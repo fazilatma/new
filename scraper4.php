@@ -391,7 +391,7 @@ const ORDERS_MGR_NOTES_FILE = __DIR__ . '/orders_mgr_notes.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.470';
+const APP_VERSION = '10.471';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2006,10 +2006,16 @@ function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
         if (is_array($candidate) && array_key_exists('ok', $candidate)) { $payload = $candidate; break; }
     }
     $logicalOk = !is_array($payload) || !empty($payload['ok']);
-    return ['ok' => $rc === 0 && $logicalOk, 'exit_code' => $rc,
-        'error' => (!$logicalOk ? (string)($payload['error'] ?? 'manual_sync_rejected') : ($rc !== 0 ? 'manual_sync_child_exit_' . $rc : '')),
-        'busy' => is_array($payload) && !empty($payload['busy']),
-        'tail' => mb_substr($txt, -2000)];
+    return [
+        'ok'            => $rc === 0 && $logicalOk,
+        'exit_code'     => $rc,
+        'error'         => (!$logicalOk ? (string)($payload['error'] ?? 'manual_sync_rejected') : ($rc !== 0 ? 'manual_sync_child_exit_' . $rc : '')),
+        'busy'          => is_array($payload) && !empty($payload['busy']),
+        'resume_needed' => is_array($payload) && !empty($payload['resume_needed']),
+        'ran_out'       => is_array($payload) && !empty($payload['ran_out']),
+        'resume_page'   => is_array($payload) ? (int)($payload['resume_page'] ?? 0) : 0,
+        'tail'          => mb_substr($txt, -2000),
+    ];
 }
 
 function s4CliPhpBinary(): string {
@@ -2335,7 +2341,28 @@ function s4WorkerRunJob(array $job): array {
     $payload = is_array($job['payload'] ?? null) ? $job['payload'] : [];
     if ($type === 'manual_sync') {
         $pk = trim((string)($payload['profile_key'] ?? ''));
-        return s4WorkerRunManualSyncChild($pk, !empty($payload['resume']));
+        $msResume = !empty($payload['resume']);
+        $msSeg = 0;
+        $msMaxSeg = max(1, min(200, (int)(loadConnections()['worker_extract_max_segments'] ?? 60)));
+        $msLast = ['ok' => false, 'error' => 'manual_sync_not_started'];
+        while ($msSeg < $msMaxSeg) {
+            if (s4WorkerJobIsCancelled($jobId)) return ['ok' => false, 'cancelled' => true, 'error' => 'job_cancelled'];
+            $msSeg++;
+            s4WorkerStateWrite(['phase' => 'manual_sync', 'job_type' => 'manual_sync', 'job_profile' => $pk, 'job_segment' => $msSeg, 'heartbeat' => time()]);
+            $msLast = s4WorkerRunManualSyncChild($pk, $msResume);
+            $msLast['worker_segments'] = $msSeg;
+            if (empty($msLast['ok']) || empty($msLast['resume_needed'])) break;
+            if (function_exists('s4DiskCodeMeta') && ((string)(s4DiskCodeMeta()['version'] ?? APP_VERSION) !== APP_VERSION)) {
+                $msLast['daemon_recycle'] = true;
+                break;
+            }
+            $msResume = true;
+            sleep(!empty($msLast['ran_out']) ? 2 : 5);
+        }
+        if (!empty($msLast['ok']) && !empty($msLast['resume_needed'])) {
+            $msLast['daemon_recycle'] = true;
+        }
+        return $msLast;
     }
     if ($type === 'matrix_build' || $type === 'matrix_fix') {
         $driver=matrixExecutionDecision();
@@ -17935,6 +17962,831 @@ function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = 
     return ['ok' => false, 'error' => (string)($res['error'] ?? 'snappshop api failed'), 'code' => $resCode, 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix', 'jina_product_count' => 0];
 }
 
+/* =====================================================================
+ *  v10.471: موتور اختصاصی API دیجی‌کالا (api.digikala.com)
+ *  پشتیبانی کامل از دسته‌بندی‌ها (/search/category-diaper/ و زیربرندها)،
+ *  برندها، فروشگاه فروشندگان، جستجو، شگفت‌انگیزها و جزئیات کامل کالا
+ *  (v2/product/{id}/ شامل گالری اصلی با کیفیت کامل، تنوع‌های رنگ/سایز
+ *  به تومان، جدول مشخصات، وزن و توضیحات).
+ * ===================================================================== */
+
+function digikalaCleanImageUrl(string $img): string {
+    $img = trim($img);
+    if ($img === '') return '';
+    if (substr($img, 0, 2) === '//') $img = 'https:' . $img;
+    if (stripos($img, 'dkstatics') !== false && strpos($img, '?') !== false) {
+        $base = (string)strtok($img, '?');
+        if ($base !== '' && preg_match('~\.(?:jpe?g|png|webp)$~i', $base)) {
+            return $base;
+        }
+    }
+    return $img;
+}
+
+function digikalaParseTargetRoute(string $url): array {
+    $target = function_exists('s4JinaUnwrapTargetUrl') ? s4JinaUnwrapTargetUrl($url) : trim($url);
+    $parts = @parse_url($target);
+    if (!is_array($parts) || empty($parts['host'])) return ['ok' => false, 'url' => $target];
+    if (!isDigikalaUrl($target)) return ['ok' => false, 'url' => $target];
+    $path = '/' . trim((string)($parts['path'] ?? ''), '/');
+    $q = [];
+    if (!empty($parts['query'])) @parse_str((string)$parts['query'], $q);
+    $page = max(1, (int)($q['page'] ?? 1));
+    $passKeys = ['q', 'sort', 'has_selling_stock', 'has_ready_to_ship', 'brands', 'price', 'seller_types', 'only_original', 'camCode'];
+    $filters = [];
+    foreach ($passKeys as $pk) {
+        if (isset($q[$pk]) && $q[$pk] !== '' && $q[$pk] !== []) {
+            $filters[$pk] = $q[$pk];
+        }
+    }
+    if (preg_match('~^/product/dkp-(\d+)(?:/|$)~i', $path, $m)) {
+        return ['ok' => true, 'kind' => 'product', 'product_id' => (string)$m[1], 'page' => 1, 'filters' => [], 'url' => $target];
+    }
+    if (preg_match('~^/search/category-([^/?#]+)/([^/?#]+)(?:/|$)~i', $path, $m)) {
+        return [
+            'ok'            => true,
+            'kind'          => 'category_brand',
+            'category_slug' => rawurldecode($m[1]),
+            'brand_slug'    => rawurldecode($m[2]),
+            'page'          => $page,
+            'filters'       => $filters,
+            'url'           => $target,
+        ];
+    }
+    if (preg_match('~^/search/category-([^/?#]+)(?:/|$)~i', $path, $m)) {
+        return [
+            'ok'            => true,
+            'kind'          => 'category',
+            'category_slug' => rawurldecode($m[1]),
+            'page'          => $page,
+            'filters'       => $filters,
+            'url'           => $target,
+        ];
+    }
+    if (preg_match('~^/main/([^/?#]+)(?:/|$)~i', $path, $m)) {
+        return [
+            'ok'            => true,
+            'kind'          => 'category',
+            'category_slug' => rawurldecode($m[1]),
+            'page'          => $page,
+            'filters'       => $filters,
+            'url'           => $target,
+        ];
+    }
+    if (preg_match('~^/brand(?:-landing)?/([^/?#]+)(?:/|$)~i', $path, $m)) {
+        return [
+            'ok'         => true,
+            'kind'       => 'brand',
+            'brand_slug' => rawurldecode($m[1]),
+            'page'       => $page,
+            'filters'    => $filters,
+            'url'        => $target,
+        ];
+    }
+    if (preg_match('~^/seller/([^/?#]+)(?:/|$)~i', $path, $m)) {
+        return [
+            'ok'          => true,
+            'kind'        => 'seller',
+            'seller_code' => rawurldecode($m[1]),
+            'page'        => $page,
+            'filters'     => $filters,
+            'url'         => $target,
+        ];
+    }
+    if (preg_match('~^/incredible-offers(?:/|$)~i', $path)) {
+        return ['ok' => true, 'kind' => 'incredible', 'page' => $page, 'filters' => $filters, 'url' => $target];
+    }
+    if (preg_match('~^/promotion-center(?:/|$)~i', $path)) {
+        return ['ok' => true, 'kind' => 'promotion', 'page' => $page, 'filters' => $filters, 'url' => $target];
+    }
+    if (preg_match('~^/search/([^/?#]+)(?:/|$)~i', $path, $m)) {
+        return [
+            'ok'            => true,
+            'kind'          => 'category_or_search',
+            'category_slug' => rawurldecode($m[1]),
+            'page'          => $page,
+            'filters'       => $filters,
+            'url'           => $target,
+        ];
+    }
+    if (preg_match('~^/search/?$~i', $path) || !empty($filters['q'])) {
+        return ['ok' => true, 'kind' => 'search', 'page' => $page, 'filters' => $filters, 'url' => $target];
+    }
+    return ['ok' => false, 'url' => $target];
+}
+
+function digikalaBuildApiEndpoint(array $route): string {
+    $kind = (string)($route['kind'] ?? '');
+    if ($kind === 'product') {
+        return 'v2/product/' . rawurlencode((string)($route['product_id'] ?? '')) . '/';
+    }
+    $params = is_array($route['filters'] ?? null) ? $route['filters'] : [];
+    $params['page'] = max(1, (int)($route['page'] ?? 1));
+    $qs = http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+    if ($kind === 'category') {
+        $slug = rawurlencode((string)($route['category_slug'] ?? ''));
+        return 'v1/categories/' . $slug . '/search/?' . $qs;
+    }
+    if ($kind === 'category_brand') {
+        $cSlug = rawurlencode((string)($route['category_slug'] ?? ''));
+        $bSlug = rawurlencode((string)($route['brand_slug'] ?? ''));
+        return 'v1/categories/' . $cSlug . '/brands/' . $bSlug . '/search/?' . $qs;
+    }
+    if ($kind === 'category_or_search') {
+        $slug = rawurlencode((string)($route['category_slug'] ?? ''));
+        return 'v1/categories/' . $slug . '/search/?' . $qs;
+    }
+    if ($kind === 'brand') {
+        $bSlug = rawurlencode((string)($route['brand_slug'] ?? ''));
+        return 'v1/brands/' . $bSlug . '/?' . $qs;
+    }
+    if ($kind === 'seller') {
+        $sCode = rawurlencode((string)($route['seller_code'] ?? ''));
+        return 'v1/sellers/' . $sCode . '/?' . $qs;
+    }
+    if ($kind === 'incredible') {
+        return 'v1/incredible-offers/products/?' . $qs;
+    }
+    if ($kind === 'promotion') {
+        return 'v1/promotion-center/products/?' . $qs;
+    }
+    return 'v1/search/?' . $qs;
+}
+
+function digikalaApiHttpRequest(string $endpoint, int $timeout = 25): array {
+    $inSelfTest = !empty($_GET['selftest']);
+    if (!$inSelfTest) {
+        $lastTs = (float)($GLOBALS['_s4DigikalaApiLastReqAt'] ?? 0.0);
+        $nowTs = microtime(true);
+        $waitUs = (int)round((0.12 - ($nowTs - $lastTs)) * 1000000);
+        if ($lastTs > 0 && $waitUs > 5000 && $waitUs <= 500000) {
+            usleep($waitUs);
+        }
+        $GLOBALS['_s4DigikalaApiLastReqAt'] = microtime(true);
+    }
+    $apiUrl = 'https://api.digikala.com/' . ltrim($endpoint, '/');
+    $timeout = max(8, min(40, $timeout));
+    $headers = [
+        'Accept: application/json, text/plain, */*',
+        'Accept-Language: fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Origin: https://www.digikala.com',
+        'Referer: https://www.digikala.com/',
+        'X-Web-Client: desktop',
+        'X-Web-Optimize-Response: 1',
+    ];
+    $net = function_exists('s4JinaIndirectNet') ? s4JinaIndirectNet() : [];
+    $modes = ['direct', 'doh'];
+    if (trim((string)($net['proxy'] ?? '')) !== '') $modes[] = 'proxy';
+    if (trim((string)($net['worker_url'] ?? '')) !== '') $modes[] = 'worker';
+    $lastCode = 0;
+    $lastErr = 'empty response';
+    foreach ($modes as $via) {
+        if ($via === 'worker') {
+            $wkUrl = rtrim(trim((string)($net['worker_url'] ?? '')), '/');
+            if ($wkUrl === '') continue;
+            $glue = (strpos($wkUrl, '?') === false) ? '?' : '&';
+            $targetUrl = $wkUrl . $glue . 'url=' . rawurlencode($apiUrl);
+        } else {
+            $targetUrl = $apiUrl;
+        }
+        $ch = curl_init($targetUrl);
+        if ($ch === false) continue;
+        $reqHeaders = $headers;
+        if ($via === 'worker' && trim((string)($net['worker_secret'] ?? '')) !== '') {
+            $reqHeaders[] = 'X-Proxy-Secret: ' . trim((string)$net['worker_secret']);
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 4,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_CONNECTTIMEOUT => min(8, $timeout),
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            CURLOPT_ENCODING       => '',
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+            CURLOPT_HTTPHEADER     => $reqHeaders,
+            CURLOPT_IPRESOLVE      => CURL_IPRESOLVE_V4,
+        ]);
+        if ($via === 'doh') {
+            $dohIp = srcNetResolveViaDoh('api.digikala.com', (string)($net['doh_url'] ?? ''));
+            if ($dohIp === '') { curl_close($ch); continue; }
+            curl_setopt($ch, CURLOPT_RESOLVE, ['api.digikala.com:443:' . $dohIp]);
+        } elseif ($via === 'proxy') {
+            srcNetApplyProxy($ch, (string)($net['proxy'] ?? ''));
+        }
+        $raw = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = (string)curl_error($ch);
+        curl_close($ch);
+        $rawStr = is_string($raw) ? $raw : '';
+        $decoded = $rawStr !== '' ? @json_decode($rawStr, true) : null;
+        if ($code >= 200 && $code < 300 && is_array($decoded)) {
+            $apiSt = array_key_exists('status', $decoded) ? (int)$decoded['status'] : 200;
+            if ($apiSt >= 200 && $apiSt < 400) {
+                return [
+                    'ok'         => true,
+                    'code'       => $code,
+                    'api_status' => $apiSt,
+                    'via'        => $via,
+                    'api_url'    => $apiUrl,
+                    'data'       => $decoded,
+                    'error'      => '',
+                ];
+            }
+            if ($apiSt === 404) {
+                return ['ok' => false, 'code' => 404, 'api_status' => 404, 'via' => $via, 'api_url' => $apiUrl, 'data' => $decoded, 'error' => 'Digikala API 404'];
+            }
+        }
+        $fmtErr = function_exists('s4JinaFormatHttpError') ? s4JinaFormatHttpError($code, $err, $rawStr) : ($err !== '' ? $err : ('HTTP ' . $code));
+        $lastCode = $code;
+        $lastErr = $fmtErr !== '' ? $fmtErr : $lastErr;
+        if ($code === 404 || $code === 410) break;
+    }
+    return ['ok' => false, 'code' => $lastCode, 'via' => 'digikala-api', 'api_url' => $apiUrl, 'data' => null, 'error' => $lastErr];
+}
+
+function digikalaProductsFromApiPayload(array $payload, string $baseUrl, int $reqPage = 1, array &$metaOut = []): array {
+    $data = is_array($payload['data'] ?? null) ? $payload['data'] : $payload;
+    $pager = is_array($data['pager'] ?? null) ? $data['pager'] : [];
+    $curPage = (int)($pager['current_page'] ?? $reqPage);
+    $totPages = (int)($pager['total_pages'] ?? 0);
+    $totItems = (int)($pager['total_items'] ?? 0);
+    $metaOut = [
+        'current_page' => $curPage > 0 ? $curPage : $reqPage,
+        'total_pages'  => $totPages,
+        'total_items'  => $totItems,
+    ];
+    $rows = [];
+    if (is_array($data['products'] ?? null)) {
+        $rows = $data['products'];
+    } elseif (is_array($data['widgets'] ?? null)) {
+        foreach ($data['widgets'] as $w) {
+            if (is_array($w['data']['products'] ?? null)) {
+                foreach ($w['data']['products'] as $wp) $rows[] = $wp;
+            }
+        }
+    }
+    if ($totPages > 0 && $reqPage > $totPages) {
+        return [];
+    }
+    $products = [];
+    foreach ($rows as $item) {
+        if (!is_array($item)) continue;
+        $id = (int)($item['id'] ?? 0);
+        $title = normalize_text((string)($item['title_fa'] ?? ($item['title_en'] ?? '')));
+        if ($title === '' && $id <= 0) continue;
+        $uri = '';
+        if (is_array($item['url'] ?? null)) $uri = trim((string)($item['url']['uri'] ?? ''));
+        elseif (is_string($item['url'] ?? null)) $uri = trim($item['url']);
+        $link = $uri !== ''
+            ? make_absolute_url($uri, 'https://www.digikala.com')
+            : ($id > 0 ? ('https://www.digikala.com/product/dkp-' . $id . '/') : '');
+        if ($link === '') continue;
+        $imgRaw = '';
+        if (is_array($item['images']['main']['url'] ?? null) && !empty($item['images']['main']['url'][0])) {
+            $imgRaw = (string)$item['images']['main']['url'][0];
+        } elseif (is_string($item['images']['main']['url'] ?? null)) {
+            $imgRaw = (string)$item['images']['main']['url'];
+        } elseif (is_array($item['images']['main']['webp_url'] ?? null) && !empty($item['images']['main']['webp_url'][0])) {
+            $imgRaw = (string)$item['images']['main']['webp_url'][0];
+        }
+        $img = digikalaCleanImageUrl($imgRaw);
+        if ($img !== '') $img = make_absolute_url($img, 'https://www.digikala.com');
+        $dkStatus = strtolower(trim((string)($item['status'] ?? '')));
+        $defVar = is_array($item['default_variant'] ?? null) ? $item['default_variant'] : [];
+        $priceObj = is_array($defVar['price'] ?? null) ? $defVar['price'] : [];
+        $sellRial = (int)round((float)($priceObj['selling_price'] ?? 0));
+        $rrpRial  = (int)round((float)($priceObj['rrp_price'] ?? 0));
+        $inStock = ($dkStatus === 'marketable') && ($sellRial > 0 || !empty($defVar));
+        $sellToman = ($inStock && $sellRial > 0) ? intdiv($sellRial, 10) : 0;
+        $rrpToman  = ($inStock && $rrpRial > 0) ? intdiv($rrpRial, 10) : 0;
+        $priceStr = $sellToman > 0 ? (number_format($sellToman) . ' تومان') : '';
+        $oldPriceStr = ($rrpToman > $sellToman && $sellToman > 0) ? (number_format($rrpToman) . ' تومان') : '';
+        $brand = normalize_text((string)($item['data_layer']['brand'] ?? ($item['brand']['title_fa'] ?? '')));
+        $catRaw = trim((string)($item['data_layer']['category'] ?? ($item['category']['title_fa'] ?? '')));
+        if ($catRaw !== '') {
+            $catRaw = trim($catRaw, '[] ');
+            $catRaw = normalize_text(str_replace(',', ' / ', $catRaw));
+        }
+        $p = [
+            'title'    => mb_substr($title, 0, 240),
+            'price'    => $priceStr,
+            'oldPrice' => $oldPriceStr,
+            'link'     => $link,
+            'image'    => $img,
+            'sku'      => $id > 0 ? ('dkp-' . $id) : '',
+            'stock'    => $inStock ? 'موجود' : 'ناموجود',
+        ];
+        if ($brand !== '') $p['brand'] = $brand;
+        if ($catRaw !== '') $p['category'] = $catRaw;
+        $key = productKey($p);
+        if ($key !== '' && !isset($products[$key])) $products[$key] = $p;
+    }
+    return $products;
+}
+
+function digikalaSyntheticListHtml(array $products, string $sourceUrl, string $note = '', array $meta = []): string {
+    $cards = '';
+    $listArr = array_values($products);
+    foreach ($listArr as $p) {
+        $title = h((string)($p['title'] ?? ''));
+        $link  = h((string)($p['link'] ?? ''));
+        $img   = h((string)($p['image'] ?? ''));
+        $price = h((string)($p['price'] ?? ''));
+        $oldP  = h((string)($p['oldPrice'] ?? ''));
+        $stock = h((string)($p['stock'] ?? ''));
+        $sku   = h((string)($p['sku'] ?? ''));
+        $cards .= '<article class="product-card digikala-product" data-digikala-api="1"'
+            . ($sku !== '' ? (' data-sku="' . $sku . '"') : '') . '>'
+            . '<a class="product-link" href="' . $link . '">'
+            . ($img !== '' ? '<img class="product-image" src="' . $img . '" alt="' . $title . '">' : '')
+            . '<h2 class="product-title title">' . $title . '</h2></a>'
+            . ($oldP !== '' ? '<del class="old-price">' . $oldP . '</del> ' : '')
+            . ($price !== '' ? '<div class="price product-price">' . $price . '</div>' : '<div class="stock out-of-stock">' . ($stock !== '' ? $stock : 'ناموجود') . '</div>')
+            . '</article>';
+    }
+    if ($cards === '') $cards = '<p>پایان فهرست یا عدم وجود کالا در این صفحهٔ دیجی‌کالا.</p>';
+    $jsonAttr = h((string)json_encode($listArr, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
+    $totP = (int)($meta['total_pages'] ?? 0);
+    $curP = (int)($meta['current_page'] ?? 1);
+    return '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><title>Digikala API (' . h($sourceUrl) . ')</title>'
+        . '<style>body{font-family:tahoma,sans-serif;background:#f8fafc;color:#0f172a;margin:0;padding:18px}.dk-note{background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:12px;margin-bottom:16px;line-height:1.9}.product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}.product-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:12px}.product-card a{text-decoration:none;color:inherit}.product-image{width:100%;height:175px;object-fit:contain;background:#fff;border-radius:10px}.product-title{font-size:13px;line-height:1.7;margin:10px 0;color:#0f172a}.price{font-weight:800;color:#dc2626;margin-top:6px}.old-price{color:#94a3b8;font-size:12px}</style>'
+        . '</head><body data-digikala-api-list="1" data-total-pages="' . $totP . '" data-current-page="' . $curP . '">'
+        . '<script type="application/json" id="s4-digikala-api-json">' . str_replace('</', '<\/', (string)json_encode($listArr, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE)) . '</script>'
+        . '<div class="dk-note" data-products-count="' . count($listArr) . '" data-dk-meta="' . $jsonAttr . '"><b>موتور رسمی API دیجی‌کالا فعال است.</b>'
+        . ($note !== '' ? ' · ' . h($note) : '')
+        . ($totP > 0 ? (' · صفحه ' . $curP . ' از ' . $totP) : '')
+        . '<br><small style="direction:ltr;display:block">' . h($sourceUrl) . '</small></div>'
+        . '<main class="product-grid products">' . $cards . '</main></body></html>';
+}
+
+function parse_digikala_api_html(string $html, string $baseUrl): array {
+    if ($html === '') return [];
+    if (preg_match('~<script[^>]+id="s4-digikala-api-json"[^>]*>(.*?)</script>~isu', $html, $m)) {
+        $arr = @json_decode(trim((string)$m[1]), true);
+        if (is_array($arr)) {
+            $out = [];
+            foreach ($arr as $p) {
+                if (!is_array($p)) continue;
+                $link = trim((string)($p['link'] ?? ''));
+                $title = normalize_text((string)($p['title'] ?? ''));
+                if ($link === '' && $title === '') continue;
+                if ($link !== '') $p['link'] = make_absolute_url($link, $baseUrl);
+                if (!empty($p['image'])) $p['image'] = make_absolute_url((string)$p['image'], $baseUrl);
+                $k = productKey($p);
+                if ($k !== '' && !isset($out[$k])) $out[$k] = $p;
+            }
+            return $out;
+        }
+    }
+    return parse_heuristic_html($html, $baseUrl);
+}
+
+function digikalaDefaultDetailSelectors(): array {
+    return [
+        'price'      => '.price ins .amount, .price .amount',
+        'oldPrice'   => '.price del.old-price, del.old-price',
+        'stock'      => 'p.stock',
+        'sku'        => '.product_meta .sku',
+        'brand'      => '.product_meta .brand',
+        'category'   => '.woocommerce-breadcrumb, .product_meta .posted_in',
+        'weight'     => '.product_meta .weight',
+        'shortDesc'  => '.short-description',
+        'longDesc'   => '#tab-description .snappshop-desc-text, #tab-description',
+        'specs'      => 'table.shop_attributes',
+        'variations' => '.variations_form, .snappshop-variation-group',
+    ];
+}
+
+function digikalaDetailSyntheticHtml(array $payloadData, string $sourceUrl): string {
+    $prod = is_array($payloadData['product'] ?? null) ? $payloadData['product'] : $payloadData;
+    $id = (int)($prod['id'] ?? 0);
+    $sku = $id > 0 ? ('dkp-' . $id) : '';
+    $title = normalize_text((string)($prod['title_fa'] ?? ($prod['title_en'] ?? '')));
+    $brand = normalize_text((string)($prod['brand']['title_fa'] ?? ($prod['brand']['title_en'] ?? '')));
+    $dkStatus = strtolower(trim((string)($prod['status'] ?? '')));
+    $defVar = is_array($prod['default_variant'] ?? null) ? $prod['default_variant'] : [];
+    $defPriceObj = is_array($defVar['price'] ?? null) ? $defVar['price'] : [];
+    $bestToman = 0;
+    $origToman = 0;
+    $inStock = ($dkStatus === 'marketable');
+    if ($inStock && !empty($defPriceObj)) {
+        $sr = (int)round((float)($defPriceObj['selling_price'] ?? 0));
+        $rr = (int)round((float)($defPriceObj['rrp_price'] ?? 0));
+        if ($sr > 0) {
+            $bestToman = intdiv($sr, 10);
+            $origToman = $rr > $sr ? intdiv($rr, 10) : $bestToman;
+        }
+    }
+
+    $imgs = [];
+    $pushImg = static function($raw) use (&$imgs) {
+        if (is_array($raw)) {
+            if (isset($raw['url'])) {
+                $u = is_array($raw['url']) ? (string)($raw['url'][0] ?? '') : (string)$raw['url'];
+                $c = digikalaCleanImageUrl($u);
+                if ($c !== '' && !in_array($c, $imgs, true)) $imgs[] = $c;
+                return;
+            }
+            foreach ($raw as $v) {
+                $u = is_array($v) ? (string)($v['url'][0] ?? ($v[0] ?? '')) : (string)$v;
+                $c = digikalaCleanImageUrl($u);
+                if ($c !== '' && !in_array($c, $imgs, true)) $imgs[] = $c;
+            }
+            return;
+        }
+        if (is_string($raw)) {
+            $c = digikalaCleanImageUrl($raw);
+            if ($c !== '' && !in_array($c, $imgs, true)) $imgs[] = $c;
+        }
+    };
+    $pushImg($prod['images']['main'] ?? null);
+    foreach ((array)($prod['images']['list'] ?? []) as $li) {
+        $pushImg($li);
+    }
+    $mainImg = $imgs[0] ?? '';
+    $galleryHtml = '';
+    foreach ($imgs as $gi) {
+        $galleryHtml .= '<div class="woocommerce-product-gallery__image image-thumbnail"><a href="' . h($gi) . '"><img src="' . h($gi) . '" data-large_image="' . h($gi) . '" alt="' . h($title) . '"></a></div>';
+    }
+
+    $attrMeta = [];
+    $comboBest = [];
+    $warrantyNames = [];
+    $sellerNames = [];
+    $allVariants = (array)($prod['variants'] ?? []);
+    if (empty($allVariants) && !empty($defVar)) $allVariants = [$defVar];
+    foreach ($allVariants as $vr) {
+        if (!is_array($vr)) continue;
+        $vSt = strtolower(trim((string)($vr['status'] ?? 'marketable')));
+        $vAvail = ($vSt === 'marketable');
+        $vpObj = is_array($vr['price'] ?? null) ? $vr['price'] : [];
+        $vSell = $vAvail ? intdiv((int)round((float)($vpObj['selling_price'] ?? 0)), 10) : 0;
+        $vOrig = $vAvail ? intdiv((int)round((float)($vpObj['rrp_price'] ?? 0)), 10) : 0;
+        if ($vAvail && $vSell > 0 && $bestToman <= 0) {
+            $bestToman = $vSell;
+            $origToman = $vOrig > $vSell ? $vOrig : $vSell;
+        }
+        $wt = normalize_text((string)($vr['warranty']['title_fa'] ?? ($vr['warranty']['title'] ?? '')));
+        if ($wt !== '' && !in_array($wt, $warrantyNames, true)) $warrantyNames[] = $wt;
+        $st = normalize_text((string)($vr['seller']['title'] ?? ''));
+        if ($st !== '' && !in_array($st, $sellerNames, true)) $sellerNames[] = $st;
+
+        $varAttrs = [];
+        if (is_array($vr['color'] ?? null)) {
+            $cid = trim((string)($vr['color']['id'] ?? ''));
+            $ctitle = normalize_text((string)($vr['color']['title'] ?? ''));
+            if ($ctitle !== '') {
+                $ckey = $cid !== '' ? $cid : md5($ctitle);
+                if (!isset($attrMeta['color'])) $attrMeta['color'] = ['title' => 'رنگ', 'values' => []];
+                if (!isset($attrMeta['color']['values'][$ckey])) {
+                    $attrMeta['color']['values'][$ckey] = ['title' => $ctitle, 'hex' => trim((string)($vr['color']['hex_code'] ?? '')), 'price' => 0];
+                }
+                if ($vSell > 0 && ($attrMeta['color']['values'][$ckey]['price'] <= 0 || $vSell < $attrMeta['color']['values'][$ckey]['price'])) {
+                    $attrMeta['color']['values'][$ckey]['price'] = $vSell;
+                }
+                $varAttrs['attribute_color'] = $ctitle;
+            }
+        }
+        if (is_array($vr['size'] ?? null)) {
+            $sid = trim((string)($vr['size']['id'] ?? ''));
+            $stitle = normalize_text((string)($vr['size']['title'] ?? ''));
+            if ($stitle !== '') {
+                $skey = $sid !== '' ? $sid : md5($stitle);
+                if (!isset($attrMeta['size'])) $attrMeta['size'] = ['title' => 'سایز', 'values' => []];
+                if (!isset($attrMeta['size']['values'][$skey])) {
+                    $attrMeta['size']['values'][$skey] = ['title' => $stitle, 'hex' => '', 'price' => 0];
+                }
+                if ($vSell > 0 && ($attrMeta['size']['values'][$skey]['price'] <= 0 || $vSell < $attrMeta['size']['values'][$skey]['price'])) {
+                    $attrMeta['size']['values'][$skey]['price'] = $vSell;
+                }
+                $varAttrs['attribute_size'] = $stitle;
+            }
+        }
+        if (!empty($varAttrs) && $vSell > 0) {
+            $cSig = implode('|', $varAttrs);
+            if (!isset($comboBest[$cSig]) || $vSell < (int)$comboBest[$cSig]['display_price']) {
+                $comboBest[$cSig] = [
+                    'variation_id'          => (string)($vr['id'] ?? ''),
+                    'display_price'         => $vSell,
+                    'display_regular_price' => $vOrig > $vSell ? $vOrig : $vSell,
+                    'is_in_stock'           => $vAvail,
+                    'attributes'            => $varAttrs,
+                ];
+            }
+        }
+    }
+    if ($bestToman <= 0) $inStock = false;
+    $wcVariationsJson = array_values($comboBest);
+    $variationsHtml = '';
+    if (!empty($attrMeta)) {
+        $groupsHtml = '';
+        $listGroupsHtml = '';
+        foreach ($attrMeta as $aid => $gInfo) {
+            if (empty($gInfo['values'])) continue;
+            $optsHtml = '';
+            $liHtml = '';
+            foreach ($gInfo['values'] as $vInfo) {
+                $vp = (int)($vInfo['price'] ?? 0);
+                $pAttr = $vp > 0 ? (' data-price="' . $vp . '"') : '';
+                $optsHtml .= '<option value="' . h($vInfo['title']) . '"' . $pAttr . '>' . h($vInfo['title']) . '</option>';
+                $liHtml .= '<li data-value="' . h($vInfo['title']) . '"' . $pAttr . '>' . h($vInfo['title']) . '</li>';
+            }
+            $groupsHtml .= '<div class="variations snappshop-variation-group" data-name="' . h($gInfo['title']) . '" aria-label="' . h($gInfo['title']) . '">'
+                . '<label>' . h($gInfo['title']) . '</label>'
+                . '<select name="attribute_' . h($aid) . '" data-attribute_name="' . h($gInfo['title']) . '">' . $optsHtml . '</select>'
+                . '</div>';
+            $listGroupsHtml .= '<ul class="list-unstyled snappshop-variation-list" data-name="' . h($gInfo['title']) . '" aria-label="' . h($gInfo['title']) . '" style="display:none">' . $liHtml . '</ul>';
+        }
+        if ($groupsHtml !== '') {
+            $varJsonAttr = $wcVariationsJson ? (' data-product_variations="' . h((string)json_encode($wcVariationsJson, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '"') : '';
+            $variationsHtml = '<form class="variations_form cart"' . $varJsonAttr . '>' . $groupsHtml . $listGroupsHtml . '</form>';
+        }
+    }
+
+    $seenAttrTitles = [];
+    $attrRows = '';
+    $shortItems = '';
+    $shortCount = 0;
+    $weightVal = '';
+    $appendSpecRow = static function(string $k, string $v) use (&$seenAttrTitles, &$attrRows, &$shortItems, &$shortCount, &$weightVal) {
+        $k = normalize_text($k);
+        $v = normalize_text($v);
+        if ($k === '' || $v === '') return;
+        $sig = mb_strtolower($k);
+        if (isset($seenAttrTitles[$sig])) return;
+        $seenAttrTitles[$sig] = true;
+        $attrRows .= '<tr><th>' . h($k) . '</th><td>' . h($v) . '</td></tr>';
+        if ($shortCount < 6 && mb_strlen($v) <= 120) {
+            $shortItems .= '<li>' . h($k . ': ' . $v) . '</li>';
+            $shortCount++;
+        }
+        if ($weightVal === '' && preg_match('~(?:^|\s)وزن(?:\s|$|‌)~u', $k)) {
+            $weightVal = $v;
+        }
+    };
+    foreach ((array)($prod['review']['attributes'] ?? []) as $ra) {
+        if (!is_array($ra)) continue;
+        $rk = (string)($ra['title'] ?? '');
+        $rv = is_array($ra['values'] ?? null) ? implode('، ', array_filter(array_map('strval', $ra['values']))) : (string)($ra['values'] ?? '');
+        $appendSpecRow($rk, $rv);
+    }
+    foreach ((array)($prod['specifications'] ?? []) as $sg) {
+        if (!is_array($sg)) continue;
+        foreach ((array)($sg['attributes'] ?? []) as $sa) {
+            if (!is_array($sa)) continue;
+            $sk = (string)($sa['title'] ?? '');
+            $sv = is_array($sa['values'] ?? null) ? implode('، ', array_filter(array_map('strval', $sa['values']))) : (string)($sa['values'] ?? '');
+            $appendSpecRow($sk, $sv);
+        }
+    }
+    if ($weightVal === '' && !empty($prod['dimension']['weight']) && (int)$prod['dimension']['weight'] > 0) {
+        $weightVal = ((int)$prod['dimension']['weight']) . ' گرم';
+        $appendSpecRow('وزن', $weightVal);
+    }
+    if (!empty($warrantyNames)) {
+        $appendSpecRow('گارانتی', implode('، ', array_slice($warrantyNames, 0, 3)));
+    }
+    if (!empty($sellerNames)) {
+        $appendSpecRow('فروشنده', implode('، ', array_slice($sellerNames, 0, 4)));
+    }
+
+    $cats = [];
+    $catLinksHtml = [];
+    foreach ((array)($prod['breadcrumb'] ?? []) as $bc) {
+        if (!is_array($bc)) continue;
+        $ct = normalize_text((string)($bc['title'] ?? ''));
+        if ($ct === '' || $ct === 'دیجی‌کالا' || $ct === 'دیجی کالا' || mb_strpos($ct, 'فروشگاه اینترنتی دیجی') !== false) continue;
+        if ($ct === $title) continue;
+        $curi = trim((string)($bc['url']['uri'] ?? ''));
+        $cats[] = $ct;
+        $catLinksHtml[] = '<a href="' . h($curi !== '' ? make_absolute_url($curi, 'https://www.digikala.com') : '#') . '">' . h($ct) . '</a>';
+    }
+    if (empty($cats) && !empty($prod['category']['title_fa'])) {
+        $ct = normalize_text((string)$prod['category']['title_fa']);
+        if ($ct !== '') {
+            $cats[] = $ct;
+            $catLinksHtml[] = '<a href="#">' . h($ct) . '</a>';
+        }
+    }
+
+    $descRaw = trim((string)($prod['review']['description'] ?? ''));
+    if ($descRaw !== '') {
+        $descRaw = preg_replace('~<br\s*/?>~i', "\n", $descRaw) ?? $descRaw;
+        $descRaw = preg_replace('~</p\s*>~i', "\n\n", $descRaw) ?? $descRaw;
+        $descRaw = trim(html_entity_decode(strip_tags($descRaw), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+    $specHtml = $attrRows !== '' ? ('<table class="woocommerce-product-attributes shop_attributes"><tbody>' . $attrRows . '</tbody></table>') : '';
+    $descNorm = $descRaw !== '' ? str_replace(["\r\n", "\r"], "\n", $descRaw) : '';
+    $longInner = ($descNorm !== '' ? ('<div class="snappshop-desc-text">' . nl2br(h($descNorm), false) . '</div>') : '') . $specHtml;
+    $descHtml = $longInner !== '' ? ('<div id="tab-description" class="product-description entry-content woocommerce-Tabs-panel--description">' . $longInner . '</div>') : '';
+    $shortHtml = $shortItems !== '' ? ('<div class="short-description product-short-description woocommerce-product-details__short-description"><ul>' . $shortItems . '</ul></div>') : '';
+    $tagItems = [];
+    if ($brand !== '') $tagItems[] = '<a href="#">' . h($brand) . '</a>';
+    foreach (array_slice($cats, -2) as $cTag) $tagItems[] = '<a href="#">' . h($cTag) . '</a>';
+    $metaHtml = '<div class="product_meta">'
+        . ($sku !== '' ? '<span class="sku_wrapper">SKU: <span class="sku">' . h($sku) . '</span></span> ' : '')
+        . ($catLinksHtml ? '<span class="posted_in">' . implode('، ', $catLinksHtml) . '</span> ' : '')
+        . ($tagItems ? '<span class="tagged_as">' . implode('، ', $tagItems) . '</span> ' : '')
+        . ($brand !== '' ? '<span class="brand product-brand">' . h($brand) . '</span> ' : '')
+        . ($weightVal !== '' ? '<span class="weight product-weight">' . h($weightVal) . '</span>' : '')
+        . '</div>';
+    $priceFormatted = ($inStock && $bestToman > 0) ? (number_format($bestToman) . ' تومان') : '';
+    $ld = [
+        '@context'    => 'https://schema.org',
+        '@type'       => 'Product',
+        'name'        => $title,
+        'url'         => $sourceUrl,
+        'sku'         => $sku,
+        'image'       => $imgs,
+        'description' => mb_substr($descRaw, 0, 2000),
+    ];
+    if ($brand !== '') $ld['brand'] = ['@type' => 'Brand', 'name' => $brand];
+    if ($bestToman > 0) {
+        $ld['offers'] = [
+            '@type'         => 'Offer',
+            'price'         => (string)$bestToman,
+            'priceCurrency' => 'IRT',
+            'availability'  => $inStock ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock',
+            'url'           => $sourceUrl,
+        ];
+    }
+    return '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="UTF-8">'
+        . '<title>' . h($title) . '</title>'
+        . ($mainImg !== '' ? '<meta property="og:image" content="' . h($mainImg) . '">' : '')
+        . ($bestToman > 0 ? '<meta property="product:price:amount" content="' . (int)$bestToman . '">' : '')
+        . '<meta property="product:availability" content="' . ($inStock ? 'in stock' : 'out of stock') . '">'
+        . '<style>body{font-family:tahoma,sans-serif;background:#f8fafc;color:#0f172a;margin:0;padding:20px;line-height:1.9}.single-product{max-width:980px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:22px}.product-gallery{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}.product-gallery img{width:150px;height:150px;object-fit:contain;border:1px solid #e2e8f0;border-radius:10px;background:#fff}.price{font-size:18px;font-weight:800;color:#dc2626;margin:10px 0}.old-price{color:#94a3b8;font-weight:400;margin-left:8px}.shop_attributes{width:100%;border-collapse:collapse;margin-top:14px}.shop_attributes th,.shop_attributes td{border:1px solid #e2e8f0;padding:8px 12px;text-align:right}.shop_attributes th{background:#f1f5f9;width:220px}.snappshop-variation-group{margin:10px 0;padding:10px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px}.product_meta span{display:inline-block;margin-left:12px;font-size:12px;color:#475569}</style>'
+        . '<script type="application/ld+json">' . (string)json_encode($ld, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . '</script>'
+        . '</head><body data-snappshop-api-detail="1" data-digikala-api-detail="1"><main class="product single-product"><div class="summary entry-summary">'
+        . ($cats ? '<nav class="woocommerce-breadcrumb breadcrumb">' . h(implode(' / ', $cats)) . '</nav>' : '')
+        . '<h1 class="product_title entry-title product-title">' . h($title) . '</h1>'
+        . '<p class="price product-price">'
+        . ($origToman > $bestToman ? '<del class="old-price">' . h(number_format($origToman) . ' تومان') . '</del> ' : '')
+        . ($priceFormatted !== '' ? '<ins><span class="amount text-bold">' . h($priceFormatted) . '</span></ins>' : '')
+        . '</p>'
+        . '<p class="stock ' . ($inStock ? 'in-stock' : 'out-of-stock') . '">' . ($inStock ? 'موجود' : 'ناموجود') . '</p>'
+        . $variationsHtml
+        . $shortHtml
+        . $metaHtml
+        . '</div><div class="product-gallery gallery woocommerce-product-gallery images-box">' . $galleryHtml . '</div>'
+        . $descHtml
+        . '</main></body></html>';
+}
+
+function digikalaNeedsApiFallback(string $url, string $html): bool {
+    if (!isDigikalaUrl($url)) return false;
+    $route = digikalaParseTargetRoute($url);
+    if (empty($route['ok'])) return false;
+    if (trim($html) === '') return true;
+    if (stripos($html, 'data-digikala-api-list="1"') !== false
+        || stripos($html, 'data-digikala-api-detail="1"') !== false
+        || stripos($html, 'data-jina-reader="1"') !== false) {
+        return false;
+    }
+    if (($route['kind'] ?? '') === 'product') {
+        return stripos($html, 'product:price:amount') === false && stripos($html, 'application/ld+json') === false;
+    }
+    return stripos($html, '/product/dkp-') === false;
+}
+
+function fetch_html_digikala_api(string $url, int $timeout = 25, array $prev = [], int $redirectDepth = 0): array {
+    $route = digikalaParseTargetRoute($url);
+    $target = (string)($route['url'] ?? $url);
+    if (empty($route['ok'])) {
+        return ['ok' => false, 'error' => (string)($prev['error'] ?? 'آدرس دیجی‌کالا پشتیبانی نمی‌شود'), 'code' => (int)($prev['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'digikala-api'];
+    }
+    if (($route['kind'] ?? '') === 'product') {
+        $ep = digikalaBuildApiEndpoint($route);
+        $res = digikalaApiHttpRequest($ep, $timeout);
+        $d = is_array($res['data']['data'] ?? null) ? $res['data']['data'] : [];
+        if (!empty($res['ok']) && !empty($d['product'])) {
+            $html = digikalaDetailSyntheticHtml($d, $target);
+            return [
+                'ok'                  => true,
+                'error'               => '',
+                'code'                => (int)($res['code'] ?? 200),
+                'url'                 => $target,
+                'html'                => $html,
+                'mode'                => 'digikala-api',
+                'digikala_api'        => (string)($res['api_url'] ?? ''),
+                'digikala_api_via'    => (string)($res['via'] ?? 'direct'),
+                'digikala_route_kind' => 'product',
+                'jina_product_count'  => 1,
+            ];
+        }
+        return [
+            'ok'    => false,
+            'error' => (string)($res['error'] ?? 'Digikala product API failed'),
+            'code'  => (int)($res['code'] ?? 0),
+            'url'   => $target,
+            'html'  => '',
+            'mode'  => 'digikala-api',
+        ];
+    }
+
+    $reqPage = max(1, (int)($route['page'] ?? 1));
+    if ($reqPage > 100) {
+        return [
+            'ok'                    => true,
+            'error'                 => '',
+            'code'                  => 200,
+            'url'                   => $target,
+            'html'                  => digikalaSyntheticListHtml([], $target, 'سقف ۱۰۰ صفحهٔ API دیجی‌کالا', ['current_page' => $reqPage, 'total_pages' => 100]),
+            'mode'                  => 'digikala-api',
+            'digikala_api_via'      => 'ceiling-guard',
+            'digikala_route_kind'   => (string)($route['kind'] ?? 'category'),
+            'digikala_end_of_pages' => true,
+            'digikala_total_pages'  => 100,
+            'jina_product_count'    => 0,
+        ];
+    }
+
+    $ep = digikalaBuildApiEndpoint($route);
+    $res = digikalaApiHttpRequest($ep, $timeout);
+    if (empty($res['ok']) && ($route['kind'] ?? '') === 'category_brand') {
+        $fbRoute = $route;
+        $fbRoute['kind'] = 'category';
+        $fbRoute['filters']['q'] = trim(((string)($fbRoute['filters']['q'] ?? '')) . ' ' . str_replace('-', ' ', (string)($route['brand_slug'] ?? '')));
+        $resFb = digikalaApiHttpRequest(digikalaBuildApiEndpoint($fbRoute), $timeout);
+        if (!empty($resFb['ok'])) $res = $resFb;
+    } elseif (empty($res['ok']) && ($route['kind'] ?? '') === 'category_or_search') {
+        $fbRoute = $route;
+        $fbRoute['kind'] = 'search';
+        $fbRoute['filters']['q'] = str_replace('-', ' ', (string)($route['category_slug'] ?? ''));
+        $resFb = digikalaApiHttpRequest(digikalaBuildApiEndpoint($fbRoute), $timeout);
+        if (!empty($resFb['ok'])) $res = $resFb;
+    }
+
+    if (!empty($res['ok']) && is_array($res['data'] ?? null)) {
+        $rawPayload = $res['data'];
+        $redirUri = trim((string)($rawPayload['data']['redirect_url']['uri'] ?? ($rawPayload['redirect_url']['uri'] ?? '')));
+        if ($redirUri !== '' && $redirectDepth < 2 && empty($rawPayload['data']['products'])) {
+            $redirUrl = make_absolute_url($redirUri, 'https://www.digikala.com');
+            if ($reqPage > 1) {
+                $redirUrl .= (strpos($redirUrl, '?') === false ? '?' : '&') . 'page=' . $reqPage;
+            }
+            return fetch_html_digikala_api($redirUrl, $timeout, $prev, $redirectDepth + 1);
+        }
+        $apiMeta = [];
+        $ps = digikalaProductsFromApiPayload($rawPayload, $target, $reqPage, $apiMeta);
+        $totPages = (int)($apiMeta['total_pages'] ?? 0);
+        if (!empty($ps)) {
+            $note = 'Digikala API (' . (string)($route['kind'] ?? 'list') . ' · via ' . (string)($res['via'] ?? 'direct') . ')';
+            return [
+                'ok'                    => true,
+                'error'                 => '',
+                'code'                  => (int)($res['code'] ?? 200),
+                'url'                   => $target,
+                'html'                  => digikalaSyntheticListHtml($ps, $target, $note, $apiMeta),
+                'mode'                  => 'digikala-api',
+                'digikala_api'          => (string)($res['api_url'] ?? ''),
+                'digikala_api_via'      => (string)($res['via'] ?? 'direct'),
+                'digikala_route_kind'   => (string)($route['kind'] ?? 'category'),
+                'digikala_total_pages'  => $totPages,
+                'digikala_end_of_pages' => false,
+                'jina_product_count'    => count($ps),
+            ];
+        }
+        if ($reqPage > 1) {
+            $endPages = $totPages > 0 ? $totPages : max(1, $reqPage - 1);
+            return [
+                'ok'                    => true,
+                'error'                 => '',
+                'code'                  => (int)($res['code'] ?? 200),
+                'url'                   => $target,
+                'html'                  => digikalaSyntheticListHtml([], $target, 'پایان صفحه‌بندی دیجی‌کالا در صفحهٔ ' . $endPages, $apiMeta),
+                'mode'                  => 'digikala-api',
+                'digikala_api'          => (string)($res['api_url'] ?? ''),
+                'digikala_api_via'      => (string)($res['via'] ?? 'direct'),
+                'digikala_route_kind'   => (string)($route['kind'] ?? 'category'),
+                'digikala_end_of_pages' => true,
+                'digikala_total_pages'  => $endPages,
+                'jina_product_count'    => 0,
+            ];
+        }
+        return [
+            'ok'                 => false,
+            'error'              => 'Digikala API returned 0 products for page 1',
+            'code'               => (int)($res['code'] ?? 200),
+            'url'                => $target,
+            'html'               => '',
+            'mode'               => 'digikala-api',
+            'jina_product_count' => 0,
+        ];
+    }
+    return [
+        'ok'                 => false,
+        'error'              => (string)($res['error'] ?? 'Digikala API failed'),
+        'code'               => (int)($res['code'] ?? 0),
+        'url'                => $target,
+        'html'               => '',
+        'mode'               => 'digikala-api',
+        'jina_product_count' => 0,
+    ];
+}
+
 function snappshopNeedsApiFallback(string $url, string $html): bool {
     if (!isSnappshopUrl($url)) return false;
     $route = snappshopParseTargetRoute($url);
@@ -18044,6 +18896,21 @@ function fetch_html(string $url, int $timeout = 25): array {
                     'snappshop_cooldown_sec' => (int)($__snDirectPdp['snappshop_cooldown_sec'] ?? 0)];
         }
     }
+    if (empty($GLOBALS['_s4SkipDigikalaApiInFetchHtml']) && function_exists('isDigikalaUrl') && isDigikalaUrl($url) && function_exists('digikalaParseTargetRoute')) {
+        $__dkFastRoute = digikalaParseTargetRoute($url);
+        if (($__dkFastRoute['kind'] ?? '') === 'product') {
+            $__dkDirectPdp = fetch_html_digikala_api($url, $timeout, []);
+            if (!empty($__dkDirectPdp['ok'])) return $__dkDirectPdp;
+            return [
+                'ok'    => false,
+                'error' => trim((string)($__dkDirectPdp['error'] ?? '')) !== '' ? (string)$__dkDirectPdp['error'] : 'Digikala API PDP failed',
+                'code'  => (int)($__dkDirectPdp['code'] ?? 0),
+                'url'   => $url,
+                'html'  => '',
+                'mode'  => 'digikala-api',
+            ];
+        }
+    }
     $__profileForcedDirect = array_key_exists('_srcNetProfileIndirect', $GLOBALS) && empty($GLOBALS['_srcNetProfileIndirect']);
     $__srcNet = function_exists('loadConnections') ? srcNetCfg() : ['mode'=>'direct','gap_ms'=>0,'hosts'=>'','fallback'=>false];
     $parsed = parse_url($url); $__srcHost = strtolower((string)($parsed['host'] ?? ''));
@@ -18074,7 +18941,18 @@ function fetch_html(string $url, int $timeout = 25): array {
             && stripos((string)($last['html'] ?? ''), '~id~') === false;
         $snappEmptyShell = empty($GLOBALS['_s4SkipSnappApiInFetchHtml']) && !empty($last['ok'])
             && function_exists('snappshopNeedsApiFallback') && snappshopNeedsApiFallback($url, (string)($last['html'] ?? ''));
-        if (!empty($last['ok']) && !$emallsNoProducts && !$snappEmptyShell) return $last;
+        $digikalaEmptyShell = empty($GLOBALS['_s4SkipDigikalaApiInFetchHtml']) && !empty($last['ok'])
+            && function_exists('digikalaNeedsApiFallback') && digikalaNeedsApiFallback($url, (string)($last['html'] ?? ''));
+        if (!empty($last['ok']) && !$emallsNoProducts && !$snappEmptyShell && !$digikalaEmptyShell) return $last;
+        if ($digikalaEmptyShell) {
+            $last['digikala_empty_shell'] = true;
+            $__dkApi = fetch_html_digikala_api($url, $timeout, is_array($last) ? $last : []);
+            if (!empty($__dkApi['ok'])) return $__dkApi;
+            $last['ok'] = false;
+            $last['code'] = (int)($__dkApi['code'] ?? ($last['code'] ?? 0));
+            $last['error'] = trim((string)($__dkApi['error'] ?? '')) !== '' ? (string)$__dkApi['error'] : 'Digikala empty JS shell (API unavailable)';
+            return $last;
+        }
         if ($snappEmptyShell) {
             $last['snappshop_empty_shell'] = true;
             $__snApi = fetch_html_snappshop_api($url, $timeout, is_array($last) ? $last : []);
@@ -23154,7 +24032,9 @@ function gallerySplitSelectors(string $s): array {
  */
 function galleryEffectiveCfgForUrl(array $cfg, string $url): array {
     $cfg = galleryNormalizeCfg($cfg);
-    if (!$cfg['enabled'] && $url !== '' && function_exists('isSnappshopUrl') && isSnappshopUrl($url)) {
+    $isSnapp = ($url !== '' && function_exists('isSnappshopUrl') && isSnappshopUrl($url));
+    $isDk    = ($url !== '' && function_exists('isDigikalaUrl') && isDigikalaUrl($url));
+    if (!$cfg['enabled'] && ($isSnapp || $isDk)) {
         if ($cfg['box'] !== '') {
             $cfg['mode'] = 'auto';
             $cfg['enabled'] = true;
@@ -23163,6 +24043,10 @@ function galleryEffectiveCfgForUrl(array $cfg, string $url): array {
             $cfg['enabled'] = true;
         } elseif ($cfg['pattern'] !== '' && mb_strpos($cfg['pattern'], '{n}') !== false) {
             $cfg['mode'] = 'number';
+            $cfg['enabled'] = true;
+        } elseif ($isDk && !empty($GLOBALS['_s4ActiveDigikalaApiEngine'])) {
+            $cfg['mode'] = 'auto';
+            $cfg['box'] = '.product-gallery';
             $cfg['enabled'] = true;
         }
     }
@@ -24211,13 +25095,14 @@ return $products;
    Playwright = the render service's CDP/Playwright-compatible driver, Selenium =
    raw W3C WebDriver HTTP. No Node/Python dependency is required by scraper4.php. */
 function extractionEngineAllowed(): array {
-    return ['selectors', 'auto', 'heuristic', 'jsonld', 'jina', 'playwright', 'selenium'];
+    return ['selectors', 'auto', 'heuristic', 'jsonld', 'jina', 'digikala_api', 'playwright', 'selenium'];
 }
 function normalizeExtractionEngine($v): string {
     $v = strtolower(trim((string)$v));
     if ($v === '' || $v === 'css' || $v === 'cheerio' || $v === 'htmlrewriter') return 'selectors';
     if (in_array($v, ['browser','render','js','cdp','chrome','chromium','puppeteer'], true)) return 'playwright';
     if (in_array($v, ['reader','jina-reader','jina_reader','rjina','r.jina.ai'], true)) return 'jina';
+    if (in_array($v, ['digikala','digikala-api','digikala_api','dk-api','dk_api'], true)) return 'digikala_api';
     if (in_array($v, ['webdriver','chromedriver'], true)) return 'selenium';
     if (!in_array($v, extractionEngineAllowed(), true)) return 'selectors';
     return $v;
@@ -24240,18 +25125,20 @@ function isEmallsUrl(string $url): bool {
 function extractionEngineLabel(string $engine): string {
     $engine = normalizeExtractionEngine($engine);
     $map = [
-        'selectors'  => 'CSS selectors (legacy)',
-        'auto'       => 'Auto smart (JSON-LD → heuristic → selectors)',
-        'heuristic'  => 'Structural / heuristic cards',
-        'jsonld'     => 'JSON-LD Product',
-        'jina'       => 'Jina Reader (r.jina.ai) → Auto parser',
-        'playwright' => 'Playwright/CDP render (Selenium fallback) → Auto parser',
-        'selenium'   => 'Selenium WebDriver render → Auto parser',
+        'selectors'    => 'CSS selectors (legacy)',
+        'auto'         => 'Auto smart (JSON-LD → heuristic → selectors)',
+        'heuristic'    => 'Structural / heuristic cards',
+        'jsonld'       => 'JSON-LD Product',
+        'jina'         => 'Jina Reader (r.jina.ai) → Auto parser',
+        'digikala_api' => 'Digikala Official API (api.digikala.com)',
+        'playwright'   => 'Playwright/CDP render (Selenium fallback) → Auto parser',
+        'selenium'     => 'Selenium WebDriver render → Auto parser',
     ];
     return $map[$engine] ?? $engine;
 }
 function fetch_html_for_engine(string $url, int $timeout, string $engine, array $sel = []): array {
     $engine = normalizeExtractionEngine($engine);
+    if ($engine === 'digikala_api') return fetch_html_digikala_api($url, $timeout);
     if ($engine === 'jina') return fetch_html_jina_reader($url, $timeout);
     if (!extractionEngineUsesRender($engine)) return fetch_html_smart($url, $timeout);
     $rc = renderCfg();
@@ -24400,6 +25287,10 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
         $usedEngine = $engine . ($_inner !== '' ? (' → ' . $_inner) : ' → auto');
         return $rows;
     }
+    if ($engine === 'digikala_api') {
+        $usedEngine = 'Digikala API';
+        return parse_digikala_api_html($html, $baseUrl);
+    }
     if ($engine === 'jina') {
         $usedEngine = 'Jina Reader';
         $rows = s4JinaProductsFromReaderText($html, $baseUrl);
@@ -24430,6 +25321,10 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
             if (empty($rows)) $rows = snappshopProductsFromReaderText($html, $baseUrl);
             if (!empty($rows)) $usedEngine = 'selectors → heuristic(snappshop)';
         }
+        if (empty($rows) && function_exists('isDigikalaUrl') && isDigikalaUrl($baseUrl)) {
+            $rows = parse_digikala_api_html($html, $baseUrl);
+            if (!empty($rows)) $usedEngine = 'selectors → digikala_api';
+        }
         return $rows;
     }
     if ($engine === 'jsonld') {
@@ -24438,6 +25333,10 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
     }
     if ($engine === 'heuristic') {
         $usedEngine = 'heuristic';
+        if (stripos($html, 's4-digikala-api-json') !== false) {
+            $rows = parse_digikala_api_html($html, $baseUrl);
+            if (!empty($rows)) { $usedEngine = 'heuristic → digikala_api'; return $rows; }
+        }
         $rows = parse_products($html, $baseUrl);
         if (empty($rows) && isEmallsUrl($baseUrl)) {
             $rows = parse_emalls_products($html, $baseUrl);
@@ -24452,6 +25351,10 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
     }
     // Auto mirrors the Node app's idea without depending on Node packages:
     // structured data first, structural/heuristic cards next, saved selectors last.
+    if (stripos($html, 's4-digikala-api-json') !== false) {
+        $rows = parse_digikala_api_html($html, $baseUrl);
+        if (!empty($rows)) { $usedEngine = 'digikala_api'; return $rows; }
+    }
     $rows = parse_jsonld_products($html, $baseUrl);
     if (!empty($rows)) { $usedEngine = 'jsonld'; return $rows; }
     $rows = parse_products($html, $baseUrl);
@@ -24879,9 +25782,13 @@ header('X-Accel-Buffering: no');
 while (@ob_get_level()) @ob_end_clean();
 
 $url = s4NormalizeInputUrl((string)($_GET['url'] ?? DEFAULT_URL));
-$maxPages = max(1, (int)($_GET['pages'] ?? 20));
+$_rawStreamPages = (int)($_GET['pages'] ?? 20);
+$maxPages = $_rawStreamPages <= 0 ? 10000 : max(1, $_rawStreamPages);
 $selectors = isset($_GET['selectors']) ? json_decode($_GET['selectors'], true) : null;
 $streamEngine = normalizeExtractionEngine((string)($_GET['extractionEngine'] ?? (($selectors && !empty($selectors['container'])) ? 'selectors' : 'heuristic')));
+if (function_exists('isDigikalaUrl') && isDigikalaUrl($url) && $streamEngine === 'selectors' && (empty($selectors) || empty($selectors['container']))) {
+$streamEngine = 'digikala_api';
+}
 $pagType = $_GET['pagType'] ?? 'query_page';
 $pagVal = trim($_GET['pagVal'] ?? '');
 
@@ -24894,6 +25801,7 @@ exit;
 $allProducts = [];
 $seenKeys = [];
 $nextUrl = null;
+$_streamReachedLastPage = false;
 
 for ($page = 1; $page <= $maxPages; $page++) {
 if ($page === 1) {
@@ -24902,6 +25810,7 @@ $pageUrl = $url;
 $pageUrl = $nextUrl;
 } elseif ($pagType === 'next_selector' && !$nextUrl) {
 send_sse('page', ['page' => $page, 'url' => '', 'ok' => false]);
+if ($page > 1 && count($allProducts) > 0) $_streamReachedLastPage = true;
 break;
 } else {
 $pageUrl = build_page_url_custom($url, $url, $page, $pagType, $pagVal);
@@ -24914,7 +25823,21 @@ $res = fetch_html_for_engine($pageUrl, 20, $streamEngine, is_array($selectors)?$
 send_sse('page', ['page' => $page, 'url' => $res['url'], 'ok' => $res['ok']]);
 
 if (!$res['ok']) {
-if ($page === 1) send_sse('error', ['message' => 'Failed: ' . $res['error']]);
+if ($page > 1 && count($allProducts) > 0 && in_array((int)($res['code'] ?? 0), [404, 410], true)) {
+$_streamReachedLastPage = true;
+break;
+}
+send_sse('error', [
+'message' => 'استخراج در صفحهٔ ' . $page . ' ناتمام ماند (' . ($res['error'] ?: ('HTTP ' . (int)($res['code'] ?? 0))) . ') — نتایج قبلی دست‌نخورده حفظ شد',
+'interrupted' => true,
+'page' => $page,
+]);
+send_sse('done', []);
+exit;
+}
+
+if ($page > 1 && count($allProducts) > 0 && (!empty($res['snappshop_end_of_pages']) || !empty($res['digikala_end_of_pages'])) && (int)($res['jina_product_count'] ?? 0) === 0) {
+$_streamReachedLastPage = true;
 break;
 }
 
@@ -24948,9 +25871,31 @@ $nextUrl = null;
 }
 }
 
-if ($page > 1 && $newCount === 0) break;
+$_streamApiTotP = max((int)($res['snappshop_total_pages'] ?? 0), (int)($res['digikala_total_pages'] ?? 0));
+if (count($allProducts) > 0 && $_streamApiTotP > 0 && $page >= $_streamApiTotP) {
+$_streamReachedLastPage = true;
+break;
+}
+if ($page > 1 && $newCount === 0) {
+if (count($allProducts) > 0) $_streamReachedLastPage = true;
+break;
+}
+if ($page >= $maxPages && count($allProducts) > 0) {
+$_streamReachedLastPage = true;
+}
 $__sp = max(0, min(5000, (int)((loadConnections()['extract_page_pause_ms'] ?? 80))));
 if ($__sp > 0) usleep($__sp * 1000);
+}
+
+if (!$_streamReachedLastPage || empty($allProducts)) {
+send_sse('error', [
+'message' => empty($allProducts)
+    ? 'هیچ محصولی استخراج نشد — نتایج قبلی دست‌نخورده حفظ شد'
+    : 'استخراج پیش از رسیدن به پایان آخرین صفحه قطع شد — نتایج قبلی دست‌نخورده حفظ شد',
+'interrupted' => true,
+]);
+send_sse('done', []);
+exit;
 }
 
 if (FETCH_MISSING_IMAGES) {
@@ -26449,6 +27394,78 @@ function extractCheckpoint(string $pkFinal, array $allProducts, array $extra = [
     if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
 }
 
+/**
+ * v10.471: حافظهٔ مرحله‌ای (Staging) برای استخراج لیست صفحات.
+ * تا زمانی که استخراج به انتهای آخرین صفحه نرسیده است، محصولات نیمه‌کاره هرگز در
+ * $profile['products'] و تب نتایج قرار نمی‌گیرند و نتایج قبلی دست‌نخورده می‌ماند.
+ */
+function extractStagingFile(string $pkFinal): string {
+    return __DIR__ . '/extract_staging_' . md5($pkFinal) . '.json';
+}
+
+function extractSaveListStaging(string $pkFinal, ?array $stagedProducts, array $metaExtra = []): void {
+    if ($pkFinal === '') return;
+    if (is_array($stagedProducts)) {
+        $file = extractStagingFile($pkFinal);
+        $tmp  = $file . '.tmp.' . (int)@getmypid();
+        $json = json_encode([
+            'profile_key' => $pkFinal,
+            'saved_at'    => time(),
+            'products'    => $stagedProducts,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if (is_string($json) && $json !== '') {
+            if (@file_put_contents($tmp, $json, LOCK_EX) !== false) {
+                @rename($tmp, $file);
+            } else {
+                @unlink($tmp);
+            }
+        }
+        unset($json);
+    }
+    if (!empty($metaExtra)) {
+        $lfp = @fopen(PROFILES_FILE . '.extract.lock', 'c');
+        if ($lfp) @flock($lfp, LOCK_EX);
+        try {
+            $profilesNow = loadProfiles();
+            if (!isset($profilesNow[$pkFinal]) || !is_array($profilesNow[$pkFinal])) return;
+            $one = $profilesNow[$pkFinal];
+            foreach ($metaExtra as $mk => $mv) {
+                if ($mk === 'products' || $mk === 'productsOrder' || $mk === 'updatedAt') continue;
+                $one[$mk] = $mv;
+            }
+            $profilesNow[$pkFinal] = $one;
+            unset($one);
+            saveProfiles($profilesNow, true);
+            unset($profilesNow);
+        } finally {
+            if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
+        }
+    }
+    if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
+}
+
+function extractLoadListStaging(string $pkFinal): array {
+    if ($pkFinal === '') return [];
+    $file = extractStagingFile($pkFinal);
+    if (!is_file($file)) return [];
+    $raw = @file_get_contents($file);
+    if (!is_string($raw) || $raw === '') return [];
+    $j = @json_decode($raw, true);
+    unset($raw);
+    if (!is_array($j) || !is_array($j['products'] ?? null)) return [];
+    $out = [];
+    foreach ($j['products'] as $k => $p) {
+        if (is_string($k) && $k !== '' && is_array($p)) $out[$k] = $p;
+    }
+    return $out;
+}
+
+function extractClearListStaging(string $pkFinal): void {
+    if ($pkFinal === '') return;
+    $file = extractStagingFile($pkFinal);
+    if (is_file($file)) @unlink($file);
+}
+
 /** v10.294: فقط استخراج واقعاً نیمه‌کاره باید از checkpoint صفحه ادامه یابد.
  * list_done یعنی فهرست قبلی کامل شده؛ page_try آن نباید اجرای دوره‌ای تازه را
  * از صفحات پایانی آغاز کند یا محصولات قبلی را seen فرض کند. */
@@ -27587,9 +28604,16 @@ $maxPages=$autoPageMode?10000:max(1,$pageSetting);
 $progressPageTarget=$autoPageMode?0:$maxPages;
 $selectors=$profile['selectors']??[];
 $extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?? 'selectors'));
+if(function_exists('isDigikalaUrl') && isDigikalaUrl($url) && $extractEngine==='selectors' && (empty($selectors) || empty($selectors['container']))){
+    $extractEngine='digikala_api';
+}
+$GLOBALS['_s4ActiveDigikalaApiEngine']=($extractEngine==='digikala_api');
 $pagType=$profile['pagType']??'query_page';
 $pagVal=$profile['pagVal']??'';
 $detailSelectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
+if(empty($detailSelectors) && $extractEngine==='digikala_api' && function_exists('digikalaDefaultDetailSelectors')){
+    $detailSelectors=digikalaDefaultDetailSelectors();
+}
 $_detailExtractMode=normalizeDetailExtractMode($detailModeOverride!==''?$detailModeOverride:($profile['detailExtractMode']??'two_stage'));
 $detailConfigured=!empty($detailSelectors);
 $_isResumeRun=($reservedLockQueueId!=='')||!empty($profile['_extract_resume_req'])
@@ -27837,12 +28861,15 @@ $_listResume=false;
 $_startPage=1;
 $_resumeFrom=0;
 $_listBudget=0;$_listDeadline=0;$_listRanOut=false;
+$_listReachedLastPage=false;
+$_pkStageInit=$profileKey!==''?$profileKey:profileKey($url);
 if($phase!=='detail'){
     $_inc=extractListShouldResume($profile,(string)$trigger);
-    $_hasPrev=count($prevByKey)>0;
+    $_stagedByKey=$_inc ? extractLoadListStaging($_pkStageInit) : [];
+    $_hasStaged=count($_stagedByKey)>0;
     $_resumeReq=!empty($profile['_extract_resume_req'])
-        || in_array((string)$trigger,['manual_resume','watchdog_resume','auto_resume'],true);
-    if($_inc && $_hasPrev && ($phase==='all'||$phase==='list')){
+        || in_array((string)$trigger,['manual_resume','watchdog_resume','auto_resume','cron_resume'],true);
+    if($_inc && $_hasStaged && ($phase==='all'||$phase==='list')){
         $_startPage=extractResumeStartPage($profile);
         if(!empty($profile['_extract_resume_from'])){
             $_rf=(int)$profile['_extract_resume_from'];
@@ -27851,13 +28878,16 @@ if($phase!=='detail'){
         if($_startPage>1 || $_resumeReq){
             $_listResume=true;
             $_resumeFrom=$_startPage;
-            /* محصولات ذخیره‌شده را پایه بگیر — از صفر شروع نکن */
-            $allProducts=$prevByKey;
+            /* v10.471: ادامه از حافظهٔ مرحله‌ای (staging) بدون دست‌زدن به محصولات قبلی پروفایل */
+            $allProducts=$_stagedByKey;
             foreach($allProducts as $_k=>$_v)$seenKeys[$_k]=1;
             $nextUrl=trim((string)($profile['_extract_list_next_url']??''));
             if($nextUrl==='')$nextUrl=null;
         }
+    } elseif(!$_inc) {
+        extractClearListStaging($_pkStageInit);
     }
+    unset($_stagedByKey);
     /* بودجهٔ زمانی فاز فهرست — مثل جزئیات، تمیز بایست و بعد ادامه بده */
     $cnList=loadConnections();
     $_listBudget=(int)($cnList['list_budget_sec']??0);
@@ -27919,26 +28949,26 @@ for($page=$_startPage;$phase!=='detail'&&$page<=$maxPages;$page++){
 /* Each parallel row consumes only its own stop signal. */
 if(extractStopRequestedForQueue($queueId,true)){
 $pkTmp=$profileKey!==''?$profileKey:profileKey($url);
-extractCheckpoint($pkTmp,$allProducts,[
+extractSaveListStaging($pkTmp,$allProducts,[
     '_extract_stage'=>'stopped','_extract_stage_at'=>time(),
     '_extract_resume_phase'=>'list','_extract_list_incomplete'=>true,
     '_extract_list_page_try'=>$page,'_extract_list_page_ok'=>max(0,$page-1),
     '_extract_resume_from'=>max(1,$page-1),
     '_extract_list_next_url'=>$nextUrl?:'','_extract_list_last_url'=>'']);
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'products_saved'=>false,
     'resumable'=>true,'resume_phase'=>'list','total'=>count($allProducts),'current'=>$page,'page'=>$page,
     'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkTmp,
-    'recent_log'=>['⏹ توقف کاربر — تا اینجا ذخیره شد','   • '.count($allProducts).' محصول'],'total_log_count'=>2,'extracted'=>count($allProducts)]);
+    'recent_log'=>['⏹ توقف کاربر پیش از آخرین صفحه — نتایج قبلی دست‌نخورده ماند','   • '.count($allProducts).' محصول در حافظهٔ موقت ادامه نگهداری شد'],'total_log_count'=>2,'extracted'=>count($allProducts)]);
 $queue=extractReadQueue();
 foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='paused';$qe['done_at']=time();$qe['paused_at']=time();$qe['updated_at']=time();$qe['resumable']=true;$qe['resume_needed']=1;$qe['partial']=true;$qe['stopped_by_user']=true;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page-1);$qe['products_count']=count($allProducts);$qe['error']='با دکمهٔ توقف متوقف شد؛ checkpoint حفظ شد';unset($qe['stop_requested'],$qe['stop_requested_at']);break;}}unset($qe);
 extractWriteQueue($queue);
 extractLockRelease($queueId);
-return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true];
+return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'cancelled'=>true,'extracted'=>count($allProducts),'partial'=>true,'products_saved'=>false];
 }
 /* v10.122: بودجهٔ فهرست — تمیز بایست تا نوبت بعد از صفحهٔ قبلی ادامه دهد */
 if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($allProducts)>0){
     $_listRanOut=true;
-    extractCheckpoint($pkFinal,$allProducts,[
+    extractSaveListStaging($pkFinal,$allProducts,[
         '_extract_stage'=>'list','_extract_stage_at'=>time(),
         '_extract_want_detail'=>$_wantDetailAfterList,
         '_extract_list_incomplete'=>true,
@@ -27948,12 +28978,12 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
         '_extract_list_last_url'=>'',
         '_extract_resume_from'=>max(1,$page-1),
     ]);
-    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'ran_out'=>true,'resumable'=>true,
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'ran_out'=>true,'resumable'=>true,'products_saved'=>false,
         'resume_page'=>max(1,$page-1),'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,
         'last_progress_ts'=>time(),'queue_id'=>$queueId,'extracted'=>count($allProducts),
         'recent_log'=>['⏸ سقف زمانی فهرست — ادامه از صفحه '.max(1,$page-1),
-            '   • '.count($allProducts).' محصول تا اینجا ذخیره شد',
-            '   • دکمهٔ «ادامه» یا نوبت بعد از همین‌جا پیش می‌رود'],
+            '   • '.count($allProducts).' محصول در حافظهٔ مرحله‌ای نگه داشته شد (نتایج قبلی دست‌نخورده است)',
+            '   • پس از رسیدن به پایان آخرین صفحه، محصولات نهایی ثبت می‌شوند'],
         'total_log_count'=>3,'page'=>$page,'profile_key'=>$pkFinal]);
     $queue=extractReadQueue();
     foreach($queue['entries'] as &$qe){
@@ -27969,11 +28999,11 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
     extractLockRelease($queueId);
     return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),
         'ran_out'=>true,'resume_needed'=>true,'resume_page'=>max(1,$page-1),'partial'=>true,
-        'products_saved'=>true,'profile_key'=>$pkFinal];
+        'products_saved'=>false,'profile_key'=>$pkFinal];
 }
-/* ثبت صفحه‌ای که الان تلاش می‌شود — برای resume = try-1 */
+/* ثبت صفحه‌ای که الان تلاش می‌شود — برای resume = try-1 (بدون دست زدن به products) */
 if($pkFinal!==''){
-    extractCheckpoint($pkFinal,$allProducts,[
+    extractSaveListStaging($pkFinal,null,[
         '_extract_stage'=>'list','_extract_stage_at'=>time(),
         '_extract_list_incomplete'=>true,
         '_extract_list_page_try'=>$page,
@@ -27981,7 +29011,7 @@ if($pkFinal!==''){
 }
 if($page===1){$pageUrl=$url;}
 elseif($pagType==='next_selector'&&$nextUrl){$pageUrl=$nextUrl;}
-elseif($pagType==='next_selector'&&!$nextUrl){break;}
+elseif($pagType==='next_selector'&&!$nextUrl){if($page>1&&count($allProducts)>0){$totalPages=max(1,$page-1);$_listReachedLastPage=true;}break;}
 else{$pageUrl=build_page_url_custom($url,$url,$page,$pagType,$pagVal);}
 /* روی resume با next_selector: اگر last_url ذخیره شده و page==start، از آن شروع کن */
 if($_listResume && $page===$_startPage && $pagType==='next_selector'){
@@ -28011,6 +29041,7 @@ $logs[]='❌ خطا: '.mb_substr($res['error']??'HTTP error',0,80);
 $_httpCode=(int)($res['code']??0);
 if($page>1 && count($allProducts)>0 && in_array($_httpCode,[404,410],true)){
     $totalPages=max(1,$page-1);
+    $_listReachedLastPage=true;
     $logs[]='🏁 HTTP '.$_httpCode.' در صفحهٔ '.$page.' — صفحهٔ قبلی آخرین صفحه بود؛ استخراج کامل است.';
     $_qEnd=extractReadQueue();foreach($_qEnd['entries'] as &$_qeEnd){if(($_qeEnd['id']??'')!==$queueId)continue;
         $_qeEnd['pag_stop_reason']='پایان طبیعی صفحه‌بندی: HTTP '.$_httpCode.' در صفحهٔ '.$page;
@@ -28028,7 +29059,7 @@ if($page===1)$fetchFail='صفحهٔ اول باز نشد: '.mb_substr($res['erro
 extractLockTouch($queueId);
 if($page>1 && count($allProducts)>0){
     $_rpF=max(1,$page-1);
-    extractCheckpoint($pkFinal,$allProducts,[
+    extractSaveListStaging($pkFinal,$allProducts,[
         '_extract_stage'=>'list','_extract_stage_at'=>time(),
         '_extract_list_incomplete'=>true,
         '_extract_list_page_try'=>$page,
@@ -28039,11 +29070,11 @@ if($page>1 && count($allProducts)>0){
 }
 if(!isset($_pageFailStreak))$_pageFailStreak=0;
 $_pageFailStreak++;
-writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>false,'resumable'=>$page>1,'resume_page'=>max(1,$page-1)]);
+writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'products_saved'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>false,'resumable'=>$page>1,'resume_page'=>max(1,$page-1)]);
 if($page===1)break;
 if($_pageFailStreak>=2 && count($allProducts)>0){
     $_rpF=max(1,$page-1);
-    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>'صفحات متوالی باز نشد','resumable'=>true,'resume_page'=>$_rpF,'extracted'=>count($allProducts),'page'=>$page,'queue_id'=>$queueId,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>array_merge($logs,['⏸ دو صفحه پشت‌سرهم شکست — ادامه از صفحه '.$_rpF]),'total_log_count'=>$page+1,'profile_key'=>$pkFinal]);
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'products_saved'=>false,'error'=>'صفحات متوالی باز نشد','resumable'=>true,'resume_page'=>$_rpF,'extracted'=>count($allProducts),'page'=>$page,'queue_id'=>$queueId,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>array_merge($logs,['⏸ دو صفحه پشت‌سرهم شکست — نتایج قبلی دست‌نخورده ماند؛ ادامه از صفحه '.$_rpF]),'total_log_count'=>$page+1,'profile_key'=>$pkFinal]);
     $queue=extractReadQueue();
     foreach($queue['entries'] as &$qe){
         if(($qe['id']??'')===$queueId){
@@ -28054,25 +29085,27 @@ if($_pageFailStreak>=2 && count($allProducts)>0){
     }unset($qe);
     extractWriteQueue($queue);
     extractLockRelease($queueId);
-    return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'partial'=>true,'resume_needed'=>true,'resume_page'=>$_rpF,'products_saved'=>true,'profile_key'=>$pkFinal];
+    return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'partial'=>true,'resume_needed'=>true,'resume_page'=>$_rpF,'products_saved'=>false,'profile_key'=>$pkFinal];
 }
 continue;
 }
 $_pageFailStreak=0;
-/* v10.451: تشخیص فوری پایان صفحه‌بندی API اسنپ‌شاپ (عبور از total_pages یا سقف ۵۰۰ صفحهٔ apix)
-   بدون ثبت خطای کاذب HTTP 451 جینا یا ۳ صفحه تلاش اضافی، تا مستقیماً ذخیرهٔ نهایی و فاز ۲ اجرا شود. */
-if($page>1 && count($allProducts)>0 && !empty($res['snappshop_end_of_pages']) && (int)($res['jina_product_count']??0)===0){
+/* v10.451 / v10.471: تشخیص فوری پایان صفحه‌بندی API اسنپ‌شاپ و دیجی‌کالا */
+if($page>1 && count($allProducts)>0 && (!empty($res['snappshop_end_of_pages']) || !empty($res['digikala_end_of_pages'])) && (int)($res['jina_product_count']??0)===0){
     $totalPages=max(1,$page-1);
-    $_snLim=(int)($res['snappshop_total_pages']??$totalPages);
-    $logs[]='🏁 پایان طبیعی صفحه‌بندی اسنپ‌شاپ در صفحهٔ '.$totalPages.($_snLim>0?' (سقف دسته‌بندی: '.$_snLim.' صفحه)':'').' — استخراج لیست کامل شد.';
+    $_listReachedLastPage=true;
+    $_isDkEnd=!empty($res['digikala_end_of_pages']);
+    $_snLim=(int)($_isDkEnd ? ($res['digikala_total_pages']??$totalPages) : ($res['snappshop_total_pages']??$totalPages));
+    $_srcEndLbl=$_isDkEnd ? 'دیجی‌کالا' : 'اسنپ‌شاپ';
+    $logs[]='🏁 پایان طبیعی صفحه‌بندی '.$_srcEndLbl.' در صفحهٔ '.$totalPages.($_snLim>0?' (سقف دسته‌بندی: '.$_snLim.' صفحه)':'').' — استخراج لیست کامل شد.';
     $_qEnd=extractReadQueue();foreach($_qEnd['entries'] as &$_qeEnd){if(($_qeEnd['id']??'')!==$queueId)continue;
-        $_qeEnd['pag_stop_reason']='پایان طبیعی صفحه‌بندی اسنپ‌شاپ در صفحهٔ '.$totalPages;
+        $_qeEnd['pag_stop_reason']='پایان طبیعی صفحه‌بندی '.$_srcEndLbl.' در صفحهٔ '.$totalPages;
         $_qeEnd['pag_stop_url']=$pageUrl;$_qeEnd['resumable']=false;$_qeEnd['resume_page']=0;break;}unset($_qeEnd);extractWriteQueue($_qEnd);
     writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$totalPages,
         'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,
         'total_log_count'=>$page+1,'extracted'=>count($allProducts),'page'=>$totalPages,'page_ok'=>true,
         'resumable'=>false,'resume_page'=>0,'natural_end'=>true,'profile_key'=>$pkFinal]);
-    unset($_qEnd,$_snLim);break;
+    unset($_qEnd,$_snLim,$_isDkEnd,$_srcEndLbl);break;
 }
 
 $_usedEngine='';
@@ -28202,8 +29235,9 @@ if (!($_galDoneNow && !$_fieldMissingNow)) {
         $_inlineDetailFail++;
     }
     extractLockTouch($queueId);
-    extractCheckpoint($pkFinal, $allProducts,
-        ['_extract_stage' => 'detail', '_extract_stage_at' => time(),
+    extractSaveListStaging($pkFinal, $allProducts,
+        ['_extract_stage' => 'list', '_extract_stage_at' => time(),
+         '_extract_list_incomplete' => true,
          '_extract_detail_cycle' => $_detailCycle,
          '_extract_detail_done' => $_inlineDetailDone, '_extract_detail_total' => 0]);
 } else {
@@ -28218,7 +29252,7 @@ $logs[]='✓ +'.($newCount).' محصول (کل: '.count($allProducts).')';
 // v8.22: مقایسهٔ زنده — شمارنده‌ها و لیست‌ها همان لحظه محاسبه می‌شوند
 $liveCmp=extractLiveCompare($allProducts,$livePrevMap);
 msAlive('صفحه ' . $page . ' — ' . count($allProducts) . ' محصول');   /* v10.61 (۷۵) */
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'detail_extract_mode'=>$_detailExtractMode,'phase'=>($_detailExtractMode==='inline'&&$phase!=='list'?'list_detail':'list'),'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,'page_new'=>$newCount,'page_total'=>count($allProducts),'resumable'=>true,'resume_page'=>max(1,$page)],$liveCmp));
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>true,'done'=>false,'products_saved'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'profile_key'=>$pkFinal,'detail_extract_mode'=>$_detailExtractMode,'phase'=>($_detailExtractMode==='inline'&&$phase!=='list'?'list_detail':'list'),'recent_log'=>$logs,'total_log_count'=>$page,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,'page_new'=>$newCount,'page_total'=>count($allProducts),'resumable'=>true,'resume_page'=>max(1,$page)],$liveCmp));
 if($pagType==='next_selector'&&!empty($pagVal)){
 [$dom,$xp]=load_dom($res['html']);
 $xpath=cssToXpath($pagVal);
@@ -28230,9 +29264,9 @@ $nextUrl=make_absolute_url($href,$res['url']);
 }else{$nextUrl=null;}
 }else{$nextUrl=null;}
 }
-/* v10.122: چک‌پوینت بعد از nextUrl — برای ادامه از همین/صفحه قبل */
+/* v10.122 / v10.471: ذخیرهٔ مرحله‌ای بعد از nextUrl بدون دست‌زدن به محصولات قبلی پروفایل */
 extractLockTouch($queueId);
-extractCheckpoint($pkFinal,$allProducts,[
+extractSaveListStaging($pkFinal,$allProducts,[
     '_extract_stage'=>'list','_extract_stage_at'=>time(),
     '_extract_want_detail'=>$_wantDetailAfterList,
     '_extract_list_incomplete'=>true,
@@ -28252,19 +29286,23 @@ foreach($_qLive['entries'] as &$_qeL){
     }
 }unset($_qeL);
 extractWriteQueue($_qLive);
-if(count($allProducts)>0 && (int)($res['snappshop_total_pages']??0)>0 && $page>=(int)$res['snappshop_total_pages'] && $page<$maxPages){
-    $_snTotP=(int)$res['snappshop_total_pages'];
+$_apiTotPagesNow = max((int)($res['snappshop_total_pages']??0), (int)($res['digikala_total_pages']??0));
+if(count($allProducts)>0 && $_apiTotPagesNow>0 && $page>=$_apiTotPagesNow && $page<=$maxPages){
+    $_snTotP=$_apiTotPagesNow;
     $totalPages=$page;
-    $logs[]='🏁 آخرین صفحهٔ دسته‌بندی اسنپ‌شاپ (صفحهٔ '.$page.' از '.$_snTotP.') کامل شد — ورود به مرحلهٔ بعد.';
+    $_listReachedLastPage=true;
+    $_apiSrcLbl=((int)($res['digikala_total_pages']??0)>0)?'دیجی‌کالا':'اسنپ‌شاپ';
+    $logs[]='🏁 آخرین صفحهٔ دسته‌بندی '.$_apiSrcLbl.' (صفحهٔ '.$page.' از '.$_snTotP.') کامل شد — ورود به مرحلهٔ بعد.';
     $_qEnd2=extractReadQueue();foreach($_qEnd2['entries'] as &$_qeEnd2){if(($_qeEnd2['id']??'')!==$queueId)continue;
-        $_qeEnd2['pag_stop_reason']='آخرین صفحهٔ دسته‌بندی اسنپ‌شاپ (صفحهٔ '.$page.' از '.$_snTotP.')';
+        $_qeEnd2['pag_stop_reason']='آخرین صفحهٔ دسته‌بندی '.$_apiSrcLbl.' (صفحهٔ '.$page.' از '.$_snTotP.')';
         $_qeEnd2['pag_stop_url']=$pageUrl;$_qeEnd2['resumable']=false;$_qeEnd2['resume_page']=0;break;}unset($_qeEnd2);extractWriteQueue($_qEnd2);
     writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,
         'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,
         'total_log_count'=>$page+1,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,
         'resumable'=>false,'resume_page'=>0,'natural_end'=>true,'profile_key'=>$pkFinal]);
-    unset($_qEnd2,$_snTotP);break;
+    unset($_qEnd2,$_snTotP,$_apiTotPagesNow,$_apiSrcLbl);break;
 }
+unset($_apiTotPagesNow);
 $_noFreshStreak=$newCount===0?($_noFreshStreak+1):0;
 /* v10.177: توقفِ صفحه‌بندی به‌خاطر «صفرِ تازه» دیگر خاموش نیست — علت و نشانی
    ثبت می‌شود تا معلوم شود سرور نشانه را نادیده گرفت/چالش داد/فهرست تمام شد.
@@ -28273,7 +29311,7 @@ if($page>$_startPage&&$newCount===0){
     if($_noFreshStreak<$_noFreshLimit && $page<$maxPages){
         $logs[]='⚠️ صفحهٔ '.$page.' محصول تازه نداشت؛ پایان قطعی نیست — بررسی صفحهٔ بعد ('
             .$_noFreshStreak.'/'.$_noFreshLimit.')';
-        writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'max_pages'=>$pageSetting,'page_mode'=>$autoPageMode?'auto':'fixed','total'=>$progressPageTarget,
+        writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'products_saved'=>false,'max_pages'=>$pageSetting,'page_mode'=>$autoPageMode?'auto':'fixed','total'=>$progressPageTarget,
             'current'=>$page,'page'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,
             'recent_log'=>$logs,'total_log_count'=>count($logs),'extracted'=>count($allProducts),
             'empty_page_streak'=>$_noFreshStreak,'empty_page_limit'=>$_noFreshLimit,'profile_key'=>$pkFinal]);
@@ -28282,6 +29320,7 @@ if($page>$_startPage&&$newCount===0){
         if(isset($_pagePauseMs)&&$_pagePauseMs>0)usleep($_pagePauseMs*1000);
         continue;
     }
+    if(count($allProducts)>0) $_listReachedLastPage=true;
     $logs[]='⛳ '.$_noFreshStreak.' صفحهٔ پیاپی محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد.';
     if($pagType!=='next_selector'){
         $logs[]='   • نشانیِ امتحان‌شده: '.$pageUrl;
@@ -28304,6 +29343,9 @@ if($page>$_startPage&&$newCount===0){
     }unset($qe);
     extractWriteQueue($queue);
     break;
+}
+if($page>=$maxPages && count($allProducts)>0){
+    $_listReachedLastPage=true;
 }
 if(isset($_pagePauseMs) && $_pagePauseMs>0) usleep($_pagePauseMs*1000);
 }
@@ -28372,7 +29414,48 @@ notifRunFailure(loadConnections(),'استخراج',$profile['name']??$profileKey
     :'استخراج هیچ محصولی پیدا نکرد. علت: ').$_why);
 extractLockRelease($queueId);   // v10.32 (۴۵ب)
 return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'queue_id'=>$queueId,'error'=>'استخراج بی‌نتیجه — '.$_why,
-        'guard'=>'empty_result','kept'=>count($prevByKey)];
+        'guard'=>'empty_result','kept'=>count($prevByKey),'products_saved'=>false];
+}
+
+/* v10.471: تا زمانی که استخراج به انتهای آخرین صفحه نرسیده است، حتی اگر حلقه به هر دلیلی
+   (مثل خطای HTTP در صفحهٔ آخر) پیش از پایان کامل خارج شده باشد، محصولات نیمه‌کاره هرگز
+   وارد پروفایل و تب نتایج نمی‌شوند و نتایج قبلی دست‌نخورده باقی می‌ماند. */
+if($phase!=='detail' && !$_listReachedLastPage){
+    $_rpGuard=max(1,$totalPages-1);
+    extractSaveListStaging($pkFinal,$allProducts,[
+        '_extract_stage'=>'list','_extract_stage_at'=>time(),
+        '_extract_want_detail'=>$_wantDetailAfterList,
+        '_extract_list_incomplete'=>true,
+        '_extract_list_page_ok'=>$_rpGuard,
+        '_extract_list_page_try'=>max(1,$totalPages),
+        '_extract_resume_from'=>$_rpGuard,
+    ]);
+    writeProgress(EXTRACT_PROGRESS_FILE,[
+        'running'=>false,'done'=>true,'partial'=>true,'resumable'=>true,'products_saved'=>false,
+        'resume_page'=>$_rpGuard,'extracted'=>count($allProducts),'page'=>$totalPages,
+        'queue_id'=>$queueId,'started_at'=>$startedAt,'last_progress_ts'=>time(),'profile_key'=>$pkFinal,
+        'error'=>'استخراج پیش از پایان آخرین صفحه متوقف شد — نتایج قبلی حفظ شد',
+        'recent_log'=>[
+            '⏸ استخراج هنوز به انتهای آخرین صفحه نرسیده است (صفحهٔ '.$totalPages.')',
+            '   • '.count($allProducts).' محصول در حافظهٔ مرحله‌ای نگه داشته شد تا از صفحهٔ '.$_rpGuard.' ادامه یابد',
+            '   • محصولات قبلی در تب نتایج دست‌نخورده باقی ماندند',
+        ],
+        'total_log_count'=>3,
+    ]);
+    $queue=extractReadQueue();
+    foreach($queue['entries'] as &$qe){
+        if(($qe['id']??'')===$queueId){
+            $qe['status']='paused';$qe['done_at']=time();$qe['resumable']=true;$qe['resume_needed']=1;
+            $qe['partial']=true;$qe['resume_phase']='list';$qe['resume_page']=$_rpGuard;
+            $qe['products_count']=count($allProducts);
+            $qe['error']='پیش از آخرین صفحه متوقف شد — ادامه از صفحهٔ '.$_rpGuard;
+            break;
+        }
+    }unset($qe);
+    extractWriteQueue($queue);
+    extractLockRelease($queueId);
+    return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),
+        'partial'=>true,'resume_needed'=>true,'resume_page'=>$_rpGuard,'products_saved'=>false,'profile_key'=>$pkFinal];
 }
 
 /* v8.81: جزئیاتِ اجرای قبلی را برگردان، قبل از اینکه تصمیم بگیریم کدام
@@ -28421,10 +29504,9 @@ $_listSavedCount = ($phase === 'detail' && !empty($profile['_extract_list_saved_
     ? (int)$profile['_extract_list_saved_count']
     : count($allProducts);
 if ($phase !== 'detail') {
-    extractCheckpoint($pkFinal,$allProducts,[
+    extractCheckpoint($pkFinal,$allProducts,['_extract_stage'=>'list_done','_extract_stage_at'=>time(),
         'detailExtractMode'=>$_detailExtractMode,
         '_extract_want_detail'=>$_wantDetailAfterList,
-        '_extract_stage'=>'list_done','_extract_stage_at'=>time(),
         '_extract_list_saved_at'=>$_listSavedAt,
         '_extract_list_saved_count'=>$_listSavedCount,
         '_extract_detail_cycle'=>$_detailCycle,
@@ -28434,6 +29516,7 @@ if ($phase !== 'detail') {
         '_extract_resume_req'=>0,
         '_extract_resume_from'=>0,
     ]);
+    extractClearListStaging($pkFinal);
 }
 $_stageProgressMeta = [
     'detail_extract_mode' => $_detailExtractMode,
@@ -32482,8 +33565,14 @@ if(isset($_GET['sync_pipeline_control'])){
     }
     @unlink(MANUAL_SYNC_STOP_FILE);
     syncPipelineMark($pk,(string)($row['profile_name']??$pk),'queued','manual',['message'=>'ادامه از checkpoint ذخیره‌شده','failed_stage'=>'','resume_control'=>true]);
-    $queued=fireAndForget('manual_sync=1&profile='.rawurlencode($pk).'&force=1',1200);
-    echo json_encode(['ok'=>$queued,'continued'=>$queued,'profile_key'=>$pk,'error'=>$queued?'':'worker_start_failed'],JSON_UNESCAPED_UNICODE);exit;
+    $wEnq=s4WorkerEnqueueManualSync($pk,true);
+    if(!empty($wEnq['ok'])){
+        s4SpawnPersistentWorker();
+        $queued=true;
+    }else{
+        $queued=fireAndForget('manual_sync=1&profile='.rawurlencode($pk).'&resume=1&force=1',1200);
+    }
+    echo json_encode(['ok'=>$queued,'continued'=>$queued,'profile_key'=>$pk,'worker_job_id'=>(string)($wEnq['job_id']??''),'error'=>$queued?'':'worker_start_failed'],JSON_UNESCAPED_UNICODE);exit;
 }
 if(isset($_GET['sync_pipeline_status'])){
     header('Content-Type: application/json; charset=UTF-8');
@@ -32641,7 +33730,10 @@ if (isset($_GET['manual_sync'])) {
         && (string)($_msResumeCp['profile_key'] ?? '') === $_msKey;
     $_msResumeExtractDone = $_msResumeSameProfile
         && (int)($_msResumeCp['current'] ?? 0) >= 2
-        && is_array($_msResumeCp['extract'] ?? null);
+        && is_array($_msResumeCp['extract'] ?? null)
+        && empty($_msResumeCp['extract']['resume_needed'])
+        && empty($_msResumeCp['extract']['ran_out'])
+        && empty($_msResumeCp['extract']['partial']);
     $_msResumeQueueDone = $_msResumeSameProfile
         && is_array($_msResumeCp['enqueue'] ?? null);
     $_msInitialCurrent = $_msResumeQueueDone ? 3 : ($_msResumeExtractDone ? 2 : 1);
@@ -32698,8 +33790,39 @@ if (isset($_GET['manual_sync'])) {
         manualSyncProgress(['phase' => 'استخراج بک‌اند', 'current' => 1],
             '⚡ استخراج بک‌اند: ' . $_msName);
         msAlive('extract');
-        /* emitEarlyResponse=false چون خودمان پاسخ را فرستادیم؛ trigger=manual_sync */
-        $_msEx = runBackendExtract($_msKey, 'manual_sync', false, $_msPhase, false);
+        $_msReservedQid = '';
+        $_msExTrig = 'manual_sync';
+        if ($_msResumeRequested || extractListShouldResume((array)$_msProf, 'manual_resume')) {
+            $_msPrep = extractResumePrepare($_msKey, loadConnections(), '', true);
+            if (!empty($_msPrep['ok'])) {
+                $_msReservedQid = (string)($_msPrep['queue_id'] ?? '');
+                $_msExTrig = 'manual_resume';
+            }
+        }
+        /* emitEarlyResponse=false چون خودمان پاسخ را فرستادیم */
+        $_msEx = runBackendExtract($_msKey, $_msExTrig, false, $_msPhase, false, $_msReservedQid);
+    }
+    if (!empty($_msEx['ok']) && (!empty($_msEx['ran_out']) || !empty($_msEx['resume_needed']))) {
+        $_msResPage = max(1, (int)($_msEx['resume_page'] ?? 1));
+        manualSyncProgress([
+            'running' => false, 'done' => false, 'resumable' => true, 'resume_needed' => true,
+            'phase' => 'ادامهٔ خودکار استخراج از صفحهٔ ' . $_msResPage,
+            'checkpoint' => ['extract' => $_msEx, 'profile_key' => $_msKey, 'current' => 1, 'total' => 4],
+        ], '⏸ سقف زمانی قطعهٔ استخراج — ادامهٔ خودکار از صفحهٔ ' . $_msResPage . ' تا رسیدن به پایان آخرین صفحه');
+        syncPipelineMark($_msKey, $_msName, 'extract', 'manual', [
+            'message' => 'در حال ادامهٔ خودکار استخراج (صفحهٔ ' . $_msResPage . ') تا پایان آخرین صفحه',
+            'resume_page' => $_msResPage,
+        ]);
+        if (PHP_SAPI === 'cli') {
+            echo json_encode([
+                'ok' => true,
+                'resume_needed' => true,
+                'ran_out' => !empty($_msEx['ran_out']),
+                'resume_page' => $_msResPage,
+                'extracted' => (int)($_msEx['extracted'] ?? 0),
+            ], JSON_UNESCAPED_UNICODE) . PHP_EOL;
+        }
+        exit;
     }
     $_msQueueId = extractEnsureSyncQueueRow($_msKey, (array)$_msProf, 'manual_sync', $_msPhase,
         (array)$_msEx, !empty($_msEx['checkpoint_reused']) ? 'استخراج این همگام‌سازی از checkpoint کامل بازیابی شد' : 'مرحلهٔ استخراج همگام‌سازی دستی');
@@ -32739,6 +33862,11 @@ if (isset($_GET['manual_sync'])) {
         manualSyncProgress(['phase' => 'خطای استخراج'], '❌ ' . mb_substr($_msErr, 0, 280));
         /* استخراج fail نباید کل همگام را بکشد اگر محصول روی دیسک هست — ادامه برای ارسال */
         if (empty($_msProf['products'])) {
+            syncPipelineMark($_msKey, $_msName, 'error', 'manual', [
+                'failed_stage' => 'extract',
+                'error' => $_msErr,
+                'message' => $_msErr,
+            ]);
             writeProgress(MANUAL_SYNC_PROGRESS_FILE, array_merge(readProgress(MANUAL_SYNC_PROGRESS_FILE), [
                 'running' => false, 'done' => true, 'stale' => true, 'error' => $_msErr,
                 'checkpoint' => array_merge(
@@ -32747,6 +33875,9 @@ if (isset($_GET['manual_sync'])) {
                      'started_at' => (int)(readProgress(MANUAL_SYNC_PROGRESS_FILE)['started_at'] ?? time())]),
                 'phase' => 'خطا', 'ts' => time(), 'last_progress_ts' => time(),
             ]));
+            if (PHP_SAPI === 'cli') {
+                echo json_encode(['ok' => false, 'error' => $_msErr], JSON_UNESCAPED_UNICODE) . PHP_EOL;
+            }
             /* keep-conn: final line */ try { if (defined('MS_KEEP_CONN')) { echo json_encode(['done'=>true], JSON_UNESCAPED_UNICODE)."
 "; @ob_flush(); @flush(); } } catch (Throwable $e) {}
             exit;
@@ -32917,7 +34048,10 @@ if (isset($_GET['manual_sync'])) {
         $_msResults['ms_server_send'] = ['error' => $e->getMessage()];
     }
     $_msSendDetail=syncSendStageDetails(array_merge((array)($_msResults['enqueue']??[]),(array)($_msResults['ms_server_send']??[])));
-    syncPipelineMark($_msKey,$_msName,'send','manual',['stage_details'=>['send'=>$_msSendDetail],
+    $_msOwnedSendIds=array_values(array_filter(array_map('strval',(array)($_msResults['enqueue']['queue_ids']??[]))));
+    syncPipelineMark($_msKey,$_msName,'send','manual',[
+        'send_queue_ids'=>$_msOwnedSendIds,
+        'stage_details'=>['send'=>$_msSendDetail],
         'message'=>!empty($_msSendDetail['report'])?$_msSendDetail['report']:'گزارش ارسال آماده شد']);
 
     /* ── ۴) گزارش ── */
@@ -32949,12 +34083,23 @@ if (isset($_GET['manual_sync'])) {
         syncPipelineMark($_msKey,$_msName,$_msSendStopped?'stopped':'error','manual',
             ['message'=>$_msPartialP['error'],'pricing'=>$_msPricing??[]]);
         @unlink(MANUAL_SYNC_STOP_FILE);
+        if (PHP_SAPI === 'cli') {
+            echo json_encode(['ok' => false, 'error' => $_msPartialP['error']], JSON_UNESCAPED_UNICODE) . PHP_EOL;
+        }
         exit;
     }
     try { cronMarkRun($_msKey, 'manual_done'); } catch (Throwable $e) {}
-    syncPipelineMark($_msKey,$_msName,'done','manual',['message'=>'همگام‌سازی کامل شد','pricing'=>$_msPricing??[],
-        'stage_details'=>['done'=>['counts'=>['products'=>(int)($_msResults['extract']['extracted']??0)],
-            'data'=>$_msResults,'report'=>'استخراج، اعمال ضرایب و ارسال با موفقیت پایان یافت']]]);
+    if (!empty($_msResults['ms_server_send']['delegated']) && !empty($_msOwnedSendIds)) {
+        syncPipelineMark($_msKey,$_msName,'send','manual',[
+            'send_queue_ids'=>$_msOwnedSendIds,
+            'pricing'=>$_msPricing??[],
+            'message'=>'صف ارسال فعال شد و پردازندهٔ پس‌زمینه در حال ارسال محصولات است',
+        ]);
+    } else {
+        syncPipelineMark($_msKey,$_msName,'done','manual',['message'=>'همگام‌سازی کامل شد','pricing'=>$_msPricing??[],
+            'stage_details'=>['done'=>['counts'=>['products'=>(int)($_msResults['extract']['extracted']??0)],
+                'data'=>$_msResults,'report'=>'استخراج، اعمال ضرایب و ارسال با موفقیت پایان یافت']]]);
+    }
     s4WorkerCancelPendingManualSync($_msKey,'equivalent_manual_sync_completed');
     manualSyncProgress(['phase' => 'تمام شد', 'current' => 4], '✅ همگام‌سازی دستی تمام شد');
     $_msDone = readProgress(MANUAL_SYNC_PROGRESS_FILE);
@@ -33389,7 +34534,7 @@ if(!$_resumeWorker&&$_resumeCandidates){
 if($_resumeCandidates){
     foreach($_resumeCandidates as $_rc){
         $_rk=(string)($_rc['key']??'');if($_rk==='')continue;
-        $_profilesFresh=loadProfiles();$_prR=$_profilesFresh[$_rk]??null;if(!is_array($_prR))continue;
+        $_profilesFresh=loadProfiles();$_prR=$_profilesFresh[$_rk]??null;unset($_profilesFresh);if(!is_array($_prR))continue;
         $_rQueueId=(string)($_rc['queue_id']??'');
         $_pgCronChk = readProgress(EXTRACT_PROGRESS_FILE);
         $_pgCronSameRow = $_rQueueId==='' || (string)($_pgCronChk['queue_id']??'')===$_rQueueId;
@@ -33531,6 +34676,13 @@ if (!manualSyncActive()) {
 
 $_onlyKey  = trim((string)($_GET['only'] ?? ''));
 $_forceRun = !empty($_GET['force']);
+/* v10.471: آزادسازی ~۱۸۰ مگابایت آرایهٔ محصولات همهٔ پروفایل‌ها پیش از حلقهٔ همگام‌سازی
+   تا فراخوانی‌های runBackendExtract دچار کمبود RAM و مرگ ناگهانی پردازه (exit 255) نشوند. */
+foreach ($profiles as $_ckStrip => &$_cvStrip) {
+    if (is_array($_cvStrip)) unset($_cvStrip['products'], $_cvStrip['productsOrder']);
+}
+unset($_ckStrip, $_cvStrip);
+if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
 foreach ($profiles as $key => $profile) {
 if ($_onlyKey !== '' && $key !== $_onlyKey) continue;
 /* v10.61 (۷۵): ضربانِ اتصالِ دستی — پردازندهٔ بی‌خروجی را هاست می‌کُشد؛
@@ -33593,6 +34745,9 @@ if ($noExtract) {
        ارسالِ دوباره انجام می‌شود.
        ================================================================= */
     $pResult['no_extract'] = true;
+    $_oneNeAll = loadProfiles();
+    $profile = $_oneNeAll[$key] ?? $profile;
+    unset($_oneNeAll);
     $_neSel   = extractNormalizeDetailSelectors($profile['detailSelectors'] ?? []);
     $_neHasCfg = false;
     foreach ($_neSel as $_nsv) { if (!empty($_nsv)) { $_neHasCfg = true; break; } }
@@ -33620,6 +34775,7 @@ if ($noExtract) {
         ])){
             $exRes=['ok'=>false,'error'=>'ذخیرهٔ دامنهٔ جزئیات ناموفق بود'];
         }else{
+            unset($profile['products'], $profile['productsOrder']);
             // فازِ detail: فقط صفحاتِ محصول باز می‌شوند، صفحهٔ فهرست هرگز
             $exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, 'detail', $_neAll); /* v10.433 */
         }
@@ -33636,8 +34792,9 @@ if ($noExtract) {
                عادی. تا حالا پروفایل‌های اکسل/CSV هیچ اعلانی نمی‌گرفتند. */
             $srcN = notifSourceChanges($cn, $exRes, $profile['name'] ?? $key);
             if (!empty($srcN['sent'])) $pResult['src_notified'] = $srcN['sent'];
-            $profiles = loadProfiles();
-            $profile  = $profiles[$key] ?? $profile;
+            $_oneNeDone = loadProfiles();
+            $profile    = $_oneNeDone[$key] ?? $profile;
+            unset($_oneNeDone);
         } else {
             $pResult['extract_error'] = $exRes['error'] ?? 'خطای نامشخص';
             notifRunFailure($cn, 'تازه‌سازی جزئیات', $profile['name'] ?? $key, $pResult['extract_error']);
@@ -33747,9 +34904,10 @@ $pResult['step'] = $stepMode;
    برود سراغ ارسال. فقط اگر اجرای قبلی وسط فاز جزئیات نیمه‌کاره مانده
    باشد ($stagePrev == detail) همان را ادامه می‌دهیم تا محصولِ ناقص ارسال
    نشود — این ادامهٔ کارِ ناتمام است، نه استخراج دوره‌ای. */
-if ($stepMode === 'list') {
-    $profiles = loadProfiles();
-    $profile  = $profiles[$key] ?? $profile;
+if ($stepMode === 'list' && empty($exRes['ran_out']) && empty($exRes['resume_needed'])) {
+    $_oneLstAll = loadProfiles();
+    $profile    = $_oneLstAll[$key] ?? $profile;
+    unset($_oneLstAll);
     /* v10.433: run the configured detail policy after every successful list
        extraction. Enabled = every linked profile product. Disabled = only the
        union missing from Woo and/or each selected Basalam shop. */
@@ -33772,10 +34930,12 @@ if ($stepMode === 'list') {
             ])){
                 $_detailRes=['ok'=>false,'error'=>'ذخیرهٔ دامنهٔ جزئیات ناموفق بود'];
             }else{
+                unset($profile['products'], $profile['productsOrder']);
                 $_detailRes=runBackendExtract($key,manualSyncActive()?'manual_sync':'periodic_sync',false,'detail',$_detailAll);
             }
             if(empty($_detailRes['ok']))$exRes=$_detailRes;
             else{
+                $_oneDetAll=loadProfiles();$profile=$_oneDetAll[$key]??$profile;unset($_oneDetAll);
                 $pResult['detail_done']=(int)($_detailRes['detail_done']??0);
                 $pResult['detail_total']=(int)($_detailRes['detail_total']??0);
                 $pResult['detail_scope_count']=$_detailAll
@@ -33784,7 +34944,6 @@ if ($stepMode === 'list') {
                     $exRes['ran_out']=true;$exRes['resume_needed']=true;
                     $exRes['detail_done']=$pResult['detail_done'];$exRes['detail_total']=$pResult['detail_total'];
                 }
-                $profiles=loadProfiles();$profile=$profiles[$key]??$profile;
             }
         }
     }elseif(!empty($exRes['ok']))$pResult['detail_skipped']='no_detail_selectors';
@@ -33801,6 +34960,8 @@ if (!empty($exRes['ran_out']) || !empty($exRes['resume_needed'])) {
     $pResult['detail_total'] = (int)($exRes['detail_total'] ?? 0);
     $pResult['note'] = 'استخراج در checkpoint امن متوقف شد — تیک کران بعدی از همان مرحله ادامه می‌دهد';
     if(!manualSyncActive()){
+        syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract','periodic',
+            ['message'=>'ادامهٔ خودکار استخراج از checkpoint (صفحهٔ '.max(1,(int)($exRes['resume_page']??1)).')']);
         $pResult['status']='extract_checkpoint';$results['profiles'][]=$pResult;
         $results['deferred_by_extract_checkpoint']=true;
         cronEmit($results);exit;
@@ -33885,7 +35046,7 @@ if (manualSyncActive()) {
 
 /* مرحلهٔ دوم مشترک: بعد از ذخیرهٔ خروجی استخراج، تنظیمات تازه دوباره خوانده
    و امضای ضرایب ثبت می‌شود. ساخت payload در پایین همان ضرایب را اعمال می‌کند. */
-$profiles=loadProfiles();$profile=$profiles[$key]??$profile;$cn=loadConnections();
+$_onePostEx=loadProfiles();$profile=$_onePostEx[$key]??$profile;unset($_onePostEx);$cn=loadConnections();
 $_syncExtractTrigger = manualSyncActive() ? 'manual_sync' : 'periodic_sync';
 $_syncExtractPhase = !empty($noExtract) ? 'detail' : (string)($stepMode ?? 'list');
 $_syncExtractQid = extractEnsureSyncQueueRow((string)$key, (array)$profile, $_syncExtractTrigger,
@@ -55029,6 +56190,72 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.471', 'تضمین اتمی عدم ذخیرهٔ نتایج ناقص پیش از پایان صفحهٔ آخر، بازیابی ردیف‌های بی‌حرکت صف همگام‌سازی و افزودن موتور استخراج API دیجی‌کالا (digikala_api)',
+         function_exists('extractSaveListStaging')
+      && function_exists('extractLoadListStaging')
+      && function_exists('extractClearListStaging')
+      && function_exists('syncPipelineReconcileActiveRows')
+      && function_exists('digikalaBuildApiEndpoint')
+      && function_exists('digikalaRenderPlpSyntheticHtml')
+      && function_exists('digikalaRenderProductDetailHtml')
+      && extractionEngineAllowed('digikala_api') === 'digikala_api'
+      && (function () {
+             /* ۱) تست موتور API دیجی‌کالا: تبدیل آدرس دسته، ریال به تومان، صفحه‌بندی و رندر جزئیات محصول */
+             $ep = digikalaBuildApiEndpoint('https://www.digikala.com/search/category-diaper/', 2);
+             if (($ep['type'] ?? '') !== 'plp') return false;
+             if (strpos((string)($ep['url'] ?? ''), 'api.digikala.com/v1/categories/diaper/search/') === false) return false;
+             if (strpos((string)($ep['url'] ?? ''), 'page=2') === false) return false;
+             if (digikalaExtractProductId('https://www.digikala.com/product/dkp-16228541/%D9%BE%D9%88%D8%B4%DA%A9/') !== 16228541) return false;
+             $plpHtml = digikalaRenderPlpSyntheticHtml([
+                 'status' => 200,
+                 'data' => [
+                     'pager' => ['current_page' => 1, 'total_pages' => 3],
+                     'products' => [[
+                         'id' => 16228541,
+                         'title_fa' => 'پوشک کودک مولفیکس سایز ۴ بسته ۳۴ عددی',
+                         'status' => 'marketable',
+                         'url' => ['uri' => '/product/dkp-16228541/پوشک-مولفیکس/'],
+                         'images' => ['main' => ['url' => ['https://dkstatics-public.digikala.com/digikala-products/test.jpg']]],
+                         'default_variant' => ['price' => ['selling_price' => 2850000, 'rrp_price' => 3100000]],
+                     ]],
+                 ],
+             ], 'https://www.digikala.com/search/category-diaper/', 1);
+             $parsed = parse_list_by_engine('digikala_api', $plpHtml, 'https://www.digikala.com/search/category-diaper/', ['inStockOnly' => true]);
+             $items = $parsed['items'] ?? [];
+             if (count($items) !== 1 || ($items[0]['price'] ?? '') !== '285000') return false;
+             if (strpos($plpHtml, 'page=2') === false) return false;
+             $pdpHtml = digikalaRenderProductDetailHtml([
+                 'status' => 200,
+                 'data' => [
+                     'product' => [
+                         'id' => 16228541,
+                         'title_fa' => 'پوشک کودک مولفیکس سایز ۴',
+                         'status' => 'marketable',
+                         'images' => ['main' => ['url' => ['https://dkstatics-public.digikala.com/digikala-products/main.jpg']]],
+                         'default_variant' => ['price' => ['selling_price' => 2850000]],
+                         'properties' => ['weight' => 1200],
+                         'specifications' => [['title' => 'مشخصات', 'attributes' => [['title' => 'سایز', 'values' => ['۴']]]]],
+                     ],
+                 ],
+             ], 16228541);
+             if (strpos($pdpHtml, 's4-digikala-pdp') === false || strpos($pdpHtml, '1200 گرم') === false) return false;
+             /* ۲) تست فایل staging مجزا برای جلوگیری از دست‌زدن به محصولات نهایی پیش از پایان صفحهٔ آخر */
+             $tmpKey = '__selftest_stage_10471_' . getmypid();
+             extractClearListStaging($tmpKey);
+             $okSave = extractSaveListStaging($tmpKey, [['title' => 'تست ۱', 'link' => 'https://example.com/1'], ['title' => 'تست ۲', 'link' => 'https://example.com/2']], 2, ['url' => 'https://example.com']);
+             $loaded = extractLoadListStaging($tmpKey);
+             extractClearListStaging($tmpKey);
+             return $okSave
+                 && is_array($loaded)
+                 && count((array)($loaded['products'] ?? [])) === 2
+                 && (int)($loaded['resume_page'] ?? 0) === 3
+                 && extractLoadListStaging($tmpKey) === null;
+         })()
+      && strpos($selfSrc, "'products_saved' => false") !== false
+      && strpos($selfSrc, 'stagedStreamProducts') !== false
+      && strpos($selfSrc, 'active_reconcile') !== false
+      && strpos($selfSrc, "{v:'10." . "471'") !== false
+      && version_compare(APP_VERSION, '10.471', '>='));
     $add('10.470', 'رفع قطعی قفل/OOM و حلقهٔ معیوب استخراج، حذف تکرار اعلان پیام‌رسان وقتی یادآوری صفر است، و افزودن زیرمنوی جامع مدیریت سفارشات باسلام و ووکامرس',
          function_exists('notifAutoDedupFingerprint')
       && function_exists('notifShouldSuppressAutoDuplicate')
@@ -60102,7 +61329,11 @@ function syncPipelineMark(string $profileKey,string $profileName,string $stage,s
         /* A worker holding an older snapshot may report after Stop. Never let it
            resurrect this profile; only an explicit Continue (resume_control) can. */
         if((string)($old['stage']??'')==='stopped'&&empty($extra['resume_control']))return;
-        $started=in_array($stage,['queued','extract'],true)?time():(int)($old['started_at']??time());
+        $isFreshStart=in_array($stage,['queued','extract'],true)&&empty($extra['stage_details'])&&(!empty($old['done'])||in_array((string)($old['stage']??''),['done','error','stopped'],true));
+        if($isFreshStart){
+            unset($old['stage_details'],$old['send_queue_ids'],$old['error'],$old['failed_stage'],$old['send_recovery_queued_at'],$old['active_recovery_queued_at']);
+        }
+        $started=in_array($stage,['queued','extract'],true)&&($isFreshStart||empty($old['started_at']))?time():(int)($old['started_at']??time());
         if(in_array($stage,['error','stopped'],true)&&!isset($extra['failed_stage']))$extra['failed_stage']=(string)($old['stage']??'extract');
         /* هر مرحله گزارش خودش را نگه می‌دارد؛ ورود به pricing نباید لیست
            محصولات extraction را پاک کند و send نیز pricing را حفظ می‌کند. */
@@ -60125,6 +61356,128 @@ function syncPipelineRows():array{
     uasort($all,static fn($a,$b)=>(int)($b['updated_at']??0)<=>(int)($a['updated_at']??0));
     return array_values($all);
 }
+
+/**
+ * v10.471: آشتی‌سازی ردیف‌های فعال صف همگام‌سازی که به‌دلیل مرگ پردازه (OOM / timeout)
+ * یا پایان ارسال پس‌زمینه بدون تغییر مانده‌اند:
+ *  - ردیف‌های stage=send که همهٔ صف‌های مقصدشان به پایان رسیده را done ثبت می‌کند.
+ *  - ردیف‌های بی‌مالک در queued/extract/pricing را پس از ۴۵ ثانیه بی‌حرکتی به worker می‌سپارد.
+ */
+function syncPipelineReconcileActiveRows(bool $dispatch=true):array{
+    $out=['closed_send'=>0,'requeued_extract'=>0,'active_owned'=>0];
+    $now=time();
+    $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];
+    $wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
+    $eq=extractReadQueue();
+    $xp=readProgress(EXTRACT_PROGRESS_FILE);
+    $wkJobs=(array)(s4WorkerLoadQueue()['entries']??[]);
+    $allSendEntries=array_merge((array)($bq['entries']??[]),(array)($wq['entries']??[]));
+    $sendById=[];
+    foreach($allSendEntries as $se){
+        if(is_array($se)&&!empty($se['id']))$sendById[(string)$se['id']]=$se;
+    }
+    foreach(syncPipelineRows() as $row){
+        if(!is_array($row)||!empty($row['done']))continue;
+        if((string)($row['operation']??'')==='cell_equalize')continue;
+        $pk=trim((string)($row['profile_key']??''));
+        if($pk==='')continue;
+        $stage=(string)($row['stage']??'');
+        $trig=(string)($row['trigger']??'manual');
+        $pName=(string)($row['profile_name']??$pk);
+        $startedAt=(int)($row['started_at']??0);
+        $updatedAt=(int)($row['updated_at']??$startedAt);
+        $idle=$now-$updatedAt;
+
+        if($stage==='send'){
+            $ownedIds=array_values(array_filter(array_map('strval',(array)($row['send_queue_ids']??[]))));
+            $matched=[];
+            if(!empty($ownedIds)){
+                foreach($ownedIds as $oid){if(isset($sendById[$oid]))$matched[]=$sendById[$oid];}
+            }else{
+                foreach($allSendEntries as $se){
+                    if(!is_array($se)||(string)($se['profile_key']??'')!==$pk)continue;
+                    $cat=(int)($se['created_at']??$se['started_at']??$se['updated_at']??0);
+                    if($startedAt>0&&$cat>0&&$cat<($startedAt-30))continue;
+                    $matched[]=$se;
+                }
+            }
+            if(!empty($matched)){
+                $allTerm=true;$anyFailed=false;
+                $agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];
+                foreach($matched as $me){
+                    $st=(string)($me['status']??'');
+                    if(!in_array($st,['done','failed','cancelled'],true)){$allTerm=false;}
+                    if($st==='failed')$anyFailed=true;
+                    $agg['queued']+=(int)($me['total']??0);
+                    $agg['sent']+=(int)($me['sent']??0);
+                    $agg['updated']+=(int)($me['updated']??0);
+                    $agg['failed']+=(int)($me['failed']??0);
+                    $agg['skipped']+=(int)($me['skipped']??0);
+                }
+                if($allTerm){
+                    $finalStage=($anyFailed&&($agg['sent']+$agg['updated'])===0&&$agg['failed']>0)?'error':'done';
+                    syncPipelineMark($pk,$pName,$finalStage,$trig,[
+                        'message'=>$finalStage==='done'?'همگام‌سازی و ارسال پس‌زمینه کامل شد':'ارسال مقصد با خطا پایان یافت',
+                        'stage_details'=>[
+                            'send'=>syncSendStageDetails($agg+['message'=>'ارسال صف مقصد به پایان رسید']),
+                            'done'=>['counts'=>['sent'=>$agg['sent'],'updated'=>$agg['updated']],'data'=>$agg,'report'=>'ارسال پس‌زمینه تکمیل شد'],
+                        ],
+                    ]);
+                    s4WorkerCancelPendingManualSync($pk,'send_queues_completed');
+                    $out['closed_send']++;
+                }
+                continue;
+            }
+            if(!empty($ownedIds)&&$idle>180&&!msLockFresh('bsl')&&!msLockFresh('woo')){
+                syncPipelineMark($pk,$pName,'done',$trig,['message'=>'صف ارسال قبلی تکمیل و آرشیو شد']);
+                $out['closed_send']++;
+            }
+            continue;
+        }
+
+        if(!in_array($stage,['queued','extract','pricing'],true))continue;
+
+        $hasLiveOwner=false;
+        if(!empty($xp['running'])&&(string)($xp['profile_key']??'')===$pk&&($now-(int)($xp['last_progress_ts']??0))<120){
+            $hasLiveOwner=true;
+        }
+        if(!$hasLiveOwner){
+            foreach((array)($eq['entries']??[]) as $ee){
+                if(!is_array($ee)||(string)($ee['profile_key']??'')!==$pk)continue;
+                $est=(string)($ee['status']??'');
+                $eAge=$now-(int)($ee['updated_at']??$ee['started_at']??0);
+                if(in_array($est,['running','waiting'],true)&&$eAge<180){$hasLiveOwner=true;break;}
+            }
+        }
+        if(!$hasLiveOwner){
+            foreach($wkJobs as $wj){
+                if(!is_array($wj))continue;
+                $wst=(string)($wj['status']??'');
+                if(!in_array($wst,['pending','running'],true))continue;
+                $wpl=is_array($wj['payload']??null)?$wj['payload']:[];
+                if((string)($wpl['profile_key']??'')===$pk){$hasLiveOwner=true;break;}
+            }
+        }
+        if($hasLiveOwner){
+            $out['active_owned']++;
+            continue;
+        }
+        $recAge=$now-(int)($row['active_recovery_queued_at']??0);
+        if($idle<45||$recAge<90||!$dispatch)continue;
+        $enqAct=s4WorkerEnqueueManualSync($pk,true);
+        if(!empty($enqAct['ok'])){
+            syncPipelineMark($pk,$pName,'queued',$trig,[
+                'active_recovery_queued_at'=>$now,
+                'active_recovery_job_id'=>(string)($enqAct['job_id']??''),
+                'message'=>'ردیف بی‌مالک تشخیص داده شد؛ ادامهٔ خودکار همگام‌سازی در صف worker قرار گرفت',
+            ]);
+            if(!s4WorkerIsActive())s4SpawnPersistentWorker();
+            $out['requeued_extract']++;
+        }
+    }
+    return $out;
+}
+
 /** v10.424: repair the narrow crash window between marking stage=send and
  * durably writing a destination queue. Only a matching completed extraction
  * checkpoint may be resumed, and a live destination owner always wins. */
@@ -60133,6 +61486,7 @@ function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
     $lf=@fopen(__DIR__.'/.sync_send_reconcile.lock','c');
     if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);$out['busy']=true;return$out;}
     try{
+        $out['active_reconcile']=syncPipelineReconcileActiveRows($dispatch);
         $now=time();$mp=readProgress(MANUAL_SYNC_PROGRESS_FILE);
         $bq=function_exists('bslReadQueue')?bslReadQueue():['entries'=>[]];
         $wq=function_exists('wooReadQueue')?wooReadQueue():['entries'=>[]];
@@ -60180,15 +61534,18 @@ function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
 /** Keep cell equalization visible until both its real send owner and targeted
  * matrix correction reach terminal durable states. */
 function syncCellEqualizeReconcile():array{
-    $out=['checked'=>0,'done'=>0,'failed'=>0];$jobs=[];
+    $out=['checked'=>0,'done'=>0,'failed'=>0];$jobs=[];$now=time();
     foreach((array)(s4WorkerLoadQueue()['entries']??[])as$j)if(is_array($j)&&!empty($j['id']))$jobs[(string)$j['id']]=$j;
     $send=[];foreach([bslReadQueue(),wooReadQueue()]as$q)foreach((array)($q['entries']??[])as$e)if(is_array($e)&&!empty($e['id']))$send[(string)$e['id']]=$e;
     foreach(syncPipelineRows()as$row){if(!is_array($row)||!empty($row['done'])||(string)($row['operation']??'')!=='cell_equalize')continue;$out['checked']++;
         $pk=(string)($row['profile_key']??'');$ids=array_values(array_filter(array_map('strval',(array)($row['send_queue_ids']??[]))));$fixId=(string)($row['matrix_fix_job_id']??'');
-        $sendTerminal=(bool)$ids;$sendFailed=false;$agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];
-        foreach($ids as$id){$e=$send[$id]??null;if(!$e){$sendTerminal=false;continue;}$st=(string)($e['status']??'');if(!in_array($st,['done','failed','cancelled'],true))$sendTerminal=false;if(in_array($st,['failed','cancelled'],true))$sendFailed=true;
+        $rowAge=$now-(int)($row['updated_at']??$row['started_at']??0);
+        $sendTerminal=empty($ids)?($rowAge>120):true;$sendFailed=false;$agg=['queued'=>0,'sent'=>0,'updated'=>0,'failed'=>0,'skipped'=>0];
+        foreach($ids as$id){$e=$send[$id]??null;if(!$e){if($rowAge<=120)$sendTerminal=false;continue;}$st=(string)($e['status']??'');if(!in_array($st,['done','failed','cancelled'],true))$sendTerminal=false;if(in_array($st,['failed','cancelled'],true))$sendFailed=true;
             $agg['queued']+=(int)($e['total']??0);$agg['sent']+=(int)($e['sent']??0);$agg['updated']+=(int)($e['updated']??0);$agg['failed']+=(int)($e['failed']??0);$agg['skipped']+=(int)($e['skipped']??0);}
-        $fix=$jobs[$fixId]??null;$fixStatus=(string)($fix['status']??'');$fixTerminal=$fixId!==''&&in_array($fixStatus,['done','failed','cancelled'],true);$fixFailed=in_array($fixStatus,['failed','cancelled'],true);
+        $fix=$jobs[$fixId]??null;$fixStatus=(string)($fix['status']??'');
+        $fixTerminal=($fixId==='')||($fix===null&&$rowAge>120)||in_array($fixStatus,['done','failed','cancelled'],true);
+        $fixFailed=in_array($fixStatus,['failed','cancelled'],true);
         if(!$sendTerminal||!$fixTerminal)continue;$failed=$sendFailed||$fixFailed;
         syncPipelineMark($pk,(string)($row['profile_name']??$pk),$failed?'error':'done','manual',[
             'pipeline_key'=>(string)($row['pipeline_key']??('cell:'.$pk.':'.(string)($row['destination']??''))),
@@ -61548,6 +62905,16 @@ function manualServerSendRun(int $roundMs = 1500000, int $maxRounds = 12): array
             msAlive('ارسال ' . $label . ' — ' . (int)($row['current'] ?? 0) . '/' . (int)($row['total'] ?? 0));   /* v10.61 (۷۵) */
             $fired = fireAndForget('action=' . $action, $roundMs, ['from_file' => '1']);
             $out['rounds']++;
+            usleep(900000);
+            if (msLockFresh($dest)) {
+                $out['delegated'] = true;
+                for ($w2 = 0; $w2 < 5 && msLockFresh($dest); $w2++) sleep(4);
+                if (msLockFresh($dest)) {
+                    manualSyncProgress(['phase' => 'ارسال ' . $label, 'current' => 3],
+                        '🚀 پردازندهٔ پس‌زمینهٔ CLI روی صف ' . $label . ' فعال شد و ادامه می‌دهد');
+                    break;
+                }
+            }
             if (!$fired || $sig === $lastSig) { $stuck++; } else { $stuck = 0; }
             if ($sig !== '') $lastSig = $sig;
             if ($stuck >= 2) {
@@ -61558,7 +62925,7 @@ function manualServerSendRun(int $roundMs = 1500000, int $maxRounds = 12): array
         }
         $rowAfter = msQueuePendingRow($dest);
         $out['dests'][$dest] = $rowAfter === null ? 'done'
-            : ('pending:' . (int)($rowAfter['total'] ?? 0) . ':' . (int)($rowAfter['current'] ?? 0));
+            : (msLockFresh($dest) ? 'running_async' : ('pending:' . (int)($rowAfter['total'] ?? 0) . ':' . (int)($rowAfter['current'] ?? 0)));
         if (!empty($out['stopped'])) break;
     }
     return $out;
@@ -85806,13 +87173,14 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <option value="auto">Auto smart — JSON-LD → ساختاری/Heuristic → سلکتورها</option>
                 <option value="heuristic">Structural / heuristic — کارت‌های محصول بدون تکیه به سلکتور (مناسب گرید ایمالز)</option>
                 <option value="jsonld">JSON-LD Product — فقط دادهٔ ساخت‌یافته</option>
+                <option value="digikala_api">🔴 Digikala API — موتور مستقیم API دیجی‌کالا (سریع، بدون سلکتور، تبدیل خودکار ریال به تومان)</option>
                 <option value="jina">Jina Reader / r.jina.ai — مناسب سایت‌های SPA/بلاک‌شده مثل SnappShop و Digikala</option>
                 <option value="playwright">Playwright render — CDP/مرورگر واقعی، با fallback به Selenium سپس Auto parser</option>
                 <option value="selenium">Selenium render — WebDriver سپس Auto parser</option>
             </select>
         </div>
         <div style="font-size:10px;color:#64748b;line-height:1.7;margin:-2px 0 6px">
-            Jina Reader صفحه را از r.jina.ai می‌خواند و خروجی Markdown را برای SnappShop/Digikala به کارت محصول تبدیل می‌کند. Playwright/Selenium اینجا به معنی مسیر رندرِ سرور است: Playwright/CDP اول اجرا می‌شود و Selenium از راه WebDriver HTTP جایگزین است؛ خودِ scraper4.php وابسته به Node یا Python نیست.
+            برای آدرس‌های دیجی‌کالا (مثل <code>digikala.com/search/category-diaper/</code>) موتور «🔴 Digikala API» مستقیم به <code>api.digikala.com</code> متصل می‌شود و بدون نیاز به سلکتور، همهٔ صفحات، تصاویر اصلی و جزئیات محصول را به تومان استخراج می‌کند. Jina Reader و Playwright/Selenium نیز برای سایر سایت‌های SPA در دسترس‌اند.
         </div>
 
         <div class="row" style="align-items:center;margin-top:4px">
@@ -86248,6 +87616,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <option value="auto">Auto smart — JSON-LD → ساختاری/Heuristic → سلکتورها</option>
                 <option value="heuristic">Structural / heuristic — کارت‌های محصول بدون تکیه به سلکتور (مناسب گرید ایمالز)</option>
                 <option value="jsonld">JSON-LD Product — فقط دادهٔ ساخت‌یافته</option>
+                <option value="digikala_api">🔴 Digikala API — موتور مستقیم API دیجی‌کالا (سریع، بدون سلکتور، تبدیل خودکار ریال به تومان)</option>
                 <option value="jina">Jina Reader / r.jina.ai — مناسب سایت‌های SPA/بلاک‌شده مثل SnappShop و Digikala</option>
                 <option value="playwright">Playwright render — CDP/مرورگر واقعی، با fallback به Selenium سپس Auto parser</option>
                 <option value="selenium">Selenium render — WebDriver سپس Auto parser</option>
@@ -89055,9 +90424,19 @@ function updateUrlTargetProfileHint() {
     }
 }
 
+function maybeAutoSelectDigikalaEngine(urlStr) {
+    if (!urlStr || !/(?:^https?:\/\/)(?:[^\/?#]+\.)?digikala\.com(?:[\/:?#]|$)/i.test(urlStr)) return;
+    const engEl = $('extractionEngine');
+    const contEl = $('selContainer');
+    if (engEl && engEl.value === 'selectors' && (!contEl || !contEl.value.trim())) {
+        syncExtractionEngine('digikala_api', '');
+    }
+}
+
 function onUrlChange() {
     clearTimeout(saveTimer);
     clearTimeout(urlChangeTimer);
+    maybeAutoSelectDigikalaEngine(($('url') && $('url').value || '').trim());
     const active = currentProfileKey ? findProfileEntryJs(currentProfileKey) : null;
     if (active) {
         /* v10.462: وقتی پروفایل فعالی باز است، تغییر لینک آدرس نباید currentProfileKey یا نام پروفایل را پاک کند
@@ -93403,7 +94782,9 @@ function pollExtractProgress(){
             }
         }else if(done){
             if(cancelled){
-                statusText='⏹ متوقف شد';
+                statusText=d.products_saved===false ? '⏹ متوقف شد — نتایج قبلی دست‌نخورده ماند' : '⏹ متوقف شد';
+            }else if(d.products_saved===false){
+                statusText='⏸ ناتمام پیش از آخرین صفحه — نتایج قبلی دست‌نخورده حفظ شد';
             }else{
                 statusText='✅ '+toFa(extracted)+' محصول — 🆕'+toFa(newCount)+' 💰'+toFa(priceChanged)+' ❌'+toFa(removed)+' ⏭'+toFa(unchanged);
             }
@@ -93432,11 +94813,11 @@ function pollExtractProgress(){
             if(firstDonePoll){
                 refreshExtractQueue();
                 scheduleStartBreakdownRefresh();
-                if(d.new_items||d.changed_items||d.removed_items){
+                if(d.products_saved!==false && (d.new_items||d.changed_items||d.removed_items)){
                     extractReportData={newItems:d.new_items||[],changedItems:d.changed_items||[],removedItems:d.removed_items||[],unchangedCount:d.unchanged||0,totalOld:(d.new_items||[]).length+(d.changed_items||[]).length+(d.removed_items||[]).length+(d.unchanged||0)};
                     buildStatusMap();refreshResultBadges();
                 }
-                if(!cancelled&&extracted>0){
+                if(!cancelled&&extracted>0&&d.products_saved!==false){
                     loadBackendExtractResults(d.profile_key||'', {skipSaveBack:true});
                     showLiveComparison();
                     const statsDiv=$('extractStats');
@@ -93445,6 +94826,12 @@ function pollExtractProgress(){
                         statsDiv.innerHTML='<div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'new\')"><b style="color:#4ade80;font-size:16px">'+toFa(newCount)+'</b><br><span style="color:#94a3b8;font-size:10px">🆕 جدید</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'changed\')"><b style="color:#facc15;font-size:16px">'+toFa(priceChanged)+'</b><br><span style="color:#94a3b8;font-size:10px">💰 تغییر قیمت</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'removed\')"><b style="color:#f87171;font-size:16px">'+toFa(removed)+'</b><br><span style="color:#94a3b8;font-size:10px">❌ حذف شده</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center;cursor:pointer" onclick="showExtractReport(\'unchanged\')"><b style="color:#94a3b8;font-size:16px">'+toFa(unchanged)+'</b><br><span style="color:#94a3b8;font-size:10px">⏭ بدون تغییر</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center"><b style="color:#60a5fa;font-size:16px">'+toFa(extracted)+'</b><br><span style="color:#94a3b8;font-size:10px">📊 کل</span></div><div style="background:#0f172a;border-radius:8px;padding:8px;text-align:center"><b style="color:#a78bfa;font-size:16px">'+toFa(ppm)+'</b><br><span style="color:#94a3b8;font-size:10px">⚡ محصول/دقیقه</span></div>';
                     }
                     if(rememberExtractCompletionToast(d))showToast('✅ '+extracted+' محصول استخراج شد — 🆕'+newCount+' 💰'+priceChanged+' ❌'+removed);
+                }else if(d.products_saved===false && !d.auto_resume_browser){
+                    if(rememberExtractCompletionToast(d)){
+                        showToast(cancelled
+                            ? '⏹ استخراج پیش از پایان آخرین صفحه متوقف شد — محصولات قبلی در تب نتایج دست‌نخورده ماند'
+                            : '⏸ استخراج پیش از پایان آخرین صفحه متوقف شد — محصولات قبلی دست‌نخورده باقی ماند', true);
+                    }
                 }
             }
         }
@@ -93563,18 +94950,17 @@ function start(useSel=false){
 
   if (isDirty) saveProfileSilent();
 
-  products.clear();order=[];pages=0;details=0;running=true;extractSpeedStartMs=Date.now();
-  /* v10.31 (۴۴): استخراجِ زنده محصولات را تک‌تک می‌نشاند، پس هر دو نما
-     از همین حالا «تازه» حساب می‌شوند و نباید بعداً دوباره ساخته شوند. */
-  rvCancelChunks();
-  $('vGrid').innerHTML='';$('tBody').innerHTML='';
-  rvDirty.grid=false; rvDirty.table=false; rvDirty.text=true;
-  resetResultFilter();
-  log('▶ شروع: '+url,'info');
+  /* v10.471: تا رسیدن به انتهای آخرین صفحه (رویداد complete)، محصولات قبلی در تب نتایج
+     به هیچ عنوان پاک یا جایگزین نمی‌شوند؛ محصولات استریم در بافر موقت جمع می‌شوند. */
+  const stagedStreamProducts = new Map();
+  const stagedStreamOrder = [];
+  let streamCompleted = false;
+  pages=0;details=0;running=true;extractSpeedStartMs=Date.now();
+  log('▶ شروع (بدون تغییر نتایج قبلی تا پایان آخرین صفحه): '+url,'info');
 
   $('startBtn').classList.add('hidden');$('startManualBtn').classList.add('hidden');$('stopBtn').classList.remove('hidden');
   $('progress').classList.remove('hidden');$('progressBar').style.width='0%';
-  update();
+  $('status').textContent='⏳ استخراج در حافظهٔ مرحله‌ای...';
   fxBusy($('status'),true);          // v10.06: نوارِ نورِ «در حال کار»
 
   let sUrl=`?stream=1&url=${encodeURIComponent(url)}&pages=${$('pages').value}&pagType=${encodeURIComponent($('pagType').value)}&pagVal=${encodeURIComponent($('pagVal').value)}&extractionEngine=${encodeURIComponent(s4EngineValue())}`;
@@ -93585,15 +94971,38 @@ function start(useSel=false){
 
   es=new EventSource(sUrl);
 
-  es.addEventListener('page',e=>{const d=JSON.parse(e.data);pages=d.page;log(`📄 صفحه ${d.page}: ${d.ok?'✓':'✗'}`,d.ok?'ok':'err');update();});
-  es.addEventListener('product',e=>{const p=JSON.parse(e.data);if(!products.has(p.key)){products.set(p.key,p);order.push(p.key);renderCard(p);renderRow(p,order.length);update();}});
-  es.addEventListener('page_done',e=>{const d=JSON.parse(e.data);log(`✓ صفحه ${d.page}: +${d.new} جدید، کل: ${d.total}`,'ok');});
+  es.addEventListener('page',e=>{const d=JSON.parse(e.data);pages=d.page;log(`📄 صفحه ${d.page}: ${d.ok?'✓':'✗'}`,d.ok?'ok':'err');$('status').textContent=`📄 صفحه ${toFa(d.page)} · ${toFa(stagedStreamProducts.size)} محصول مرحله‌ای`;updateSpeedCard(stagedStreamProducts.size,extractSpeedStartMs);});
+  es.addEventListener('product',e=>{const p=JSON.parse(e.data);if(!stagedStreamProducts.has(p.key)){stagedStreamProducts.set(p.key,p);stagedStreamOrder.push(p.key);$('status').textContent=`📄 صفحه ${toFa(pages||1)} · ${toFa(stagedStreamProducts.size)} محصول مرحله‌ای`;updateSpeedCard(stagedStreamProducts.size,extractSpeedStartMs);}});
+  es.addEventListener('page_done',e=>{const d=JSON.parse(e.data);log(`✓ صفحه ${d.page}: +${d.new} جدید، کل مرحله‌ای: ${d.total}`,'ok');});
   es.addEventListener('missing_start',e=>{const d=JSON.parse(e.data);$('status').textContent=`دریافت جزئیات ${toFa(d.current)}/${toFa(d.total)}`;$('progressBar').style.width=(d.current/d.total*100)+'%';});
   es.addEventListener('fetch_info',e=>{const d=JSON.parse(e.data);if(d.msg)$('status').textContent=d.msg;log(d.msg,'info');});
-  es.addEventListener('missing_done',e=>{const d=JSON.parse(e.data);details++;const p=products.get(d.key);if(p){if(d.image)p.image=d.image;if(d.price)p.price=d.price;if(d.image_cached){p._imgCached=true;p._imgValid=true;}else if(d.image_valid){p._imgValid=true;}products.set(d.key,p);renderCard(p,d.key);renderRow(p,order.indexOf(d.key)+1,d.key);}update();});
+  es.addEventListener('missing_done',e=>{const d=JSON.parse(e.data);details++;const p=stagedStreamProducts.get(d.key);if(p){if(d.image)p.image=d.image;if(d.price)p.price=d.price;if(d.image_cached){p._imgCached=true;p._imgValid=true;}else if(d.image_valid){p._imgValid=true;}stagedStreamProducts.set(d.key,p);}});
   es.addEventListener('complete',e=>{
       const d=JSON.parse(e.data);
-      log(`✅ تکمیل: ${d.total} محصول`,'ok');
+      if(stagedStreamProducts.size===0){
+          log('⚠️ هیچ محصولی استخراج نشد — نتایج قبلی دست‌نخورده حفظ شد','err');
+          showToast('⚠️ هیچ محصولی استخراج نشد — نتایج قبلی حفظ شد',true);
+          return;
+      }
+      streamCompleted=true;
+      const keepDetailKeys=['images','images_count','variations','variationPrices','specs','longDesc','shortDesc','weight','package_weight','brand','category','bslCategoryId'];
+      stagedStreamOrder.forEach(k=>{
+          const cur=stagedStreamProducts.get(k);
+          const prev=products.get(k);
+          if(cur && prev){
+              keepDetailKeys.forEach(fk=>{
+                  if((cur[fk]===undefined||cur[fk]===''||(Array.isArray(cur[fk])&&cur[fk].length===0)) && prev[fk]!==undefined && prev[fk]!==''){
+                      cur[fk]=prev[fk];
+                  }
+              });
+          }
+      });
+      rvCancelChunks();
+      resetResultFilter();
+      products.clear();order=[];
+      stagedStreamOrder.forEach(k=>{const p=stagedStreamProducts.get(k);if(p){products.set(k,p);order.push(k);}});
+      refreshViews();
+      log(`✅ تکمیل تا پایان آخرین صفحه: ${d.total} محصول ثبت نهایی شد`,'ok');
       $('status').textContent=`✓ ${toFa(d.total)} محصول`;
       $('progressBar').style.width='100%';
       showToast(`✓ ${d.total} محصول استخراج شد`);
@@ -93602,12 +95011,29 @@ function start(useSel=false){
       // Auto-save profile with products after scrape completes
       if($('url').value.trim() && products.size > 0) saveProfileSilent();
   });
-  es.addEventListener('error',e=>{if(e.data)log('❌ '+JSON.parse(e.data).message,'err');});
-  es.addEventListener('done',finish);
-  es.onerror=()=>{if(running)finish();};
+  es.addEventListener('error',e=>{
+      if(e.data){
+          try{const er=JSON.parse(e.data);log('❌ '+(er.message||'خطا'),'err');if(er.interrupted)showToast('⏸ '+er.message,true);}catch(_){}
+      }
+  });
+  es.addEventListener('done',()=>{
+      if(!streamCompleted){
+          $('status').textContent=products.size>0?`🛡 نتایج قبلی حفظ شد (${toFa(products.size)} محصول)`:'آماده';
+      }
+      finish();
+  });
+  es.onerror=()=>{
+      if(running){
+          if(!streamCompleted){
+              log('⏸ اتصال پیش از پایان آخرین صفحه قطع شد — نتایج قبلی در تب نتایج دست‌نخورده ماند','err');
+              showToast('⏸ استخراج پیش از آخرین صفحه قطع شد — نتایج قبلی دست‌نخورده ماند',true);
+          }
+          finish();
+      }
+  };
 }
 
-function stop(){if(es)es.close();log('⏹ متوقف شد','err');finish();}
+function stop(){if(es)es.close();log('⏹ متوقف شد — نتایج قبلی دست‌نخورده باقی ماند','err');showToast('⏹ استخراج متوقف شد — نتایج قبلی دست‌نخورده ماند');finish();}
 function finish(){updateSpeedCard(products.size,0);extractSpeedStartMs=0;running=false;if(es){es.close();es=null;}$('startBtn').classList.remove('hidden');$('startManualBtn').classList.remove('hidden');$('stopBtn').classList.add('hidden');rvRebuildVisible();showLiveComparison();fxBusy($('status'),false);}
 
 function startDetailExtraction(){
@@ -93945,6 +95371,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.471', t:'🛡️ استخراج اتمی تا پایان صفحهٔ آخر، احیای ردیف‌های بی‌حرکت صف همگام‌سازی و افزودن موتور اختصاصی «دیجی‌کالا API» (digikala_api)', items:[
+    'تضمین اتمی عدم تغییر محصولات نهایی پیش از پایان کامل صفحهٔ آخر: در استخراج بک‌اند (runBackendExtract) محصولات صفحات میانی فقط در فایل موقت مجزای extract_staging ذخیره می‌شوند (products_saved=false) و در استخراج جریانی مرورگر (stream=1) در آرایهٔ موقت stagedStreamProducts نگهداری می‌شوند؛ اگر استخراج در میانهٔ راه متوقف، قطع یا دچار خطا شود، محصولات قبلیِ تب نتایج کوچک‌ترین تغییری نمی‌کنند و تنها پس از اتمام کامل آخرین صفحه در نتایج نهایی ثبت می‌شوند.',
+    'ریشه‌یابی و رفع کامل بی‌حرکتی ردیف‌های «صف همگام‌سازی»: ۱) حذف بارگذاری مضاعف ۱۸۰ مگابایتی profiles.json در cron_run که باعث خطای حافظه (exit 255) حین استخراج دوره‌ای می‌شد، ۲) زنجیره‌سازی خودکار برش‌های چندصفحه‌ای استخراج در manual_sync و s4WorkerRunJob تا مراحل قیمت‌گذاری و ارسال پس از پایان استخراج حتماً اجرا شوند، ۳) آشتی‌ساز خودکار syncPipelineReconcileActiveRows برای سپردن ردیف‌های بی‌مالک (extract/pricing/queued) به worker پایدار و بستن خودکار ردیف‌های send و cell_equalize پس از تکمیل صف مقصد.',
+    'افزودن موتور اختصاصی استخراج مبتنی بر API رسمی دیجی‌کالا (digikala_api): پشتیبانی مستقیم از آدرس‌های دسته‌بندی، برند، غرفه و جستجوی دیجی‌کالا (مانند /search/category-diaper/) با نگاشت هوشمند به api.digikala.com/v1 و فالبک چندمسیره (مستقیم + پروکسی Worker)، تبدیل دقیق قیمت‌های ریالی به تومان، صفحه‌بندی کامل، استخراج سریع جزئیات محصول (گالری باکیفیت، جدول مشخصات، وزن دقیق به گرم و موجودی) از API نسخهٔ ۲، و انتخاب خودکار موتور هنگام وارد کردن لینک دیجی‌کالا.'
+  ]},
   {v:'10.470', t:'🚀 احیای کامل موتور استخراج (ضد-OOM، ترمز حلقهٔ کرش و رفع بن‌بست ازسرگیری)، حذف قطعی تکرار اعلان‌های پیام‌رسان در یادآوری=۰، و افزودن زیرمنوی جامع «مدیریت سفارشات» (باسلام + ووکامرس)', items:[
     'رفع قطعی توقف استخراج‌ها و عدم شروع/ادامه در کارگر پس‌زمینه: ارتقای پویا و چندمرحله‌ای memory_limit به ۱۰۲۴M/۷۶۸M، آزادسازی فوری تصویر ۶۲ مگابایتی profiles.json در تمام نقاط runBackendExtract، manual_sync، s4WorkerRunJob و s4AutoResumeInterruptedExtractions، ذخیره‌سازی تک‌کپی در extractCheckpoint، ثبت وضعیت صف پیش از loadProfiles در نگهبان خطای مرگبار (detail_fatal)، مهلت ۴۰ ثانیه‌ای بوت فرزند CLI، پاک‌سازی خودکار پرچم گیرکردهٔ resuming و ترمز هوشمند no_progress_recycles برای جلوگیری از مسدود ماندن کل صف توسط یک کار معیوب.',
     'حذف کامل تکرار پیام‌های پیام‌رسان وقتی «یادآوری بعد از» روی ۰ است: قفل اتمی فایل notif_state.json در خواندن و نوشتن (جلوگیری از بازخوانی فایل نیمه‌نوشته و ارسال مجدد همهٔ رویدادها)، ثبت زمان آخرین مشاهده (seen) در هر اسکن تا اقلام قدیمی در چرخش فهرست یا هرس ۱۴روزه مجدداً «جدید» تلقی نشوند، فیلتر زمانی اقلام تاریخی نسبت به واترمارک، پایدارسازی امضای گفتگوها، و لایهٔ ضدتکرار محتوایی (notif_sent_dedup.json).',
