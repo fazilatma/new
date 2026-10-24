@@ -371,7 +371,7 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.458';
+const APP_VERSION = '10.459';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -385,8 +385,16 @@ if (!function_exists('str_contains')) {
         return $needle === '' || strpos((string)$haystack, (string)$needle) !== false;
     }
 }
+if (!function_exists('str_ends_with')) {
+    function str_ends_with($haystack, $needle) {
+        $haystack = (string)$haystack; $needle = (string)$needle;
+        if ($needle === '') return true;
+        $nlen = strlen($needle);
+        return strlen($haystack) >= $nlen && substr($haystack, -$nlen) === $needle;
+    }
+}
 
-const APP_VERSION_DATE = '1405/08/01';
+const APP_VERSION_DATE = '1405/08/02';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -10400,8 +10408,186 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
             curl_close($ch);
         }
         curl_multi_close($mh);
+        /* v10.459: در ارسال موازی (bslReqMulti) هم اگر محصولی به خطای ۴۲۲/۴۰۰
+           preparation_days برخورد کرد، از طریق bslReq هر بار ۱ روز کم می‌شود تا تایید شود. */
+        foreach ($slice as $kk => $j) {
+            if (!is_array($j) || !empty($j['mp']) || !is_array($j['d'] ?? null)) continue;
+            $rOne = $out[$kk] ?? null;
+            if (!is_array($rOne) || !empty($rOne['ok'])) continue;
+            $epOne = (string)($j['ep'] ?? '');
+            $mOne  = strtoupper((string)($j['m'] ?? 'GET'));
+            if ($mOne === 'GET' || stripos($epOne, 'product') === false) continue;
+            if ($mOne === 'POST' && function_exists('bslIsDuplicateName') && bslIsDuplicateName($rOne)) continue;
+            if (bslIsPreparationDaysError($rOne)) {
+                $defPrep = (int)((function_exists('loadConnections') ? (loadConnections()['basalam']['preparation_days'] ?? 5) : 5));
+                $stepped = bslRunPreparationDaysRetryLoop(
+                    $rOne,
+                    $j['d'],
+                    static fn(array $nextPayload): array => bslReqMode(
+                        bslApiBase() . ltrim($epOne, '/'),
+                        (string)($j['tk'] ?? ''),
+                        $mOne,
+                        $nextPayload,
+                        false,
+                        $net,
+                        $mmode
+                    ),
+                    $mOne,
+                    $defPrep,
+                    !$skipStop ? static fn(): bool => bslStopRequestedForQueue() : null
+                );
+                $out[$kk] = $stepped['response'];
+            }
+        }
     }
     return $out;
+}
+
+/* v10.459: تشخیص خطای بازه/مقدار preparation_days (مدت زمان آماده‌سازی) در پاسخ باسلام
+   و کاهش پله‌ای ۱ روز در هر تلاش تا زمان تایید (تا سقف ۰ روز). */
+function bslIsPreparationDaysError(array $r): bool {
+    if (!empty($r['ok'])) return false;
+    $code = (int)($r['code'] ?? 0);
+    if (!in_array($code, [400, 422], true)) return false;
+    $b = is_array($r['body'] ?? null) ? $r['body'] : [];
+    $msgLists = [$b['messages'] ?? null, $b['data']['messages'] ?? null];
+    if (is_array($b['errors'] ?? null) && array_values($b['errors']) === $b['errors']) {
+        $msgLists[] = $b['errors'];
+    }
+    foreach ($msgLists as $list) {
+        if (!is_array($list)) continue;
+        foreach ($list as $item) {
+            if (!is_array($item)) continue;
+            foreach ((array)($item['fields'] ?? []) as $f) {
+                $fl = strtolower(trim((string)$f));
+                if ($fl === 'preparation_days' || $fl === 'preparation_day'
+                    || str_ends_with($fl, '.preparation_days') || str_ends_with($fl, '.preparation_day')) {
+                    return true;
+                }
+            }
+            $mTxt = (string)($item['message'] ?? '');
+            if ($mTxt !== '' && (
+                stripos($mTxt, 'preparation_day') !== false
+                || preg_match('~(?:زمان|مدت|روز)\s*(?:آماده\s*سازی|آماده‌سازی|اماده\s*سازی|اماده‌سازی)|(?:آماده\s*سازی|آماده‌سازی)\s*(?:برای|باید|حداکثر|کمتر|بیشتر|بین)~u', $mTxt)
+            )) {
+                return true;
+            }
+        }
+    }
+    foreach ([$b['errors'] ?? null, $b['data']['errors'] ?? null] as $errMap) {
+        if (!is_array($errMap)) continue;
+        foreach ($errMap as $fk => $fv) {
+            $fkl = strtolower(trim((string)$fk));
+            if ($fkl === 'preparation_days' || $fkl === 'preparation_day'
+                || str_ends_with($fkl, '.preparation_days') || str_ends_with($fkl, '.preparation_day')) {
+                return true;
+            }
+        }
+    }
+    $hay = [];
+    foreach (['message', 'error', 'error_description', 'detail'] as $k) {
+        if (!empty($b[$k])) {
+            $hay[] = is_array($b[$k]) ? (string)json_encode($b[$k], JSON_UNESCAPED_UNICODE) : (string)$b[$k];
+        }
+    }
+    if (!empty($r['raw']) && is_string($r['raw'])) $hay[] = $r['raw'];
+    if (!empty($r['error']) && is_string($r['error'])) $hay[] = $r['error'];
+    $joined = implode(' ', $hay);
+    if ($joined === '') return false;
+    if (stripos($joined, 'preparation_days') !== false || stripos($joined, 'preparation_day') !== false) return true;
+    if (preg_match('~(?:زمان|مدت|روز)\s*(?:آماده\s*سازی|آماده‌سازی|اماده\s*سازی|اماده‌سازی)~u', $joined)) return true;
+    return false;
+}
+
+function bslStepDownPreparationDays(array $r, array $payload, int $defaultPrepDays = 5): ?array {
+    /* حالت دسته‌ای: PATCH vendors/{vid}/products/batch-updates با کلید data */
+    if (isset($payload['data']) && is_array($payload['data']) && !array_key_exists('preparation_days', $payload)) {
+        $targetIdxs = [];
+        $b = is_array($r['body'] ?? null) ? $r['body'] : [];
+        foreach ([$b['messages'] ?? null, $b['data']['messages'] ?? null] as $list) {
+            if (!is_array($list)) continue;
+            foreach ($list as $item) {
+                if (!is_array($item)) continue;
+                foreach ((array)($item['fields'] ?? []) as $f) {
+                    if (preg_match('~(?:^|\.)(?:data|items)\.(\d+)\.preparation_days?$~i', trim((string)$f), $mm)) {
+                        $targetIdxs[(int)$mm[1]] = true;
+                    }
+                }
+            }
+        }
+        $anyDec = false;
+        $minTo  = null;
+        foreach ($payload['data'] as $idx => $row) {
+            if (!is_array($row)) continue;
+            if ($targetIdxs && empty($targetIdxs[$idx])) continue;
+            $cur = array_key_exists('preparation_days', $row) && $row['preparation_days'] !== null && $row['preparation_days'] !== ''
+                ? (int)$row['preparation_days']
+                : max(1, $defaultPrepDays);
+            if ($cur > 31) $cur = 31;
+            $next = $cur - 1;
+            if ($next < 0) continue;
+            $payload['data'][$idx]['preparation_days'] = $next;
+            $anyDec = true;
+            if ($minTo === null || $next < $minTo) $minTo = $next;
+        }
+        return $anyDec ? ['payload' => $payload, 'from' => null, 'to' => $minTo] : null;
+    }
+
+    if (array_key_exists('preparation_days', $payload) && $payload['preparation_days'] !== null && $payload['preparation_days'] !== '') {
+        $cur = (int)$payload['preparation_days'];
+    } else {
+        $cur = $defaultPrepDays > 0 ? $defaultPrepDays : 5;
+    }
+    if ($cur > 31) $cur = 31;
+    $next = $cur - 1;
+    if ($next < 0) return null;
+    $payload['preparation_days'] = $next;
+    return ['payload' => $payload, 'from' => $cur, 'to' => $next];
+}
+
+function bslRunPreparationDaysRetryLoop(
+    array $initialRes,
+    array $payload,
+    callable $sender,
+    string $method = 'PATCH',
+    int $defaultPrepDays = 5,
+    ?callable $shouldStop = null
+): array {
+    $r = $initialRes;
+    $mUpper = strtoupper($method);
+    if (!empty($r['ok']) || ($mUpper === 'POST' && function_exists('bslIsDuplicateName') && bslIsDuplicateName($r)) || !bslIsPreparationDaysError($r)) {
+        return ['response' => $r, 'payload' => $payload, 'steps' => 0];
+    }
+    $prepStart = (array_key_exists('preparation_days', $payload) && $payload['preparation_days'] !== null && $payload['preparation_days'] !== '')
+        ? (int)$payload['preparation_days']
+        : null;
+    $steps = 0;
+    while (empty($r['ok']) && bslIsPreparationDaysError($r) && $steps < 32) {
+        if ($shouldStop !== null && $shouldStop()) {
+            return [
+                'response' => ['ok' => false, 'code' => 0, 'error' => 'stopped', 'body' => null, 'raw' => ''],
+                'payload'  => $payload,
+                'steps'    => $steps,
+            ];
+        }
+        if ($mUpper === 'POST' && function_exists('bslIsDuplicateName') && bslIsDuplicateName($r)) {
+            break;
+        }
+        $step = bslStepDownPreparationDays($r, $payload, $defaultPrepDays);
+        if ($step === null) break;
+        $payload = $step['payload'];
+        if ($prepStart === null && isset($step['from']) && $step['from'] !== null) {
+            $prepStart = (int)$step['from'];
+        }
+        $steps++;
+        $r = $sender($payload);
+        if (!is_array($r)) $r = ['ok' => false, 'code' => 0, 'error' => 'پاسخ نامعتبر', 'body' => null, 'raw' => ''];
+        $r['preparation_days_retried'] = true;
+        $r['preparation_days_steps']   = $steps;
+        if ($prepStart !== null) $r['preparation_days_from'] = $prepStart;
+        if (isset($step['to']) && $step['to'] !== null) $r['preparation_days_adjusted'] = (int)$step['to'];
+    }
+    return ['response' => $r, 'payload' => $payload, 'steps' => $steps];
 }
 
 /* v10.285: خطای اعتبارسنجی محتوای باسلام گاهی محل دقیق متن ممنوع را در
@@ -10447,8 +10633,37 @@ function bslRepairValidationPayload(array $r,array $payload):array{
         }
     }
     /* بعضی پاسخ‌های 422 فقط پیام عمومی دارند و detected نمی‌فرستند.
-       یک payload محافظه‌کارِ بدون HTML/لینک/اطلاعات تماس بساز و یک بار امتحان کن. */
+       یک payload محافظه‌کارِ بدون HTML/لینک/اطلاعات تماس بساز و یک بار امتحان کن.
+       v10.459: اگر خطا صریحاً مربوط به فیلدهای غیرمتنی (مثل preparation_days، category،
+       variants، primary_price، weight، photo و نام تکراری) باشد، جدول HTML توضیحات
+       را بی‌دلیل strip نکن! */
     if (!$changed) {
+        if (bslIsPreparationDaysError($r)
+            || (function_exists('bslIsDuplicateName') && bslIsDuplicateName($r))
+            || (function_exists('bslIsCategoryError') && bslIsCategoryError($r))) {
+            return ['changed'=>false,'payload'=>$payload,'fields'=>[]];
+        }
+        $_body422 = is_array($r['body'] ?? null) ? $r['body'] : [];
+        $_explicitFields = [];
+        foreach ((array)($_body422['messages'] ?? []) as $_m422) {
+            if (!is_array($_m422)) continue;
+            foreach ((array)($_m422['fields'] ?? []) as $_f422) {
+                $_fl422 = strtolower(trim((string)$_f422));
+                if ($_fl422 !== '') $_explicitFields[$_fl422] = true;
+            }
+        }
+        if ($_explicitFields) {
+            $_touchesText = false;
+            foreach (array_keys($_explicitFields) as $_efk) {
+                if (in_array($_efk, ['name', 'title', 'brief', 'description', 'sku'], true)) {
+                    $_touchesText = true;
+                    break;
+                }
+            }
+            if (!$_touchesText) {
+                return ['changed'=>false,'payload'=>$payload,'fields'=>[]];
+            }
+        }
         foreach (['name','brief','description'] as $field) {
             if (!isset($payload[$field]) || !is_string($payload[$field])) continue;
             $old=(string)$payload[$field];
@@ -10508,6 +10723,23 @@ if(!$skipStop&&bslStopRequestedForQueue()){
 return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 }
 $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
+/* v10.459: اگر خطای ۴۲۲/۴۰۰ مربوط به preparation_days (مدت زمان آماده‌سازی) باشد،
+   هر بار ۱ روز کم می‌کنیم و دوباره می‌فرستیم تا تایید شود (تا سقف ۰ روز). */
+if(empty($r['ok'])&&!$mp&&is_array($d)&&stripos($ep,'product')!==false&&bslIsPreparationDaysError($r)){
+    $_defPrep=(int)((function_exists('loadConnections')?(loadConnections()['basalam']['preparation_days']??5):5));
+    $_prepRes=bslRunPreparationDaysRetryLoop(
+        $r,
+        $d,
+        static fn(array $nextPayload):array=>bslReqMode($url,$tk,$m,$nextPayload,false,$net,$mode),
+        $m,
+        $_defPrep,
+        !$skipStop?static fn():bool=>bslStopRequestedForQueue():null
+    );
+    $d=$_prepRes['payload'];
+    $r=$_prepRes['response'];
+    if(($r['error']??'')==='stopped')return $traceReturn($r);
+    unset($_defPrep,$_prepRes);
+}
 /* v10.285: یک retry ترمیمی برای متن ممنوع؛ فقط درخواست محصول و فقط JSON. */
 if((int)($r['code']??0)===422&&!$mp&&is_array($d)&&stripos($ep,'product')!==false){
     $_vr=bslRepairValidationPayload($r,$d);
@@ -11853,11 +12085,17 @@ function bslBuildVariantsPayload(array $p, int $defaultPriceRial = 0, int $defau
 
 function bslReqWithVariantsFallback(string $tk, string $method, string $ep, array &$payload): array {
     $r = bslReq($tk, $method, $ep, $payload);
+    if (isset($r['preparation_days_adjusted'])) {
+        $payload['preparation_days'] = (int)$r['preparation_days_adjusted'];
+    }
     if (!empty($r['ok']) || empty($payload['variants'])) return $r;
     $code = (int)($r['code'] ?? 0);
     if ($code === 422 && !bslIsDuplicateName($r) && !bslIsCategoryError($r)) {
         unset($payload['variants']);
         $r2 = bslReq($tk, $method, $ep, $payload);
+        if (isset($r2['preparation_days_adjusted'])) {
+            $payload['preparation_days'] = (int)$r2['preparation_days_adjusted'];
+        }
         if (!empty($r2['ok']) || (int)($r2['code'] ?? 0) !== 422) return $r2;
         return $r2;
     }
@@ -51918,6 +52156,93 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     if (function_exists('bslApplyContent')) {
         bslApplyContent($_buTest458, ['long_desc' => 'متن کوتاه', 'specs' => $_tblSpecs458]);
     }
+    $_prepRaw459 = '{"http_status":422,"messages":[{"code":0,"fields":["preparation_days"],"message":".مدت زمان آماده سازی برای این دسته بندی باید بین صفر تا 4 روز باشد"}]}';
+    $_prepErr459 = [
+        'ok'   => false,
+        'code' => 422,
+        'body' => json_decode($_prepRaw459, true),
+        'raw'  => $_prepRaw459,
+    ];
+    $_prepTried459 = [];
+    $_prepRun459 = function_exists('bslRunPreparationDaysRetryLoop')
+        ? bslRunPreparationDaysRetryLoop(
+            $_prepErr459,
+            ['primary_price' => 350000, 'preparation_days' => 7],
+            static function (array $pl) use (&$_prepTried459, $_prepErr459): array {
+                $pd = (int)($pl['preparation_days'] ?? -99);
+                $_prepTried459[] = $pd;
+                if ($pd <= 4) {
+                    return ['ok' => true, 'code' => 200, 'body' => ['id' => 59147054, 'preparation_days' => $pd], 'raw' => '{"id":59147054}'];
+                }
+                return $_prepErr459;
+            },
+            'PATCH',
+            7
+        )
+        : ['response' => ['ok' => false], 'payload' => [], 'steps' => -1];
+    $_prepFloor459 = [];
+    $_prepFloorRun459 = function_exists('bslRunPreparationDaysRetryLoop')
+        ? bslRunPreparationDaysRetryLoop(
+            $_prepErr459,
+            ['preparation_days' => 2],
+            static function (array $pl) use (&$_prepFloor459, $_prepErr459): array {
+                $_prepFloor459[] = (int)($pl['preparation_days'] ?? -99);
+                return $_prepErr459;
+            },
+            'PATCH',
+            2
+        )
+        : ['response' => ['ok' => true], 'payload' => [], 'steps' => -1];
+    $_prepMissing459 = [];
+    $_prepMissingRun459 = function_exists('bslRunPreparationDaysRetryLoop')
+        ? bslRunPreparationDaysRetryLoop(
+            $_prepErr459,
+            ['primary_price' => 500000],
+            static function (array $pl) use (&$_prepMissing459, $_prepErr459): array {
+                $pd = (int)($pl['preparation_days'] ?? -99);
+                $_prepMissing459[] = $pd;
+                return $pd <= 4 ? ['ok' => true, 'code' => 200, 'body' => ['id' => 100], 'raw' => '{"id":100}'] : $_prepErr459;
+            },
+            'PATCH',
+            6
+        )
+        : ['response' => ['ok' => false], 'payload' => [], 'steps' => -1];
+    $_prepBatchErr459 = [
+        'ok'   => false,
+        'code' => 422,
+        'body' => ['http_status' => 422, 'messages' => [['code' => 0, 'fields' => ['data.1.preparation_days'], 'message' => '.مدت زمان آماده سازی برای این دسته بندی باید بین صفر تا 4 روز باشد']]],
+        'raw'  => '',
+    ];
+    $_prepBatchStep459 = function_exists('bslStepDownPreparationDays')
+        ? bslStepDownPreparationDays($_prepBatchErr459, ['data' => [['id' => 1, 'preparation_days' => 5], ['id' => 2, 'preparation_days' => 5]]], 5)
+        : null;
+    $_prepRepair459 = function_exists('bslRepairValidationPayload')
+        ? bslRepairValidationPayload($_prepErr459, ['description' => '<table class="s4-specs-table"><tr><th>جنس</th><td>نخی</td></tr></table>', 'preparation_days' => 4])
+        : ['changed' => true, 'payload' => ['description' => '']];
+    $add('10.459', 'کاهش خودکار پله‌ای ۱ روزهٔ preparation_days روی خطای ۴۲۲ باسلام تا زمان تایید، عدم اشتباه با خطای دسته‌بندی و حفظ جدول HTML توضیحات',
+         function_exists('bslIsPreparationDaysError')
+      && function_exists('bslStepDownPreparationDays')
+      && function_exists('bslRunPreparationDaysRetryLoop')
+      && bslIsPreparationDaysError($_prepErr459) === true
+      && bslIsPreparationDaysError($_prepBatchErr459) === true
+      && bslIsCategoryError($_prepErr459) === false
+      && $_prepTried459 === [6, 5, 4]
+      && !empty($_prepRun459['response']['ok'])
+      && (int)($_prepRun459['response']['preparation_days_from'] ?? -1) === 7
+      && (int)($_prepRun459['response']['preparation_days_adjusted'] ?? -1) === 4
+      && (int)($_prepRun459['payload']['preparation_days'] ?? -1) === 4
+      && $_prepFloor459 === [1, 0]
+      && empty($_prepFloorRun459['response']['ok'])
+      && (int)($_prepFloorRun459['payload']['preparation_days'] ?? -1) === 0
+      && $_prepMissing459 === [5, 4]
+      && !empty($_prepMissingRun459['response']['ok'])
+      && is_array($_prepBatchStep459)
+      && (int)($_prepBatchStep459['payload']['data'][0]['preparation_days'] ?? -1) === 5
+      && (int)($_prepBatchStep459['payload']['data'][1]['preparation_days'] ?? -1) === 4
+      && empty($_prepRepair459['changed'])
+      && strpos((string)($_prepRepair459['payload']['description'] ?? ''), '<table class="s4-specs-table">') !== false
+      && strpos($selfSrc, "{v:'10." . "459'") !== false
+      && version_compare(APP_VERSION, '10.459', '>='));
     $add('10.458', 'فیل‌اور چندنود Sotoon CDN، پیش‌نمایش عکس ویرایش‌شده در تب نتایج، رفع اسپاون CLI صف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها',
          count($_snPools458) >= 6
       && in_array('185.143.232.5', $_snPools458, true)
@@ -63502,14 +63827,24 @@ function bslIsCategoryError(array $r): bool {
     if ($code === 429 || in_array($code, [0, 401, 403], true)) return false;
     if (function_exists('bslIsDuplicateName') && bslIsDuplicateName($r)) return false;
     $b = is_array($r['body'] ?? null) ? $r['body'] : [];
+    $hasExplicitCatField = false;
     if (is_array($b['messages'] ?? null)) {
         foreach ($b['messages'] as $mItem) {
             if (!is_array($mItem)) continue;
             $fields = is_array($mItem['fields'] ?? null) ? $mItem['fields'] : [];
+            $nonEmptyFields = false;
             foreach ($fields as $f) {
                 $fl = strtolower(trim((string)$f));
-                if ($fl === 'category' || $fl === 'category_id') return true;
+                if ($fl !== '') $nonEmptyFields = true;
+                if ($fl === 'category' || $fl === 'category_id') {
+                    $hasExplicitCatField = true;
+                    return true;
+                }
             }
+            /* v10.459: پیام‌هایی مثل «مدت زمان آماده سازی برای این دسته بندی باید بین صفر تا 4 روز باشد»
+               دارای fields:["preparation_days"] هستند و صرفِ وجود عبارت «برای این دسته بندی» نباید
+               آن‌ها را خطای دسته‌بندی جا بزند. */
+            if ($nonEmptyFields) continue;
             $mTxt = (string)($mItem['message'] ?? '');
             if ($mTxt !== '' && (
                 mb_strpos($mTxt, 'دارای فرزند') !== false ||
@@ -63521,6 +63856,7 @@ function bslIsCategoryError(array $r): bool {
                 stripos($mTxt, 'category') !== false ||
                 stripos($mTxt, 'leaf') !== false
             )) {
+                if (function_exists('bslIsPreparationDaysError') && bslIsPreparationDaysError($r)) continue;
                 return true;
             }
         }
@@ -63530,6 +63866,9 @@ function bslIsCategoryError(array $r): bool {
             $fkl = strtolower(trim((string)$fk));
             if ($fkl === 'category' || $fkl === 'category_id') return true;
         }
+    }
+    if (!$hasExplicitCatField && function_exists('bslIsPreparationDaysError') && bslIsPreparationDaysError($r)) {
+        return false;
     }
     $hay = [];
     foreach (['message', 'error', 'error_description', 'detail'] as $k) {
@@ -68801,6 +69140,8 @@ foreach($entriesFb as $rowFb){if(!is_array($rowFb))continue;if(!in_array((string
 $identityFb=notifSourceIdentity($cnFb);$identityFb['label']=$safeFbText($identityFb['label']??'',160);$identityFb['host_path']=$safeFbText($identityFb['host_path']??'',240);
 $groups=[];$samples=[];$total=0;$entriesWithError=0;
 $solution=function(int $code,string $kind,string $detail):array{
+    if(in_array($code,[400,422],true)&&preg_match('~preparation_days|preparation_day|(?:زمان|مدت|روز)\s*(?:آماده\s*سازی|آماده‌سازی|اماده\s*سازی|اماده‌سازی)~iu',$detail))
+        return ['key'=>'preparation_days_validation','title'=>'مدت زمان آماده‌سازی خارج از سقف دسته‌بندی','solution'=>'هر بار ۱ روز از preparation_days کم می‌شود و درخواست خودکار تکرار می‌گردد تا تایید شود','auto_repair'=>true];
     if($code===422&&(stripos($detail,'detected')!==false||preg_match('~پیج|کانال|تلگرام|اینستا|غیرمجاز~u',$detail)))
         return ['key'=>'forbidden_content','title'=>'محتوای تبلیغاتی/راه ارتباطی ممنوع','solution'=>'قطعهٔ detected از description/brief حذف و درخواست یک بار خودکار تکرار می‌شود','auto_repair'=>true];
     if($code===422&&preg_match('~category|دسته~iu',$detail))return ['key'=>'category_validation','title'=>'دسته‌بندی نامعتبر','solution'=>'دستهٔ برگ و سپس دسته‌های جایگزین امتحان شود','auto_repair'=>false];
@@ -68864,7 +69205,7 @@ echo json_encode([
         'pending_count'=>count(bslAiCatPendingLoad(null,true)),
         'fixed_count'=>count(array_filter(bslAiCatPendingLoad(null,false),static fn($x)=>($x['status']??'')==='fixed')),
     ],
-    'cron'=>$cronFb,'repairs'=>['forbidden_content_retry'=>true,'requested'=>$repairRequestedFb,
+    'cron'=>$cronFb,'repairs'=>['forbidden_content_retry'=>true,'preparation_days_stepdown'=>true,'requested'=>$repairRequestedFb,
         'missing_queue_row'=>$repairResultFb]
 ],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
@@ -87310,6 +87651,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.459', t:'⏱️ کاهش پله‌ای خودکار ۱ روزهٔ زمان آماده‌سازی (preparation_days) روی خطای ۴۲۲ باسلام تا زمان تایید', items:[
+    'تشخیص دقیق خطاهای مدت زمان آماده‌سازی باسلام (bslIsPreparationDaysError) در تمام ساختارهای پاسخ ۴۲۲ و ۴۰۰ (از جمله fields:["preparation_days"]، کلیدهای آرایه‌ای data.*.preparation_days در آپدیت دسته‌ای، errors.preparation_days و پیام‌های فارسی/انگلیسی مشابه «مدت زمان آماده سازی برای این دسته بندی باید بین صفر تا 4 روز باشد»).',
+    'کاهش خودکار ۱ روزه در هر تلاش (bslStepDownPreparationDays / bslRunPreparationDaysRetryLoop) در تمام مسیرهای تک‌درخواستی (bslReq)، موازی چندغرفه‌ای (bslReqMulti)، ارسال با تنوع (bslReqWithVariantsFallback) و آپدیت دسته‌ای (batch-updates) تا زمانی که باسلام درخواست را تایید کند (تا کف ۰ روز)؛ حتی اگر در PATCH اولیه فیلد preparation_days ارسال نشده باشد.',
+    'رفع تداخل تشخیص خطای دسته‌بندی و حفظ جدول HTML مشخصات: ۱) در bslIsCategoryError پیام‌هایی که صریحاً روی فیلد غیر دسته‌بندی مثل preparation_days هستند دیگر به‌خاطر وجود عبارت «برای این دسته بندی» به‌اشتباه خطای دسته‌بندی تشخیص داده نمی‌شوند، و ۲) در bslRepairValidationPayload هنگام خطای فیلدهای غیرمتنی، تگ‌های جدول مشخصات فنی (<table>) از توضیحات حذف نمی‌شوند.'
+  ]},
   {v:'10.458', t:'🚀 سوئیچ چندنود Sotoon CDN برای شروع فوری جزئیات، پیش‌نمایش تصاویر ویرایش‌شده در تب نتایج، رفع توقف ارسال باسلام/ووکامرس، جدول مشخصات فنی و ارسال تنوع‌ها', items:[
     'شروع فوری و بدون قفل استخراج جزئیات (فاز ۲): ۱) اتصال مستقیم CURLOPT_RESOLVE به استخر ۶ نود سالم Sotoon CDN (185.143.232.5 تا 185.143.235.5 و 185.143.233.104/.234.104) با failover آنی روی خطای ۴۲۹/تایم‌اوت، ۲) رفع قفل ارث‌بری‌شدهٔ پردازش‌های فرزند در s4WorkerIsActive، و ۳) حذف ذخیرهٔ تکراری چندمگابایتی در startDetailExtractionServer.',
     'نمایش تصاویر ویرایش‌شده در تب نتایج و مودال کلیک محصول: تمام عکس‌های شاخص و گالری در کارت‌ها، جدول نتایج و مودال جزئیات محصول از طریق resultEditedImgUrl با اعمال برش پایین یا مربع سفید گوشه نمایش داده می‌شوند و با تغییر اسلایدرها زنده به‌روز می‌شوند.',
