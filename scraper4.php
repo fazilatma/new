@@ -17219,6 +17219,52 @@ if (strtolower($kind) === 'snappshop_pdp_probe') {
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
+    if ($sub === 'alt') {
+        $appJs = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/_app-bb3ec8dbfebff8e9.js')['raw'];
+        $c6666 = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/6666-b00f677f2276ce45.js')['raw'];
+        $c516 = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/516-e999d38d3429b770.js')['raw'];
+        $pdpJs = $quickGet('GET', 'https://cdn.snappshop.ir/customer-production-assets/releases/customer_production_ir_csr_1326d499_production_v0/_next/static/chunks/pages/product/%5Bproduct-id%5D/%5B%5B...slug%5D%5D-4eecedd0da96539f.js')['raw'];
+        $routes = [];
+        foreach (['_app' => $appJs, 'c6666' => $c6666, 'c516' => $c516, 'pdp' => $pdpJs] as $bk => $bt) {
+            if (preg_match_all('~["\']([a-zA-Z0-9_-]+/v[1-5]/[a-zA-Z0-9_/${}.?-]*)["\']~', $bt, $rm)) {
+                $routes[$bk] = array_values(array_unique($rm[1]));
+            }
+        }
+        $pBearer = strpos($appJs, '"Bearer "');
+        $hdrBuilder = $pBearer !== false ? str_replace(['<', '>'], ['[lt]', '[gt]'], substr($appJs, max(0, $pBearer - 1100), 1300)) : '';
+        $buildId = '';
+        $webHtml = $quickGet('GET', $pdpUrl, ['Accept: text/html,*/*'])['raw'];
+        if (preg_match('~"buildId"\s*:\s*"([^"]+)"~', $webHtml, $bm)) $buildId = $bm[1];
+
+        $gRes = $quickGet('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
+        $tok = '';
+        if (preg_match('~"token"\s*:\s*"([^"]+)"~', $gRes['raw'], $tm)) $tok = $tm[1];
+        $authHdrs = $tok !== '' ? array_merge($snHdrs, ['Authorization: Bearer ' . $tok, 's-device-type: DESKTOP']) : $snHdrs;
+
+        $altProbes = [];
+        $tests = [
+            'cap_P' => ['GET', 'https://apix.snappshop.ir/Products/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
+            'dbl_slash' => ['GET', 'https://apix.snappshop.ir//products/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
+            'dot_slash' => ['GET', 'https://apix.snappshop.ir/./products/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
+            'pct70' => ['GET', 'https://apix.snappshop.ir/%70roducts/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
+            'trail_slash' => ['GET', 'https://apix.snappshop.ir/products/v2/' . $pid . '/?lat=35.77331&lng=51.418591', $authHdrs, null],
+            'api_host' => ['GET', 'https://api.snappshop.ir/products/v2/' . $pid . '?lat=35.77331&lng=51.418591', $authHdrs, null],
+            'search_v2_get' => ['GET', 'https://apix.snappshop.ir/search/v2?query=' . $pid . '&lat=35.77331&lng=51.418591', $authHdrs, null],
+            'next_data' => ['GET', 'https://snappshop.ir/_next/data/' . ($buildId ?: 'x') . '/fa-IR/product/snp-' . $pid . '.json', ['Accept: application/json'], null],
+        ];
+        foreach ($tests as $tk => [$tmth, $tu, $th, $tb]) {
+            $tr = $quickGet($tmth, $tu, $th, $tb);
+            $altProbes[$tk] = ['code' => $tr['code'], 'bytes' => $tr['bytes'], 'err' => $tr['err'], 'sample' => substr($tr['sample'], 0, 260)];
+        }
+        echo json_encode([
+            'ok' => true,
+            'build_id' => $buildId,
+            'routes' => $routes,
+            'hdr_builder' => $hdrBuilder,
+            'alt_probes' => $altProbes,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        exit;
+    }
     $guestGet = $quickGet('GET', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', $snHdrs);
     $guestGetRaw = $guestGet['raw']; unset($guestGet['raw']);
     $guestPost = $quickGet('POST', 'https://apix.snappshop.ir/guest/v2/token?lat=35.77331&lng=51.418591', array_merge($snHdrs, ['Content-Type: application/json']), '{}');
