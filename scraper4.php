@@ -292,6 +292,8 @@ const AI_KEY_STATE_FILE = __DIR__ . '/ai_key_state.json';
 const AI_KEY_RATE_COOLDOWN = 90;
 // v9.38: پایگاه رایِ «مدل کاندید» — کدام مدل در آزمون‌ها بهتر جواب داده
 const AI_VOTES_FILE = __DIR__ . '/ai_votes.json';
+/* v10.476: وضعیت زمان‌بند تست خودکار روزانهٔ مدل‌های هوش مصنوعی و انتخاب خودکار مستر + پشتیبان‌ها */
+const AI_DAILY_STATE_FILE = __DIR__ . '/ai_daily_test_state.json';
 const NOTIF_STATE_FILE = __DIR__ . '/last_notification_check.json';
 const NOTIF_SCAN_LOCK_FILE = __DIR__ . '/notification_scan.lock'; /* v10.392: prevent overlapping cron/browser scans */
 /* v10.66 (۸۰): فیدِ رویدادهایِ زنده — مرورگر رویدادهایِ تازه را می‌خواند */
@@ -392,7 +394,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.475';
+const APP_VERSION = '10.476';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2583,6 +2585,9 @@ function s4WorkerLoopFromCli(): void {
             $lastWorkerResumeAll = time();
             if (function_exists('s4CronAutoResumeAllTasks')) {
                 try { s4CronAutoResumeAllTasks('internal_worker'); } catch (Throwable $_wraErr) {}
+            }
+            if (function_exists('s4CronMaybeRunDailyAiTest')) {
+                try { s4CronMaybeRunDailyAiTest('internal_worker'); } catch (Throwable $_datErr) {}
             }
         }
         $job = s4WorkerClaimJob();
@@ -8519,18 +8524,51 @@ function aiProviderCallOnce(array $p, string $model, array $payload, ?array $net
     return $last;
 }
 
-/** تنظیمات «ارائه‌دهندهٔ فعال» — اولین ارائه‌دهندهٔ روشن که مدل دارد */
+/** تنظیمات «ارائه‌دهندهٔ فعال» — اولویت با مدل مسترِ سالم، سپس انتخاب فعال کاربر، سپس اولین مدل سالم */
 function aiActiveConfig(): array {
     $providers = aiProvidersLoad();
+    $mk = function_exists('aiMasterKey') ? aiMasterKey() : '';
+    if ($mk !== '' && strpos($mk, '::') !== false) {
+        [$mPid, $mMid] = explode('::', $mk, 2);
+        if (isset($providers[$mPid]) && (($providers[$mPid]['enabled'] ?? true) !== false)) {
+            foreach ((array)($providers[$mPid]['models'] ?? []) as $mm) {
+                if ((string)($mm['id'] ?? '') === $mMid) {
+                    if (empty($mm['tested']) || !empty($mm['available'])) {
+                        return ['provider' => $providers[$mPid], 'model' => $mMid];
+                    }
+                    break;
+                }
+            }
+        }
+    }
     $sel = aiSelected();
     $pid = $sel['provider'];
     if ($pid !== '' && isset($providers[$pid])) {
         $p = $providers[$pid];
         if (($p['enabled'] ?? true) !== false) {
             if (!empty($p['models'])) {
-                foreach ($p['models'] as $m) if (($m['id'] ?? '') === $sel['model']) return ['provider' => $p, 'model' => $sel['model']];
+                foreach ($p['models'] as $m) {
+                    if (($m['id'] ?? '') === $sel['model'] && (empty($m['tested']) || !empty($m['available']))) {
+                        return ['provider' => $p, 'model' => $sel['model']];
+                    }
+                }
+                foreach ($p['models'] as $m) {
+                    if (!empty($m['available'])) return ['provider' => $p, 'model' => (string)$m['id']];
+                }
                 return ['provider' => $p, 'model' => (string)$p['models'][0]['id']];
             }
+        }
+    }
+    if (function_exists('aiMasterFallbackChain')) {
+        $chain = aiMasterFallbackChain(true, $providers);
+        if (!empty($chain[0]['provider_obj']) && (string)($chain[0]['model'] ?? '') !== '') {
+            return ['provider' => $chain[0]['provider_obj'], 'model' => (string)$chain[0]['model']];
+        }
+    }
+    foreach ($providers as $p) {
+        if (($p['enabled'] ?? true) === false) continue;
+        foreach ((array)($p['models'] ?? []) as $m) {
+            if (!empty($m['available'])) return ['provider' => $p, 'model' => (string)$m['id']];
         }
     }
     foreach ($providers as $p) {
@@ -8555,6 +8593,7 @@ function aiFreeFallbackConfig(): array {
     foreach ($providers as $p) {
         if (($p['enabled'] ?? true) === false) continue;
         foreach ($p['models'] as $m) {
+            if (!empty($m['tested']) && empty($m['available'])) continue;
             $id = (string)($m['id'] ?? '');
             $low = strtolower($id);
             foreach ($prefer as $kw) {
@@ -8568,6 +8607,7 @@ function aiFreeFallbackConfig(): array {
     foreach ($providers as $p) {
         if (($p['enabled'] ?? true) === false) continue;
         foreach ($p['models'] as $m) {
+            if (!empty($m['tested']) && empty($m['available'])) continue;
             if (!empty($m['free'])) return ['provider' => $p, 'model' => (string)$m['id'], 'via' => 'free'];
         }
     }
@@ -8631,35 +8671,87 @@ function autoResolveModel(string $modelId): array {
     return [];
 }
 
-/** فراخوانی چت با ارائه‌دهندهٔ فعال + بک‌آپ خودکارِ مدل رایگان */
+/** فراخوانی چت با مدل مستر/فعال + زنجیرهٔ پشتیبان‌های مستر (به ترتیب پایداری و کیفیت) + بک‌آپ رایگان */
 function aiActiveChat(array $payload, ?array $net = null): array {
     $cfg = aiActiveConfig();
     if (empty($cfg['provider'])) return ['ok' => false, 'code' => 0, 'error' => 'هیچ ارائه‌دهندهٔ هوش مصنوعی فعال و دارای مدلی تنظیم نشده'];
     if ($net === null) $net = aiNetCfg();
-    $r = aiProviderCall($cfg['provider'], $cfg['model'], $payload, $net);
-    // اگر موفق بود یا خطای قطعیِ منطقی (مثل 400) داد که fallback کمکی نمی‌کند، برگردان
-    if (!empty($r['ok'])) return $r;
-    $code = (int)$r['code'];
+    $wantTools = !empty($payload['tools']);
+    $isGoodChatReply = function (array $res, string $mid) use ($wantTools): bool {
+        if (empty($res['ok'])) return false;
+        if ($wantTools) return true;
+        $txt = trim(aiExtractAnswer($res['body'] ?? []));
+        if ($txt === '') return false;
+        return aiSuspectAnswer($txt, $mid) === '';
+    };
+    $curPid = (string)($cfg['provider']['id'] ?? '');
+    $curMid = (string)($cfg['model'] ?? '');
+    $r = aiProviderCall($cfg['provider'], $curMid, $payload, $net);
+    if ($isGoodChatReply($r, $curMid)) {
+        if (!$wantTools) $r['text'] = aiExtractAnswer($r['body'] ?? []);
+        $r['provider_name'] = (string)($cfg['provider']['name'] ?? $curPid);
+        $r['model_name'] = $curMid;
+        return $r;
+    }
+    $triedKeys = [$curPid . '::' . $curMid => true];
+    $deadProvs = [];
+    if (in_array((int)($r['code'] ?? 0), [401, 402], true) && !in_array($curPid, ['openrouter', 'opencode'], true)) {
+        $deadProvs[$curPid] = true;
+    }
+    /* v10.476: عبور از پشتیبان‌های مستر به ترتیب پایداری و کیفیت */
+    if (function_exists('aiMasterFallbackChain')) {
+        $fbCount = 0;
+        foreach (aiMasterFallbackChain(true) as $fbRow) {
+            if ($fbCount >= 5) break;
+            $fPid = (string)($fbRow['provider'] ?? '');
+            $fMid = (string)($fbRow['model'] ?? '');
+            $fKey = $fPid . '::' . $fMid;
+            if ($fPid === '' || $fMid === '' || isset($triedKeys[$fKey]) || isset($deadProvs[$fPid])) continue;
+            $fObj = $fbRow['provider_obj'] ?? null;
+            if (!is_array($fObj)) continue;
+            if ($wantTools && empty($fbRow['tool_calling'])) continue;
+            $triedKeys[$fKey] = true;
+            $fbCount++;
+            $rFb = aiProviderCall($fObj, $fMid, $payload, $net);
+            if ($isGoodChatReply($rFb, $fMid)) {
+                if (!$wantTools) $rFb['text'] = aiExtractAnswer($rFb['body'] ?? []);
+                $rFb['via'] = ($rFb['via'] ?? 'direct') . '·master_fallback:' . $fbCount;
+                $rFb['backup'] = ['provider' => $fPid, 'model' => $fMid];
+                $rFb['provider_name'] = (string)($fObj['name'] ?? $fPid);
+                $rFb['model_name'] = $fMid;
+                return $rFb;
+            }
+            if (in_array((int)($rFb['code'] ?? 0), [401, 402], true) && !in_array($fPid, ['openrouter', 'opencode'], true)) {
+                $deadProvs[$fPid] = true;
+            }
+        }
+    }
     $fb = aiFreeFallbackConfig();
-    if (!empty($fb['provider']) && $fb['model'] !== $cfg['model']) {
-        $r2 = aiProviderCall($fb['provider'], $fb['model'], $payload, $net);
-        if (!empty($r2['ok'])) {
-            $r2['via'] = ($r2['via'] ?? 'direct') . '·backup:' . $fb['via'];
-            $r2['backup'] = ['provider' => $fb['provider']['id'] ?? '', 'model' => $fb['model']];
-            return $r2;
+    if (!empty($fb['provider'])) {
+        $fbKey = ((string)($fb['provider']['id'] ?? '')) . '::' . (string)$fb['model'];
+        if (!isset($triedKeys[$fbKey])) {
+            $r2 = aiProviderCall($fb['provider'], $fb['model'], $payload, $net);
+            if ($isGoodChatReply($r2, (string)$fb['model'])) {
+                if (!$wantTools) $r2['text'] = aiExtractAnswer($r2['body'] ?? []);
+                $r2['via'] = ($r2['via'] ?? 'direct') . '·backup:' . $fb['via'];
+                $r2['backup'] = ['provider' => $fb['provider']['id'] ?? '', 'model' => $fb['model']];
+                $r2['provider_name'] = (string)($fb['provider']['name'] ?? ($fb['provider']['id'] ?? ''));
+                $r2['model_name'] = (string)$fb['model'];
+                return $r2;
+            }
         }
     }
     return $r;
 }
 
 /* =====================================================================
- *  v9.38: مدل‌های کاندید + مدل مستر + پایگاه رای
+ *  v9.38 + v10.476: مدل‌های کاندید + مدل مستر + پشتیبان‌های مستر + تست روزانه
  *
- *  ادمین چند «مدل کاندید» (برای دسته‌بندی و پاسخ خودکار) انتخاب می‌کند و
- *  در آزمون‌ها، پاسخِ همهٔ کاندیدها کنار هم می‌آید تا بهترین را برگزیند.
- *  هر انتخاب یک «رأی» ثبت می‌شود و از آمار این رأی‌ها یک «مدل مستر»
- *  (بهترین از نظر آماری) انتخاب می‌شود که به‌عنوان مرجعِ قضاوتِ بقیه
- *  مدل‌ها استفاده می‌شود.
+ *  در v10.476 سیستم هر روز یک‌بار همهٔ مدل‌های هوش مصنوعی فعال را تست می‌کند
+ *  و بر اساس «آمار تست‌ها» (پایداری + کیفیت پاسخ و دسته‌بندی)، پایدارترین و
+ *  بهترین مدلی را که در آخرین تست پاسخ مناسب داده است به عنوان «مدل مستر» و
+ *  سایر مدل‌های برتر را به ترتیب پایداری و کیفیت به عنوان «پشتیبان‌های مستر»
+ *  انتخاب و ذخیره می‌کند.
  * ===================================================================== */
 
 /** کلید یکتا برای یک کاندید: «provider::model» */
@@ -8667,7 +8759,7 @@ function aiCandKey(string $provider, string $model): string {
     return $provider . '::' . $model;
 }
 
-/** فهرست مدل‌های کاندید از connections: [{provider,model,key}] */
+/** فهرست مدل‌های کاندید از connections: [{provider,model,key}] (مرتب‌شده: مستر اول، سپس پشتیبان‌های مستر) */
 function aiCandidates(): array {
     $cn = loadConnections();
     $raw = (array)($cn['ai_candidates'] ?? []);
@@ -8713,14 +8805,19 @@ function aiCandidatesSave(array $list): bool {
 
 /** خواندن پایگاه رای */
 function aiVotesLoad(): array {
-    if (!is_file(AI_VOTES_FILE)) return ['updated_at' => 0, 'scores' => [], 'history' => [], 'pin' => '', 'master' => ''];
+    $def = ['updated_at' => 0, 'scores' => [], 'history' => [], 'pin' => '', 'manual_pin_lock' => false,
+            'master' => '', 'auto_master' => '', 'fallbacks' => [], 'auto_selected_at' => 0, 'auto_reason' => ''];
+    if (!is_file(AI_VOTES_FILE)) return $def;
     $d = json_decode((string)@file_get_contents(AI_VOTES_FILE), true);
-    if (!is_array($d)) return ['updated_at' => 0, 'scores' => [], 'history' => [], 'pin' => '', 'master' => ''];
-    $d['scores']  = is_array($d['scores'] ?? null) ? $d['scores'] : [];
-    $d['history'] = is_array($d['history'] ?? null) ? $d['history'] : [];
-    $d['pin']     = (string)($d['pin'] ?? '');
-    $d['master']  = (string)($d['master'] ?? '');
-    return $d;
+    if (!is_array($d)) return $def;
+    $d['scores']          = is_array($d['scores'] ?? null) ? $d['scores'] : [];
+    $d['history']         = is_array($d['history'] ?? null) ? $d['history'] : [];
+    $d['pin']             = (string)($d['pin'] ?? '');
+    $d['manual_pin_lock'] = !empty($d['manual_pin_lock']);
+    $d['master']          = (string)($d['master'] ?? '');
+    $d['auto_master']     = (string)($d['auto_master'] ?? '');
+    $d['fallbacks']       = is_array($d['fallbacks'] ?? null) ? array_values(array_map('strval', $d['fallbacks'])) : [];
+    return array_merge($def, $d);
 }
 function aiVotesSave(array $v): void {
     $v['updated_at'] = time();
@@ -8733,18 +8830,693 @@ function aiScoreOf(array $s): float {
     if ($votes <= 0) return 0;
     return round($wins / $votes, 3);
 }
-/** مدل مستر = سنجاقِ دستی (pin) یا بهترین از نظر آماری میان کاندیدها */
+
+/** v10.476: تنظیمات تست خودکار روزانهٔ هوش مصنوعی و انتخاب هوشمند مستر + پشتیبان‌ها */
+function aiDailyTestCfg(?array $cn = null): array {
+    if ($cn === null) $cn = loadConnections();
+    $raw = is_array($cn['ai_daily_test'] ?? null) ? $cn['ai_daily_test'] : [];
+    $msg = trim((string)($raw['test_msg'] ?? 'سلام'));
+    if ($msg === '') $msg = 'سلام';
+    $cat = trim((string)($raw['test_cat'] ?? 'ادو پرفیوم'));
+    if ($cat === '') $cat = 'ادو پرفیوم';
+    return [
+        'enabled'            => !array_key_exists('enabled', $raw) ? true : !empty($raw['enabled']),
+        'auto_select_master' => !array_key_exists('auto_select_master', $raw) ? true : !empty($raw['auto_select_master']),
+        'interval_hours'     => max(1, min(168, (int)($raw['interval_hours'] ?? 24))),
+        'per_provider'       => max(1, min(500, (int)($raw['per_provider'] ?? 50))),
+        'max_fallbacks'      => max(1, min(50, (int)($raw['max_fallbacks'] ?? 12))),
+        'concurrency'        => max(1, min(16, (int)($raw['concurrency'] ?? 4))),
+        'delay_ms'           => max(0, min(60000, (int)($raw['delay_ms'] ?? 150))),
+        'test_msg'           => $msg,
+        'test_cat'           => $cat,
+    ];
+}
+
+function aiDailyStateLoad(): array {
+    $def = [
+        'last_started_at'   => 0,
+        'last_completed_at' => 0,
+        'last_rank_at'      => 0,
+        'next_due_at'       => 0,
+        'run_epoch'         => 0,
+        'pending_daily'     => false,
+        'last_reason'       => '',
+        'master'            => null,
+        'fallbacks'         => [],
+        'tested_total'      => 0,
+        'proper_count'      => 0,
+        'available_count'   => 0,
+        'history'           => [],
+    ];
+    return localTaskStateRead(AI_DAILY_STATE_FILE, $def);
+}
+
+function aiDailyStateSave(array $st): void {
+    $st['updated_at'] = time();
+    writeJsonFile(AI_DAILY_STATE_FILE, $st);
+}
+
+/** v10.476: تشخیص نتیجهٔ تست دسته‌بندی از testDetails (true=دستهٔ برگ معتبر، false=رد/خطا، null=تست دسته اجرا نشده) */
+function aiModelHasProperCatAnswer(array $td): ?bool {
+    if (array_key_exists('catOk', $td) && $td['catOk'] !== null) {
+        return !empty($td['catOk']);
+    }
+    $catRes = trim((string)($td['catResponse'] ?? ''));
+    $catStat = (int)($td['catStatus'] ?? 0);
+    if ($catRes === '' && $catStat === 0) return null;
+    if (strpos($catRes, 'خطا:') === 0 || strpos($catRes, 'Error') === 0) return false;
+    return preg_match('/\(#\d+\)\s*$/u', $catRes) === 1;
+}
+
+/** v10.476: آیا مدل در آخرین تست ثبت‌شده پاسخ سالم و مناسب داده است؟ */
+function aiModelIsProperInLatestTest(array $m, bool $requireCatOk = false): bool {
+    if (empty($m['tested']) || empty($m['available'])) return false;
+    if (!empty($m['feedbackExcluded']) || !empty($m['billingIssue']) || !empty($m['rateLimited'])) return false;
+    $mid = (string)($m['id'] ?? '');
+    if ($mid === '' || aiNonChatModel($mid, $m) !== '') return false;
+    $td = is_array($m['testDetails'] ?? null) ? $m['testDetails'] : [];
+    if ((string)($td['kind'] ?? '') !== '') return false;
+    if (isset($td['status']) && (int)$td['status'] > 0 && (int)$td['status'] !== 200) return false;
+    if (empty($td['msgSkipped'])) {
+        $resp = trim((string)($td['response'] ?? ''));
+        if (!empty($td) && array_key_exists('response', $td)) {
+            if ($resp === '' || aiSuspectAnswer($resp, $mid) !== '') return false;
+        }
+    }
+    $catOk = aiModelHasProperCatAnswer($td);
+    if ($catOk === false) return false;
+    if ($requireCatOk && $catOk !== true) return false;
+    return true;
+}
+
+/** v10.476: نرمال‌سازی آمار تجمعی تست هر مدل + مقداردهی اولیه از testDetails موجود */
+function aiModelNormalizeTestStats(array $m): array {
+    $raw = is_array($m['testStats'] ?? null) ? $m['testStats'] : [];
+    $td = is_array($m['testDetails'] ?? null) ? $m['testDetails'] : [];
+    $tested = !empty($m['tested']);
+    $avail = !empty($m['available']);
+    $catOk = aiModelHasProperCatAnswer($td);
+    $chatProper = aiModelIsProperInLatestTest($m, false);
+    $properNow = $chatProper && ($catOk !== false);
+    $latNow = max(0, (int)($td['latencyMs'] ?? 0));
+    $catLatNow = max(0, (int)($td['catLatencyMs'] ?? 0));
+    $effLatNow = ($latNow > 0 && $catLatNow > 0) ? (int)round(($latNow + $catLatNow) / 2) : max($latNow, $catLatNow);
+    $testedTs = !empty($td['testedAt']) ? max(0, (int)@strtotime((string)$td['testedAt'])) : 0;
+
+    if (empty($raw) || (int)($raw['runs'] ?? 0) <= 0) {
+        if (!$tested) {
+            return [
+                'runs' => 0, 'ok_runs' => 0, 'proper_runs' => 0,
+                'cat_runs' => 0, 'cat_ok_runs' => 0,
+                'fail_runs' => 0, 'rate_limit_runs' => 0,
+                'streak_ok' => 0, 'streak_fail' => 0,
+                'avg_latency_ms' => 0, 'last_tested_at' => 0, 'last_ok_at' => 0,
+                'last_proper' => false, 'last_cat_ok' => null, 'last_run_epoch' => 0,
+                'recent' => [],
+            ];
+        }
+        $isRl = !empty($m['rateLimited']) || (int)($td['status'] ?? 0) === 429;
+        return [
+            'runs'            => 1,
+            'ok_runs'         => $chatProper ? 1 : 0,
+            'proper_runs'     => $properNow ? 1 : 0,
+            'cat_runs'        => $catOk !== null ? 1 : 0,
+            'cat_ok_runs'     => $catOk === true ? 1 : 0,
+            'fail_runs'       => $chatProper ? 0 : 1,
+            'rate_limit_runs' => $isRl ? 1 : 0,
+            'streak_ok'       => $properNow ? 1 : 0,
+            'streak_fail'     => $properNow ? 0 : 1,
+            'avg_latency_ms'  => $effLatNow,
+            'last_tested_at'  => $testedTs,
+            'last_ok_at'      => $chatProper ? $testedTs : 0,
+            'last_proper'     => $properNow,
+            'last_cat_ok'     => $catOk,
+            'last_run_epoch'  => 0,
+            'recent'          => [[
+                'at' => $testedTs, 'ok' => $chatProper, 'proper' => $properNow,
+                'cat_ok' => $catOk, 'lat' => $effLatNow, 'code' => (int)($td['status'] ?? ($avail ? 200 : 0)),
+            ]],
+        ];
+    }
+
+    return [
+        'runs'            => max(1, (int)($raw['runs'] ?? 1)),
+        'ok_runs'         => max(0, (int)($raw['ok_runs'] ?? 0)),
+        'proper_runs'     => max(0, (int)($raw['proper_runs'] ?? 0)),
+        'cat_runs'        => max(0, (int)($raw['cat_runs'] ?? 0)),
+        'cat_ok_runs'     => max(0, (int)($raw['cat_ok_runs'] ?? 0)),
+        'fail_runs'       => max(0, (int)($raw['fail_runs'] ?? 0)),
+        'rate_limit_runs' => max(0, (int)($raw['rate_limit_runs'] ?? 0)),
+        'streak_ok'       => max(0, (int)($raw['streak_ok'] ?? 0)),
+        'streak_fail'     => max(0, (int)($raw['streak_fail'] ?? 0)),
+        'avg_latency_ms'  => max(0, (int)($raw['avg_latency_ms'] ?? $effLatNow)),
+        'last_tested_at'  => max(0, (int)($raw['last_tested_at'] ?? $testedTs)),
+        'last_ok_at'      => max(0, (int)($raw['last_ok_at'] ?? 0)),
+        'last_proper'     => array_key_exists('last_proper', $raw) ? !empty($raw['last_proper']) : $properNow,
+        'last_cat_ok'     => array_key_exists('last_cat_ok', $raw) ? $raw['last_cat_ok'] : $catOk,
+        'last_run_epoch'  => max(0, (int)($raw['last_run_epoch'] ?? 0)),
+        'recent'          => is_array($raw['recent'] ?? null) ? array_slice(array_values($raw['recent']), -14) : [],
+    ];
+}
+
+/** v10.476: ثبت یک نتیجهٔ تست جدید روی آمار تجمعی مدل (بدون شمارش مضاعف در یک runEpoch) */
+function aiModelUpdateTestStats(array $prevStats, bool $chatOk, ?bool $catOk, int $latencyMs, int $catLatencyMs = 0, int $httpCode = 200, string $kind = '', int $runEpoch = 0): array {
+    $now = time();
+    $cleanChat = $chatOk && $kind === '';
+    $proper = $cleanChat && ($catOk !== false);
+    $effLat = ($latencyMs > 0 && $catLatencyMs > 0) ? (int)round(($latencyMs + $catLatencyMs) / 2) : max(0, max($latencyMs, $catLatencyMs));
+    $prevRuns = max(0, (int)($prevStats['runs'] ?? 0));
+    $prevAvgLat = max(0, (int)($prevStats['avg_latency_ms'] ?? 0));
+    $newAvgLat = $prevAvgLat;
+    if ($cleanChat && $effLat > 0) {
+        $newAvgLat = $prevAvgLat > 0 ? (int)round($prevAvgLat * 0.65 + $effLat * 0.35) : $effLat;
+    } elseif ($prevAvgLat <= 0 && $effLat > 0) {
+        $newAvgLat = $effLat;
+    }
+    $recent = is_array($prevStats['recent'] ?? null) ? array_values($prevStats['recent']) : [];
+    $recent[] = [
+        'at'     => $now,
+        'ok'     => $cleanChat,
+        'proper' => $proper,
+        'cat_ok' => $catOk,
+        'lat'    => $effLat,
+        'code'   => $httpCode,
+    ];
+    if (count($recent) > 14) $recent = array_slice($recent, -14);
+
+    return [
+        'runs'            => $prevRuns + 1,
+        'ok_runs'         => max(0, (int)($prevStats['ok_runs'] ?? 0)) + ($cleanChat ? 1 : 0),
+        'proper_runs'     => max(0, (int)($prevStats['proper_runs'] ?? 0)) + ($proper ? 1 : 0),
+        'cat_runs'        => max(0, (int)($prevStats['cat_runs'] ?? 0)) + ($catOk !== null ? 1 : 0),
+        'cat_ok_runs'     => max(0, (int)($prevStats['cat_ok_runs'] ?? 0)) + ($catOk === true ? 1 : 0),
+        'fail_runs'       => max(0, (int)($prevStats['fail_runs'] ?? 0)) + ($cleanChat ? 0 : 1),
+        'rate_limit_runs' => max(0, (int)($prevStats['rate_limit_runs'] ?? 0)) + ($httpCode === 429 ? 1 : 0),
+        'streak_ok'       => $proper ? (max(0, (int)($prevStats['streak_ok'] ?? 0)) + 1) : 0,
+        'streak_fail'     => $proper ? 0 : (max(0, (int)($prevStats['streak_fail'] ?? 0)) + 1),
+        'avg_latency_ms'  => $newAvgLat,
+        'last_tested_at'  => $now,
+        'last_ok_at'      => $cleanChat ? $now : max(0, (int)($prevStats['last_ok_at'] ?? 0)),
+        'last_proper'     => $proper,
+        'last_cat_ok'     => $catOk,
+        'last_run_epoch'  => $runEpoch > 0 ? $runEpoch : $now,
+        'recent'          => $recent,
+    ];
+}
+
+/** v10.476: امتیاز کیفیت ذاتی و تناسب مدل برای وظایف فروشگاهی فارسی (تشخیص دسته، تولید محتوا، پاسخ‌گویی) */
+function aiModelInstructionQualityBonus(string $mid, array $m = []): float {
+    $low = strtolower($mid . ' ' . (string)($m['name'] ?? ''));
+    if (preg_match('/(leanstral|codestral|starcoder|deepseek-coder|qwen2?\.?5?-coder|codegemma|codellama|-coder\b|-code\b|robotics|mathstral)/i', $low)) {
+        return -4.0;
+    }
+    if (preg_match('/(claude-3|claude-sonnet|claude-opus|gpt-4\.1|gpt-4o|gpt-5|gemini-2\.5|gemini-3|mistral-large|mistral-medium|llama-3\.3-70b|llama-3\.1-70b|llama-4|qwen3-(?:30b|32b|72b|235b)|qwen-?2\.5-72b|deepseek-v3|deepseek-v4|deepseek-r1|kimi-k2|glm-4\.5|glm-5|command-a|command-r-plus|ministral-14b|gemma-3-27b|gemma4:31b|nemotron-(?:3-super|3-ultra|70b))/i', $low)) {
+        return 3.5;
+    }
+    if (preg_match('/(mistral-small|ministral-8b|gemini-2\.0|flash|70b|72b|32b|27b|24b|14b|12b|nemo|llama-3\.1-8b|qwen2\.5-32b|qwen3-14b|qwen3-8b|gemma-3-12b|gemma-2-27b|gemma-2-9b)/i', $low)) {
+        return 2.4;
+    }
+    if (preg_match('/(1b|2b|3b|4b|nano|micro)/i', $low)) {
+        return 0.8;
+    }
+    return 1.8;
+}
+
+/**
+ * v10.476: ارزیابی و رتبه‌بندی کامل مدل‌های هوش مصنوعی بر اساس آمار تست‌ها (پایداری + کیفیت).
+ * فقط مدل‌هایی که در آخرین تست پاسخ مناسب داده‌اند در فهرست eligible قرار می‌گیرند.
+ */
+function aiEvaluateAndRankModels(?array $providers = null, ?array $votes = null): array {
+    if ($providers === null) $providers = aiProvidersLoad();
+    if ($votes === null) $votes = aiVotesLoad();
+
+    $hasCatVerifiedModels = false;
+    foreach ($providers as $pid => $p) {
+        if (!is_array($p) || ($p['enabled'] ?? true) === false) continue;
+        foreach ((array)($p['models'] ?? []) as $m) {
+            if (is_array($m) && aiModelIsProperInLatestTest($m, true)) {
+                $hasCatVerifiedModels = true;
+                break 2;
+            }
+        }
+    }
+
+    $eligible = [];
+    $ineligible = [];
+    $allByKey = [];
+
+    foreach ($providers as $pid => $p) {
+        if (!is_array($p) || ($p['enabled'] ?? true) === false) continue;
+        $pname = trim((string)($p['name'] ?? $pid)) ?: (string)$pid;
+        $healthyKeys = aiHealthyKeyCount($p, (string)$pid);
+        foreach ((array)($p['models'] ?? []) as $m) {
+            if (!is_array($m)) continue;
+            $mid = trim((string)($m['id'] ?? ''));
+            if ($mid === '' || !empty($m['feedbackExcluded']) || aiNonChatModel($mid, $m) !== '') continue;
+
+            $candKey = aiCandKey((string)$pid, $mid);
+            $mName = trim((string)($m['name'] ?? $mid)) ?: $mid;
+            $td = is_array($m['testDetails'] ?? null) ? $m['testDetails'] : [];
+            $st = aiModelNormalizeTestStats($m);
+
+            $chatProper = aiModelIsProperInLatestTest($m, false);
+            $catTri = aiModelHasProperCatAnswer($td);
+            $properLatest = false;
+            $tier = 0;
+            if ($hasCatVerifiedModels) {
+                if ($chatProper && $catTri === true) {
+                    $properLatest = true;
+                    $tier = 2;
+                } elseif ($chatProper && $catTri === null) {
+                    $properLatest = true;
+                    $tier = 1;
+                }
+            } else {
+                if ($chatProper) {
+                    $properLatest = true;
+                    $tier = 2;
+                }
+            }
+
+            $runs = max(1, (int)$st['runs']);
+            $okRuns = max(0, (int)$st['ok_runs']);
+            $properRuns = max(0, (int)$st['proper_runs']);
+            $catRuns = max(0, (int)$st['cat_runs']);
+            $catOkRuns = max(0, (int)$st['cat_ok_runs']);
+            $rlRuns = max(0, (int)$st['rate_limit_runs']);
+            $streakOk = max(0, (int)$st['streak_ok']);
+            $avgLat = max(0, (int)$st['avg_latency_ms']);
+            if ($avgLat <= 0) $avgLat = max(0, (int)($td['latencyMs'] ?? 0));
+
+            /* ۱) امتیاز پایداری (۰ تا ۶۰) بر اساس آمار تست‌ها */
+            $smoothedProper = (($properRuns + 1.5) / ($runs + 2.0)) * 32.0;
+            $recArr = is_array($st['recent'] ?? null) ? array_slice($st['recent'], -7) : [];
+            if ($recArr) {
+                $wSum = 0.0; $wOk = 0.0;
+                foreach ($recArr as $ri => $rv) {
+                    $w = 1.0 + ($ri * 0.25);
+                    $wSum += $w;
+                    if (!empty($rv['proper'])) $wOk += $w;
+                    elseif (!empty($rv['ok'])) $wOk += ($w * 0.5);
+                }
+                $recentRatio = $wSum > 0 ? ($wOk / $wSum) : 0.0;
+            } else {
+                $recentRatio = $properLatest ? 1.0 : 0.0;
+            }
+            $rlPenalty = min(6.0, ($rlRuns / $runs) * 10.0);
+            $recentPts = max(0.0, ($recentRatio * 14.0) - $rlPenalty);
+            $streakPts = min(8.0, $streakOk * 1.6);
+            if ($avgLat <= 0)         $latPts = 3.0;
+            elseif ($avgLat <= 2000)  $latPts = 6.0;
+            elseif ($avgLat <= 4000)  $latPts = 5.0;
+            elseif ($avgLat <= 8000)  $latPts = 3.8;
+            elseif ($avgLat <= 15000) $latPts = 2.2;
+            elseif ($avgLat <= 30000) $latPts = 1.0;
+            else                      $latPts = 0.0;
+
+            $stabilityScore = round(min(60.0, max(0.0, $smoothedProper + $recentPts + $streakPts + $latPts)), 2);
+
+            /* ۲) امتیاز کیفیت (۰ تا ۴۰) بر اساس دقت دسته، کیفیت پاسخ فارسی و توانمندی مدل */
+            $catLatestPts = ($catTri === true) ? 10.0 : (($catTri === null) ? ($hasCatVerifiedModels ? 3.5 : 8.0) : 0.0);
+            $catHistPts = ($catRuns > 0)
+                ? ((($catOkRuns + 1.0) / ($catRuns + 1.5)) * 12.0)
+                : ($hasCatVerifiedModels ? 5.0 : 9.0);
+            $catTotalPts = min(22.0, $catLatestPts + $catHistPts);
+
+            $respText = trim((string)($td['response'] ?? ''));
+            $hasPersian = ($respText !== '' && preg_match('/[\x{0600}-\x{06FF}]/u', $respText) === 1);
+            $respPts = $hasPersian ? 4.0 : ($respText !== '' ? 1.8 : 0.5);
+            $tierBonus = aiModelInstructionQualityBonus($mid, $m);
+            $toolPts = !empty($m['toolCalling']) ? 1.5 : 0.0;
+            $keyPts = ($healthyKeys >= 2) ? 1.5 : (($healthyKeys === 1) ? 1.0 : 0.5);
+            $cleanCatFormatPts = ($catTri === true && preg_match('/^\s*\d{1,7}\s*$/', trim((string)($td['catAiText'] ?? '')))) ? 1.5 : (($catTri === true) ? 0.8 : 0.0);
+            $modelQualPts = min(12.0, max(0.0, $respPts + $tierBonus + $toolPts + $keyPts + $cleanCatFormatPts));
+
+            $vRow = is_array($votes['scores'][$candKey] ?? null) ? $votes['scores'][$candKey] : [];
+            $vCount = (int)($vRow['votes'] ?? 0);
+            $voteWinRate = aiScoreOf($vRow);
+            $votePts = ($vCount >= 3) ? min(6.0, round($voteWinRate * 6.0, 2)) : 3.0;
+
+            $qualityScore = round(min(40.0, max(0.0, $catTotalPts + $modelQualPts + $votePts)), 2);
+            $compositeScore = round($stabilityScore + $qualityScore, 2);
+
+            $row = [
+                'key'             => $candKey,
+                'provider'        => (string)$pid,
+                'providerName'    => $pname,
+                'model'           => $mid,
+                'modelName'       => $mName,
+                'proper_latest'   => $properLatest,
+                'tier'            => $tier,
+                'tested'          => !empty($m['tested']),
+                'available'       => !empty($m['available']),
+                'tool_calling'    => !empty($m['toolCalling']),
+                'composite_score' => $compositeScore,
+                'stability_score' => $stabilityScore,
+                'quality_score'   => $qualityScore,
+                'runs'            => (int)$st['runs'],
+                'ok_runs'         => $okRuns,
+                'proper_runs'     => $properRuns,
+                'pass_rate'       => (int)$st['runs'] > 0 ? round(($properRuns / max(1, (int)$st['runs'])) * 100, 1) : 0.0,
+                'cat_runs'        => $catRuns,
+                'cat_ok_runs'     => $catOkRuns,
+                'cat_rate'        => $catRuns > 0 ? round(($catOkRuns / $catRuns) * 100, 1) : null,
+                'last_cat_ok'     => $catTri,
+                'streak_ok'       => $streakOk,
+                'avg_latency_ms'  => $avgLat > 0 ? $avgLat : 999999,
+                'display_lat_ms'  => $avgLat,
+                'vote_score'      => $voteWinRate,
+                'votes'           => $vCount,
+                'wins'            => (int)($vRow['wins'] ?? 0),
+                'last_tested_at'  => (int)$st['last_tested_at'],
+            ];
+            $allByKey[$candKey] = $row;
+            if ($properLatest) $eligible[] = $row;
+            else               $ineligible[] = $row;
+        }
+    }
+
+    $cmp = function (array $a, array $b): int {
+        if ($a['tier'] !== $b['tier']) return $b['tier'] <=> $a['tier'];
+        if ($a['composite_score'] !== $b['composite_score']) return $b['composite_score'] <=> $a['composite_score'];
+        if ($a['stability_score'] !== $b['stability_score']) return $b['stability_score'] <=> $a['stability_score'];
+        if ($a['quality_score'] !== $b['quality_score']) return $b['quality_score'] <=> $a['quality_score'];
+        if ($a['streak_ok'] !== $b['streak_ok']) return $b['streak_ok'] <=> $a['streak_ok'];
+        return $a['avg_latency_ms'] <=> $b['avg_latency_ms'];
+    };
+    usort($eligible, $cmp);
+    usort($ineligible, $cmp);
+
+    return [
+        'eligible'        => $eligible,
+        'ineligible'      => $ineligible,
+        'by_key'          => $allByKey,
+        'has_cat_metrics' => $hasCatVerifiedModels,
+        'total_evaluated' => count($allByKey),
+        'eligible_count'  => count($eligible),
+    ];
+}
+
+/**
+ * v10.476: انتخاب خودکار پایدارترین و باکیفیت‌ترین مدلِ دارای پاسخ مناسب در آخرین تست
+ * به عنوان «مدل مستر» و چینش «پشتیبان‌های مستر» به ترتیب پایداری و کیفیت.
+ */
+function aiAutoSelectMasterAndFallbacks(?array $providers = null, string $reason = 'daily_test', array $opts = []): array {
+    if ($providers === null) $providers = aiProvidersLoad();
+    $cn = loadConnections();
+    $cfg = aiDailyTestCfg($cn);
+    $maxFallbacks = max(1, min(50, (int)($opts['max_fallbacks'] ?? $cfg['max_fallbacks'])));
+    $votes = aiVotesLoad();
+    $eval = aiEvaluateAndRankModels($providers, $votes);
+    $eligible = $eval['eligible'];
+
+    if (!$eligible) {
+        return [
+            'ok'             => false,
+            'kept_previous'  => true,
+            'reason'         => $reason,
+            'eligible_count' => 0,
+            'total_evaluated'=> $eval['total_evaluated'],
+            'master'         => aiMasterKey(),
+            'error'          => 'در آخرین تست هیچ مدلی پاسخ مناسب نداد؛ مدل مستر و پشتیبان‌های قبلی بدون تغییر حفظ شدند',
+        ];
+    }
+
+    $masterRow = $eligible[0];
+    $fallbackRows = array_slice($eligible, 1, $maxFallbacks);
+    $orderedChain = array_merge([$masterRow], $fallbackRows);
+
+    $candSaveList = [];
+    $fallbackKeys = [];
+    foreach ($orderedChain as $idx => $r) {
+        $candSaveList[] = ['provider' => $r['provider'], 'model' => $r['model']];
+        if ($idx > 0) $fallbackKeys[] = $r['key'];
+    }
+
+    $cn['ai_candidates'] = $candSaveList;
+    $cn['ai_master_fallbacks'] = $fallbackKeys;
+    $cn['ai_selected_provider'] = $masterRow['provider'];
+    $cn['ai_selected_model'] = $masterRow['model'];
+    saveConnections($cn);
+
+    $pinStillHealthy = false;
+    if ($votes['pin'] !== '' && !empty($votes['manual_pin_lock']) && empty($opts['force_auto'])) {
+        foreach ($eligible as $er) {
+            if ($er['key'] === $votes['pin']) { $pinStillHealthy = true; break; }
+        }
+    }
+    if (!$pinStillHealthy) {
+        $votes['pin'] = '';
+        $votes['manual_pin_lock'] = false;
+    }
+    $votes['auto_master'] = $masterRow['key'];
+    $votes['fallbacks'] = $fallbackKeys;
+    $votes['auto_selected_at'] = time();
+    $votes['auto_reason'] = $reason;
+    $votes['master'] = $pinStillHealthy ? $votes['pin'] : $masterRow['key'];
+    aiVotesSave($votes);
+
+    $compactRow = function (array $r, int $rank): array {
+        return [
+            'rank'            => $rank,
+            'key'             => $r['key'],
+            'provider'        => $r['provider'],
+            'providerName'    => $r['providerName'],
+            'model'           => $r['model'],
+            'modelName'       => $r['modelName'],
+            'composite_score' => $r['composite_score'],
+            'stability_score' => $r['stability_score'],
+            'quality_score'   => $r['quality_score'],
+            'pass_rate'       => $r['pass_rate'],
+            'cat_rate'        => $r['cat_rate'],
+            'streak_ok'       => $r['streak_ok'],
+            'latency_ms'      => $r['display_lat_ms'],
+        ];
+    };
+    $masterSummary = $compactRow($masterRow, 1);
+    $fallbackSummaries = [];
+    foreach ($fallbackRows as $fi => $fr) {
+        $fallbackSummaries[] = $compactRow($fr, $fi + 2);
+    }
+
+    $dst = aiDailyStateLoad();
+    $now = time();
+    $dst['last_rank_at'] = $now;
+    $dst['last_reason'] = $reason;
+    $dst['master'] = $masterSummary;
+    $dst['fallbacks'] = $fallbackSummaries;
+    $dst['tested_total'] = (int)$eval['total_evaluated'];
+    $dst['proper_count'] = (int)$eval['eligible_count'];
+    $dst['available_count'] = (int)$eval['eligible_count'];
+    if (!empty($opts['mark_daily_done'])) {
+        $dst['last_completed_at'] = $now;
+        $dst['pending_daily'] = false;
+        $dst['next_due_at'] = $now + ($cfg['interval_hours'] * 3600);
+        $hist = is_array($dst['history'] ?? null) ? $dst['history'] : [];
+        $hist[] = [
+            'at'           => $now,
+            'reason'       => $reason,
+            'master'       => $masterRow['key'],
+            'master_label' => $masterRow['providerName'] . ' / ' . $masterRow['modelName'],
+            'score'        => $masterRow['composite_score'],
+            'stability'    => $masterRow['stability_score'],
+            'quality'      => $masterRow['quality_score'],
+            'fallbacks_n'  => count($fallbackSummaries),
+            'proper_count' => (int)$eval['eligible_count'],
+        ];
+        if (count($hist) > 30) $hist = array_slice($hist, -30);
+        $dst['history'] = $hist;
+    } elseif ((int)($dst['last_completed_at'] ?? 0) > 0) {
+        $dst['next_due_at'] = (int)$dst['last_completed_at'] + ($cfg['interval_hours'] * 3600);
+    }
+    aiDailyStateSave($dst);
+
+    return [
+        'ok'              => true,
+        'reason'          => $reason,
+        'master'          => $masterSummary,
+        'effective_master'=> $votes['master'],
+        'fallbacks'       => $fallbackSummaries,
+        'eligible_count'  => (int)$eval['eligible_count'],
+        'total_evaluated' => (int)$eval['total_evaluated'],
+    ];
+}
+
+/** v10.476: زنجیرهٔ مرتب‌شدهٔ مدل مستر و پشتیبان‌های مستر (فقط ارائه‌دهنده و مدل‌های فعال و سالم) */
+function aiMasterFallbackChain(bool $includeMaster = true, ?array $providers = null): array {
+    if ($providers === null) $providers = aiProvidersLoad();
+    $masterKey = aiMasterKey();
+    $cands = aiCandidates();
+    $orderedKeys = [];
+    if ($includeMaster && $masterKey !== '') $orderedKeys[] = $masterKey;
+    foreach ($cands as $c) {
+        $ck = (string)($c['key'] ?? '');
+        if ($ck === '' || $ck === $masterKey) continue;
+        $orderedKeys[] = $ck;
+    }
+    $v = aiVotesLoad();
+    foreach ((array)($v['fallbacks'] ?? []) as $fk) {
+        $fk = trim((string)$fk);
+        if ($fk !== '' && $fk !== $masterKey && !in_array($fk, $orderedKeys, true)) {
+            $orderedKeys[] = $fk;
+        }
+    }
+    $chain = [];
+    $seen = [];
+    foreach ($orderedKeys as $k) {
+        if (isset($seen[$k]) || strpos($k, '::') === false) continue;
+        [$pid, $mid] = explode('::', $k, 2);
+        $p = $providers[$pid] ?? null;
+        if (!is_array($p) || ($p['enabled'] ?? true) === false) continue;
+        $mRow = aiFindModelRow($p, $mid);
+        if ($mRow === null) continue;
+        if (!empty($mRow['tested']) && empty($mRow['available'])) continue;
+        if (!empty($mRow['feedbackExcluded']) || aiNonChatModel($mid, $mRow) !== '') continue;
+        $seen[$k] = true;
+        $chain[] = [
+            'key'          => $k,
+            'provider'     => $pid,
+            'providerName' => (string)($p['name'] ?? $pid),
+            'provider_obj' => $p,
+            'model'        => $mid,
+            'modelName'    => (string)($mRow['name'] ?? $mid),
+            'is_master'    => ($k === $masterKey),
+            'tool_calling' => !empty($mRow['toolCalling']),
+        ];
+    }
+    return $chain;
+}
+
+/** مدل مستر = سنجاقِ دستیِ قفل‌شدهٔ سالم یا بهترین مدل بر اساس آمار پایداری و کیفیت تست‌ها (و آرا) */
 function aiMasterKey(): string {
     $v = aiVotesLoad();
-    if ($v['pin'] !== '') return $v['pin'];
+    $providers = aiProvidersLoad();
+    $isModelHealthy = function (string $candKey) use ($providers): bool {
+        if ($candKey === '' || strpos($candKey, '::') === false) return false;
+        [$pid, $mid] = explode('::', $candKey, 2);
+        $p = $providers[$pid] ?? null;
+        if (!is_array($p) || ($p['enabled'] ?? true) === false) return false;
+        $m = aiFindModelRow($p, $mid);
+        if ($m === null || !empty($m['feedbackExcluded'])) return false;
+        if (!empty($m['tested']) && empty($m['available'])) return false;
+        return true;
+    };
+    if ($v['pin'] !== '' && !empty($v['manual_pin_lock']) && $isModelHealthy($v['pin'])) {
+        return $v['pin'];
+    }
+    if (!empty($v['auto_master']) && $isModelHealthy((string)$v['auto_master'])) {
+        return (string)$v['auto_master'];
+    }
+    $eval = aiEvaluateAndRankModels($providers, $v);
+    if (!empty($eval['eligible'][0]['key'])) {
+        return (string)$eval['eligible'][0]['key'];
+    }
+    if ($v['pin'] !== '' && $isModelHealthy($v['pin'])) return $v['pin'];
     $cands = aiCandidates();
     if (!$cands) return '';
     $best = ''; $bestS = -1.0;
     foreach ($cands as $c) {
+        if (!$isModelHealthy($c['key'])) continue;
         $s = aiScoreOf($v['scores'][$c['key']] ?? []);
         if ($s > $bestS) { $bestS = $s; $best = $c['key']; }
     }
-    return $best !== '' ? $best : $cands[0]['key'];
+    if ($best !== '') return $best;
+    return $cands[0]['key'];
+}
+
+/** v10.476: زمان‌بند خودکار تست روزانهٔ مدل‌های هوش مصنوعی در کران + انتخاب مستر و پشتیبان‌ها */
+function s4CronMaybeRunDailyAiTest(string $source = 'cron', bool $forceNow = false): array {
+    $cn = loadConnections();
+    $cfg = aiDailyTestCfg($cn);
+    if (!$forceNow && empty($cfg['enabled'])) {
+        return ['ok' => true, 'skipped' => 'disabled'];
+    }
+    $providers = aiProvidersLoad();
+    $hasTestable = false;
+    $hasAnyTestedOk = false;
+    foreach ($providers as $p) {
+        if (!is_array($p) || ($p['enabled'] ?? true) === false) continue;
+        foreach ((array)($p['models'] ?? []) as $m) {
+            if (!is_array($m)) continue;
+            $mid = (string)($m['id'] ?? '');
+            if ($mid === '' || !empty($m['feedbackExcluded']) || aiNonChatModel($mid, $m) !== '') continue;
+            $hasTestable = true;
+            if (!empty($m['tested']) && !empty($m['available'])) $hasAnyTestedOk = true;
+        }
+    }
+    if (!$hasTestable) {
+        return ['ok' => true, 'skipped' => 'no_models'];
+    }
+
+    $now = time();
+    $dst = aiDailyStateLoad();
+    $v = aiVotesLoad();
+    $bootstrapped = null;
+
+    /* اگر هنوز رتبه‌بندی خودکار انجام نشده اما مدل‌های تست‌شدهٔ سالم روی دیسک هستند، همین لحظه مستر و پشتیبان‌ها را بچین */
+    if ($hasAnyTestedOk && !empty($cfg['auto_select_master']) && (empty($v['auto_master']) || empty($dst['master']))) {
+        $testSt0 = aiTestStateLoad();
+        $lastFullTestAt = (!empty($testSt0['done']) && empty($testSt0['stopped']) && (int)($testSt0['tested'] ?? 0) >= 5)
+            ? max(0, (int)($testSt0['updated_at'] ?? $testSt0['started_at'] ?? 0))
+            : 0;
+        $recentFull = ($lastFullTestAt > 0 && ($now - $lastFullTestAt) < ($cfg['interval_hours'] * 3600));
+        $bootstrapped = aiAutoSelectMasterAndFallbacks($providers, 'initial_bootstrap', ['mark_daily_done' => false]);
+        if ($recentFull && (int)($dst['last_completed_at'] ?? 0) <= 0) {
+            $dst = aiDailyStateLoad();
+            $dst['last_completed_at'] = $lastFullTestAt;
+            $dst['next_due_at'] = $lastFullTestAt + ($cfg['interval_hours'] * 3600);
+            aiDailyStateSave($dst);
+        }
+    }
+
+    $dst = aiDailyStateLoad();
+    $intervalSec = max(3600, (int)$cfg['interval_hours'] * 3600);
+    $lastDone = max(0, (int)($dst['last_completed_at'] ?? 0));
+    $lastStart = max(0, (int)($dst['last_started_at'] ?? 0));
+    $due = $forceNow || ($lastDone <= 0) || (($now - $lastDone) >= $intervalSec);
+    if (!$due) {
+        return [
+            'ok'           => true,
+            'skipped'      => 'not_due_yet',
+            'last_done_at' => $lastDone,
+            'next_due_at'  => $lastDone + $intervalSec,
+            'bootstrapped' => $bootstrapped,
+        ];
+    }
+
+    if (aiTestLockHeld()) {
+        return ['ok' => true, 'skipped' => 'test_already_running', 'bootstrapped' => $bootstrapped];
+    }
+    $curTest = aiTestStateLoad();
+    $curUpd = max(0, (int)($curTest['updated_at'] ?? $curTest['started_at'] ?? 0));
+    if (!empty($curTest['running']) && empty($curTest['done']) && ($now - $curUpd) < 300) {
+        return ['ok' => true, 'skipped' => 'test_state_active', 'bootstrapped' => $bootstrapped];
+    }
+    if (!$forceNow && $lastStart > $lastDone && ($now - $lastStart) < 900) {
+        return ['ok' => true, 'skipped' => 'recently_dispatched', 'bootstrapped' => $bootstrapped];
+    }
+
+    $dst['last_started_at'] = $now;
+    $dst['run_epoch'] = $now;
+    $dst['pending_daily'] = true;
+    $dst['last_trigger_source'] = $source;
+    aiDailyStateSave($dst);
+
+    $qs = 'ai_test_start=1&daily_auto=1'
+        . '&run_epoch=' . $now
+        . '&per_provider=' . (int)$cfg['per_provider']
+        . '&conc=' . (int)$cfg['concurrency']
+        . '&delay=' . (int)$cfg['delay_ms']
+        . '&msg=' . rawurlencode((string)$cfg['test_msg'])
+        . '&cat=' . rawurlencode((string)$cfg['test_cat']);
+    $dispatched = fireAndForget($qs, 1500);
+    return [
+        'ok'           => $dispatched,
+        'started'      => $dispatched,
+        'source'       => $source,
+        'run_epoch'    => $now,
+        'bootstrapped' => $bootstrapped,
+    ];
 }
 
 /** ثبت یک رأی: task=category|autoreply، winner=key برنده، candidates=همهٔ keys */
@@ -9480,13 +10252,21 @@ function aiMapToBslCategory(string $title, string $catHint = '', ?array $cn = nu
                 }
             }
             if ($catList !== '' && function_exists('aiActiveConfig') && function_exists('aiProviderCall') && function_exists('aiCatPayload') && function_exists('aiCatParse')) {
-                $cfg = aiActiveConfig();
-                $prov = $cfg['provider'] ?? null;
-                $model = $cfg['model'] ?? '';
-                if ($prov && $model !== '') {
-                    $net = function_exists('aiNetCfg') ? aiNetCfg($cn) : null;
+                $net = function_exists('aiNetCfg') ? aiNetCfg($cn) : null;
+                $catPay = aiCatPayload($title, $catList, [], '');
+                $tryChain = function_exists('aiMasterFallbackChain') ? array_slice(aiMasterFallbackChain(true), 0, 4) : [];
+                if (!$tryChain) {
+                    $cfg = aiActiveConfig();
+                    if (!empty($cfg['provider']) && (string)($cfg['model'] ?? '') !== '') {
+                        $tryChain[] = ['provider_obj' => $cfg['provider'], 'model' => (string)$cfg['model']];
+                    }
+                }
+                foreach ($tryChain as $tc) {
+                    $prov = $tc['provider_obj'] ?? null;
+                    $model = (string)($tc['model'] ?? '');
+                    if (!$prov || $model === '') continue;
                     $t0 = microtime(true);
-                    $r = aiProviderCall($prov, $model, aiCatPayload($title, $catList, [], ''), $net);
+                    $r = aiProviderCall($prov, $model, $catPay, $net);
                     $res = aiCatParse($r, $title, $leaves, $model, (int)round((microtime(true) - $t0) * 1000));
                     if (!empty($res['ok']) && (int)($res['category_id'] ?? 0) > 0) {
                         return [
@@ -10270,6 +11050,8 @@ function aiNormalizeProviders($raw): array {
             if (array_key_exists('reasoning', $m)) $models[count($models) - 1]['reasoning'] = !empty($m['reasoning']);
             if (array_key_exists('chat', $m)) $models[$lastIdx]['chat'] = !empty($m['chat']);
             if (!empty($m['testDetails'])) $models[$lastIdx]['testDetails'] = $m['testDetails'];
+            if (!empty($m['testStats']) && is_array($m['testStats'])) $models[$lastIdx]['testStats'] = $m['testStats'];
+            if (!empty($m['keyTests']) && is_array($m['keyTests'])) $models[$lastIdx]['keyTests'] = $m['keyTests'];
             if (!empty($m['feedbackExcluded'])) {
                 $models[$lastIdx]['feedbackExcluded'] = true;
                 if (!empty($m['feedbackExcludedAt'])) $models[$lastIdx]['feedbackExcludedAt'] = (int)$m['feedbackExcludedAt'];
@@ -34869,6 +35651,9 @@ if(isset($_GET['cron_run'])||((string)($_POST['action']??'')==='cron_run')){
         if(function_exists('s4CronAutoResumeAllTasks')){
             $GLOBALS['_cronTasksResumeAll']=s4CronAutoResumeAllTasks(cronVisualPulseKind().'_cron_handoff');
         }
+        if(function_exists('s4CronMaybeRunDailyAiTest')){
+            $GLOBALS['_cronDailyAiTest']=s4CronMaybeRunDailyAiTest(cronVisualPulseKind().'_cron_handoff');
+        }
         unset($_GET['cron_run']);
         if((string)($_POST['action']??'')==='cron_run')unset($_POST['action']);
         $_GET=array_merge($_GET,(array)$_queueCronHandoff['get']);
@@ -34913,6 +35698,10 @@ $GLOBALS['_syncSendReconciliation']=syncPipelineReconcileMissingSendQueues(true)
 $GLOBALS['_cellEqualizeReconciliation']=syncCellEqualizeReconcile();
 /* v10.472: با هر بار رسیدن کران (داخلی یا خارجی)، دکمهٔ «ادامه همه» در مدیریت وظایف خودکار زده می‌شود */
 $GLOBALS['_cronTasksResumeAll']=s4CronAutoResumeAllTasks($_cronVisualKind.'_cron');
+/* v10.476: اجرای خودکار روزانهٔ تست مدل‌های هوش مصنوعی و انتخاب مستر + پشتیبان‌ها بر اساس آمار تست */
+if(function_exists('s4CronMaybeRunDailyAiTest')){
+    $GLOBALS['_cronDailyAiTest']=s4CronMaybeRunDailyAiTest($_cronVisualKind.'_cron');
+}
 
 /* v8.92: «اجرای الان» مثل دکمهٔ «استخراج بک‌اند» رفتار کند.
    کران‌جاب واقعی باید منتظر بماند تا curl نتیجه را بگیرد، ولی دکمهٔ
@@ -35041,7 +35830,8 @@ if ($cronLockHeld) {
 if (!$cronLockHeld) {
     $lockOut = ['ok' => true, 'skipped' => true, 'locked' => true,
         'reason' => 'اجرای قبلی کران هنوز قفلِ واقعی را در اختیار دارد',
-        'tasks_resume_all' => $GLOBALS['_cronTasksResumeAll'] ?? null];
+        'tasks_resume_all' => $GLOBALS['_cronTasksResumeAll'] ?? null,
+        'daily_ai_test'    => $GLOBALS['_cronDailyAiTest'] ?? null];
     cronEmit($lockOut);
     exit;
 }
@@ -35098,6 +35888,7 @@ try { if(!s4WorkerIsActive()) { $workerWake=s4SpawnPersistentWorker(); } } catch
 $results = ['ok' => true, 'time' => $now, 'profiles' => []];
 if(isset($workerWake))$results['worker_wake']=$workerWake;
 if(isset($GLOBALS['_cronTasksResumeAll']))$results['tasks_resume_all']=$GLOBALS['_cronTasksResumeAll'];
+if(isset($GLOBALS['_cronDailyAiTest']))$results['daily_ai_test']=$GLOBALS['_cronDailyAiTest'];
 // v10.21 (۳۴ج): نبضِ ابتدای اجرا در گزارش هم بماند
 if (!empty($results_heartbeat)) $results['heartbeat'] = $results_heartbeat;
 
@@ -39485,8 +40276,9 @@ if (isset($_GET['auto_run_now'])) {
 if (isset($_GET['auto_tick'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $_autoTickResumeAll = s4CronAutoResumeAllTasks('auto_tick');
+    $_autoTickDailyAi = function_exists('s4CronMaybeRunDailyAiTest') ? s4CronMaybeRunDailyAiTest('auto_tick') : null;
     $r = autoTick(loadConnections());
-    echo json_encode(array_merge(['ok' => true, 'tasks_resume_all' => $_autoTickResumeAll], $r), JSON_UNESCAPED_UNICODE);
+    echo json_encode(array_merge(['ok' => true, 'tasks_resume_all' => $_autoTickResumeAll, 'daily_ai_test' => $_autoTickDailyAi], $r), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -45544,6 +46336,8 @@ function aiFeedbackBestMode(array $probe, array $net): array {
 function aiFeedbackStoreResult(array &$providers, string $pid, int $idx, string $mid, array $r, array $j, int $latency, string $testMsg): void {
     $ok = !empty($j['ok']);
     $code = (int)($j['code'] ?? 0);
+    $prevModel = is_array($providers[$pid]['models'][$idx] ?? null) ? $providers[$pid]['models'][$idx] : ['id' => $mid];
+    $prevStats = aiModelNormalizeTestStats($prevModel);
     $providers[$pid]['models'][$idx]['tested'] = true;
     $providers[$pid]['models'][$idx]['available'] = $ok;
     $providers[$pid]['models'][$idx]['rateLimited'] = false;
@@ -45558,6 +46352,7 @@ function aiFeedbackStoreResult(array &$providers, string $pid, int $idx, string 
         'workerStyle' => (string)($r['worker_style'] ?? ''),
         'payloadRepair' => (string)($r['payload_repair'] ?? ''),
     ];
+    $providers[$pid]['models'][$idx]['testStats'] = aiModelUpdateTestStats($prevStats, $ok, null, $latency, 0, $code, (string)($j['kind'] ?? ''), time());
 }
 
 if (isset($_GET['ai_feedback_fix'])) {
@@ -57072,6 +57867,74 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.476', 'تست خودکار روزانهٔ مدل‌های هوش مصنوعی + انتخاب خودکار مدل مستر و پشتیبان‌های مستر بر اساس آمار پایداری و کیفیت در آخرین تست',
+         function_exists('aiDailyTestCfg')
+      && function_exists('aiModelNormalizeTestStats')
+      && function_exists('aiModelUpdateTestStats')
+      && function_exists('aiEvaluateAndRankModels')
+      && function_exists('aiAutoSelectMasterAndFallbacks')
+      && function_exists('aiMasterFallbackChain')
+      && function_exists('s4CronMaybeRunDailyAiTest')
+      && (function () {
+             /* ۱) بررسی صحت محاسبهٔ آمار تجمعی تست و جلوگیری از شمارش مضاعف یک چرخه (runEpoch) */
+             $st1 = aiModelUpdateTestStats([], true, true, 1800, 2100, 200, '', 1700001000);
+             $st1Dup = aiModelUpdateTestStats($st1, true, true, 1800, 2100, 200, '', 1700001000);
+             $st2 = aiModelUpdateTestStats($st1, true, true, 2200, 2400, 200, '', 1700087400);
+             if (($st1['runs'] ?? 0) !== 1 || ($st1Dup['runs'] ?? 0) !== 1 || ($st2['runs'] ?? 0) !== 2 || ($st2['streak_ok'] ?? 0) !== 2 || empty($st2['last_proper'])) {
+                 return false;
+             }
+             /* ۲) رتبه‌بندی دقیق مدل مستر و پشتیبان‌ها:
+                - مدلی که در آخرین تست خراب بوده (حتی با سابقهٔ قبلی زیاد) نباید کاندید مستر یا پشتیبان شود
+                - مدل عمومی پایدار و سریع که در آخرین تست به چت و دسته‌بندی پاسخ مناسب داده باید مستر (#1) شود
+                - بقیهٔ مدل‌های سالم بر اساس امتیاز پایداری و کیفیت به ترتیب پشتیبان مستر می‌شوند */
+             $mockProviders = [
+                 'mistral' => [
+                     'id' => 'mistral', 'name' => 'Mistral', 'enabled' => true, 'apiKey' => 'sk-test-123456',
+                     'models' => [
+                         [
+                             'id' => 'mistral-large-broken', 'name' => 'Mistral Broken Latest',
+                             'tested' => true, 'available' => false,
+                             'testDetails' => ['status' => 429, 'response' => '', 'error' => 'rate limit', 'latencyMs' => 900],
+                             'testStats' => ['runs' => 10, 'ok_runs' => 9, 'cat_runs' => 9, 'cat_ok_runs' => 9, 'streak_ok' => 0, 'streak_fail' => 1, 'last_ok' => false, 'last_proper' => false],
+                         ],
+                         [
+                             'id' => 'labs-leanstral-1-5', 'name' => 'Leanstral Specialist',
+                             'tested' => true, 'available' => true,
+                             'testDetails' => ['status' => 200, 'response' => 'Hello there!', 'catResponse' => '✗ خطا', 'catOk' => false, 'latencyMs' => 28000],
+                             'testStats' => ['runs' => 2, 'ok_runs' => 2, 'cat_runs' => 2, 'cat_ok_runs' => 0, 'streak_ok' => 2, 'streak_fail' => 0, 'ewma_lat_ms' => 28000, 'last_ok' => true, 'last_cat_ok' => false, 'last_proper' => false],
+                         ],
+                         [
+                             'id' => 'mistral-small-latest', 'name' => 'Mistral Small Instruct',
+                             'tested' => true, 'available' => true,
+                             'testDetails' => ['status' => 200, 'response' => 'سلام! چطور می‌توانم کمکتان کنم؟', 'catResponse' => 'ادکلن و عطر (#1234)', 'catOk' => true, 'latencyMs' => 1900, 'catLatencyMs' => 2100],
+                             'testStats' => ['runs' => 4, 'ok_runs' => 4, 'cat_runs' => 4, 'cat_ok_runs' => 4, 'streak_ok' => 4, 'streak_fail' => 0, 'ewma_lat_ms' => 1900, 'ewma_cat_lat_ms' => 2100, 'last_ok' => true, 'last_cat_ok' => true, 'last_proper' => true],
+                         ],
+                     ],
+                 ],
+                 'cloudflare' => [
+                     'id' => 'cloudflare', 'name' => 'Cloudflare', 'enabled' => true, 'apiKey' => 'cf-test-123456',
+                     'models' => [
+                         [
+                             'id' => '@cf/qwen/qwen3-30b-a3b-fp8', 'name' => 'Qwen3 30B Instruct',
+                             'tested' => true, 'available' => true,
+                             'testDetails' => ['status' => 200, 'response' => 'سلام وقت بخیر', 'catResponse' => 'ادکلن و عطر (#1234)', 'catOk' => true, 'latencyMs' => 4800, 'catLatencyMs' => 5200],
+                             'testStats' => ['runs' => 2, 'ok_runs' => 2, 'cat_runs' => 2, 'cat_ok_runs' => 2, 'streak_ok' => 2, 'streak_fail' => 0, 'ewma_lat_ms' => 4800, 'ewma_cat_lat_ms' => 5200, 'last_ok' => true, 'last_cat_ok' => true, 'last_proper' => true],
+                         ],
+                     ],
+                 ],
+             ];
+             $ev = aiEvaluateAndRankModels($mockProviders, ['scores' => []]);
+             if (($ev['eligible_count'] ?? 0) !== 2) return false;
+             $top0 = $ev['eligible'][0]['key'] ?? '';
+             $top1 = $ev['eligible'][1]['key'] ?? '';
+             return $top0 === 'mistral::mistral-small-latest'
+                 && $top1 === 'cloudflare::@cf/qwen/qwen3-30b-a3b-fp8'
+                 && ($ev['eligible'][0]['composite_score'] ?? 0) > ($ev['eligible'][1]['composite_score'] ?? 0);
+         })()
+      && strpos($selfSrc, "isset(\$_GET['ai_daily_status'])") !== false
+      && strpos($selfSrc, 's4CronMaybeRunDailyAiTest(') !== false
+      && strpos($selfSrc, "{v:'10." . "476'") !== false
+      && version_compare(APP_VERSION, '10.476', '>='));
     $add('10.475', 'محافظ سراسری حفظ ۱۰۰٪ نتایج استخراج قبلی هر پروفایل در صورت خطا، توقف زودهنگام یا گیرکردن استخراج + سقف تلاش ضدحلقهٔ فاز جزئیات',
          function_exists('extractAnalyzeProductSet')
       && function_exists('extractCountValidProducts')
@@ -71854,8 +72717,9 @@ $ok = !empty($j['ok']);
 $response = (string)$j['response'];
 $err = $ok ? '' : (string)$j['error'];
 $rateLimited = in_array($code, [429], true);
+$catOkOne = aiModelHasProperCatAnswer(['catResponse' => (string)$catResponse, 'catStatus' => (int)($catMeta['status'] ?? 0)]);
 $details = ['status'=>$code, 'error'=>mb_substr((string)$err,0,300), 'response'=>mb_substr((string)$response,0,300),
-            'catResponse'=>(string)$catResponse, 'testMsg'=>$testMsg, 'testCat'=>$testCat,
+            'catResponse'=>(string)$catResponse, 'catOk'=>$catOkOne, 'testMsg'=>$testMsg, 'testCat'=>$testCat,
             'latencyMs'=>$latency, 'testedAt'=>gmdate('c'),
             // v9.95 (۹د): بدنهٔ خامِ پاسخِ سرویس برای مودالِ «جزئیات کامل»
             'raw'=>mb_substr((string)($r['raw'] ?? ''), 0, 4000), 'via'=>(string)($r['via'] ?? ''),
@@ -71869,6 +72733,7 @@ $details = ['status'=>$code, 'error'=>mb_substr((string)$err,0,300), 'response'=
             'payloadRepair'=>(string)($r['payload_repair'] ?? '')];
 foreach ($providers[$pid]['models'] as $i => $m) {
     if (($m['id'] ?? '') === $mid) {
+        $prevStatsOne = aiModelNormalizeTestStats(is_array($m) ? $m : ['id' => $mid]);
         /* v10.17 (۳۰): نتیجهٔ همین کلید جدا ثبت می‌شود و «در دسترس بودن»ِ
            مدل «یا»ی همهٔ کلیدهاست — کلیدِ خرابِ دوم مدلِ سالم را قرمز نکند. */
         $anyOk = $ok;
@@ -71889,6 +72754,9 @@ foreach ($providers[$pid]['models'] as $i => $m) {
         if ($j['billing'] !== '' && !$anyOk) $providers[$pid]['models'][$i]['billingIssue'] = $j['billing'];
         else                                 unset($providers[$pid]['models'][$i]['billingIssue']);
         $providers[$pid]['models'][$i]['testDetails'] = $details;
+        $providers[$pid]['models'][$i]['testStats'] = aiModelUpdateTestStats(
+            $prevStatsOne, $anyOk, $catOkOne, $latency, 0, $anyOk ? 200 : $code, $anyOk ? '' : (string)$j['kind'], time()
+        );
         break;
     }
 }
@@ -71940,8 +72808,10 @@ $catMeta = null;
 $catResponse = aiRunTestCategory($providers[$pid], $mid, $testCat, $catData, null, $catMeta);
 $catLatency = (int)round((microtime(true) - $t0) * 1000);
 /* فقط کلیدهای دسته‌بندی را روی جزئیاتِ موجود بنویس — بقیه دست‌نخورده */
+$catOkOnly = aiModelHasProperCatAnswer(['catResponse' => (string)$catResponse, 'catStatus' => (int)($catMeta['status'] ?? 0)]);
 $d = (array)($providers[$pid]['models'][$idx]['testDetails'] ?? []);
 $d['catResponse']  = (string)$catResponse;
+$d['catOk']        = $catOkOnly;
 $d['testCat']      = $testCat;
 $d['catRaw']       = (string)($catMeta['raw'] ?? '');
 $d['catStatus']    = (int)($catMeta['status'] ?? 0);
@@ -71950,6 +72820,14 @@ $d['catAiText']    = (string)($catMeta['aiText'] ?? '');
 $d['catLatencyMs'] = $catLatency;
 $d['catTestedAt']  = gmdate('c');
 $providers[$pid]['models'][$idx]['testDetails'] = $d;
+$stCat = aiModelNormalizeTestStats((array)$providers[$pid]['models'][$idx]);
+$stCat['last_cat_ok'] = $catOkOnly;
+if ($catOkOnly !== null) {
+    $stCat['cat_runs'] = max(1, (int)($stCat['cat_runs'] ?? 0) + 1);
+    if ($catOkOnly === true) $stCat['cat_ok_runs'] = max(0, (int)($stCat['cat_ok_runs'] ?? 0)) + 1;
+}
+$stCat['last_proper'] = aiModelIsProperInLatestTest((array)$providers[$pid]['models'][$idx], false) && ($catOkOnly !== false);
+$providers[$pid]['models'][$idx]['testStats'] = $stCat;
 aiProvidersSave($providers);
 echo json_encode(['ok'=>true, 'provider'=>$pid, 'model'=>$mid, 'testCat'=>$testCat,
     'catResponse'=>(string)$catResponse, 'catStatus'=>(int)($catMeta['status'] ?? 0),
@@ -72171,10 +73049,26 @@ function aiTestBuildQueue(array $providers, int $per, bool $onlyUntested, bool $
             }
             /* v10.17: «فقط تست‌نشده» حالا برای هر کلید جداگانه سنجیده
                می‌شود؛ اگر مدل با کلیدِ اول تست شده ولی با کلیدِ دوم نه،
-               فقط اسلاتِ کلیدِ دوم وارد صف می‌شود. */
+               فقط اسلاتِ کلیدِ دوم وارد صف می‌شود.
+               v10.476: در ادامهٔ تست روزانهٔ ناتمام (_aiTestResumeEpoch)، فقط ردیف‌هایی
+               رد می‌شوند که در همین چرخهٔ روزانه قبلاً تست شده‌اند. */
+            $resumeEpoch = max(0, (int)($GLOBALS['_aiTestResumeEpoch'] ?? 0));
             $mSlots = [];
             foreach ($slots as $sl) {
-                if ($onlyUntested && aiModelKeyTested(is_array($m) ? $m : [], (string)$sl['id'])) continue;
+                if ($onlyUntested) {
+                    if ($resumeEpoch > 0) {
+                        $slId = (string)$sl['id'];
+                        $mArr = is_array($m) ? $m : [];
+                        $rowEpoch = (int)($mArr['testDetails']['runEpoch'] ?? 0);
+                        $rowAtStr = ($slId !== '' && isset($mArr['keyTests'][$slId]['testedAt']))
+                            ? (string)$mArr['keyTests'][$slId]['testedAt']
+                            : (string)($mArr['testDetails']['testedAt'] ?? '');
+                        $rowAtTs = $rowAtStr !== '' ? max(0, (int)@strtotime($rowAtStr)) : 0;
+                        if ($rowEpoch >= $resumeEpoch || $rowAtTs >= $resumeEpoch) continue;
+                    } elseif (aiModelKeyTested(is_array($m) ? $m : [], (string)$sl['id'])) {
+                        continue;
+                    }
+                }
                 $mSlots[] = $sl;
             }
             if (!$mSlots) continue;
@@ -72400,10 +73294,19 @@ function aiCatConsensus(array $cands, array $providers, string $title, array $ca
     if (trim($catList) === '') return array_merge($empty, ['error' => 'همهٔ دسته‌ها قبلاً امتحان شده‌اند']);
     $payload = aiCatPayload($title, $catList, $triedInfo, $profileHint);   // v10.36 (۴۹ه)
 
-    // مرتب‌سازی کاندیدها بر اساس امتیازِ تاریخی (بهترین‌ها اولِ صف)
+    // v10.476: مرتب‌سازی کاندیدها بر اساس امتیاز ترکیبی پایداری+کیفیت (و سپس رأی تاریخی)
     $v = aiVotesLoad();
+    $evalRank = aiEvaluateAndRankModels($providers, $v)['by_key'] ?? [];
     $ranked = $cands;
-    usort($ranked, function ($a, $b) use ($v) {
+    usort($ranked, function ($a, $b) use ($v, $evalRank) {
+        $ra = $evalRank[$a['key'] ?? ''] ?? null;
+        $rb = $evalRank[$b['key'] ?? ''] ?? null;
+        $pa = ($ra && !empty($ra['proper_latest'])) ? 1 : 0;
+        $pb = ($rb && !empty($rb['proper_latest'])) ? 1 : 0;
+        if ($pa !== $pb) return $pb <=> $pa;
+        $ca = $ra ? (float)$ra['composite_score'] : 0.0;
+        $cb = $rb ? (float)$rb['composite_score'] : 0.0;
+        if (abs($ca - $cb) > 0.01) return $cb <=> $ca;
         return aiScoreOf($v['scores'][$b['key']] ?? []) <=> aiScoreOf($v['scores'][$a['key']] ?? []);
     });
 
@@ -72637,6 +73540,10 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
            'billing'=>0,'proxy'=>0,'bogus'=>0,'badmodel'=>0,'round'=>0,'rounds'=>0,
            'current'=>['provider'=>'','model'=>''],'items'=>[],'diag'=>[],'summary'=>''];
 
+    $runEpoch = max(0, (int)($GLOBALS['_aiTestRunEpoch'] ?? 0));
+    if ($runEpoch <= 0) $runEpoch = time();
+    $isDailyAuto = !empty($GLOBALS['_aiDailyAutoRun']);
+
     /* v9.99: صفِ چرخشی — مدلِ اولِ همهٔ ارائه‌دهنده‌ها، بعد مدلِ دومِ همه، …
        تا درخواست‌هایِ هم‌زمان روی ارائه‌دهنده‌های متفاوت پخش شوند و ریت‌لیمیتِ
        هیچ ارائه‌دهنده‌ای پر نشود. */
@@ -72645,7 +73552,7 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
     /* If every eligible model is already marked tested, "only untested" used
        to create an empty queue and finish before visibly starting. Start a real
        refresh pass instead; an actually empty catalog still remains actionable. */
-    if(!$queue&&$onlyUntested){
+    if(!$queue&&$onlyUntested&&empty($GLOBALS['_aiTestResumeEpoch'])){
         $allStats=[];$allQueue=aiTestBuildQueue($providers,$per,false,$skipNonChat,$allStats);
         if($allQueue){$queue=$allQueue;$qstats=$allStats;$st['only_untested']=false;
             $st['only_untested_requested']=true;$st['fallback_all_tested']=true;}
@@ -72654,7 +73561,10 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
        همین تست را از همان‌جا که مانده ادامه دهد (بدون تستِ دوبارهٔ مدل‌هایی
        که جواب داده‌اند). */
     $st['args'] = ['per'=>$per, 'msg'=>$testMsg, 'cat'=>$testCat, 'delay'=>$delayMs,
-                   'conc'=>$concurrency, 'nonchat'=>$skipNonChat ? 1 : 0];
+                   'conc'=>$concurrency, 'nonchat'=>$skipNonChat ? 1 : 0,
+                   'run_epoch'=>$runEpoch, 'daily_auto'=>$isDailyAuto ? 1 : 0];
+    $st['run_epoch'] = $runEpoch;
+    $st['daily_auto'] = $isDailyAuto;
     $st['pid'] = function_exists('getmypid') ? (int)getmypid() : 0;
     $st['skipped'] = (int)($qstats['skipped'] ?? 0);
     $st['nonchat'] = (int)($qstats['nonchat'] ?? 0);
@@ -72703,6 +73613,20 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
        همهٔ مدل‌ها یکسان است (فقط نامِ مدل داخلِ aiParallelCalls عوض می‌شود). */
     $catPayload = ($doCat && $catData && $testCat !== '') ? aiCatPayload($testCat, (string)$catData['catList']) : null;
 
+    /* v10.476: اسنپ‌شاتِ آمار پیش از این اجرا تا تلاش‌های چندکلیدی و دورهای جبرانی
+       هرگز شمارندهٔ runs یک مدل را در یک چرخه دوبار افزایش ندهند. */
+    $prevStatsByModel = [];
+    foreach ($providers as $pidS => $pS) {
+        if (!is_array($pS)) continue;
+        foreach ((array)($pS['models'] ?? []) as $mS) {
+            if (!is_array($mS)) continue;
+            $midS = (string)($mS['id'] ?? '');
+            if ($midS === '') continue;
+            $prevStatsByModel[$pidS . '::' . $midS] = aiModelNormalizeTestStats($mS);
+        }
+    }
+    $runModelAgg = [];
+
     $rowJudge = [];
         /* v10.18 (۳۱ب): ثبتِ نتیجهٔ یک ردیف در یک نقطه جمع شد.
            تا اینجا این منطق فقط داخلِ حلقهٔ دورها بود؛ چون «دورِ جبرانیِ»
@@ -72710,6 +73634,7 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
            و واگراییِ رفتار داریم)، به یک کلوژرِ مشترک تبدیل شد.
            خروجی: false یعنی توقف خواسته شده. */
         $recordResult = function (array $res, array $catByKey) use (&$st, &$providers, &$rowJudge,
+                                  &$runModelAgg, $prevStatsByModel, $runEpoch,
                                   $sfxByKey, $net, $testMsg, $testCat): bool {
             $pid = (string)$res['pid']; $mid = (string)$res['mid'];
             /* v10.17 (۳۰): این نتیجه مالِ کدام کلید است؟ */
@@ -72751,6 +73676,26 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
             $catMeta     = $cc ? (array)$cc['meta'] : null;
             $catResponse = $cc ? (string)$cc['summary'] : null;
             $catLatency  = $cc ? (int)$cc['lat'] : 0;
+            $catOkRow    = $cc ? (!empty($cc['res']['ok']) && (int)($cc['res']['category_id'] ?? 0) > 0) : null;
+
+            $mKeyAgg = $pid . '::' . $mid;
+            $prevAgg = $runModelAgg[$mKeyAgg] ?? ['chat_ok' => false, 'cat_ok' => null, 'lat' => 0, 'cat_lat' => 0, 'code' => 0, 'kind' => ''];
+            if ($ok && (string)$j['kind'] === '') {
+                $prevAgg['chat_ok'] = true;
+                $prevAgg['kind'] = '';
+                $prevAgg['code'] = 200;
+                $prevAgg['lat'] = $latency;
+                if ($catOkRow === true) $prevAgg['cat_ok'] = true;
+                elseif ($prevAgg['cat_ok'] === null) $prevAgg['cat_ok'] = $catOkRow;
+                if ($catLatency > 0) $prevAgg['cat_lat'] = $catLatency;
+            } elseif (!$prevAgg['chat_ok']) {
+                $prevAgg['code'] = $code;
+                $prevAgg['kind'] = (string)$j['kind'];
+                $prevAgg['lat'] = $latency;
+                if ($prevAgg['cat_ok'] === null) $prevAgg['cat_ok'] = $catOkRow;
+                if ($catLatency > 0) $prevAgg['cat_lat'] = $catLatency;
+            }
+            $runModelAgg[$mKeyAgg] = $prevAgg;
 
             if (isset($providers[$pid]['models'])) {
                 foreach ($providers[$pid]['models'] as $i => $m) {
@@ -72789,6 +73734,7 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
                         }
                         $providers[$pid]['models'][$i]['testDetails'] = ['status'=>$code, 'error'=>mb_substr((string)$err,0,300),
                             'response'=>mb_substr((string)$response,0,300), 'catResponse'=>(string)$catResponse,
+                            'catOk'=>$prevAgg['cat_ok'], 'runEpoch'=>$runEpoch,
                             'testMsg'=>$testMsg, 'testCat'=>$testCat, 'latencyMs'=>$latency, 'testedAt'=>gmdate('c'),
                             'raw'=>mb_substr((string)($r['raw'] ?? ''), 0, 4000), 'via'=>(string)($r['via'] ?? ''),
                             'catRaw'=>(string)($catMeta['raw'] ?? ''), 'catStatus'=>(int)($catMeta['status'] ?? 0),
@@ -72804,6 +73750,19 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
                             'payloadRepair'=>(string)($r['payload_repair'] ?? ''),
                             'retriedPayloadSeq'=>!empty($r['retried_payload_seq']),
                             'retriedSeq'=>!empty($r['retried_seq'])];
+                        $baseSnap = $prevStatsByModel[$mKeyAgg] ?? [];
+                        if ((int)($baseSnap['last_run_epoch'] ?? 0) !== $runEpoch) {
+                            $providers[$pid]['models'][$i]['testStats'] = aiModelUpdateTestStats(
+                                $baseSnap,
+                                !empty($prevAgg['chat_ok']),
+                                $prevAgg['cat_ok'],
+                                (int)$prevAgg['lat'],
+                                (int)$prevAgg['cat_lat'],
+                                (int)$prevAgg['code'],
+                                (string)$prevAgg['kind'],
+                                $runEpoch
+                            );
+                        }
                         break;
                     }
                 }
@@ -73040,6 +73999,23 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
         $extra .= ' · ↻ ' . (int)$st['retry_tried'] . ' تلاشِ دوباره در '
                 . (int)($st['retry_passes'] ?? 0) . ' دور'
                 . ((int)($st['retry_fixed'] ?? 0) > 0 ? ' (' . (int)$st['retry_fixed'] . ' مورد درست شد)' : '');
+    /* v10.476: پس از پایان کامل تست، بر اساس آمار پایداری و کیفیت، بهترین مدلِ دارای پاسخ مناسب
+       به عنوان مدل مستر و بقیهٔ مدل‌های برتر به ترتیب پایداری و کیفیت به عنوان پشتیبان‌های مستر انتخاب می‌شوند */
+    if (!$st['stopped']) {
+        $dCfgDone = aiDailyTestCfg();
+        if (!empty($dCfgDone['auto_select_master']) || $isDailyAuto) {
+            $markDailyDone = $isDailyAuto || empty($st['only_untested']);
+            $autoSel = aiAutoSelectMasterAndFallbacks($providers, $isDailyAuto ? 'daily_cron' : 'test_complete', [
+                'mark_daily_done' => $markDailyDone,
+            ]);
+            $st['auto_selection'] = $autoSel;
+            if (!empty($autoSel['ok']) && !empty($autoSel['master'])) {
+                $mLbl = (string)($autoSel['master']['providerName'] ?? '') . ' / ' . (string)($autoSel['master']['modelName'] ?? $autoSel['master']['model'] ?? '');
+                $fbCnt = count((array)($autoSel['fallbacks'] ?? []));
+                $extra .= ' · ⭐ مستر: ' . $mLbl . ($fbCnt > 0 ? (' (+' . $fbCnt . ' پشتیبان)') : '');
+            }
+        }
+    }
     $st['summary'] = $st['stopped']
         ? 'توقف خواسته شد — '.$st['tested'].' تست انجام شد'
         : 'تمام شد — '.$st['tested'].' تست · 🟢 '.$st['available'].' · 🔴 '.$st['failed'].$extra;
@@ -73097,6 +74073,8 @@ $concurrency = max(1, min(16, (int)($_GET['conc'] ?? ($args['conc'] ?? 4))));
 // اگر وضعیتِ قبلی این پارامتر را نداشت، همان پیش‌فرضِ شروعِ تست (روشن) بماند
 $skipNonChat = isset($_GET['nonchat']) ? ($_GET['nonchat'] !== '0')
                                        : (array_key_exists('nonchat', $args) ? !empty($args['nonchat']) : true);
+$prevRunEpoch = max(0, (int)($args['run_epoch'] ?? ($st['run_epoch'] ?? 0)));
+$prevDailyAuto = !empty($args['daily_auto']) || !empty($st['daily_auto']);
 
 // آزادسازی قفل‌ها
 @unlink(AI_TEST_STOP_FILE);
@@ -73109,6 +74087,9 @@ finishRequestNow(json_encode(['ok'=>true, 'unstuck'=>true, 'resumed'=>true,
     'idle_sec'=>$idle, 'done_before'=>$doneBefore,
     'note'=>'تستِ گیرکرده آزاد شد و از همان‌جا ادامه یافت — ' . $doneBefore . ' مدل قبلاً تست شده بود'],
     JSON_UNESCAPED_UNICODE));
+if ($prevRunEpoch > 0) $GLOBALS['_aiTestResumeEpoch'] = $prevRunEpoch;
+$GLOBALS['_aiTestRunEpoch'] = $prevRunEpoch > 0 ? $prevRunEpoch : time();
+$GLOBALS['_aiDailyAutoRun'] = $prevDailyAuto;
 aiRunTestBackground($per, true, $testMsg, $testCat, $delayMs, $concurrency, $skipNonChat);
 exit;
 }
@@ -73134,6 +74115,8 @@ $delayMs = max(0, min(60000, (int)($_GET['delay'] ?? 120)));
 // v9.99: سقفِ درخواست‌های هم‌زمان و ردکردنِ مدل‌های غیرچت
 $concurrency = max(1, min(16, (int)($_GET['conc'] ?? 4)));
 $skipNonChat = ($_GET['nonchat'] ?? '1') !== '0';
+$GLOBALS['_aiDailyAutoRun'] = !empty($_GET['daily_auto']);
+$GLOBALS['_aiTestRunEpoch'] = max(0, (int)($_GET['run_epoch'] ?? 0)) ?: time();
 // اگر کاری در حال اجراست، دوباره شروع نکن
 $cur = aiTestStateLoad();
 if (!empty($cur['running'])) {
@@ -73154,17 +74137,96 @@ exit;
 }
 
 /* =====================================================================
+ *  v10.476: اندپوینت‌های مدیریت و مشاهدهٔ تست خودکار روزانه و انتخاب مستر + پشتیبان‌ها
+ * ===================================================================== */
+if (isset($_GET['ai_daily_status'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $cn = loadConnections();
+    $cfg = aiDailyTestCfg($cn);
+    $providers = aiProvidersLoad();
+    $v = aiVotesLoad();
+    $dst = aiDailyStateLoad();
+    if (!empty($cfg['auto_select_master']) && (empty($v['auto_master']) || empty($dst['master']))) {
+        $eval0 = aiEvaluateAndRankModels($providers, $v);
+        if (!empty($eval0['eligible'])) {
+            aiAutoSelectMasterAndFallbacks($providers, 'status_bootstrap', ['mark_daily_done' => false]);
+            $v = aiVotesLoad();
+            $dst = aiDailyStateLoad();
+        }
+    }
+    $eval = aiEvaluateAndRankModels($providers, $v);
+    echo json_encode([
+        'ok'              => true,
+        'config'          => $cfg,
+        'state'           => $dst,
+        'master'          => aiMasterKey(),
+        'auto_master'     => $v['auto_master'] ?? '',
+        'pin'             => $v['pin'] ?? '',
+        'manual_pin_lock' => !empty($v['manual_pin_lock']),
+        'fallbacks'       => $v['fallbacks'] ?? [],
+        'eligible_count'  => $eval['eligible_count'],
+        'total_evaluated' => $eval['total_evaluated'],
+        'top_ranked'      => array_slice($eval['eligible'], 0, max(5, (int)$cfg['max_fallbacks'] + 1)),
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+if (($_POST['action'] ?? '') === 'ai_daily_config_save') {
+    header('Content-Type: application/json; charset=UTF-8');
+    $cn = loadConnections();
+    $cur = aiDailyTestCfg($cn);
+    if (isset($_POST['enabled']))            $cur['enabled'] = !empty($_POST['enabled']) && $_POST['enabled'] !== 'false' && $_POST['enabled'] !== '0';
+    if (isset($_POST['auto_select_master'])) $cur['auto_select_master'] = !empty($_POST['auto_select_master']) && $_POST['auto_select_master'] !== 'false' && $_POST['auto_select_master'] !== '0';
+    if (isset($_POST['interval_hours']))     $cur['interval_hours'] = max(1, min(168, (int)$_POST['interval_hours']));
+    if (isset($_POST['per_provider']))       $cur['per_provider'] = max(1, min(500, (int)$_POST['per_provider']));
+    if (isset($_POST['max_fallbacks']))      $cur['max_fallbacks'] = max(1, min(50, (int)$_POST['max_fallbacks']));
+    if (isset($_POST['concurrency']))        $cur['concurrency'] = max(1, min(16, (int)$_POST['concurrency']));
+    if (isset($_POST['delay_ms']))           $cur['delay_ms'] = max(0, min(60000, (int)$_POST['delay_ms']));
+    if (isset($_POST['test_msg']) && trim((string)$_POST['test_msg']) !== '') $cur['test_msg'] = trim((string)$_POST['test_msg']);
+    if (isset($_POST['test_cat']) && trim((string)$_POST['test_cat']) !== '') $cur['test_cat'] = trim((string)$_POST['test_cat']);
+    $cn['ai_daily_test'] = $cur;
+    $ok = saveConnections($cn);
+    $rerank = null;
+    if ($ok && !empty($cur['auto_select_master'])) {
+        $rerank = aiAutoSelectMasterAndFallbacks(null, 'config_save', ['max_fallbacks' => $cur['max_fallbacks']]);
+    }
+    echo json_encode(['ok' => $ok, 'config' => $cur, 'rerank' => $rerank], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+if (isset($_GET['ai_rerank_master_now']) || (($_POST['action'] ?? '') === 'ai_rerank_master_now')) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $runTest = !empty($_REQUEST['run_test']);
+    if ($runTest) {
+        $runRes = s4CronMaybeRunDailyAiTest('manual_trigger', true);
+        echo json_encode(['ok' => !empty($runRes['ok']), 'mode' => 'daily_test_started', 'dispatch' => $runRes], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $sel = aiAutoSelectMasterAndFallbacks(null, 'manual_rerank', ['force_auto' => !empty($_REQUEST['force_auto'])]);
+    echo json_encode($sel, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/* =====================================================================
  *  v9.38: مدل‌های کاندید + مدل مستر — مدیریت، آزمون چند-مدلی و رأی
  * ===================================================================== */
 /* وضعیت کاندیدها + امتیازات + مستر */
 if (isset($_GET['ai_candidates'])) {
     header('Content-Type: application/json; charset=UTF-8');
-    $cands = aiCandidates();
-    $v = aiVotesLoad();
-    $master = aiMasterKey();
     $providers = aiProvidersLoad();
+    $v = aiVotesLoad();
+    $dCfg = aiDailyTestCfg();
+    if (!empty($dCfg['auto_select_master']) && empty($v['auto_master'])) {
+        $evalBoot = aiEvaluateAndRankModels($providers, $v);
+        if (!empty($evalBoot['eligible'])) {
+            aiAutoSelectMasterAndFallbacks($providers, 'candidates_bootstrap', ['mark_daily_done' => false]);
+            $v = aiVotesLoad();
+        }
+    }
+    $cands = aiCandidates();
+    $master = aiMasterKey();
+    $eval = aiEvaluateAndRankModels($providers, $v);
+    $rankMap = $eval['by_key'] ?? [];
     $items = [];
-    foreach ($cands as $c) {
+    foreach ($cands as $idxPos => $c) {
         $mn = $c['model'];
         if (isset($providers[$c['provider']])) {
             foreach ($providers[$c['provider']]['models'] as $mm) {
@@ -73172,15 +74234,63 @@ if (isset($_GET['ai_candidates'])) {
             }
         }
         $s = $v['scores'][$c['key']] ?? ['wins' => 0, 'losses' => 0, 'votes' => 0];
-        $items[] = ['provider' => $c['provider'], 'model' => $c['model'], 'key' => $c['key'],
-                    'providerName' => $c['providerName'], 'modelName' => $mn,
-                    'wins' => (int)($s['wins'] ?? 0), 'losses' => (int)($s['losses'] ?? 0),
-                    'votes' => (int)($s['votes'] ?? 0), 'score' => aiScoreOf($s)];
+        $rk = $rankMap[$c['key']] ?? null;
+        $items[] = [
+            'provider'        => $c['provider'],
+            'model'           => $c['model'],
+            'key'             => $c['key'],
+            'providerName'    => $c['providerName'],
+            'modelName'       => $mn,
+            'wins'            => (int)($s['wins'] ?? 0),
+            'losses'          => (int)($s['losses'] ?? 0),
+            'votes'           => (int)($s['votes'] ?? 0),
+            'score'           => aiScoreOf($s),
+            'order_idx'       => $idxPos,
+            'composite_score' => $rk ? (float)$rk['composite_score'] : 0.0,
+            'stability_score' => $rk ? (float)$rk['stability_score'] : 0.0,
+            'quality_score'   => $rk ? (float)$rk['quality_score'] : 0.0,
+            'pass_rate'       => $rk ? (float)$rk['pass_rate'] : 0.0,
+            'cat_rate'        => $rk ? $rk['cat_rate'] : null,
+            'streak_ok'       => $rk ? (int)$rk['streak_ok'] : 0,
+            'runs'            => $rk ? (int)$rk['runs'] : 0,
+            'latency_ms'      => $rk ? (int)$rk['display_lat_ms'] : 0,
+            'proper_latest'   => $rk ? !empty($rk['proper_latest']) : false,
+            'available'       => $rk ? !empty($rk['available']) : false,
+        ];
     }
-    usort($items, fn($a, $b) => $b['score'] <=> $a['score']);
-    echo json_encode(['ok' => true, 'candidates' => $items, 'master' => $master,
-        'pin' => $v['pin'], 'history' => array_slice(array_reverse($v['history']), 0, 50)],
-        JSON_UNESCAPED_UNICODE);
+    usort($items, function ($a, $b) use ($master) {
+        $aM = ($a['key'] === $master) ? 1 : 0;
+        $bM = ($b['key'] === $master) ? 1 : 0;
+        if ($aM !== $bM) return $bM <=> $aM;
+        $aP = !empty($a['proper_latest']) ? 1 : 0;
+        $bP = !empty($b['proper_latest']) ? 1 : 0;
+        if ($aP !== $bP) return $bP <=> $aP;
+        if ($a['composite_score'] !== $b['composite_score']) return $b['composite_score'] <=> $a['composite_score'];
+        if ($a['stability_score'] !== $b['stability_score']) return $b['stability_score'] <=> $a['stability_score'];
+        return ($a['order_idx'] <=> $b['order_idx']);
+    });
+    $fbRank = 0;
+    foreach ($items as &$itRef) {
+        if ($itRef['key'] === $master) {
+            $itRef['role'] = 'master';
+            $itRef['fallback_rank'] = 0;
+        } else {
+            $fbRank++;
+            $itRef['role'] = 'fallback';
+            $itRef['fallback_rank'] = $fbRank;
+        }
+    }
+    unset($itRef);
+    echo json_encode([
+        'ok'              => true,
+        'candidates'      => $items,
+        'master'          => $master,
+        'auto_master'     => $v['auto_master'] ?? '',
+        'pin'             => !empty($v['manual_pin_lock']) ? $v['pin'] : '',
+        'manual_pin_lock' => !empty($v['manual_pin_lock']),
+        'daily_test'      => ['config' => $dCfg, 'state' => aiDailyStateLoad()],
+        'history'         => array_slice(array_reverse($v['history']), 0, 50),
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 /* ذخیرهٔ کاندیدها + سنجاقِ مستر */
@@ -73197,8 +74307,15 @@ if (($_POST['action'] ?? '') === 'ai_candidates_save') {
         $valid = false;
         foreach (aiCandidates() as $c) { if ($c['key'] === $pin) { $valid = true; break; } }
         $v['pin'] = $valid ? $pin : '';
-        $v['master'] = aiMasterKey();
-        aiVotesSave($v);
+        $v['manual_pin_lock'] = ($valid && $pin !== '');
+        if ($pin === '' && aiDailyTestCfg()['auto_select_master']) {
+            aiVotesSave($v);
+            aiAutoSelectMasterAndFallbacks(null, 'pin_auto', ['force_auto' => true]);
+            $v = aiVotesLoad();
+        } else {
+            $v['master'] = aiMasterKey();
+            aiVotesSave($v);
+        }
     }
     echo json_encode(['ok' => $ok, 'error' => $ok ? '' : 'خطا در ذخیرهٔ کاندیدها'], JSON_UNESCAPED_UNICODE);
     exit;
@@ -75372,6 +76489,7 @@ $__pHint=aiCatProfileHint($__pProf);
 if($exclude){
 $sse(['type'=>'progress','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'step'=>'exclude','excluded'=>count($exclude)]);
 }
+$askedSseKeys=[];
 if($multi){
 $con=aiCatConsensus($cands,$providers,$pName,$cats,$leafCats,$exclude,$net,['quorum'=>$quorum,'tried_info'=>$triedInfo,'profile_hint'=>$__pHint]);
 $askTotal+=(int)($con['asked']??0);
@@ -75381,12 +76499,14 @@ $catName=(string)($con['category_name']??'');
 $okRes=!empty($con['ok']);
 $errRes=(string)($con['error']??'');
 $winKeys=(array)($con['winner_keys']??[]);
+foreach((array)($con['per_model']??[]) as $_pmRow){$_pmk=trim((string)($_pmRow['key']??''));if($_pmk!==''&&!in_array($_pmk,$askedSseKeys,true))$askedSseKeys[]=$_pmk;}
 if($okRes){
 $sse(['type'=>'progress','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'step'=>'consensus','catId'=>$catId,'catName'=>$catName,'agreement'=>(int)($con['agreement']??0),'asked'=>(int)($con['asked']??0),'stages'=>(int)($con['stages']??0),'from_cache'=>!empty($con['from_cache']),'per_model'=>(array)($con['per_model']??[])]);
 }
 }else{
 $res=aiCandidateCategory($mp,$master['model'],$pName,$cats,$leafCats,aiCatListBuild($leafCats,$exclude,24000,$pName),$net,$exclude,$triedInfo,$__pHint);
 $askTotal++;
+if($masterKey!=='')$askedSseKeys[]=$masterKey;
 $catId=(int)($res['category_id']??0);
 $catName=(string)($res['category_name']??'');
 $okRes=!empty($res['ok']);
@@ -75416,9 +76536,8 @@ $sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>$pId,'pName'=>$pName,'st
 $r2 = bslApplyCategoryChangeOrRecreate($tk, (int)$vid, $p, (int)$catId, $cn, null, !empty($_clsSse2['needs_image_refresh']));
 if (!empty($r2['ok'])) {
 $fixed++;
-/* رأی و یادگیری: در حالتِ چندمدلی برندهٔ اجماع رأی می‌گیرد (نه لزوماً
-   مستر)، پس آمار دیگر به‌نفعِ مستر تحریف نمی‌شود. */
-foreach(array_unique($winKeys?:[$masterKey]) as $wk)aiVoteRecord('category',$pName,$wk,$candKeys);
+/* رأی و یادگیری: فقط وقتی دست‌کم ۲ مدل واقعاً پرسیده شده باشند رأی مقایسه‌ای ثبت می‌شود تا مسترِ تک‌مدلی امتیازِ مصنوعی نگیرد */
+if(count($askedSseKeys)>=2){foreach(array_unique($winKeys?:[$masterKey]) as $wk){if($wk!=='')aiVoteRecord('category',$pName,$wk,$askedSseKeys);}}
 catLearnRecord($pName,$catId,$catName);
 catTriedRecord($pId,$catId,$catName,$multi?'consensus':'master','applied',$pName,$curCat);
 $sse(['type'=>'item','idx'=>$idx,'total'=>$total,'pId'=>(int)($r2['id']??$pId),'pName'=>$pName,'status'=>'fixed','catId'=>$catId,'catName'=>$catName,'msg'=>(string)($r2['msg']??('اصلاح شد: '.$catName)).' — '.$catName.' ('.$catId.')']);
@@ -82075,7 +83194,7 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
             continue;
         }
 
-        $catId = 0; $catName = ''; $winKeys = [];
+        $catId = 0; $catName = ''; $winKeys = []; $askedItemKeys = [];
 
         /* v10.107 + v10.466: اول حافظهٔ یادگیری (فقط اگر برگ واقعی باشد، رد نشده باشد و تضاد معنایی نداشته باشد) */
         if ($useLearn && $pName !== '' && function_exists('catLearnLookup')) {
@@ -82191,6 +83310,10 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                     $ok      = !empty($con['ok']);
                     $err     = (string)($con['error'] ?? '');
                     $winKeys = (array)($con['winner_keys'] ?? []);
+                    foreach ((array)($con['per_model'] ?? []) as $_pmIt) {
+                        $_pmKey = trim((string)($_pmIt['key'] ?? ''));
+                        if ($_pmKey !== '' && !in_array($_pmKey, $askedItemKeys, true)) $askedItemKeys[] = $_pmKey;
+                    }
                     if ($ok) catfixProgress(['log_add' => ['🗳️ [' . $idx . '/' . $total . '] اجماع: ' . $catName
                         . ' (' . $catId . ') — ' . aiFaNum((int)($con['agreement'] ?? 0)) . ' رأی از '
                         . aiFaNum((int)($con['asked'] ?? 0)) . ' مدل' . (!empty($con['from_cache']) ? ' · از کش ⚡' : '')
@@ -82204,6 +83327,7 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                     $res = aiCandidateCategory($mp, $master['model'], $pName, $cats, $leafCats,
                         $catListPrompt, $net, $exclude, $triedInfo, $pHint);
                     $asked++;
+                    if ($masterKey !== '' && !in_array($masterKey, $askedItemKeys, true)) $askedItemKeys[] = $masterKey;
                     $catId   = (int)($res['category_id'] ?? 0);
                     $catName = (string)($res['category_name'] ?? '');
                     $ok      = !empty($res['ok']);
@@ -82220,7 +83344,7 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 if ((!$ok || $catId <= 0) && count($cands) > 1) {
                     $fbChain = '🛟 زنجیرهٔ پشتیبان — مستر: ' . ($err !== '' ? $err : 'دستهٔ معتبر نداد');
                     $fbTries = 0;
-                    $maxFbTries = 5;
+                    $maxFbTries = 8;
                     $skipProvThisItem = [];
                     foreach ($cands as $fc) {
                         if (catfixStopRequested() || $fbTries >= $maxFbTries) break;
@@ -82234,6 +83358,8 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                         $fres = aiCandidateCategory($fcp, $fc['model'], $pName, $cats, $leafCats,
                             $catListPrompt, $net, $exclude, $triedInfo, $pHint);
                         $asked++;
+                        $fcKey = trim((string)($fc['key'] ?? ''));
+                        if ($fcKey !== '' && !in_array($fcKey, $askedItemKeys, true)) $askedItemKeys[] = $fcKey;
                         $fErr = (string)($fres['error'] ?? '');
                         if (empty($fres['ok'])) {
                             if (!in_array($fcProv, ['openrouter', 'opencode'], true)
@@ -82248,7 +83374,7 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                             $catName = (string)($fres['category_name'] ?? '');
                             $ok      = true;
                             $err     = '';
-                            $winKeys = [(string)$fc['key']];
+                            $winKeys = [$fcKey];
                             $fbChain .= ' → ' . ($fc['providerName'] ?? $fcProv) . '/' . $fc['model'] . ' ✓';
                             $fbRescued++;
                             break;
@@ -82327,8 +83453,10 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
             if (!empty($upRes['ok']) && (int)($upRes['id'] ?? 0) > 0) {
                 $createdId = (int)$upRes['id'];
                 $fixed++;
-                foreach (array_unique($winKeys ?: ($masterKey !== '' ? [$masterKey] : [])) as $wk) {
-                    if ($wk !== '') aiVoteRecord('category', $pName, $wk, $candKeys);
+                if (count($askedItemKeys) >= 2 && !empty($winKeys)) {
+                    foreach (array_unique($winKeys) as $wk) {
+                        if ($wk !== '') aiVoteRecord('category', $pName, $wk, $askedItemKeys);
+                    }
                 }
                 catLearnRecord($pName, $catId, $catName);
                 bslClearAiCategoryFixPending($targetVid, (string)($p['product_key'] ?? ''), $pName, [
@@ -82402,9 +83530,9 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         if (!empty($r2['ok'])) {
             $fixed++;
             $appliedId = (int)($r2['id'] ?? $pId);
-            if ($mode !== 'ai_text' && !empty($winKeys)) {
+            if ($mode !== 'ai_text' && count($askedItemKeys) >= 2 && !empty($winKeys)) {
                 foreach (array_unique($winKeys) as $wk) {
-                    if ($wk !== '') aiVoteRecord('category', $pName, $wk, $candKeys);
+                    if ($wk !== '') aiVoteRecord('category', $pName, $wk, $askedItemKeys);
                 }
             }
             if (($r2['action'] ?? '') !== 'archived') {
@@ -86230,6 +87358,29 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 </div>
 <div id="aiFixTR" style="margin-top:8px"></div>
 
+<!-- v10.476: تست خودکار روزانه + انتخاب خودکار مدل مستر و پشتیبان‌ها بر اساس آمار تست -->
+<div style="margin-top:10px;padding:9px 10px;background:#0f172a;border:1px solid #1e3a5f;border-radius:8px">
+<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+<span style="font-size:11px;color:#fbbf24;font-weight:700;flex:1">⏰ تست خودکار روزانه و انتخاب هوشمند مستر + پشتیبان‌ها</span>
+<button class="btn btn-gray" onclick="aiDailyStatusLoad()" style="flex:0;font-size:9.5px;padding:2px 8px">🔄 وضعیت</button>
+</div>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#cbd5e1;cursor:pointer;margin-bottom:4px">
+<input type="checkbox" id="aiDailyEnabled" checked style="width:14px;height:14px"> اجرای خودکار تست مدل‌ها هر روز یک‌بار (توسط کران)</label>
+<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#cbd5e1;cursor:pointer;margin-bottom:6px">
+<input type="checkbox" id="aiDailyAutoMaster" checked style="width:14px;height:14px"> انتخاب خودکار پایدارترین و بهترین مدلِ دارای پاسخ مناسب به‌عنوان «مدل مستر» + چیدمان «پشتیبان‌های مستر»</label>
+<div class="crow" style="gap:8px;flex-wrap:wrap">
+<label style="min-width:auto">دوره (ساعت):</label>
+<input type="number" id="aiDailyHours" value="24" min="1" max="168" dir="ltr" style="max-width:70px;padding:4px 6px;border:1px solid #475569;border-radius:6px;background:#111c31;color:#e2e8f0;font-size:11px">
+<label style="min-width:auto">تعداد پشتیبان:</label>
+<input type="number" id="aiDailyMaxFb" value="12" min="1" max="50" dir="ltr" style="max-width:70px;padding:4px 6px;border:1px solid #475569;border-radius:6px;background:#111c31;color:#e2e8f0;font-size:11px">
+</div>
+<div class="cact" style="margin-top:6px">
+<button class="btn btn-green" onclick="aiDailyConfigSave()" style="flex:1;font-size:10.5px">💾 ذخیره تنظیمات روزانه</button>
+<button class="btn btn-purple" onclick="aiRerankMasterNow(false)" style="flex:1;font-size:10.5px" title="همین الان بر اساس آمار تست‌های ذخیره‌شده، مدل مستر و پشتیبان‌ها را به ترتیب پایداری و کیفیت بازانتخاب می‌کند">⚡ انتخاب فوری مستر از آمار فعلی</button>
+</div>
+<div id="aiDailyStatusBox" style="margin-top:7px;font-size:10px;color:#94a3b8;line-height:1.8;padding:6px 8px;background:#111c31;border:1px solid #1e293b;border-radius:6px">در حال خواندن وضعیت تست روزانه…</div>
+</div>
+
 <!-- ═══════════════════════════════════════════════════════════════════
      v10.36 (۴۹د): کارت‌های شمارندهٔ تفصیلی و آماری زیرِ دکمه‌های تست.
 
@@ -86270,7 +87421,10 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div style="font-size:10.5px;color:#64748b;margin-bottom:6px;line-height:1.7">
 چند مدل کاندید برای <b>دسته‌بندی</b> و <b>پاسخ خودکار</b> انتخاب کنید؛ در آزمون‌ها پاسخِ همهٔ کاندیدها کنار هم می‌آید تا بهترین را برگزینید. هر انتخاب به‌صورت «رأی» ثبت می‌شود و مدلی که از نظر آماری بهترین است به‌عنوان <b>مدل مستر</b> (مرجعِ قضاوت بقیه) به‌صورت خودکار انتخاب می‌شود.
 </div>
-<div class="cact" style="margin-top:0"><button class="btn btn-orange" onclick="aiCandAddAvailable()" style="flex:1" title="همهٔ مدل‌هایی که تیک سبز (در دسترس) گرفته‌اند را یک‌جا به فهرست کاندیدها اضافه می‌کند">➕ افزودن همهٔ مدل‌های در دسترس به کاندیدها</button></div>
+<div class="cact" style="margin-top:0;gap:5px;flex-wrap:wrap">
+<button class="btn btn-orange" onclick="aiCandAddAvailable()" style="flex:1;min-width:160px" title="همهٔ مدل‌هایی که تیک سبز (در دسترس) گرفته‌اند را یک‌جا به فهرست کاندیدها اضافه می‌کند">➕ افزودن همهٔ در دسترس</button>
+<button class="btn btn-purple" onclick="aiRerankMasterNow(true)" style="flex:1;min-width:160px" title="بر اساس آمار تست‌ها، پایدارترین و بهترین مدلِ دارای پاسخ مناسب را به‌عنوان مستر و بقیه را به‌ترتیب پایداری و کیفیت به‌عنوان پشتیبان می‌چیند">⚡ انتخاب خودکار مستر + پشتیبان‌ها</button>
+</div>
 <div class="crow" style="align-items:center">
 <label style="flex:0 0 auto">ارائه‌دهنده:</label>
 <select id="aiCandProvSel" onchange="aiCandProvChange()" style="flex:1"><option value="">— انتخاب —</option></select></div>
@@ -96446,6 +97600,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.476', t:'🤖 تست خودکار روزانهٔ مدل‌های هوش مصنوعی + انتخاب هوشمند «مدل مستر» و «پشتیبان‌های مستر» بر اساس آمار پایداری و کیفیت', items:[
+    'اجرای خودکار روزانهٔ تست جامع مدل‌های هوش مصنوعی (هر ۲۴ ساعت یک‌بار از طریق کران‌جاب داخلی/بیرونی و دیسپچر پس‌زمینهٔ سرورساید s4CronMaybeRunDailyAiTest) با ادامهٔ هوشمند چرخهٔ روزانه در صورت قطع موقت پردازه (runEpoch) بدون از دست رفتن نتایج تست.',
+    'موتور امتیازدهی و رتبه‌بندی آماری مدل‌ها (aiEvaluateAndRankModels و testStats): ثبت تاریخچهٔ تجمعی اجراها (نرخ موفقیت چت، نرخ موفقیت دسته‌بندی، زنجیرهٔ بردهای پیاپی streak_ok و میانگین نمایی تأخیر EWMA) در تمام مسیرهای تست؛ انتخاب خودکار پایدارترین و باکیفیت‌ترین مدلی که در آخرین تست پاسخ مناسب داده است (هم در پیام و هم در دسته‌بندی) به‌عنوان «مدل مستر» و چیدمان خودکار سایر مدل‌های برتر به ترتیب امتیاز پایداری و کیفیت به‌عنوان «پشتیبان‌های مستر».',
+    'زنجیرهٔ پشتیبان یکپارچه در کل سامانه (aiMasterFallbackChain و aiActiveChat): استفادهٔ خودکار از مدل مستر و حرکت ترتیبی روی پشتیبان‌های مستر در صورت خطا/تایم‌اوت/محدودیت نرخ در دسته‌بندی محصولات، ایجنت، پاسخ خودکار و اتوماسیون + رفع بادکردن کاذب رأی مستر در حالت تک‌مدلی + افزودن پنل وضعیت و تنظیمات تست روزانه و نشان‌های ⭐ مستر / 🛟 پشتیبان #۱..N در تب‌های «تست مدل‌ها» و «کاندید + مستر».'
+  ]},
   {v:'10.475', t:'🛡️ محافظ سراسری حفظ ۱۰۰٪ نتایج قبلی هر پروفایل در صورت خطا، توقف زودهنگام یا گیرکردن استخراج + حذف حلقهٔ بی‌نهایت فاز جزئیات', items:[
     'افزودن محافظ یکپارچهٔ extractShouldBlockShrinkage و extractAnalyzeProductSet در تمام نقاط ذخیرهٔ محصولات هر پروفایل (پایان فاز ۱، چک‌پوینت‌های فاز ۲ در extractCheckpoint، هرس ناموجودها، ذخیرهٔ نهایی runBackendExtract، مسیر استریم مرورگر ?stream=1 و ذخیرهٔ خودکار save_profile): اگر استخراج هر پروفایل به دلیل قطعی شبکه، چالش WAF، صفحات خالی میانی (مانند توقف صفحهٔ ۴۰ از ۶۰ در آوندپرینتر)، خطای موقت API اسنپ‌شاپ/دیجی‌کالا یا عدم تطبیق سلکتور ناقص بماند یا تعداد زیادی از محصولاتش کم شود، محصولات قبلی پروفایل (products و productsOrder) ۱۰۰٪ ثابت و دست‌نخورده باقی می‌مانند، ادامهٔ کار تا ۲ نوبت از صفحهٔ سالم قبلی روی فایل مجزای extract_staging تلاش می‌شود و هیچ بازنشستگی کاذبی (retireAfterExtract) در باسلام یا ووکامرس رخ نمی‌دهد.',
     'رفع گیرکردن بی‌پایان فاز ۲ استخراج جزئیات و حذف ناموجودشدن کاذب محصولات: ۱) افزودن سقف هوشمند تلاش به ازای هر محصول (_detail_fail_tries: حداکثر ۲ نوبت برای ۴۰۴/۴۱۰ و ۳ نوبت برای سایر خطاها) با حفظ کامل دادهٔ قبلی محصول تا یک صفحهٔ خراب هرگز حلقهٔ ۱۷۵+ باره نسازد و اسلات استخراج سایر پروفایل‌ها مسدود نشود، ۲) الزام سیگنال صریح ناموجودی (detailPageHasExplicitOosSignal) پیش از تغییر موجودی به ناموجود در فاز ۲، ۳) نگهداری بافر فاز ۲ در staging برای پروفایل‌هایی که قیمتشان فقط در صفحهٔ جزئیات است، و ۴) تکمیل زنجیرهٔ v2 ← v1 ← ریدایرکت وب و JSON-LD در جزئیات دیجی‌کالا به همراه حذف آیتم‌های ناموجود بدون قیمت از شمارش لیست.'
@@ -107789,6 +108948,9 @@ function aiTab(tab){
     // اتصال» هیچ محتوایی دیده نمی‌شد (تب‌ها خالی). حالا برای تبِ انتخاب‌شده
     // صریحاً display:block می‌گذاریم تا حتی تب‌های بدون کلاس .active هم باز شوند.
     panels.forEach(p=>{p.style.display=(p.getAttribute('data-ai-panel')===tab)?'block':'none';});
+    // v10.476: در تب تست مدل‌ها وضعیت تست روزانه و در تب کاندیدها آرایش مستر/پشتیبان‌ها تازه شود
+    if(tab==='test'){ if(typeof aiDailyStatusLoad==='function') aiDailyStatusLoad(); }
+    if(tab==='candidates'){ if(typeof aiCandRender==='function') aiCandRender(); }
     // v10.05: تبِ اتوماسیون در نخستین باز شدن، کاتالوگ/کارها/وضعیتِ کران را می‌گیرد
     if(tab==='autopilot'){ apLoadCatalog(); apLoadJobs(); apCronState(); }
     // v10.10 (۲۳): تبِ ایجنت هم کاتالوگِ مدل‌ها و وضعیتِ مدلِ فعال را می‌گیرد
@@ -108927,16 +110089,27 @@ function aiCandRender(){
     const box=$('aiCandList'); if(!box)return;
     const c=d.candidates||[];
     aiCandSelectedKeys.clear();
-    if(!c.length){box.innerHTML='<div style="padding:8px;color:#64748b;font-size:11px">کاندیدی نیست — مدل فعال را انتخاب و «➕ افزودن» بزنید.</div>';}
+    if(!c.length){box.innerHTML='<div style="padding:8px;color:#64748b;font-size:11px">کاندیدی نیست — «⚡ انتخاب خودکار مستر + پشتیبان‌ها» را بزنید یا دستی اضافه کنید.</div>';}
     else{
-      let h='';
+      let h='',fbIdx=0;
       c.forEach(x=>{
         const isM=(x.key===d.master);
+        if(!isM)fbIdx++;
+        const roleBadge=isM
+          ?' <span style="background:#78350f;color:#fde68a;padding:1px 5px;border-radius:4px;font-size:9px;font-weight:700">⭐ مستر</span>'
+          :' <span style="background:#0c4a6e;color:#7dd3fc;padding:1px 5px;border-radius:4px;font-size:9px">🛟 پشتیبان #'+toFa(x.fallback_rank||fbIdx)+'</span>';
+        const comp=typeof x.composite_score==='number'&&x.composite_score>0
+          ?('امتیاز '+toFa(Math.round(x.composite_score))+' (پایداری '+toFa(Math.round(x.stability_score||0))+'/۶۰ · کیفیت '+toFa(Math.round(x.quality_score||0))+'/۴۰'
+            +(x.runs?(' · '+toFa(Math.round((x.pass_rate||0)*100))+'٪ در '+toFa(x.runs)+' تست'):'')
+            +(x.latency_ms?(' · '+toFa((x.latency_ms/1000).toFixed(1))+'s'):'')+')')
+          :'';
+        const voteTxt=x.votes?('🏅 '+toFa(x.wins)+'/'+toFa(x.votes)):'';
         h+='<div class="aiCandRow" data-key="'+esc(x.key)+'" style="display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #1e293b;font-size:11px">'
           +'<input type="checkbox" class="aiCandCb" style="width:14px;height:14px;flex:0 0 auto" onchange="aiCandRowCheck(this,\''+esc(x.key)+'\')">'
-          +'<span style="flex:1;color:'+(isM?'#4ade80':'#e2e8f0')+'">'+esc(x.providerName)+' · <span dir="ltr">'+esc(x.modelName||x.model)+'</span>'
-          +(isM?' <span style="color:#fbbf24;font-size:9px">⭐ مستر</span>':'')
-          +'<span style="color:#64748b;font-size:9px"> | '+(x.votes?('🏅 '+toFa(x.wins)+'/'+toFa(x.votes)+' ('+Math.round(x.score*100)+'٪)'):'بدون رای')+'</span></span>'
+          +'<div style="flex:1;min-width:0"><div style="color:'+(isM?'#4ade80':'#e2e8f0')+'">'+esc(x.providerName)+' · <span dir="ltr">'+esc(x.modelName||x.model)+'</span>'+roleBadge
+          +(x.proper_latest===false?' <span style="color:#f87171;font-size:9px" title="در آخرین تست پاسخ مناسب نداده">⚠ تست اخیر ناموفق</span>':'')
+          +'</div><div style="color:#64748b;font-size:9.5px;margin-top:2px">'
+          +(comp?comp:(voteTxt||'بدون آمار تست'))+(comp&&voteTxt?(' · '+voteTxt):'')+'</div></div>'
           +'<button class="btn btn-red" onclick="aiCandRemove(\''+esc(x.key)+'\')" style="font-size:10px;padding:2px 6px">🗑</button></div>';
       });
       box.innerHTML=h;
@@ -108945,7 +110118,7 @@ function aiCandRender(){
     aiCandUpdateSelUI();
     const ms=$('aiMasterPin');
     if(ms){
-      let o='<option value="">خودکار (بهترین آمار)</option>';
+      let o='<option value="">خودکار (پایدارترین و باکیفیت‌ترین مدل تست‌شده)</option>';
       c.forEach(x=>{o+='<option value="'+esc(x.key)+'"'+(d.pin===x.key?' selected':'')+'>'+esc(x.providerName+' / '+(x.modelName||x.model))+'</option>';});
       ms.innerHTML=o;
     }
@@ -108953,12 +110126,75 @@ function aiCandRender(){
     if(mi){
       if(d.master){
         const m=c.find(x=>x.key===d.master);
+        const fbs=c.filter(x=>x.key!==d.master);
+        const fbPreview=fbs.slice(0,4).map((f,i)=>toFa(i+1)+') '+esc(f.providerName+'/'+((f.modelName||f.model).split('/').pop()))).join(' · ');
         mi.innerHTML='⭐ مدل مستر: <b>'+esc(m?(m.providerName+' / '+(m.modelName||m.model)):d.master)+'</b>'
-          +(d.pin?' (سنجاق دستی)':' — به‌صورت خودکار از بهترین آمار')
-          +' — در آزمون‌ها، پاسخِ مستر به‌عنوان مرجعِ مقایسه نشان داده می‌شود.';
-      }else{mi.innerHTML='هنوز مستری نیست — با آزمون‌ها به‌صورت خودکار مشخص می‌شود.';}
+          +(d.manual_pin_lock&&d.pin?' <span style="color:#fbbf24">(سنجاق دستی)</span>':' <span style="color:#4ade80">(انتخاب خودکار از آمار پایداری و کیفیت)</span>')
+          +(fbs.length?'<div style="margin-top:3px;color:#7dd3fc">🛟 پشتیبان‌های مستر ('+toFa(fbs.length)+' مدل به ترتیب پایداری و کیفیت): '+fbPreview+(fbs.length>4?' و …':'')+'</div>':'');
+      }else{mi.innerHTML='هنوز مستری نیست — پس از تست مدل‌ها به‌صورت خودکار مشخص می‌شود.';}
     }
   });
+}
+function aiDailyStatusLoad(){
+  const box=$('aiDailyStatusBox');
+  fetch('?ai_daily_status=1').then(r=>r.json()).then(d=>{
+    if(!d||!d.ok){if(box)box.textContent='خطا در خواندن وضعیت تست روزانه';return;}
+    const cfg=d.config||{},st=d.state||{};
+    if($('aiDailyEnabled'))$('aiDailyEnabled').checked=cfg.enabled!==false;
+    if($('aiDailyAutoMaster'))$('aiDailyAutoMaster').checked=cfg.auto_select_master!==false;
+    if($('aiDailyHours')&&cfg.interval_hours)$('aiDailyHours').value=cfg.interval_hours;
+    if($('aiDailyMaxFb')&&cfg.max_fallbacks)$('aiDailyMaxFb').value=cfg.max_fallbacks;
+    if(!box)return;
+    const fmtTs=ts=>{if(!ts||ts<=0)return 'هنوز اجرا نشده';try{return new Date(ts*1000).toLocaleString('fa-IR');}catch(e){return String(ts);}};
+    const intervalSec=Math.max(3600,(parseInt(cfg.interval_hours||24,10)||24)*3600);
+    const lastOk=parseInt(st.last_daily_completed_at||0,10);
+    const nextAt=lastOk>0?(lastOk+intervalSec):0;
+    const top=(d.top_ranked||[]);
+    const mRow=top.find(x=>x.key===d.master)||top[0]||null;
+    const fbCount=(d.fallbacks||[]).length;
+    box.innerHTML='<div>📅 آخرین تست کامل روزانه: <b style="color:#e2e8f0">'+esc(fmtTs(lastOk))+'</b>'
+      +(nextAt>0?(' · نوبت بعدی: <b style="color:#67e8f9">'+esc(fmtTs(nextAt))+'</b>'):' · نوبت بعدی: <b style="color:#4ade80">در اولین تیک کران</b>')+'</div>'
+      +'<div>🟢 مدل‌های واجد شرایط در آخرین تست: <b style="color:#4ade80">'+toFa(d.eligible_count||0)+'</b> از '+toFa(d.total_evaluated||0)+' مدل</div>'
+      +(mRow?('<div>⭐ مستر فعلی: <b style="color:#fde68a">'+esc(mRow.providerName+' / '+(mRow.modelName||mRow.model))+'</b>'
+        +' (امتیاز '+toFa(Math.round(mRow.composite_score||0))+' · پایداری '+toFa(Math.round(mRow.stability_score||0))+'/۶۰ · کیفیت '+toFa(Math.round(mRow.quality_score||0))+'/۴۰)'
+        +(fbCount>0?(' · 🛟 '+toFa(fbCount)+' پشتیبان مرتب‌شده'):'')+'</div>'):'');
+  }).catch(()=>{if(box)box.textContent='خطا در دریافت وضعیت تست روزانه';});
+}
+function aiDailyConfigSave(){
+  const fd=new FormData();
+  fd.append('action','ai_daily_config_save');
+  fd.append('enabled',($('aiDailyEnabled')&&$('aiDailyEnabled').checked)?'1':'0');
+  fd.append('auto_select_master',($('aiDailyAutoMaster')&&$('aiDailyAutoMaster').checked)?'1':'0');
+  fd.append('interval_hours',($('aiDailyHours')||{}).value||'24');
+  fd.append('max_fallbacks',($('aiDailyMaxFb')||{}).value||'12');
+  fd.append('per_provider',($('aiTestPerProvider')||{}).value||'50');
+  fd.append('concurrency',($('aiTestConc')||{}).value||'4');
+  fd.append('delay_ms',($('aiTestDelay')||{}).value||'150');
+  fd.append('test_msg',($('aiTestMsg')||{}).value||'سلام');
+  fd.append('test_cat',($('aiTestCat')||{}).value||'ادو پرفیوم');
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(d&&d.ok){
+      showToast('✓ تنظیمات تست روزانه و انتخاب خودکار ذخیره شد');
+      aiDailyStatusLoad();
+      aiLoadProviders();
+    }else showToast('خطا در ذخیره تنظیمات روزانه',1);
+  }).catch(()=>showToast('خطا در ارتباط',1));
+}
+function aiRerankMasterNow(forceAuto){
+  const fd=new FormData();
+  fd.append('action','ai_rerank_master_now');
+  if(forceAuto)fd.append('force_auto','1');
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(d&&d.ok){
+      const mLbl=d.master?(d.master.providerName+' / '+(d.master.modelName||d.master.model)):(d.master_key||'?');
+      const fbCnt=(d.fallbacks||[]).length;
+      showToast('⭐ مستر: '+mLbl+' (+'+toFa(fbCnt)+' پشتیبان)');
+      aiDailyStatusLoad();
+      aiLoadProviders();
+    }else{
+      showToast((d&&d.error)||'مدل واجد شرایطی یافت نشد — ابتدا تست مدل‌ها را اجرا کنید',1);
+    }
+  }).catch(()=>showToast('خطا در ارتباط',1));
 }
 function aiCandVote(task,idx){
   const it=(aiCandCtx.items||[])[idx];
