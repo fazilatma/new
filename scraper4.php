@@ -392,7 +392,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.473';
+const APP_VERSION = '10.474';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2590,6 +2590,9 @@ function s4WorkerLoopFromCli(): void {
             if ($effectiveTick > 0 && (time() - $lastCron) >= $effectiveTick) {
                 $lastCron = time();
                 if (function_exists('cronVisualPulseWrite')) cronVisualPulseWrite('internal');
+                if (function_exists('s4SpawnInternalCronDetached')) {
+                    try { s4SpawnInternalCronDetached('worker_daemon'); } catch (Throwable $_wicErr) {}
+                }
             }
             $jid = (string)($job['id'] ?? '');
             s4WorkerStateWrite(['running' => true, 'phase' => 'job', 'job_id' => $jid, 'job_type' => (string)($job['type'] ?? '')]);
@@ -2634,6 +2637,9 @@ function s4WorkerLoopFromCli(): void {
             if ($effectiveTick > 0 && $matrixNeedsWorker && (time() - $lastCron) >= $effectiveTick) {
                 $lastCron = time();
                 if (function_exists('cronVisualPulseWrite')) cronVisualPulseWrite('internal');
+                if (function_exists('s4SpawnInternalCronDetached')) {
+                    try { s4SpawnInternalCronDetached('worker_daemon'); } catch (Throwable $_wicErr2) {}
+                }
             }
             s4WorkerStateWrite(['phase' => 'idle']);
             if ($once) break;
@@ -26217,21 +26223,23 @@ if (isset($_POST['recon_auto'])) {
     if (!function_exists('retireModes') || !isset(retireModes()[$mode])) $mode = 'off';
     $execMode=(string)($ra['execution_mode']??'cron_first');
     if(!in_array($execMode,['cron_only','delay_only','cron_first','delay_first'],true))$execMode='cron_first';
+    $buildOnly = !empty($ra['build_only']);
     $conn['recon_auto'] = [
         'enabled' => !empty($ra['enabled']),
+        'build_only' => $buildOnly,
         'woo' => !isset($ra['woo']) || !empty($ra['woo']),
         'bsl' => !isset($ra['bsl']) || !empty($ra['bsl']),
         'all_vendors' => !isset($ra['all_vendors']) || !empty($ra['all_vendors']),
         'all_profiles' => !isset($ra['all_profiles']) || !empty($ra['all_profiles']),
         'fix_price' => !isset($ra['fix_price']) || !empty($ra['fix_price']),
-        'apply' => !empty($ra['apply']),
+        'apply' => $buildOnly ? false : !empty($ra['apply']),
         'extra_mode' => $mode,
         'interval_h' => $iv,
         'notify' => !isset($ra['notify']) || !empty($ra['notify']),
-        'enqueue_missing' => !empty($ra['enqueue_missing']),
+        'enqueue_missing' => $buildOnly ? false : !empty($ra['enqueue_missing']),
         /* v10.113: بعد از مغایرت دوره‌ای، جدول مقایسه را سمت سرور بساز */
-        'build_matrix' => !isset($ra['build_matrix']) || !empty($ra['build_matrix']),
-        'matrix_fix' => !isset($ra['matrix_fix']) || !empty($ra['matrix_fix']),
+        'build_matrix' => $buildOnly ? true : (!isset($ra['build_matrix']) || !empty($ra['build_matrix'])),
+        'matrix_fix' => $buildOnly ? false : (!isset($ra['matrix_fix']) || !empty($ra['matrix_fix'])),
         'execution_mode'=>$execMode,
         'execution_pause_ms'=>max(0,min(2000,(int)($ra['execution_pause_ms']??250))),
         'cron_lease_sec'=>max(30,min(900,(int)($ra['cron_lease_sec']??180))),
@@ -26333,6 +26341,7 @@ if (isset($_POST['queue_dedup_stale'])) $conn['queue_dedup_stale'] = max(0, (int
 if (isset($_POST['cron_lock_min']))     $conn['cron_lock_min']     = max(1, min(240, (int)$_POST['cron_lock_min']));
 if (isset($_POST['internal_cron_enabled'])) $conn['internal_cron_enabled'] = !empty($_POST['internal_cron_enabled']) && $_POST['internal_cron_enabled'] !== 'false';
 if (isset($_POST['internal_cron_sec'])) $conn['internal_cron_sec'] = max(5, min(86400, (int)$_POST['internal_cron_sec']));
+if (isset($_POST['auto_resume_all_cron'])) $conn['auto_resume_all_cron'] = !empty($_POST['auto_resume_all_cron']) && $_POST['auto_resume_all_cron'] !== 'false';
 if (isset($_POST['keep_reports']))      $conn['keep_reports']      = max(1, min(200, (int)$_POST['keep_reports']));
 // v8.69: آپدیت محتوای تازه روی محصولات موجود (پیش‌فرض روشن)
 if (isset($_POST['content_sync']))      $conn['content_sync']      = !empty($_POST['content_sync']) && $_POST['content_sync'] !== 'false';
@@ -26390,6 +26399,22 @@ if ($_savedC['ok']) {
         if($oldMatrixExecMode!==$newExecMode){
             matrixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
             matrixFixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
+        }
+        if(!empty($conn['recon_auto']['build_only'])&&function_exists('s4WorkerQueueMutate')){
+            s4WorkerQueueMutate(static function(&$q){
+                $now=time();
+                foreach((array)($q['entries']??[]) as $idx=>$e){
+                    if(!is_array($e)||(string)($e['type']??'')!=='matrix_fix'||(string)($e['status']??'')!=='pending')continue;
+                    $dk=(string)($e['dedup_key']??'');
+                    $src=(string)($e['payload']['source']??'');
+                    if($src!=='recon_auto'&&strpos($dk,'matrix_fix|recon_auto')!==0)continue;
+                    $q['entries'][$idx]['status']='cancelled';
+                    $q['entries'][$idx]['updated_at']=$now;
+                    $q['entries'][$idx]['done_at']=$now;
+                    $q['entries'][$idx]['error']='periodic_build_only_enabled';
+                }
+                return ['ok'=>true];
+            });
         }
     }
     echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh,'matrix_execution'=>$modeTransition,
@@ -33683,6 +33708,19 @@ if (isset($_GET['manual_sync'])) {
        از request وب جدا می‌شود. childِ CLI با direct=1 از enqueue دوباره رد می‌شود. */
     if (empty($_GET['direct']) && empty($_POST['direct']) && s4WorkerIsActive()) {
         $_msKeyQ = trim((string)($_GET['profile'] ?? $_GET['profile_key'] ?? $_POST['profile'] ?? $_POST['profile_key'] ?? ''));
+        if ($_msKeyQ === '' || (function_exists('profileTombstoneIsDeleted') && profileTombstoneIsDeleted($_msKeyQ))) {
+            writeProgress(MANUAL_SYNC_PROGRESS_FILE, [
+                'running' => false, 'done' => true, 'cancelled' => false,
+                'phase' => 'خطا', 'started_at' => time(), 'ts' => time(),
+                'last_progress_ts' => time(), 'total' => 4, 'current' => 0,
+                'profile_key' => $_msKeyQ, 'profile_name' => $_msKeyQ,
+                'recent_log' => ['❌ پروفایل یافت نشد یا حذف شده است'],
+                'total_log_count' => 1,
+            ]);
+            header('Content-Type: application/json; charset=UTF-8');
+            echo json_encode(['ok' => false, 'error' => 'پروفایل یافت نشد'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
         $_msEnq = s4WorkerEnqueueManualSync($_msKeyQ, !empty($_GET['resume']) || !empty($_POST['resume']));
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(array_merge(['ok'=>!empty($_msEnq['ok']),'started'=>!empty($_msEnq['ok']),
@@ -37648,6 +37686,11 @@ function tasksResumeUrl(string $key, array $def, array $p): string {
         case 'manual_sync':
             $pk = trim((string)($p['profile_key'] ?? ''));
             if ($pk === '') return '';
+            if (function_exists('profileTombstoneIsDeleted') && profileTombstoneIsDeleted($pk)) return '';
+            if (strpos((string)($p['error'] ?? ''), 'پروفایل یافت نشد') !== false) return '';
+            foreach ((array)($p['recent_log'] ?? []) as $_msLogLine) {
+                if (is_string($_msLogLine) && strpos($_msLogLine, 'پروفایل یافت نشد') !== false) return '';
+            }
             return $base . '&profile=' . rawurlencode($pk) . '&force=1&resume=1';
         case 'extract':
             $pk = trim((string)($p['profile_key'] ?? ''));
@@ -38308,6 +38351,17 @@ if(isset($_POST['tasks_extract_concurrency'])){
     echo json_encode(['ok'=>$ok,'extract_task_concurrency'=>$n,'default'=>3,'dispatch'=>$dispatch],JSON_UNESCAPED_UNICODE);exit;
 }
 
+if (isset($_POST['tasks_auto_resume_toggle']) || isset($_GET['tasks_auto_resume_toggle'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    $cnT = loadConnections();
+    $rawVal = $_POST['enabled'] ?? ($_GET['enabled'] ?? '1');
+    $enT = !empty($rawVal) && $rawVal !== 'false' && $rawVal !== '0';
+    $cnT['auto_resume_all_cron'] = $enT;
+    $okT = saveConnections($cnT);
+    echo json_encode(['ok' => $okT, 'auto_resume_all_enabled' => $enT], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 /** فهرستِ زندهٔ همهٔ کارها + کارهای زمان‌بندی‌شده در یک پاسخ.
  *  مدیر وظیفه فقط همین یک اندپوینت را poll می‌کند تا با باز بودنِ
  *  پنجره ده‌تا درخواستِ موازی روی هاستِ اشتراکی نریزد. */
@@ -38329,10 +38383,13 @@ if (isset($_GET['tasks_list'])) {
     $running = 0; $stale = 0;
     foreach ($rows as $r) { if ($r['state'] === 'running') $running++; if ($r['state'] === 'stale') $stale++; }
     $autoResumeAllState = function_exists('tasksResumeAllStateRead') ? tasksResumeAllStateRead() : [];
+    $cnTl = loadConnections();
+    $autoResumeAllEnabled = !array_key_exists('auto_resume_all_cron', $cnTl) || !empty($cnTl['auto_resume_all_cron']);
     echo json_encode(['ok' => true, 'now' => $now, 'tasks' => $rows, 'jobs' => $jobs,
         'running' => $running, 'stale' => $stale,
         'extract_task_concurrency'=>extractTaskConcurrency(),
         'extract_running'=>s4WorkerParallelExtractRunning(),
+        'auto_resume_all_enabled' => $autoResumeAllEnabled,
         'auto_resume_all_last' => $autoResumeAllState['last'] ?? null,
         'stale_after' => TASKS_STALE_SEC], JSON_UNESCAPED_UNICODE);
     exit;
@@ -38409,6 +38466,10 @@ function tasksResumeAllStateWrite(array $st): void {
  */
 function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual'): array {
     $isCronAuto = ($trigger !== 'manual');
+    $cnRa = loadConnections();
+    if ($isCronAuto && array_key_exists('auto_resume_all_cron', $cnRa) && empty($cnRa['auto_resume_all_cron'])) {
+        return ['ok' => true, 'disabled' => true, 'trigger' => $trigger, 'resumed' => [], 'skipped' => [], 'count' => 0, 'sequential' => true];
+    }
     $lf = @fopen(__DIR__ . '/.tasks_resume_all.lock', 'c');
     if (!$lf || !@flock($lf, LOCK_EX | LOCK_NB)) {
         if ($lf) @fclose($lf);
@@ -38424,9 +38485,12 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
             }
             $raState['last_cron_trigger_at'] = $now;
         }
+        $reconCfgRa = function_exists('reconAutoCfg') ? reconAutoCfg($cnRa) : [];
+        $periodicBuildOnly = !empty($reconCfgRa['build_only']);
         $reg = tasksRegistry();
         $rows = tasksRowsOrdered($now);
-        $done = []; $skipped = []; $dispatched = false;
+        $done = []; $skipped = []; $dispatchedCount = 0;
+        $maxDispatchPerPass = (function_exists('s4CanSpawnCliTask') && s4CanSpawnCliTask()) ? ($isCronAuto ? 6 : 8) : 1;
         $primaryRows = []; $deferredRows = [];
         $perTask = is_array($raState['per_task'] ?? null) ? $raState['per_task'] : [];
 
@@ -38445,6 +38509,10 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
                 $defT = $reg[$rKey] ?? [];
                 $fT = is_array($defT) ? (string)($defT['file'] ?? '') : '';
                 $pT = $fT !== '' ? localTaskStateRead($fT, []) : [];
+                if ($rKey === 'matrix_fix' && $periodicBuildOnly && (string)($pT['source'] ?? '') === 'recon_auto') {
+                    $skipped[] = ['key' => $rKey, 'why' => 'تیک فقط ساخت جدول دوره‌ای روشن است'];
+                    continue;
+                }
                 $curSig = taskProgressSig($pT);
                 $prevMeta = is_array($perTask[$rKey] ?? null) ? $perTask[$rKey] : [];
                 $prevAt = (int)($prevMeta['at'] ?? 0);
@@ -38472,11 +38540,8 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
         }
 
         foreach ($orderedCandidates as $r) {
-            if ($dispatched) {
-                /* worker قبلی با پاسخِ زودهنگام هنوز ممکن است زنده باشد؛
-                   این ردیف عمداً در checkpoint خودش می‌ماند تا کران بعدی، پس
-                   از آزادشدنِ قبلی، آن را به همان ترتیب بردارد. */
-                $skipped[] = ['key' => $r['key'], 'why' => 'پس از پایانِ کارِ اولویتِ بالاتر، در کران بعدی ادامه می‌یابد'];
+            if ($dispatchedCount >= $maxDispatchPerPass) {
+                $skipped[] = ['key' => $r['key'], 'why' => 'سقف راه‌اندازی هم‌زمان این تیک پر شد؛ در کران بعدی ادامه می‌یابد'];
                 continue;
             }
             $rKey = (string)$r['key'];
@@ -38485,13 +38550,13 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
                 $done[] = ['key' => $rKey, 'title' => $r['title'], 'rank' => $r['rank']];
                 $perTask[$rKey] = ['at' => $now, 'sig' => (string)($r['_cur_sig'] ?? ''), 'trigger' => $trigger];
                 if (empty($one['already_dispatched'])) {
-                    $dispatched = true;
+                    $dispatchedCount++;
                 }
             } else {
                 $errStr = (string)($one['error'] ?? '');
                 $skipped[] = ['key' => $rKey, 'why' => $errStr];
                 if (strpos($errStr, 'پاسخ نداد') !== false) {
-                    $dispatched = true;
+                    $dispatchedCount++;
                 }
             }
         }
@@ -43595,16 +43660,26 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
     if(!in_array($workflow,['fix_only','build_and_fix'],true))$workflow='fix_only';
     $combinedWorkflow=$workflow==='build_and_fix';
     $matrixFixCp = null;
+    $oldFix = [];
     if (!empty($_GET['resume']) && is_file(SYNC_MATRIX_FIX_PROGRESS_FILE)) {
         $oldFix = json_decode((string)@file_get_contents(SYNC_MATRIX_FIX_PROGRESS_FILE), true);
+        if (!is_array($oldFix)) $oldFix = [];
         $oldFixCp = is_array($oldFix['checkpoint'] ?? null) ? $oldFix['checkpoint'] : null;
         if (is_array($oldFixCp) && (string)($oldFixCp['scope'] ?? 'all') === $opts['scope']
             && is_array($oldFixCp['done_jobs'] ?? null)) $matrixFixCp = $oldFixCp;
     }
     $opts['checkpoint'] = $matrixFixCp;
+    matrixFixStopClear();
     /* اصلاح دستی روی snapshot تازه اجرا می‌شود، اما snapshot همین چند دقیقهٔ
        اخیر تازه است و checkpoint ناتمام همیشه باید قبل از هر rebuild ادامه یابد. */
     $fixMatrix=is_file(SYNC_MATRIX_RESULT_FILE)?matrixResultLoad():[];
+    if (!empty($_GET['resume']) && !isset($_GET['selected_destinations']) && !isset($_POST['selected_destinations'])) {
+        $inheritedDest = !empty($oldFix['selected_destinations']) ? $oldFix['selected_destinations'] : ($fixMatrix['selected_destinations'] ?? null);
+        if (is_array($inheritedDest) && $inheritedDest) {
+            $normInh = matrixNormalizeDestinations($inheritedDest);
+            if ($normInh) $opts['selected_destinations'] = $normInh;
+        }
+    }
     $fixHave=array_values((array)($fixMatrix['selected_destinations']??[]));sort($fixHave);
     $fixWant=array_values($opts['selected_destinations']);sort($fixWant);
     /* An unfinished build wins over correction's freshness request. Queue/resume
@@ -43631,7 +43706,7 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
        never trigger a surprise rebuild. The explicit combined workflow is the
        only manual action allowed to create a fresh build before correction. */
     $fixNeedsBuild=!$fixMatrix||$fixHave!==$fixWant
-        ||(string)($fixMatrix['pricing_signature']??'')!==matrixPricingFingerprint();
+        ||(empty($_GET['resume']) && (string)($fixMatrix['pricing_signature']??'')!==matrixPricingFingerprint());
     if($fixNeedsBuild&&!$combinedWorkflow){
         echo json_encode(['ok'=>false,'error'=>'جدول فعلی برای این مقصدها آماده/سازگار نیست؛ ابتدا جدول را بسازید یا دکمهٔ «ساخت جدول + اصلاح کلی» را بزنید',
             'code'=>'matrix_not_ready_for_fix','needs_build'=>true],JSON_UNESCAPED_UNICODE);exit;
@@ -56377,6 +56452,31 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.474', 'تکمیل اجرای کاملاً سرورساید «ادامه همه» در کران داخلی/خارجی (چندکاره و بدون وابستگی به مرورگر) + تیک «فقط ساخت جدول دوره‌ای» بدون اصلاح مغایرت‌ها',
+         function_exists('s4CanSpawnCliTask')
+      && function_exists('reconAutoCfg')
+      && (function () {
+             $cfgBo = reconAutoCfg(['recon_auto' => [
+                 'enabled' => true, 'build_only' => true,
+                 'build_matrix' => false, 'matrix_fix' => true,
+                 'apply' => true, 'enqueue_missing' => true,
+             ]]);
+             $cfgDef = reconAutoCfg(['recon_auto' => ['enabled' => true]]);
+             return !empty($cfgBo['build_only'])
+                 && !empty($cfgBo['build_matrix'])
+                 && empty($cfgBo['matrix_fix'])
+                 && empty($cfgBo['apply'])
+                 && empty($cfgBo['enqueue_missing'])
+                 && empty($cfgDef['build_only'])
+                 && !empty($cfgDef['matrix_fix']);
+         })()
+      && strpos($selfSrc, 'id="smPeriodicBuildOnly"') !== false
+      && strpos($selfSrc, 'id="reconAutoBuildOnly"') !== false
+      && strpos($selfSrc, 'function reconAutoBuildOnlyToggle(') !== false
+      && strpos($selfSrc, "s4SpawnInternalCronDetached('worker_daemon')") !== false
+      && strpos($selfSrc, 'tasks_auto_resume_toggle') !== false
+      && strpos($selfSrc, "{v:'10." . "474'") !== false
+      && version_compare(APP_VERSION, '10.474', '>='));
     $add('10.473', 'رفع فشرده‌سازی دیکشنری هدر X-Web-Optimize-Response در جزئیات محصول API دیجی‌کالا + پشتیبان خودکار v2/v1 و ریدایرکت dkp',
          strpos($selfSrc, "'X-Web-Optimize-" . "Response: 1'") === false
       && strpos($selfSrc, "\$epCandidates = ['v2/product/' . \$pid . '/', 'v1/product/' . \$pid . '/'];") !== false
@@ -62068,6 +62168,11 @@ function fireAndForgetCliQueueBackend(array $get, ?array $post = null): bool {
     return true;
 }
 
+function s4CanSpawnCliTask(): bool {
+    if (!function_exists('exec') || strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return false;
+    return trim(s4CliPhpBinary()) !== '';
+}
+
 function fireAndForgetCliTask(array $get, ?array $post = null): bool {
     $taskKeys = [
         'catfix_start', 'dedup_start', 'ai_test_unstick', 'ai_test_start',
@@ -66833,20 +66938,22 @@ function reconAutoCfg(?array $cn = null): array {
     if (!function_exists('retireModes') || !isset(retireModes()[$mode])) $mode = 'off';
     $execMode=(string)($r['execution_mode']??'cron_first');
     if(!in_array($execMode,['cron_only','delay_only','cron_first','delay_first'],true))$execMode='cron_first';
+    $buildOnly = !empty($r['build_only']);
     return [
         'enabled'       => !empty($r['enabled']),
+        'build_only'    => $buildOnly,
         'woo'           => !isset($r['woo']) || !empty($r['woo']),
         'bsl'           => !isset($r['bsl']) || !empty($r['bsl']),
         'all_vendors'   => !isset($r['all_vendors']) || !empty($r['all_vendors']),
         'all_profiles'  => !isset($r['all_profiles']) || !empty($r['all_profiles']),
         'fix_price'     => !isset($r['fix_price']) || !empty($r['fix_price']),
-        'apply'         => !empty($r['apply']), // پیش‌فرض فقط گزارش
+        'apply'         => $buildOnly ? false : !empty($r['apply']), // پیش‌فرض فقط گزارش
         'extra_mode'    => $mode,
         'interval_h'    => $iv,
         'notify'        => !isset($r['notify']) || !empty($r['notify']),
-        'enqueue_missing' => !empty($r['enqueue_missing']), // صف‌کردن محصولاتِ «در مقصد نیست»
-        'build_matrix'  => !isset($r['build_matrix']) || !empty($r['build_matrix']), // v10.113
-        'matrix_fix'    => !isset($r['matrix_fix']) || !empty($r['matrix_fix']), // v10.121
+        'enqueue_missing' => $buildOnly ? false : !empty($r['enqueue_missing']), // صف‌کردن محصولاتِ «در مقصد نیست»
+        'build_matrix'  => $buildOnly ? true : (!isset($r['build_matrix']) || !empty($r['build_matrix'])), // v10.113
+        'matrix_fix'    => $buildOnly ? false : (!isset($r['matrix_fix']) || !empty($r['matrix_fix'])), // v10.121
         'execution_mode'=>$execMode,
         'execution_pause_ms'=>max(0,min(2000,(int)($r['execution_pause_ms']??250))),
         'cron_lease_sec'=>max(30,min(900,(int)($r['cron_lease_sec']??180))),
@@ -67701,17 +67808,19 @@ function reconAutoTick(array $cn, int $now = 0): array {
             /* v10.336: correction is never a sibling of build. A fresh build is
                always queued first, then fix requires that build's timestamp. */
             $chainKey='recon_auto';
+            $isBuildOnly=!empty($cfg['build_only']);
             $build=s4WorkerEnqueueMatrixBuild(['profile'=>'all','parallel_destinations'=>false,'live_fill'=>true,'selected_destinations'=>$periodicDest,'slice_seconds'=>8,'source'=>'recon_auto','dedup_key'=>'matrix_build|'.$chainKey],false);
-            $fix=['ok'=>true,'skipped'=>true];
-            if(!empty($cfg['matrix_fix'])&&!empty($build['ok'])){$keep=(string)(dedupCfg($cn)['keep']??'newest');if(!in_array($keep,['newest','expensive'],true))$keep='newest';
+            $fix=['ok'=>true,'skipped'=>true,'reason'=>$isBuildOnly?'build_only':'matrix_fix_disabled'];
+            if(!$isBuildOnly&&!empty($cfg['matrix_fix'])&&!empty($build['ok'])){$keep=(string)(dedupCfg($cn)['keep']??'newest');if(!in_array($keep,['newest','expensive'],true))$keep='newest';
                 $fix=s4WorkerEnqueueMatrixFix(['scope'=>$scope,'source'=>'recon_auto','delay_ms'=>120,'duplicate_keep'=>$keep,'view_filters'=>[],'selected_destinations'=>$periodicDest,'min_matrix_generated_at'=>$requested,'dedup_key'=>'matrix_fix|'.$chainKey],false);
-            }elseif(!empty($cfg['matrix_fix'])){$fix=['ok'=>false,'skipped'=>true,'error'=>'matrix_build_queue_failed'];}
+            }elseif(!$isBuildOnly&&!empty($cfg['matrix_fix'])){$fix=['ok'=>false,'skipped'=>true,'error'=>'matrix_build_queue_failed'];}
 
-            $queued=['worker_ready'=>$workerReady,'scope'=>$scope,'execution'=>matrixExecutionDecision(),'build'=>$build,'fix'=>$fix];
-            $out['ran']=true;$out['queued']=true;$out['jobs']=$queued;$out['ok']=$workerReady&&!empty($build['ok'])&&!empty($fix['ok']);$out['skipped']='';
+            $queued=['worker_ready'=>$workerReady,'scope'=>$scope,'build_only'=>$isBuildOnly,'execution'=>matrixExecutionDecision(),'build'=>$build,'fix'=>$fix];
+            $out['ran']=true;$out['queued']=true;$out['build_only']=$isBuildOnly;$out['jobs']=$queued;$out['ok']=$workerReady&&!empty($build['ok'])&&!empty($fix['ok']);$out['skipped']='';
             $st['last_finish']=time();$st['last_results']=['queued'=>$queued];reconAutoStateSave($st);
             reconProgress(['running'=>false,'done'=>true,'phase'=>'queued','source'=>'recon_auto','result_ok'=>$out['ok'],
-                'log_add'=>['⏰ مغایرت‌گیری دوره‌ای به worker مستقل سپرده شد','📊 build: '.(!empty($build['duplicate'])?'از قبل در صف':(!empty($build['ok'])?'صف شد':'خطا')).' · 🔧 fix: '.(!empty($fix['duplicate'])?'از قبل در صف':(!empty($fix['ok'])?'صف شد':'خطا'))]]);
+                'log_add'=>['⏰ مغایرت‌گیری دوره‌ای به worker مستقل سپرده شد'.($isBuildOnly?' (فقط ساخت جدول — بدون اصلاح مغایرت‌ها)':''),
+                    '📊 build: '.(!empty($build['duplicate'])?'از قبل در صف':(!empty($build['ok'])?'صف شد':'خطا')).' · 🔧 fix: '.($isBuildOnly?'خاموش (فقط ساخت جدول)':(!empty($fix['skipped'])?'غیرفعال':(!empty($fix['duplicate'])?'از قبل در صف':(!empty($fix['ok'])?'صف شد':'خطا'))))]]);
             reconAutoLog($out['ok']?'queued':'queue_failed',$queued);
             return $out;
         }
@@ -67848,8 +67957,8 @@ function reconAutoTick(array $cn, int $now = 0): array {
         }
     }
 
-    $doFix = !empty($cfg['apply']) || !empty($cfg['fix_price']) || !empty($cfg['enqueue_missing'])
-        || !empty($cfg['matrix_fix']);
+    $doFix = empty($cfg['build_only']) && (!empty($cfg['apply']) || !empty($cfg['fix_price']) || !empty($cfg['enqueue_missing'])
+        || !empty($cfg['matrix_fix']));
     if (!$reconBlocked && $doFix && !empty($out['matrix']['ok']) && function_exists('matrixFixRun')) {
         /* recon_auto قبلاً فقط recon.lock داشت و می‌توانست همزمان با دکمهٔ
            «اصلاح جدول» روی همان نتیجه API بزند. مالکیتِ lock خودِ matrix_fix
@@ -86587,6 +86696,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 </div>
 <button class="btn btn-purple" onclick="syncMatrixStart(false)" id="smBuildStartBtn" style="font-size:11px;padding:6px 12px">🚀 فقط ساخت جدول</button>
 <button class="btn" onclick="syncMatrixBuildAndFix()" id="smBuildFixBtn" style="font-size:11px;padding:7px 12px;background:linear-gradient(135deg,#0e7490,#7c3aed);color:#fff;border:1px solid #67e8f9;font-weight:900;box-shadow:0 3px 12px #0891b255" title="ابتدا جدول تازه را کامل می‌سازد و سپس اصلاح کلی همهٔ ردیف‌ها را اجرا می‌کند">🔄 ساخت جدول + اصلاح کلی</button>
+<label style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;background:#1e1b4b;border:1px solid #818cf8;border-radius:8px;font-size:10.5px;color:#e0e7ff;font-weight:800;cursor:pointer" title="وقتی تیک بخورد، اجرای دوره‌ای کران فقط جدول مقایسه را می‌سازد/به‌روز می‌کند و اصلاح مغایرت‌ها به‌صورت دوره‌ای اجرا نمی‌شود">
+<input type="checkbox" id="smPeriodicBuildOnly" onchange="reconAutoBuildOnlyToggle(this.checked,true)" style="width:15px;height:15px">
+<span>📊 فقط ساخت جدول به‌صورت دوره‌ای (بدون اصلاح مغایرت‌ها)</span></label>
 <button class="btn btn-orange" onclick="syncMatrixStart(true)" id="smBuildResumeBtn" style="font-size:10px;padding:5px 10px;display:none">⏯ ادامه ساخت</button>
 <button class="btn btn-red" onclick="syncMatrixStop()" id="smBuildStopBtn" style="font-size:10px;padding:5px 10px;display:none">⏹ توقف ساخت</button>
 <button class="btn btn-gray" onclick="syncMatrixFullscreen()" id="smFullscreenBtn" style="font-size:11px;padding:6px 12px">⛶ تمام‌صفحه</button>
@@ -86688,6 +86800,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#e2e8f0;margin-bottom:6px;cursor:pointer">
 <input type="checkbox" id="reconAutoEn" onchange="reconAutoSave()" style="width:15px;height:15px">
 <span>فعال‌سازی مغایرت‌گیری دوره‌ای</span></label>
+<label style="display:flex;align-items:flex-start;gap:6px;font-size:11px;color:#c4b5fd;margin:6px 0 8px;padding:7px 9px;background:#1e1b4b88;border:1px solid #6366f188;border-radius:8px;cursor:pointer;line-height:1.6">
+<input type="checkbox" id="reconAutoBuildOnly" onchange="reconAutoBuildOnlyToggle(this.checked,false)" style="width:15px;height:15px;margin-top:2px">
+<span><b>📊 فقط ساخت جدول به‌صورت دوره‌ای (بدون اصلاح مغایرت‌ها)</b> — در نوبت‌های دوره‌ای کران فقط جدول مقایسه ساخته/تازه‌سازی می‌شود و مرحلهٔ «اصلاح مغایرت‌ها» به‌صورت دوره‌ای اجرا نخواهد شد</span></label>
 <div class="crow" style="align-items:center;margin-bottom:4px">
 <label style="flex:0 0 auto">هر چند ساعت:</label>
 <input type="number" id="reconAutoIv" min="1" max="168" value="6" onchange="reconAutoSave()" style="flex:1">
@@ -95630,6 +95745,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.474', t:'⚡ اجرای کاملاً سرورساید و چندکارهٔ «ادامهٔ همه» در کران داخلی/بیرونی + تیک «فقط ساخت جدول دوره‌ای» در بخش مغایرت‌گیری', items:[
+    'اجرای ۱۰۰٪ سرورساید دکمهٔ «▶▶ ادامهٔ همه» (tasksResumeAllExecute / s4CronAutoResumeAllTasks) توسط کران‌جاب‌های داخلی و بیرونی بدون کوچک‌ترین وابستگی به باز بودن مرورگر: راه‌اندازی هم‌زمان همهٔ کارهای رهاشدهٔ قابل‌ادامه در هر تیک کران از طریق پردازهٔ مستقل CLI (s4CanSpawnCliTask)، اجرای کران داخلی جداگانه توسط worker دائمی حتی هنگام مشغول بودن صف کارها (s4SpawnInternalCronDetached)، حذف گیرکردن همگام‌سازی دستی روی پروفایل‌های حذف‌شده، اصلاح بازیابی checkpoint در sync_matrix_fix_start و افزودن تیک کنترلی سرورساید در سربرگ مدیر وظایف.',
+    'افزودن تیک «📊 فقط ساخت جدول به‌صورت دوره‌ای (بدون اصلاح مغایرت‌ها)» در نوار ابزار بالای بخش مغایرت‌گیری با مقصد و نیز داخل کارت مغایرت‌گیری دوره‌ای (recon_auto.build_only): با فعال‌سازی این گزینه، در نوبت‌های دوره‌ای کران فقط ساخت/تازه‌سازی جدول مقایسه اجرا می‌شود، هیچ job اصلاح مغایرت (matrix_fix / apply / enqueue_missing) صف یا اجرا نمی‌شود و jobهای اصلاح دوره‌ای در صف نیز بلافاصله لغو می‌گردند.'
+  ]},
   {v:'10.473', t:'🔎 تکمیل فاز ۲ (جزئیات محصول PDP) در موتور اختصاصی «دیجی‌کالا API»', items:[
     'حذف هدر X-Web-Optimize-Response در درخواست‌های api.digikala.com که در مسیر v2/product باعث فشرده‌سازی دیکشنری پاسخ و مخفی‌شدن گرهٔ data.product می‌شد.',
     'افزودن زنجیرهٔ پشتیبان خودکار v2/product ← v1/product، دنبال‌کردن ریدایرکت‌های ۳۰۱ شناسه‌های ادغام‌شده (redirect_url.uri) و افتادن نرم روی صفحهٔ SEO در صورت نبود گرهٔ API.'
@@ -101047,56 +101166,85 @@ function reconScanAll(){
   setTimeout(function(){ if(!window.reconTimer) reconStart('bsl',false,'off',1); }, 2500);
 }
 
+function reconAutoBuildOnlyUi(buildOnly){
+  const bo=!!buildOnly;
+  if($('reconAutoBuildOnly'))$('reconAutoBuildOnly').checked=bo;
+  if($('smPeriodicBuildOnly'))$('smPeriodicBuildOnly').checked=bo;
+  if(bo){
+    if($('reconAutoMatrix'))$('reconAutoMatrix').checked=true;
+    if($('reconAutoMatrixFix')){$('reconAutoMatrixFix').checked=false;$('reconAutoMatrixFix').disabled=true;}
+    if($('reconAutoApply')){$('reconAutoApply').checked=false;$('reconAutoApply').disabled=true;}
+    if($('reconAutoEnqueue')){$('reconAutoEnqueue').checked=false;$('reconAutoEnqueue').disabled=true;}
+  }else{
+    if($('reconAutoMatrixFix'))$('reconAutoMatrixFix').disabled=false;
+    if($('reconAutoApply'))$('reconAutoApply').disabled=false;
+    if($('reconAutoEnqueue'))$('reconAutoEnqueue').disabled=false;
+  }
+}
+function reconAutoBuildOnlyToggle(checked,fromToolbar){
+  const bo=!!checked;
+  if(bo&&fromToolbar&&$('reconAutoEn')&&!$('reconAutoEn').checked){
+    $('reconAutoEn').checked=true;
+  }
+  reconAutoBuildOnlyUi(bo);
+  reconAutoSave(bo?'✓ مغایرت‌گیری دوره‌ای روی حالت «فقط ساخت جدول» ذخیره شد':'✓ حالت ساخت جدول + اصلاح دوره‌ای ذخیره شد');
+}
 function reconAutoCollect(){
+  const buildOnly=!!(($('reconAutoBuildOnly')&&$('reconAutoBuildOnly').checked)||($('smPeriodicBuildOnly')&&$('smPeriodicBuildOnly').checked));
   return {
     enabled: !!($('reconAutoEn')||{}).checked,
+    build_only: buildOnly,
     woo: !!($('reconAutoWoo')||{}).checked,
     bsl: !!($('reconAutoBsl')||{}).checked,
     all_vendors: true,
     all_profiles: !!($('reconAllProfiles')||{}).checked,
     fix_price: !!($('reconAutoFixPrice')||{}).checked,
-    apply: !!($('reconAutoApply')||{}).checked,
+    apply: buildOnly ? false : !!($('reconAutoApply')||{}).checked,
     extra_mode: (($('reconAutoMode')||{}).value||'off'),
     interval_h: parseInt(($('reconAutoIv')||{}).value||'6')||6,
     notify: !!($('reconAutoNotify')||{}).checked,
-    enqueue_missing: !!($('reconAutoEnqueue')||{}).checked,
-    build_matrix: ($('reconAutoMatrix') ? !!$('reconAutoMatrix').checked : true),
-    matrix_fix: ($('reconAutoMatrixFix') ? !!$('reconAutoMatrixFix').checked : true),
+    enqueue_missing: buildOnly ? false : !!($('reconAutoEnqueue')||{}).checked,
+    build_matrix: buildOnly ? true : ($('reconAutoMatrix') ? !!$('reconAutoMatrix').checked : true),
+    matrix_fix: buildOnly ? false : ($('reconAutoMatrixFix') ? !!$('reconAutoMatrixFix').checked : true),
     execution_mode: (($('reconExecMode')||{}).value||'cron_first'),
     execution_pause_ms: Math.max(0,Math.min(2000,parseInt(($('reconExecPause')||{}).value||'250')||0)),
     cron_lease_sec: Math.max(30,Math.min(900,parseInt(($('reconCronLease')||{}).value||'180')||180))
   };
 }
-function reconAutoSave(){
+function reconAutoSave(customToast){
+  const cfg=reconAutoCollect();
   const fd=new FormData();
   fd.append('action','save_connections');
-  fd.append('recon_auto', JSON.stringify(reconAutoCollect()));
+  fd.append('recon_auto', JSON.stringify(cfg));
   fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     const st=$('reconAutoStatus');
-    if(st) st.textContent = (d&&d.ok) ? '✓ ذخیره و همان لحظه روی عملیات فعال اعمال شد' : ('✗ '+(d&&d.error||'خطا'));
+    const modeDesc=cfg.build_only?'فقط ساخت جدول (بدون اصلاح مغایرت‌ها)':(cfg.matrix_fix?'ساخت جدول + اصلاح مغایرت‌ها':'مسیر جدول');
+    if(st) st.textContent = (d&&d.ok) ? ('✓ ذخیره شد · '+(cfg.enabled?('فعال هر '+(cfg.interval_h||6)+' ساعت · '+modeDesc):'غیرفعال')) : ('✗ '+(d&&d.error||'خطا'));
     reconAutoBadge();
-    if(d&&d.ok) showToast('روش اجرا فوراً ذخیره و اعمال شد');
+    if(d&&d.ok) showToast(customToast||'تنظیمات مغایرت‌گیری دوره‌ای ذخیره و اعمال شد');
   }).catch(()=>{const st=$('reconAutoStatus'); if(st) st.textContent='✗ شبکه';});
 }
 function reconAutoApplyCfg(c){
   c=c||{};
   const chk=(id,v)=>{const e=$(id); if(e) e.checked=!!v;};
   const set=(id,v)=>{const e=$(id); if(e) e.value=v;};
+  const buildOnly=!!c.build_only;
   chk('reconAutoEn', c.enabled);
   chk('reconAutoWoo', c.woo!==false);
   chk('reconAutoBsl', c.bsl!==false);
   chk('reconAutoFixPrice', c.fix_price!==false);
-  chk('reconAutoApply', c.apply);
+  chk('reconAutoApply', buildOnly?false:c.apply);
   chk('reconAutoNotify', c.notify!==false);
-  chk('reconAutoEnqueue', c.enqueue_missing);
-  chk('reconAutoMatrix', c.build_matrix!==false);
-  chk('reconAutoMatrixFix', c.matrix_fix!==false);
+  chk('reconAutoEnqueue', buildOnly?false:c.enqueue_missing);
+  chk('reconAutoMatrix', buildOnly?true:(c.build_matrix!==false));
+  chk('reconAutoMatrixFix', buildOnly?false:(c.matrix_fix!==false));
+  reconAutoBuildOnlyUi(buildOnly);
   set('reconAutoIv', c.interval_h||6);
   set('reconAutoMode', c.extra_mode||'off');
   set('reconExecMode',c.execution_mode||'cron_first');set('reconExecPause',c.execution_pause_ms===undefined?250:c.execution_pause_ms);set('reconCronLease',c.cron_lease_sec||180);
   reconExecUi();reconAutoBadge();
   const st=$('reconAutoStatus');
-  if(st && c.enabled) st.textContent='فعال · هر '+(c.interval_h||6)+' ساعت · مسیر جدول';
+  if(st && c.enabled) st.textContent='فعال · هر '+(c.interval_h||6)+' ساعت · '+(buildOnly?'فقط ساخت جدول (بدون اصلاح مغایرت‌ها)':(c.matrix_fix!==false?'ساخت جدول + اصلاح مغایرت‌ها':'مسیر جدول'));
 }
 function reconExecUi(){
   const m=(($('reconExecMode')||{}).value)||'cron_first',p=$('reconExecPause');
@@ -101136,7 +101284,8 @@ function reconAutoLoadLog(){
 function reconAutoBadge(){
   const b=$('reconAutoBadge'); if(!b) return;
   const on=!!($('reconAutoEn')||{}).checked;
-  b.textContent=on?'دوره‌ای روشن':'دوره‌ای';
+  const bo=!!(($('reconAutoBuildOnly')&&$('reconAutoBuildOnly').checked)||($('smPeriodicBuildOnly')&&$('smPeriodicBuildOnly').checked));
+  b.textContent=on?(bo?'دوره‌ای: فقط ساخت جدول':'دوره‌ای روشن'):'دوره‌ای';
   b.className='cst '+(on?'on':'off');
 }
 
@@ -108547,6 +108696,18 @@ function tmJobRow(j,i,n){
   return h;
 }
 
+function tmToggleAutoResumeAll(checked){
+  const fd=new FormData();
+  fd.append('tasks_auto_resume_toggle','1');
+  fd.append('enabled',checked?'1':'0');
+  fetch('?tasks_auto_resume_toggle=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(d&&d.ok){
+      showToast(d.auto_resume_all_enabled?'⚡ ادامهٔ همهٔ خودکار سرورساید در هر کران داخلی و بیرونی فعال شد':'⏸ ادامهٔ همهٔ خودکار سرورساید خاموش شد');
+      tmPulse();
+    }
+  }).catch(()=>{showToast('✗ خطای شبکه',true);});
+}
+
 function tmRender(){
   const body=document.getElementById('tmBody'); if(!body||!tmData)return;
   const d=tmData;
@@ -108557,11 +108718,14 @@ function tmRender(){
   /* v10.24 (۳۷ج): چند کارِ گیرکرده معمولاً با هم می‌میرند (یک ری‌استارتِ
      هاست)، پس دکمهٔ جمعی کنارِ شمارندهٔ «رهاشده» می‌نشیند. */
   const staleResumable=(d.tasks||[]).filter(t=>t.state==='stale'&&t.resumable).length;
+  const arEnabled=d.auto_resume_all_enabled!==false;
   const arLast=d.auto_resume_all_last||null;
   const arAgo=arLast&&arLast.at?Math.max(0,(parseInt(d.now)||Math.floor(Date.now()/1000))-parseInt(arLast.at)):null;
-  const arLabel=arLast&&arLast.at
-    ? ('⚡ ادامهٔ همه خودکار فعال · آخرین تیک کران: '+(arAgo<60?(toFa(arAgo)+' ثانیه پیش'):(toFa(Math.floor(arAgo/60))+' دقیقه پیش'))+((arLast.count>0)?(' ('+toFa(arLast.count)+' کار ادامه یافت)'):''))
-    : '⚡ ادامهٔ همه خودکار در هر کران داخلی و خارجی فعال است';
+  const arLabel=!arEnabled
+    ? '⏸ ادامهٔ همه خودکار سرورساید خاموش'
+    : (arLast&&arLast.at
+        ? ('⚡ ادامهٔ همه سرورساید فعال · آخرین کران: '+(arAgo<60?(toFa(arAgo)+' ثانیه پیش'):(toFa(Math.floor(arAgo/60))+' دقیقه پیش'))+((arLast.count>0)?(' ('+toFa(arLast.count)+' کار ادامه یافت)'):''))
+        : '⚡ ادامهٔ همه خودکار سرورساید در هر کران داخلی و بیرونی فعال است');
   let h='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
     +'<span class="tmc-badge '+(run>0?'tmb-run':'tmb-idle')+'">'+toFa(run)+' در حال اجرا</span>'
     +(st>0?'<span class="tmc-badge tmb-stale">'+toFa(st)+' رهاشده</span>':'')
@@ -108569,7 +108733,9 @@ function tmRender(){
     +(staleResumable>0?'<button class="btn btn-green" style="font-size:10px;padding:3px 10px" '
       +'onclick="tmResumeAll()" title="همهٔ کارهای گیرکرده را به ترتیبِ اولویت دوباره شروع کن">'
       +'▶▶ ادامهٔ همه ('+toFa(staleResumable)+')</button>':'')
-    +'<span style="font-size:9.5px;color:#34d399;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);border-radius:999px;padding:2px 9px;align-self:center">'+esc(arLabel)+'</span>'
+    +'<label style="display:inline-flex;align-items:center;gap:5px;font-size:9.5px;color:'+(arEnabled?'#34d399':'#94a3b8')+';background:'+(arEnabled?'rgba(16,185,129,.12)':'rgba(148,163,184,.1)')+';border:1px solid '+(arEnabled?'rgba(16,185,129,.35)':'rgba(148,163,184,.25)')+';border-radius:999px;padding:2px 9px;align-self:center;cursor:pointer" title="اجرای خودکار سرورساید دکمهٔ «ادامهٔ همه» با هر بار رسیدن کران‌جاب داخلی یا بیرونی بدون نیاز به مرورگر">'
+    +'<input type="checkbox" '+(arEnabled?'checked ':'')+'onchange="tmToggleAutoResumeAll(this.checked)" style="width:12px;height:12px;margin:0">'
+    +'<span>'+esc(arLabel)+'</span></label>'
     +'<span style="flex:1"></span>'
     +'<span style="font-size:9.5px;color:#64748b;align-self:center">به‌روزرسانیِ خودکار هر ۲.۵ ثانیه</span></div>';
 
