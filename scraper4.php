@@ -392,7 +392,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.474';
+const APP_VERSION = '10.475';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -415,7 +415,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/02';
+const APP_VERSION_DATE = '1405/08/04';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -17332,11 +17332,12 @@ function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requ
     if (!$sections && !empty($data['items']) && is_array($data['items'])) {
         $sections[] = ['section_type' => 'plp', 'items' => $data['items'], 'pagination' => $topPg];
     }
-    $apiMeta = ['total_pages' => $maxTotalPages, 'exceeded_total_pages' => false];
+    $apiMeta = ['total_pages' => $maxTotalPages, 'exceeded_total_pages' => false, 'raw_rows_count' => 0];
     if ($requestedPage > 1 && $maxTotalPages > 0 && $requestedPage > $maxTotalPages) {
         $apiMeta['exceeded_total_pages'] = true;
         return [];
     }
+    $rawRowsSeen = 0;
     foreach ($sections as $sec) {
         $pg = is_array($sec['pagination'] ?? null) ? $sec['pagination'] : [];
         $totalPages = (int)($pg['total_pages'] ?? ($pg['last_page'] ?? 0));
@@ -17347,6 +17348,7 @@ function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requ
         }
         foreach ((array)$sec['items'] as $item) {
             if (!is_array($item)) continue;
+            $rawRowsSeen++;
             $href = trim((string)($item['href'] ?? ''));
             if ($href === '' && !empty($item['product_id']) && ctype_digit((string)$item['product_id'])) {
                 $href = '/product/snp-' . (string)$item['product_id'];
@@ -17385,6 +17387,7 @@ function snappshopProductsFromApiPayload(array $json, string $baseUrl, int $requ
         }
         if ($products && ($sec['section_type'] ?? '') === 'plp') break;
     }
+    $apiMeta['raw_rows_count'] = $rawRowsSeen;
     return $products;
 }
 
@@ -17930,10 +17933,25 @@ function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = 
         }
     }
     $reqPage = max(1, (int)($route['page'] ?? 1));
+    if (empty($res['ok']) && !empty($res['json_status_false']) && $reqPage > 1 && $reqPage <= 500) {
+        usleep(300000);
+        $resRetry = snappshopApiHttpRequest('POST', $endpoint, $payload, $timeout);
+        if (!empty($resRetry['ok'])) $res = $resRetry;
+    }
     if (!empty($res['ok']) && is_array($res['data'] ?? null)) {
         $apiMeta = [];
         $ps = snappshopProductsFromApiPayload($res['data'], $target, $reqPage, $apiMeta);
         $totPages = (int)($apiMeta['total_pages'] ?? 0);
+        if (empty($ps) && $reqPage > 1 && empty($apiMeta['exceeded_total_pages']) && (int)($apiMeta['raw_rows_count'] ?? 0) === 0 && $totPages > 0 && $reqPage < $totPages) {
+            usleep(300000);
+            $resRetry2 = snappshopApiHttpRequest('POST', $endpoint, $payload, $timeout);
+            if (!empty($resRetry2['ok']) && is_array($resRetry2['data'] ?? null)) {
+                $res = $resRetry2;
+                $apiMeta = [];
+                $ps = snappshopProductsFromApiPayload($res['data'], $target, $reqPage, $apiMeta);
+                $totPages = (int)($apiMeta['total_pages'] ?? $totPages);
+            }
+        }
         if (!empty($ps)) {
             $note = 'SnappShop API (' . $endpoint . ' · via ' . (string)($res['via'] ?? 'direct') . ')';
             return ['ok' => true, 'error' => '', 'code' => (int)($res['code'] ?? 200), 'url' => $target,
@@ -17943,7 +17961,13 @@ function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = 
                     'snappshop_total_pages' => $totPages,
                     'jina_product_count' => count($ps), 'source_error' => (string)($prev['error'] ?? '')];
         }
-        /* v10.451: در صفحهٔ ۲ به بالا، پاسخ ۲۰۰ سالمِ apix با صفر کالا (یا عبور از total_pages)
+        /* v10.475: اگر total_pages بزرگ‌تر از صفحهٔ فعلی است و هیچ آیتم خامی برنگشته، خطای موقت API است نه پایان کاتالوگ */
+        if ($reqPage > 1 && empty($apiMeta['exceeded_total_pages']) && (int)($apiMeta['raw_rows_count'] ?? 0) === 0 && $totPages > 0 && $reqPage < $totPages) {
+            return ['ok' => false, 'error' => 'SnappShop API empty page ' . $reqPage . ' before total_pages=' . $totPages,
+                    'code' => (int)($res['code'] ?? 200), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix',
+                    'jina_product_count' => 0];
+        }
+        /* v10.451: در صفحهٔ ۲ به بالا، پاسخ ۲۰۰ سالمِ apix پس از عبور از total_pages
            یعنی پایان طبیعی صفحه‌بندی دسته‌بندی؛ نباید ok=false برگردد که به خطای HTTP 451 جینا سقوط کند. */
         if ($reqPage > 1) {
             $endPages = $totPages > 0 ? $totPages : max(1, $reqPage - 1);
@@ -17959,11 +17983,12 @@ function fetch_html_snappshop_api(string $url, int $timeout = 25, array $prev = 
                 'code' => (int)($res['code'] ?? 200), 'url' => $target, 'html' => '', 'mode' => 'snappshop-apix',
                 'jina_product_count' => 0];
     }
-    /* v10.451: موتور جستجوی Elasticsearch اسنپ‌شاپ در apix سقف سخت ۵۰۰ صفحه (۱۰,۰۰۰ کالا، skip=500) دارد
-       و در صفحهٔ ۵۰۱+ با خطای ۴۰۰/۴۲۲/۵۰۰ پاسخ می‌دهد؛ این حالت پس از ۵۰۰ صفحه، پایان طبیعی لیست است. */
+    /* v10.451 / v10.475: موتور جستجوی Elasticsearch اسنپ‌شاپ در apix سقف سخت ۵۰۰ صفحه (۱۰,۰۰۰ کالا، skip=500) دارد
+       و در صفحهٔ ۵۰۱+ با خطای ۴۰۰/۴۲۲/۵۰۰ یا json_status_false پاسخ می‌دهد؛ اما در صفحات <= 500 خطای json_status_false
+       یک خطای موقت سمت سرور است و هرگز نباید پایان طبیعی اعلام شود تا کل محصولات قبلی نصفه ذخیره نشود. */
     $resCode = (int)($res['code'] ?? 0);
-    if (($reqPage > 1 && !empty($res['json_status_false'])) || ($reqPage > 500 && ($resCode === 200 || in_array($resCode, [400, 404, 410, 422, 500], true)))) {
-        $endLim = $reqPage > 500 ? 500 : max(1, $reqPage - 1);
+    if ($reqPage > 500 && (!empty($res['json_status_false']) || $resCode === 200 || in_array($resCode, [400, 404, 410, 422, 500], true))) {
+        $endLim = 500;
         return ['ok' => true, 'error' => '', 'code' => 200, 'url' => $target,
                 'html' => snappshopSyntheticHtml([], $target, 'پایان صفحه‌بندی API اسنپ‌شاپ در صفحهٔ ' . $endLim),
                 'mode' => 'snappshop-apix', 'snappshop_api' => (string)($res['api_url'] ?? ''),
@@ -18249,9 +18274,14 @@ function digikalaProductsFromApiPayload(array $payload, string $baseUrl, int $re
         }
     }
     if ($totPages > 0 && $reqPage > $totPages) {
+        $metaOut['exceeded_total_pages'] = true;
+        $metaOut['raw_rows_count'] = 0;
+        $metaOut['all_rows_out_of_stock'] = false;
         return [];
     }
     $products = [];
+    $rawRowsCount = 0;
+    $marketableRowsCount = 0;
     foreach ($rows as $item) {
         if (!is_array($item)) continue;
         $id = (int)($item['id'] ?? 0);
@@ -18264,6 +18294,7 @@ function digikalaProductsFromApiPayload(array $payload, string $baseUrl, int $re
             ? make_absolute_url($uri, 'https://www.digikala.com')
             : ($id > 0 ? ('https://www.digikala.com/product/dkp-' . $id . '/') : '');
         if ($link === '') continue;
+        $rawRowsCount++;
         $imgRaw = '';
         if (is_array($item['images']['main']['url'] ?? null) && !empty($item['images']['main']['url'][0])) {
             $imgRaw = (string)$item['images']['main']['url'][0];
@@ -18282,8 +18313,14 @@ function digikalaProductsFromApiPayload(array $payload, string $baseUrl, int $re
         $inStock = ($dkStatus === 'marketable') && ($sellRial > 0 || !empty($defVar));
         $sellToman = ($inStock && $sellRial > 0) ? intdiv($sellRial, 10) : 0;
         $rrpToman  = ($inStock && $rrpRial > 0) ? intdiv($rrpRial, 10) : 0;
-        $priceStr = $sellToman > 0 ? (number_format($sellToman) . ' تومان') : '';
-        $oldPriceStr = ($rrpToman > $sellToman && $sellToman > 0) ? (number_format($rrpToman) . ' تومان') : '';
+        /* v10.475: کالاهای ناموجود بدون قیمت در انتهای لیست‌های دیجی‌کالا را وارد کاتالوگ نکن
+           تا شمارش فهرست (مثلاً ۱۵۵۵ به ۲۵۴) کاذب باد نکند و صفحات ناموجود اضافی پیمایش نشوند. */
+        if (!$inStock || $sellToman <= 0) {
+            continue;
+        }
+        $marketableRowsCount++;
+        $priceStr = number_format($sellToman) . ' تومان';
+        $oldPriceStr = ($rrpToman > $sellToman) ? (number_format($rrpToman) . ' تومان') : '';
         $brand = normalize_text((string)($item['data_layer']['brand'] ?? ($item['brand']['title_fa'] ?? '')));
         $catRaw = trim((string)($item['data_layer']['category'] ?? ($item['category']['title_fa'] ?? '')));
         if ($catRaw !== '') {
@@ -18297,13 +18334,17 @@ function digikalaProductsFromApiPayload(array $payload, string $baseUrl, int $re
             'link'     => $link,
             'image'    => $img,
             'sku'      => $id > 0 ? ('dkp-' . $id) : '',
-            'stock'    => $inStock ? 'موجود' : 'ناموجود',
+            'stock'    => 'موجود',
+            'in_stock' => true,
         ];
         if ($brand !== '') $p['brand'] = $brand;
         if ($catRaw !== '') $p['category'] = $catRaw;
         $key = productKey($p);
         if ($key !== '' && !isset($products[$key])) $products[$key] = $p;
     }
+    $metaOut['exceeded_total_pages'] = false;
+    $metaOut['raw_rows_count'] = $rawRowsCount;
+    $metaOut['all_rows_out_of_stock'] = ($rawRowsCount > 0 && $marketableRowsCount === 0);
     return $products;
 }
 
@@ -18673,6 +18714,78 @@ function digikalaNeedsApiFallback(string $url, string $html): bool {
     return stripos($html, '/product/dkp-') === false;
 }
 
+function digikalaDetailFromSeoHtml(string $rawHtml, string $sourceUrl): string {
+    if (trim($rawHtml) === '') return '';
+    [$dom, $xp] = load_dom($rawHtml);
+    $prod = null;
+    $ldNodes = @$xp->query("//script[translate(@type,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')='application/ld+json']");
+    if ($ldNodes && $ldNodes->length) {
+        foreach ($ldNodes as $ln) {
+            $raw = trim((string)($ln->textContent ?? ''));
+            if ($raw === '') continue;
+            $j = @json_decode($raw, true);
+            if (!is_array($j)) continue;
+            $items = isset($j['@graph']) && is_array($j['@graph']) ? $j['@graph'] : [$j];
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+                $tp = $it['@type'] ?? '';
+                $isProd = is_array($tp) ? in_array('Product', $tp, true) : (stripos((string)$tp, 'Product') !== false);
+                if ($isProd) { $prod = $it; break 2; }
+            }
+        }
+    }
+    if (!is_array($prod)) return '';
+    $title = normalize_text((string)($prod['name'] ?? ''));
+    if ($title === '') return '';
+    $offersRaw = $prod['offers'] ?? [];
+    $offerList = isset($offersRaw[0]) ? $offersRaw : (is_array($offersRaw) && !empty($offersRaw) ? [$offersRaw] : []);
+    $bestRial = 0;
+    $inStock = false;
+    foreach ($offerList as $of) {
+        if (!is_array($of)) continue;
+        $pNum = (int)round((float)($of['price'] ?? ($of['lowPrice'] ?? 0)));
+        $cur = strtoupper(trim((string)($of['priceCurrency'] ?? 'IRR')));
+        $rial = ($cur === 'IRT') ? ($pNum * 10) : $pNum;
+        $avail = strtolower((string)($of['availability'] ?? ''));
+        $avOk = ($avail === '' || strpos($avail, 'instock') !== false || strpos($avail, 'in_stock') !== false);
+        if ($avOk && $rial > 0) {
+            $inStock = true;
+            if ($bestRial <= 0 || $rial < $bestRial) $bestRial = $rial;
+        }
+    }
+    $imgsRaw = $prod['image'] ?? [];
+    if (is_string($imgsRaw)) $imgsRaw = [$imgsRaw];
+    $cleanImgs = [];
+    foreach ((array)$imgsRaw as $im) {
+        if (is_string($im) && trim($im) !== '') $cleanImgs[] = ['url' => [digikalaCleanImageUrl($im)]];
+    }
+    if (empty($cleanImgs)) {
+        $ogImgNodes = @$xp->query("//meta[@property='og:image']/@content");
+        if ($ogImgNodes && $ogImgNodes->length) {
+            $ogU = digikalaCleanImageUrl(trim((string)$ogImgNodes->item(0)->nodeValue));
+            if ($ogU !== '') $cleanImgs[] = ['url' => [$ogU]];
+        }
+    }
+    if ($bestRial <= 0 && empty($cleanImgs)) return '';
+    $pidNum = 0;
+    if (preg_match('~/product/dkp-(\d+)~i', $sourceUrl, $pm)) $pidNum = (int)$pm[1];
+    $brandName = is_array($prod['brand'] ?? null) ? (string)($prod['brand']['name'] ?? '') : (string)($prod['brand'] ?? '');
+    return digikalaDetailSyntheticHtml([
+        'product' => [
+            'id' => $pidNum,
+            'title_fa' => $title,
+            'status' => $inStock ? 'marketable' : 'out_of_stock',
+            'brand' => ['title_fa' => normalize_text($brandName)],
+            'images' => [
+                'main' => $cleanImgs[0] ?? ['url' => []],
+                'list' => array_slice($cleanImgs, 1),
+            ],
+            'default_variant' => $bestRial > 0 ? ['price' => ['selling_price' => $bestRial, 'rrp_price' => $bestRial]] : [],
+            'review' => ['description' => (string)($prod['description'] ?? '')],
+        ],
+    ], $sourceUrl);
+}
+
 function fetch_html_digikala_api(string $url, int $timeout = 25, array $prev = [], int $redirectDepth = 0): array {
     $route = digikalaParseTargetRoute($url);
     $target = (string)($route['url'] ?? $url);
@@ -18713,7 +18826,47 @@ function fetch_html_digikala_api(string $url, int $timeout = 25, array $prev = [
                     'jina_product_count'  => 1,
                 ];
             }
-            if ((int)($res['code'] ?? 0) === 404 || (int)($res['api_status'] ?? 0) === 404) break;
+            /* v10.475: روی ۴۰۴ نسخهٔ v2 حلقه را قطع نکن تا v1/product/{pid}/ هم امتحان شود */
+        }
+        /* v10.475: پشتیبان وب برای تشخیص ریدایرکت dkp جدید یا استخراج SEO/JSON-LD از صفحهٔ وب */
+        if ($redirectDepth < 2 && function_exists('curl_init')) {
+            $chWeb = @curl_init($target);
+            if ($chWeb) {
+                @curl_setopt_array($chWeb, [
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_FOLLOWLOCATION => true,
+                    CURLOPT_MAXREDIRS      => 4,
+                    CURLOPT_TIMEOUT        => max(5, min(12, $timeout)),
+                    CURLOPT_CONNECTTIMEOUT => 5,
+                    CURLOPT_SSL_VERIFYPEER => false,
+                    CURLOPT_SSL_VERIFYHOST => 0,
+                    CURLOPT_ENCODING       => '',
+                    CURLOPT_RANGE          => '0-262143',
+                    CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                ]);
+                $webBody = @curl_exec($chWeb);
+                $webCode = (int)@curl_getinfo($chWeb, CURLINFO_HTTP_CODE);
+                $effWebUrl = (string)@curl_getinfo($chWeb, CURLINFO_EFFECTIVE_URL);
+                @curl_close($chWeb);
+                if ($effWebUrl !== '' && preg_match('~/product/dkp-(\d+)~i', $effWebUrl, $wm) && (string)$wm[1] !== (string)($route['product_id'] ?? '')) {
+                    return fetch_html_digikala_api('https://www.digikala.com/product/dkp-' . $wm[1] . '/', $timeout, $prev, $redirectDepth + 1);
+                }
+                if (is_string($webBody) && $webBody !== '' && in_array($webCode, [200, 206], true)) {
+                    $seoSynth = digikalaDetailFromSeoHtml($webBody, $effWebUrl !== '' ? $effWebUrl : $target);
+                    if ($seoSynth !== '') {
+                        return [
+                            'ok'                  => true,
+                            'error'               => '',
+                            'code'                => 200,
+                            'url'                 => $effWebUrl !== '' ? $effWebUrl : $target,
+                            'html'                => $seoSynth,
+                            'mode'                => 'digikala-seo-fallback',
+                            'digikala_route_kind' => 'product',
+                            'jina_product_count'  => 1,
+                        ];
+                    }
+                }
+            }
         }
         $errMsg = trim((string)($lastRes['error'] ?? ''));
         if ($errMsg === '') {
@@ -18776,6 +18929,16 @@ function fetch_html_digikala_api(string $url, int $timeout = 25, array $prev = [
         $apiMeta = [];
         $ps = digikalaProductsFromApiPayload($rawPayload, $target, $reqPage, $apiMeta);
         $totPages = (int)($apiMeta['total_pages'] ?? 0);
+        if (empty($ps) && $reqPage > 1 && empty($apiMeta['exceeded_total_pages']) && empty($apiMeta['all_rows_out_of_stock']) && (int)($apiMeta['raw_rows_count'] ?? 0) === 0 && $totPages > 0 && $reqPage < $totPages) {
+            usleep(300000);
+            $resRetry = digikalaApiHttpRequest($ep, $timeout);
+            if (!empty($resRetry['ok']) && is_array($resRetry['data'] ?? null)) {
+                $res = $resRetry;
+                $apiMeta = [];
+                $ps = digikalaProductsFromApiPayload($res['data'], $target, $reqPage, $apiMeta);
+                $totPages = (int)($apiMeta['total_pages'] ?? $totPages);
+            }
+        }
         if (!empty($ps)) {
             $note = 'Digikala API (' . (string)($route['kind'] ?? 'list') . ' · via ' . (string)($res['via'] ?? 'direct') . ')';
             return [
@@ -18793,14 +18956,26 @@ function fetch_html_digikala_api(string $url, int $timeout = 25, array $prev = [
                 'jina_product_count'    => count($ps),
             ];
         }
-        if ($reqPage > 1) {
-            $endPages = $totPages > 0 ? $totPages : max(1, $reqPage - 1);
+        /* v10.475: اگر هیچ ردیف خامی پیش از total_pages نیامد، خطای موقت API است نه پایان طبیعی کاتالوگ */
+        if ($reqPage > 1 && empty($apiMeta['exceeded_total_pages']) && empty($apiMeta['all_rows_out_of_stock']) && (int)($apiMeta['raw_rows_count'] ?? 0) === 0 && $totPages > 0 && $reqPage < $totPages) {
+            return [
+                'ok'                 => false,
+                'error'              => 'Digikala API empty page ' . $reqPage . ' before total_pages=' . $totPages,
+                'code'               => (int)($res['code'] ?? 200),
+                'url'                => $target,
+                'html'               => '',
+                'mode'               => 'digikala-api',
+                'jina_product_count' => 0,
+            ];
+        }
+        if ($reqPage > 1 || !empty($apiMeta['all_rows_out_of_stock'])) {
+            $endPages = !empty($apiMeta['all_rows_out_of_stock']) ? max(1, $reqPage - 1) : ($totPages > 0 ? $totPages : max(1, $reqPage - 1));
             return [
                 'ok'                    => true,
                 'error'                 => '',
                 'code'                  => (int)($res['code'] ?? 200),
                 'url'                   => $target,
-                'html'                  => digikalaSyntheticListHtml([], $target, 'پایان صفحه‌بندی دیجی‌کالا در صفحهٔ ' . $endPages, $apiMeta),
+                'html'                  => digikalaSyntheticListHtml([], $target, 'پایان کالاهای موجود دیجی‌کالا در صفحهٔ ' . $endPages, $apiMeta),
                 'mode'                  => 'digikala-api',
                 'digikala_api'          => (string)($res['api_url'] ?? ''),
                 'digikala_api_via'      => (string)($res['via'] ?? 'direct'),
@@ -20832,9 +21007,23 @@ if ($lfSave && !@flock($lfSave, LOCK_EX)) { @fclose($lfSave); $lfSave = null; }
 $profiles = s4StripDeletedProfiles(loadProfiles());
 $key = s4ResolveSaveProfileTargetKey($url, $targetKeyIn, $profiles);
 $existingProfile = is_array($profiles[$key] ?? null) ? $profiles[$key] : $existingProfile;
-if (empty($_POST['partial_meta_only']) && empty($productsData) && !empty($existingProfile['products']) && empty($_POST['allow_empty_products'])) {
-    $profilePatch['products'] = (array)$existingProfile['products'];
-    $profilePatch['productsOrder'] = (array)($existingProfile['productsOrder'] ?? []);
+if (empty($_POST['partial_meta_only']) && !empty($existingProfile['products']) && empty($_POST['allow_empty_products'])) {
+    if (empty($productsData)) {
+        $profilePatch['products'] = (array)$existingProfile['products'];
+        $profilePatch['productsOrder'] = (array)($existingProfile['productsOrder'] ?? []);
+    } elseif ($isAutosave && empty($_POST['allow_shrink_products'])) {
+        $_autoPrevValid = extractCountValidProducts((array)$existingProfile['products']);
+        $_autoNewValid  = extractCountValidProducts($productsData);
+        $_autoStage     = (string)($existingProfile['_extract_stage'] ?? '');
+        $_autoGuard     = extractShouldBlockShrinkage($_autoPrevValid, $_autoNewValid, [
+            'autosave'   => true,
+            'incomplete' => (!empty($existingProfile['_extract_list_incomplete']) || !empty($existingProfile['_extract_resume_needed']) || in_array($_autoStage, ['list', 'detail'], true)),
+        ]);
+        if (!empty($_autoGuard['blocked'])) {
+            $profilePatch['products'] = (array)$existingProfile['products'];
+            $profilePatch['productsOrder'] = (array)($existingProfile['productsOrder'] ?? []);
+        }
+    }
 }
 $profiles[$key] = array_merge($existingProfile, $profilePatch);
 $_saved = writeJsonFile(PROFILES_FILE, $profiles);
@@ -25848,6 +26037,9 @@ $allProducts = [];
 $seenKeys = [];
 $nextUrl = null;
 $_streamReachedLastPage = false;
+$_streamEmptyStreak = 0;
+$_streamEmptyLimit = (function_exists('isEmallsUrl') && isEmallsUrl($url)) ? 5 : 3;
+$_streamStoppedEarly = false;
 
 for ($page = 1; $page <= $maxPages; $page++) {
 if ($page === 1) {
@@ -25871,6 +26063,7 @@ send_sse('page', ['page' => $page, 'url' => $res['url'], 'ok' => $res['ok']]);
 if (!$res['ok']) {
 if ($page > 1 && count($allProducts) > 0 && in_array((int)($res['code'] ?? 0), [404, 410], true)) {
 $_streamReachedLastPage = true;
+if ($page < $maxPages) $_streamStoppedEarly = true;
 break;
 }
 send_sse('error', [
@@ -25922,8 +26115,15 @@ if (count($allProducts) > 0 && $_streamApiTotP > 0 && $page >= $_streamApiTotP) 
 $_streamReachedLastPage = true;
 break;
 }
+$_streamEmptyStreak = ($newCount === 0) ? ($_streamEmptyStreak + 1) : 0;
 if ($page > 1 && $newCount === 0) {
+if ($_streamEmptyStreak < $_streamEmptyLimit && $page < $maxPages) {
+$__sp = max(0, min(5000, (int)((loadConnections()['extract_page_pause_ms'] ?? 80))));
+if ($__sp > 0) usleep($__sp * 1000);
+continue;
+}
 if (count($allProducts) > 0) $_streamReachedLastPage = true;
+if ($page < $maxPages) $_streamStoppedEarly = true;
 break;
 }
 if ($page >= $maxPages && count($allProducts) > 0) {
@@ -26009,6 +26209,32 @@ if ($i % 10 === 0) send_sse_ping();
 usleep(80000);
 }
 if ($failCount > 0) send_sse('fetch_info', ['msg' => "⚠️ $failCount محصول قابل دسترسی نبود (می‌توانید دوباره تلاش کنید)"]);
+}
+
+/* v10.475: گارد حفاظت نتایج قبلی در مسیر استریم مرورگر پیش از ارسال رویداد complete */
+$_streamProfs = s4StripDeletedProfiles(loadProfiles());
+$_streamPk = s4ResolveSaveProfileTargetKey($url, trim((string)($_GET['profile_key'] ?? '')), $_streamProfs);
+$_streamExistingProds = is_array($_streamProfs[$_streamPk]['products'] ?? null) ? $_streamProfs[$_streamPk]['products'] : [];
+unset($_streamProfs);
+if (!empty($_streamExistingProds)) {
+    $_stPrevValid = extractCountValidProducts($_streamExistingProds);
+    $_stNewValid  = extractCountValidProducts($allProducts);
+    $_stShrink    = extractShouldBlockShrinkage($_stPrevValid, $_stNewValid, [
+        'stopped_early' => $_streamStoppedEarly,
+        'had_errors'    => isset($failCount) && $failCount > 0,
+        'stage'         => 'stream_complete',
+    ]);
+    if (!empty($_stShrink['blocked'])) {
+        send_sse('error', [
+            'message'           => 'گارد پایداری: استخراج ناقص بود (' . $_stNewValid . ' محصول در برابر ' . $_stPrevValid . ' محصول قبلی) — نتایج قبلی دست‌نخورده حفظ شد',
+            'interrupted'       => true,
+            'shrinkage_blocked' => true,
+            'prev_count'        => $_stPrevValid,
+            'new_count'         => $_stNewValid,
+        ]);
+        send_sse('done', []);
+        exit;
+    }
 }
 
 send_sse('complete', ['total' => count($allProducts), 'products' => array_values($allProducts)]);
@@ -27436,6 +27662,159 @@ function extractInstallDetailFatalGuard(): void {
     });
 }
 
+/**
+ * v10.475: تحلیل شمارشی محصولات معتبر/کاندید و محافظ سراسری جلوگیری از کاهش محصولات پروفایل
+ * هنگام خطا، توقف زودهنگام صفحه‌بندی، یا گیرکردن فاز جزئیات.
+ */
+function extractAnalyzeProductSet(array $productsMapOrPairs, bool $detailSuppliesPrice = false): array {
+    $total = 0;
+    $valid = 0;
+    $inStockValid = 0;
+    $detailCand = 0;
+    foreach ($productsMapOrPairs as $k => $entry) {
+        $p = null;
+        if (is_array($entry) && array_key_exists(0, $entry) && array_key_exists(1, $entry) && is_string($entry[0]) && is_array($entry[1])) {
+            $p = $entry[1];
+        } elseif (is_array($entry)) {
+            $p = $entry;
+        }
+        if (!is_array($p)) continue;
+        $total++;
+        $hasTitle = trim(strip_tags((string)($p['title'] ?? ''))) !== '';
+        $hasLink  = trim((string)($p['link'] ?? '')) !== '';
+        $isValid  = $hasTitle && extractPriceNum($p['price'] ?? '') > 0;
+        $isInStock = !array_key_exists('in_stock', $p) || !empty($p['in_stock']);
+        if ($isValid) {
+            $valid++;
+            if ($isInStock) $inStockValid++;
+        }
+        if ($hasTitle && ($hasLink || $isValid) && $isInStock) {
+            $detailCand++;
+        }
+    }
+    return [
+        'total'            => $total,
+        'valid'            => $valid,
+        'in_stock_valid'   => $inStockValid,
+        'detail_candidate' => $detailSuppliesPrice ? $detailCand : $valid,
+    ];
+}
+
+function extractCountValidProducts(array $productsMapOrPairs): int {
+    $an = extractAnalyzeProductSet($productsMapOrPairs, false);
+    return (int)$an['valid'];
+}
+
+function extractShouldBlockShrinkage(int $prevCount, int $newCount, array $ctx = []): array {
+    $res = [
+        'blocked'  => false,
+        'reason'   => '',
+        'prev'     => max(0, $prevCount),
+        'new'      => max(0, $newCount),
+        'lost'     => max(0, $prevCount - $newCount),
+        'loss_pct' => $prevCount > 0 ? round(max(0, $prevCount - $newCount) * 100 / $prevCount, 1) : 0.0,
+    ];
+    if (!empty($ctx['allow_shrink']) || $prevCount <= 0 || $newCount >= $prevCount) {
+        return $res;
+    }
+    $lost = $prevCount - $newCount;
+    if ($newCount <= 0) {
+        $res['blocked'] = true;
+        $res['reason']  = 'empty_new_set';
+        return $res;
+    }
+    if (!empty($ctx['incomplete']) || !empty($ctx['stopped_before_api_total'])) {
+        $res['blocked'] = true;
+        $res['reason']  = !empty($ctx['stopped_before_api_total']) ? 'stopped_before_api_total' : 'incomplete_run';
+        return $res;
+    }
+    if (!empty($ctx['autosave'])) {
+        $autoMinLoss = ($prevCount >= 50) ? min(15, (int)ceil($prevCount * 0.10)) : max(3, (int)ceil($prevCount * 0.15));
+        if ($lost >= $autoMinLoss) {
+            $res['blocked'] = true;
+            $res['reason']  = 'autosave_shrinkage';
+            return $res;
+        }
+    }
+    if (!empty($ctx['had_errors']) || !empty($ctx['stopped_early'])) {
+        $errMinLoss = ($prevCount >= 100) ? min(25, max(5, (int)ceil($prevCount * 0.05))) : max(4, (int)ceil($prevCount * 0.08));
+        if ($lost >= $errMinLoss) {
+            $res['blocked'] = true;
+            $res['reason']  = !empty($ctx['stopped_early']) ? 'early_stop_shrinkage' : 'error_run_shrinkage';
+            return $res;
+        }
+    }
+    if ($prevCount >= 8) {
+        $collapseMinLoss = ($prevCount >= 200) ? min(80, (int)ceil($prevCount * 0.18)) : max(6, (int)ceil($prevCount * 0.18));
+        if ($lost >= $collapseMinLoss) {
+            $res['blocked'] = true;
+            $res['reason']  = 'catalog_collapse';
+            return $res;
+        }
+    } elseif ($prevCount >= 4 && $lost >= (int)ceil($prevCount * 0.50)) {
+        $res['blocked'] = true;
+        $res['reason']  = 'small_catalog_collapse';
+        return $res;
+    }
+    return $res;
+}
+
+function detailPageHasExplicitOosSignal(?DOMXPath $xp, string $html = ''): bool {
+    if ($html !== '') {
+        if (stripos($html, 'property="product:availability" content="in stock"') !== false
+            || stripos($html, "property='product:availability' content='in stock'") !== false) {
+            return false;
+        }
+        if (stripos($html, 'property="product:availability" content="out of stock"') !== false
+            || stripos($html, "property='product:availability' content='out of stock'") !== false) {
+            return true;
+        }
+        if (preg_match('~"availability"\s*:\s*"https?://schema\.org/(OutOfStock|SoldOut|Discontinued)"~i', $html)
+            && !preg_match('~"availability"\s*:\s*"https?://schema\.org/InStock"~i', $html)) {
+            return true;
+        }
+    }
+    if ($xp instanceof DOMXPath) {
+        $inStockNodes = @$xp->query("//*[contains(concat(' ',normalize-space(@class),' '),' in-stock ')]");
+        if ($inStockNodes && $inStockNodes->length > 0) return false;
+        $oosClassNodes = @$xp->query("//*[contains(concat(' ',normalize-space(@class),' '),' out-of-stock ') or contains(concat(' ',normalize-space(@class),' '),' outofstock ') or contains(concat(' ',normalize-space(@class),' '),' sold-out ') or contains(concat(' ',normalize-space(@class),' '),' unavailable ')]");
+        if ($oosClassNodes && $oosClassNodes->length > 0) return true;
+        $stockNodes = @$xp->query("//*[contains(@class,'stock') or contains(@class,'availability') or contains(@class,'status') or contains(@class,'price')]");
+        if ($stockNodes && $stockNodes->length > 0) {
+            $checked = 0;
+            foreach ($stockNodes as $sn) {
+                if (++$checked > 12) break;
+                $txt = normalize_text((string)($sn->textContent ?? ''));
+                if ($txt === '' || mb_strlen($txt, 'UTF-8') > 120) continue;
+                if (preg_match('/(ناموجود|اتمام\s*موجودی|توقف\s*تولید|موجود\s*نیست|تماس\s*بگیرید)/u', $txt)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+function extractWriteStagingRawFile(string $pkFinal, array $stagedProducts, string $stageCycle = ''): void {
+    if ($pkFinal === '') return;
+    $file = extractStagingFile($pkFinal);
+    $tmp  = $file . '.tmp.' . (int)@getmypid();
+    $json = json_encode([
+        'profile_key' => $pkFinal,
+        'saved_at'    => time(),
+        'stage_cycle' => $stageCycle,
+        'products'    => $stagedProducts,
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    if (is_string($json) && $json !== '') {
+        if (@file_put_contents($tmp, $json, LOCK_EX) !== false) {
+            @rename($tmp, $file);
+        } else {
+            @unlink($tmp);
+        }
+    }
+    unset($json);
+}
+
 function extractCheckpoint(string $pkFinal, array $allProducts, array $extra = []): void {
     if ($pkFinal === '') return;
     $productsData = [];
@@ -27446,8 +27825,27 @@ function extractCheckpoint(string $pkFinal, array $allProducts, array $extra = [
     $profilesNow = loadProfiles();
     if (!isset($profilesNow[$pkFinal]) || !is_array($profilesNow[$pkFinal])) return;
     $one=$profilesNow[$pkFinal];
-    $one['products']=$productsData;$one['productsOrder']=array_keys($allProducts);$one['updatedAt']=time();
-    foreach($extra as $k=>$v)$one[$k]=$v;
+    $diskValid = extractCountValidProducts((array)($one['products'] ?? []));
+    $newValid  = extractCountValidProducts($allProducts);
+    $cpStage   = (string)($extra['_extract_stage'] ?? '');
+    $cpGuard   = extractShouldBlockShrinkage($diskValid, $newValid, [
+        'checkpoint' => true,
+        'incomplete' => in_array($cpStage, ['list', 'detail'], true) || !empty($extra['_extract_resume_needed']),
+        'stage'      => $cpStage !== '' ? $cpStage : 'checkpoint',
+    ]);
+    if (!empty($cpGuard['blocked'])) {
+        /* v10.475: محصولات معتبر قبلی روی دیسک هرگز با مجموعهٔ کوچکتر/بی‌قیمت بازنویسی نشود؛
+           بافر کاری در فایل staging ذخیره می‌شود تا ادامهٔ فاز ۲ بدون از دست رفتن هیچ محصولی انجام شود. */
+        $cyc = (string)($extra['_extract_detail_cycle'] ?? ($one['_extract_detail_cycle'] ?? ''));
+        extractWriteStagingRawFile($pkFinal, $allProducts, $cyc);
+        foreach ($extra as $k => $v) {
+            if ($k === 'products' || $k === 'productsOrder' || $k === 'updatedAt') continue;
+            $one[$k] = $v;
+        }
+    } else {
+        $one['products']=$productsData;$one['productsOrder']=array_keys($allProducts);$one['updatedAt']=time();
+        foreach($extra as $k=>$v)$one[$k]=$v;
+    }
     unset($productsData);
     $profilesNow[$pkFinal]=$one;
     unset($one);
@@ -27468,24 +27866,10 @@ function extractStagingFile(string $pkFinal): string {
     return __DIR__ . '/extract_staging_' . md5($pkFinal) . '.json';
 }
 
-function extractSaveListStaging(string $pkFinal, ?array $stagedProducts, array $metaExtra = []): void {
+function extractSaveListStaging(string $pkFinal, ?array $stagedProducts, array $metaExtra = [], string $stageCycle = ''): void {
     if ($pkFinal === '') return;
     if (is_array($stagedProducts)) {
-        $file = extractStagingFile($pkFinal);
-        $tmp  = $file . '.tmp.' . (int)@getmypid();
-        $json = json_encode([
-            'profile_key' => $pkFinal,
-            'saved_at'    => time(),
-            'products'    => $stagedProducts,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        if (is_string($json) && $json !== '') {
-            if (@file_put_contents($tmp, $json, LOCK_EX) !== false) {
-                @rename($tmp, $file);
-            } else {
-                @unlink($tmp);
-            }
-        }
-        unset($json);
+        extractWriteStagingRawFile($pkFinal, $stagedProducts, $stageCycle);
     }
     if (!empty($metaExtra)) {
         $lfp = @fopen(PROFILES_FILE . '.extract.lock', 'c');
@@ -27509,20 +27893,29 @@ function extractSaveListStaging(string $pkFinal, ?array $stagedProducts, array $
     if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
 }
 
-function extractLoadListStaging(string $pkFinal): array {
-    if ($pkFinal === '') return [];
+function extractLoadListStagingPayload(string $pkFinal): array {
+    if ($pkFinal === '') return ['products' => [], 'stage_cycle' => '', 'saved_at' => 0];
     $file = extractStagingFile($pkFinal);
-    if (!is_file($file)) return [];
+    if (!is_file($file)) return ['products' => [], 'stage_cycle' => '', 'saved_at' => 0];
     $raw = @file_get_contents($file);
-    if (!is_string($raw) || $raw === '') return [];
+    if (!is_string($raw) || $raw === '') return ['products' => [], 'stage_cycle' => '', 'saved_at' => 0];
     $j = @json_decode($raw, true);
     unset($raw);
-    if (!is_array($j) || !is_array($j['products'] ?? null)) return [];
+    if (!is_array($j) || !is_array($j['products'] ?? null)) return ['products' => [], 'stage_cycle' => '', 'saved_at' => 0];
     $out = [];
     foreach ($j['products'] as $k => $p) {
         if (is_string($k) && $k !== '' && is_array($p)) $out[$k] = $p;
     }
-    return $out;
+    return [
+        'products'    => $out,
+        'stage_cycle' => (string)($j['stage_cycle'] ?? ''),
+        'saved_at'    => (int)($j['saved_at'] ?? 0),
+    ];
+}
+
+function extractLoadListStaging(string $pkFinal): array {
+    $pl = extractLoadListStagingPayload($pkFinal);
+    return (array)($pl['products'] ?? []);
 }
 
 function extractClearListStaging(string $pkFinal): void {
@@ -28538,7 +28931,8 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
     }
     $out['ok'] = true;
     [$domInl, $xpInl] = load_dom($dr['html']);
-    $_inlineSnappSynth = strpos($dr['html'], 'data-snappshop-api-detail="1"') !== false;
+    $_inlineSnappSynth = strpos($dr['html'], 'data-snappshop-api-detail="1"') !== false
+        || strpos($dr['html'], 'data-digikala-api-detail="1"') !== false;
     $galleryCfg = galleryEffectiveCfgForUrl($galleryCfg, (string)($p['link'] ?? ''));
     $fields = 0; $imgs = 0; $vars = 0;
     foreach ($detailSelectors as $field => $selStr) {
@@ -28921,6 +29315,11 @@ $allProducts=[];$seenKeys=[];$nextUrl=null;$totalPages=0;$fetchFail='';
    such as eMalls: transient cache/anti-bot responses often repeat page 1.
    Probe a short consecutive gap before declaring the catalogue finished. */
 $_noFreshStreak=0;$_noFreshLimit=(function_exists('isEmallsUrl')&&isEmallsUrl($url))?5:3;
+$_stoppedByEarlySignal=false;
+$_lastGoodListPage=0;
+$_hadListFetchErrors=false;
+$_knownApiTotalPages=0;
+$_detailSuppliesPrice=($_wantDetailAfterList && !empty($detailSelectors['price']) && empty($selectors['price']));
 /* v10.122: ادامه از صفحه — اگر استخراج قبلی وسط فهرست مرده باشد */
 $_listResume=false;
 $_startPage=1;
@@ -28940,6 +29339,7 @@ if($phase!=='detail'){
             $_rf=(int)$profile['_extract_resume_from'];
             if($_rf>0) $_startPage=max(1,$_rf);
         }
+        $_lastGoodListPage=max(0,$_startPage-1);
         if($_startPage>1 || $_resumeReq){
             $_listResume=true;
             $_resumeFrom=$_startPage;
@@ -28971,7 +29371,16 @@ if($phase!=='detail'){
    همان‌هایی هستند که اجرای قبلی روی دیسک گذاشته. اینطور مرحلهٔ جزئیات
    یک گام مستقل است و یک بار دیگر کل فهرست را نمی‌گیرد. */
 if($phase==='detail'){
-    $allProducts=$prevByKey;
+    $_oldDetailCyclePre=trim((string)($profile['_extract_detail_cycle']??''));
+    $_oldStagePre=(string)($profile['_extract_stage']??'');
+    $_stagedDetailPl=($_oldDetailCyclePre!=='' && in_array($_oldStagePre,['detail','list_done','stopped'],true))
+        ? extractLoadListStagingPayload($_pkStageInit) : ['products'=>[],'stage_cycle'=>''];
+    if(!empty($_stagedDetailPl['products']) && (string)($_stagedDetailPl['stage_cycle']??'')===$_oldDetailCyclePre){
+        $allProducts=(array)$_stagedDetailPl['products'];
+    } else {
+        $allProducts=$prevByKey;
+    }
+    unset($_stagedDetailPl,$_oldDetailCyclePre,$_oldStagePre);
     foreach($allProducts as $_k=>$_v)$seenKeys[$_k]=1;
     $totalPages=0;
     if(empty($allProducts)){
@@ -29107,6 +29516,7 @@ $_httpCode=(int)($res['code']??0);
 if($page>1 && count($allProducts)>0 && in_array($_httpCode,[404,410],true)){
     $totalPages=max(1,$page-1);
     $_listReachedLastPage=true;
+    if($page<$maxPages) $_stoppedByEarlySignal=true;
     $logs[]='🏁 HTTP '.$_httpCode.' در صفحهٔ '.$page.' — صفحهٔ قبلی آخرین صفحه بود؛ استخراج کامل است.';
     $_qEnd=extractReadQueue();foreach($_qEnd['entries'] as &$_qeEnd){if(($_qeEnd['id']??'')!==$queueId)continue;
         $_qeEnd['pag_stop_reason']='پایان طبیعی صفحه‌بندی: HTTP '.$_httpCode.' در صفحهٔ '.$page;
@@ -29118,6 +29528,7 @@ if($page>1 && count($allProducts)>0 && in_array($_httpCode,[404,410],true)){
     unset($_qEnd,$_httpCode);break;
 }
 unset($_httpCode);
+$_hadListFetchErrors=true;
 // v8.91: علت شکست صفحهٔ اول را نگه دار تا محافظِ پایین بداند
 // «صفر محصول» به‌خاطر قطعی بوده، نه به‌خاطر خالی شدن فروشگاه.
 if($page===1)$fetchFail='صفحهٔ اول باز نشد: '.mb_substr($res['error']??('HTTP '.(int)($res['code']??0)),0,60);
@@ -29352,6 +29763,8 @@ foreach($_qLive['entries'] as &$_qeL){
 }unset($_qeL);
 extractWriteQueue($_qLive);
 $_apiTotPagesNow = max((int)($res['snappshop_total_pages']??0), (int)($res['digikala_total_pages']??0));
+if($_apiTotPagesNow>$_knownApiTotalPages) $_knownApiTotalPages=$_apiTotPagesNow;
+if($newCount>0) $_lastGoodListPage=$page;
 if(count($allProducts)>0 && $_apiTotPagesNow>0 && $page>=$_apiTotPagesNow && $page<=$maxPages){
     $_snTotP=$_apiTotPagesNow;
     $totalPages=$page;
@@ -29386,6 +29799,7 @@ if($page>$_startPage&&$newCount===0){
         continue;
     }
     if(count($allProducts)>0) $_listReachedLastPage=true;
+    if($page<$maxPages) $_stoppedByEarlySignal=true;
     $logs[]='⛳ '.$_noFreshStreak.' صفحهٔ پیاپی محصولِ تازه‌ای نداشت — صفحه‌بندی متوقف شد.';
     if($pagType!=='next_selector'){
         $logs[]='   • نشانیِ امتحان‌شده: '.$pageUrl;
@@ -29397,7 +29811,7 @@ if($page>$_startPage&&$newCount===0){
         }
         unset($_fin2);
     }
-    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>null,'resumable'=>false,'extracted'=>count($allProducts),'page'=>$page,'queue_id'=>$queueId,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>$logs,'total_log_count'=>count($logs),'profile_key'=>$pkFinal]);
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>($phase!=='list'),'done'=>($phase==='list'),'error'=>null,'resumable'=>false,'extracted'=>count($allProducts),'page'=>$page,'queue_id'=>$queueId,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>$logs,'total_log_count'=>count($logs),'profile_key'=>$pkFinal]);
     $queue=extractReadQueue();
     foreach($queue['entries'] as &$qe){
         if(($qe['id']??'')===$queueId){
@@ -29532,23 +29946,112 @@ if(!isset($prevByKey[$key])||!is_array($prevByKey[$key]))continue;
 $allProducts[$key]=extractMergeDetail($p,$prevByKey[$key]);
 }
 
-/* v10.121: گارد soft-collapse — فهرست ناقص نباید کاتالوگ را جایگزین کند */
-$_prevN=count($prevByKey);
-$_newN=count($allProducts);
-if($_prevN>=8 && $_newN>0 && $_newN < (int)max(3, floor($_prevN * 0.45))){
-    $_why='فروپاشی فهرست: قبلاً '.$_prevN.' محصول، این نوبت '.$_newN.' — دادهٔ قبلی حفظ شد';
-    writeProgress(EXTRACT_PROGRESS_FILE,[
-        'running'=>false,'done'=>true,'error'=>$_why,'guard'=>'soft_collapse',
-        'kept'=>$_prevN,'extracted'=>$_newN,'started_at'=>$startedAt,
-        'last_progress_ts'=>time(),'queue_id'=>$queueId,
-        'recent_log'=>['🛡 گارد پایداری: فهرست ناقص','   • قبلی '.$_prevN.' · الان '.$_newN,'   • محصولات قبلی دست‌نخورده ماندند'],
-        'total_log_count'=>3,'products_saved'=>false,
+/* v10.121 / v10.475: محافظ جامع جلوگیری از کاهش/حذف محصولات پروفایل هنگام خطا یا گیرکردن فهرست */
+if ($phase !== 'detail') {
+    $_prevAn = extractAnalyzeProductSet($prevByKey, $_detailSuppliesPrice);
+    $_newAn  = extractAnalyzeProductSet($allProducts, $_detailSuppliesPrice);
+    $_prevN  = $_detailSuppliesPrice
+        ? max(count($prevByKey), (int)$_prevAn['detail_candidate'])
+        : (int)($_prevAn['valid'] > 0 ? $_prevAn['valid'] : count($prevByKey));
+    $_newN   = $_detailSuppliesPrice ? (int)$_newAn['detail_candidate'] : (int)$_newAn['valid'];
+    $_apiTargetPages = ($_knownApiTotalPages > 0) ? min($maxPages, $_knownApiTotalPages) : 0;
+    $_stoppedBeforeApiTotal = ($_apiTargetPages > 0 && $totalPages < $_apiTargetPages);
+    $_listShrink = extractShouldBlockShrinkage($_prevN, $_newN, [
+        'incomplete'               => !$_listReachedLastPage,
+        'had_errors'               => $_hadListFetchErrors,
+        'stopped_early'            => $_stoppedByEarlySignal,
+        'stopped_before_api_total' => $_stoppedBeforeApiTotal,
+        'stage'                    => 'list_done',
     ]);
-    $queue=extractReadQueue();
-    foreach($queue['entries'] as &$qe){if(($qe['id']??'')===$queueId){$qe['status']='failed';$qe['done_at']=time();$qe['error']=$_why;$qe['products_count']=$_prevN;break;}}unset($qe);
-    extractWriteQueue($queue);
-    extractLockRelease($queueId);
-    return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'queue_id'=>$queueId,'error'=>$_why,'guard'=>'soft_collapse','kept'=>$_prevN,'extracted'=>$_newN];
+    if (!empty($_listShrink['blocked'])) {
+        $pkGuard = $profileKey !== '' ? $profileKey : profileKey($url);
+        $_shrinkTries = (int)($profile['_extract_shrink_guard_tries'] ?? 0) + 1;
+        $_canStageResume = ($_stoppedByEarlySignal || $_hadListFetchErrors || $_stoppedBeforeApiTotal)
+            && $_lastGoodListPage >= 1 && $_lastGoodListPage < $maxPages && $_shrinkTries <= 2;
+        if ($_canStageResume) {
+            $_rpShrink = max(1, $_lastGoodListPage);
+            $_whyRetry = 'توقف زودهنگام فهرست در صفحهٔ ' . $totalPages . ' (' . $_newN . ' از ' . $_prevN . ' محصول قبلی) — نتایج قبلی حفظ شد؛ ادامه از صفحهٔ ' . $_rpShrink . ' (تلاش ' . $_shrinkTries . '/2)';
+            extractSaveListStaging($pkGuard, $allProducts, [
+                '_extract_stage'              => 'list',
+                '_extract_stage_at'           => time(),
+                '_extract_want_detail'        => $_wantDetailAfterList,
+                '_extract_list_incomplete'    => true,
+                '_extract_list_page_ok'       => $_rpShrink,
+                '_extract_list_page_try'      => $_rpShrink + 1,
+                '_extract_resume_from'        => $_rpShrink,
+                '_extract_resume_needed'      => 1,
+                '_extract_resume_phase'       => 'list',
+                '_extract_shrink_guard_tries' => $_shrinkTries,
+            ]);
+            writeProgress(EXTRACT_PROGRESS_FILE, [
+                'running' => false, 'done' => false, 'paused' => true, 'partial' => true,
+                'resumable' => true, 'resume_needed' => true, 'resume_phase' => 'list', 'resume_page' => $_rpShrink,
+                'error' => $_whyRetry, 'guard' => 'shrinkage_retry', 'products_saved' => false,
+                'kept' => $_prevN, 'extracted' => $_newN, 'started_at' => $startedAt,
+                'last_progress_ts' => time(), 'queue_id' => $queueId, 'profile_key' => $pkGuard,
+                'recent_log' => [
+                    '🛡 گارد حفاظت نتایج: فهرست در میانهٔ راه متوقف شد (' . $_newN . ' محصول در برابر ' . $_prevN . ' محصول قبلی)',
+                    '   • نتایج قبلی در پروفایل و تب نتایج ۱۰۰٪ ثابت و دست‌نخورده باقی ماند',
+                    '   • ادامهٔ خودکار از صفحهٔ ' . $_rpShrink . ' (تلاش ' . $_shrinkTries . ' از ۲)',
+                ],
+                'total_log_count' => 3,
+            ]);
+            $queue = extractReadQueue();
+            foreach ($queue['entries'] as &$qe) {
+                if (($qe['id'] ?? '') === $queueId) {
+                    $qe['status'] = 'paused'; $qe['done_at'] = time(); $qe['resumable'] = true; $qe['resume_needed'] = 1;
+                    $qe['partial'] = true; $qe['resume_phase'] = 'list'; $qe['resume_page'] = $_rpShrink;
+                    $qe['products_count'] = $_prevN; $qe['products_saved'] = false; $qe['guard'] = 'shrinkage_retry';
+                    $qe['error'] = $_whyRetry;
+                    break;
+                }
+            }
+            unset($qe);
+            extractWriteQueue($queue);
+            extractLockRelease($queueId);
+            return ['__early_sent' => $emitEarlyResponse, 'ok' => true, 'partial' => true, 'resume_needed' => true,
+                'resume_page' => $_rpShrink, 'queue_id' => $queueId, 'guard' => 'shrinkage_retry',
+                'kept' => $_prevN, 'extracted' => $_newN, 'products_saved' => false, 'profile_key' => $pkGuard];
+        }
+        $_why = 'گارد حفاظت کاتالوگ: قبلاً ' . $_prevN . ' محصول معتبر، این نوبت ' . $_newN . ' محصول (' . $_listShrink['reason'] . ') — نتایج قبلی ثابت نگه داشته شد';
+        extractClearListStaging($pkGuard);
+        extractSaveListStaging($pkGuard, null, [
+            '_extract_stage'              => 'complete',
+            '_extract_stage_at'           => time(),
+            '_extract_list_incomplete'    => false,
+            '_extract_resume_needed'      => 0,
+            '_extract_resume_phase'       => '',
+            '_extract_resume_req'         => 0,
+            '_extract_resume_from'        => 0,
+            '_extract_shrink_guard_tries' => 0,
+            '_extract_last_guard'         => (string)$_listShrink['reason'],
+        ]);
+        writeProgress(EXTRACT_PROGRESS_FILE, [
+            'running' => false, 'done' => true, 'resumable' => false, 'resume_needed' => false,
+            'error' => $_why, 'guard' => 'soft_collapse',
+            'kept' => $_prevN, 'extracted' => $_newN, 'started_at' => $startedAt,
+            'last_progress_ts' => time(), 'queue_id' => $queueId, 'profile_key' => $pkGuard,
+            'recent_log' => [
+                '🛡 گارد پایداری: استخراج ناقص/ناموفق متوقف شد تا محصولات پروفایل کم نشوند',
+                '   • قبلی: ' . $_prevN . ' محصول · این نوبت: ' . $_newN . ' محصول',
+                '   • تمام ' . $_prevN . ' محصول قبلی کاملاً ثابت و دست‌نخورده باقی ماندند',
+            ],
+            'total_log_count' => 3, 'products_saved' => false,
+        ]);
+        $queue = extractReadQueue();
+        foreach ($queue['entries'] as &$qe) {
+            if (($qe['id'] ?? '') === $queueId) {
+                $qe['status'] = 'failed'; $qe['done_at'] = time(); $qe['resumable'] = false; $qe['resume_needed'] = 0;
+                $qe['error'] = $_why; $qe['products_count'] = $_prevN; $qe['products_saved'] = false; $qe['guard'] = 'soft_collapse';
+                break;
+            }
+        }
+        unset($qe);
+        extractWriteQueue($queue);
+        extractLockRelease($queueId);
+        return ['__early_sent' => $emitEarlyResponse, 'ok' => false, 'queue_id' => $queueId, 'error' => $_why,
+            'guard' => 'soft_collapse', 'kept' => $_prevN, 'extracted' => $_newN, 'products_saved' => false];
+    }
 }
 
 /* v8.94: مرحلهٔ ۱ تمام شد — همین‌جا ذخیره کن.
@@ -29580,8 +30083,11 @@ if ($phase !== 'detail') {
         '_extract_list_page_try'=>$totalPages,
         '_extract_resume_req'=>0,
         '_extract_resume_from'=>0,
+        '_extract_shrink_guard_tries'=>0,
     ]);
-    extractClearListStaging($pkFinal);
+    if (!$_detailSuppliesPrice) {
+        extractClearListStaging($pkFinal);
+    }
 }
 $_stageProgressMeta = [
     'detail_extract_mode' => $_detailExtractMode,
@@ -29809,6 +30315,7 @@ $GLOBALS['_s4SnappCooldownHeartbeat'] = function(int $leftSec) use ($autoPageMod
         'detail_current' => $detailDone, 'detail_total' => $detailTotal,
     ], $_stageProgressMeta));
 };
+$_detailCapped=0;
 foreach($needDetail as $key=>$p){
 /* v8.97: وقت تمام شد؟ تمیز بیرون بیا، نه اینکه منتظر بمانی تا هاست بکشد.
    v8.98: ولی حداقل چند محصول باید انجام شود، وگرنه پیشرفتی حاصل نمی‌شود
@@ -29870,7 +30377,8 @@ break;
 if($dr['ok']){
 $detailOk++;
 [$dom2,$xp2]=load_dom($dr['html']);
-$_isSnappSynth=(strpos($dr['html'],'data-snappshop-api-detail="1"')!==false);
+$_isSnappSynth=(strpos($dr['html'],'data-snappshop-api-detail="1"')!==false
+    || strpos($dr['html'],'data-digikala-api-detail="1"')!==false);
 
 foreach($detailSelectors as $field=>$selStr){
 if(empty($selStr))continue;
@@ -29990,6 +30498,15 @@ if(!empty($detailSelectors['price'])){
     if($_isSnappSynth && $_isIn === false && strpos($dr['html'], '<meta property="product:availability" content="in stock">') !== false){
         $_isIn = true;
     }
+    /* v10.475: جلوگیری از ناموجودشدن دسته‌جمعی کاذب وقتی صفحهٔ جزئیات رندر نشده/سلکتور قیمت تطبیق نداده
+       اما نشانهٔ صریح ناموجودی (ناموجود / OutOfStock / تماس بگیرید) در صفحه نیست. */
+    if($_isIn === false && ($_freshPrice === null || trim((string)$_freshPrice) === '')){
+        $_explicitOos = detailPageHasExplicitOosSignal($xp2, (string)($dr['html'] ?? ''));
+        $_hadPriorPrice = extractPriceNum($allProducts[$key]['price'] ?? '') > 0;
+        if(!$_explicitOos && (($_gotFields === 0 && $_gotImgs <= 1 && $_gotVars === 0) || $_hadPriorPrice)){
+            $_isIn = null;
+        }
+    }
     if($_isIn !== null){
         $allProducts[$key]['in_stock']    = $_isIn;
         $allProducts[$key]['stock_src']   = 'detail_price';
@@ -30005,26 +30522,50 @@ $_detailResolved=($_gotFields>0||$_gotImgs>1||($_isIn===false&&!empty($detailSel
 if($_detailResolved){
     $allProducts[$key]['_detail_cycle']=$_detailCycle;
     $allProducts[$key]['_detail_checked_at']=time();
-    unset($allProducts[$key]['_detail_new_pending']);
+    unset($allProducts[$key]['_detail_new_pending'],$allProducts[$key]['_detail_fail_tries'],$allProducts[$key]['_detail_fail_cycle'],$allProducts[$key]['_detail_capped']);
 } else {
-    unset($allProducts[$key]['_detail_cycle']);
-}
-if(!$_detailResolved){
-$detailNoField++;
-if(count($emptySamples)<3)$emptySamples[]=$_pTitle;
+    $_nfPrevCyc=(string)($allProducts[$key]['_detail_fail_cycle']??'');
+    $_nfTries=($_nfPrevCyc===$_detailCycle)?((int)($allProducts[$key]['_detail_fail_tries']??0)+1):1;
+    $allProducts[$key]['_detail_fail_cycle']=$_detailCycle;
+    $allProducts[$key]['_detail_fail_tries']=$_nfTries;
+    if($_nfTries>=3){
+        $allProducts[$key]['_detail_cycle']=$_detailCycle;
+        $allProducts[$key]['_detail_checked_at']=time();
+        $allProducts[$key]['_detail_capped']='nofield';
+        unset($allProducts[$key]['_detail_new_pending']);
+        $_detailCapped++;
+    } else {
+        unset($allProducts[$key]['_detail_cycle']);
+        $detailNoField++;
+        if(count($emptySamples)<3)$emptySamples[]=$_pTitle;
+    }
 }
 $pushLog('  ✓ '.$_pTitle.' — '
   .($_gotFields?($_gotFields.' فیلد'):'بدون فیلد')
   .($_gotVars?(' · '.$_gotVars.' تنوع'):'')
   .($_gotImgs>1?(' · 🖼 '.$_gotImgs.' عکس'):($_gotImgs===1?' · ۱ عکس':'')));
 }else{
-/* v8.90: تا حالا شکست باز کردن صفحه بی‌صدا رد می‌شد و کاربر نمی‌فهمید
-   چرا محصول جزئیات نگرفت. حالا علتش در لاگ می‌آید. */
-$detailFail++;
+/* v8.90 / v10.475: ثبت علت خطا + سقف تلاش به ازای هر محصول تا صفحات ۴۰۴/خراب حلقهٔ بی‌نهایت (۱۷۵+ دور) نسازند و اطلاعات قبلی محصول حفظ شود */
+$_dErrCode=(int)($dr['code']??0);
+$_maxFailTries=in_array($_dErrCode,[404,410],true)?2:3;
+$_fPrevCyc=(string)($allProducts[$key]['_detail_fail_cycle']??'');
+$_fTries=($_fPrevCyc===$_detailCycle)?((int)($allProducts[$key]['_detail_fail_tries']??0)+1):1;
+$allProducts[$key]['_detail_fail_cycle']=$_detailCycle;
+$allProducts[$key]['_detail_fail_tries']=$_fTries;
 $_err=trim((string)($dr['error']??''));
-if($_err==='')$_err='HTTP '.(int)($dr['code']??0);
-if(count($failSamples)<3)$failSamples[]=$_pTitle.' ('.mb_substr($_err,0,40).')';
-$pushLog('  ✗ '.$_pTitle.' — صفحه باز نشد: '.mb_substr($_err,0,50));
+if($_err==='')$_err='HTTP '.$_dErrCode;
+if($_fTries>=$_maxFailTries){
+    $allProducts[$key]['_detail_cycle']=$_detailCycle;
+    $allProducts[$key]['_detail_checked_at']=time();
+    $allProducts[$key]['_detail_capped']='http_'.$_dErrCode;
+    unset($allProducts[$key]['_detail_new_pending']);
+    $_detailCapped++;
+    $pushLog('  ⏭ '.$_pTitle.' — صفحه باز نشد ('.mb_substr($_err,0,40).')؛ دادهٔ قبلی محصول حفظ شد');
+} else {
+    $detailFail++;
+    if(count($failSamples)<3)$failSamples[]=$_pTitle.' ('.mb_substr($_err,0,40).')';
+    $pushLog('  ✗ '.$_pTitle.' — صفحه باز نشد: '.mb_substr($_err,0,50));
+}
 }
 /* v8.90: هر ۲ محصول به‌روزرسانی کن (قبلاً هر ۵ تا) و به‌جای یک خط
    خشک، بگو چه چیزی به دست آمده و چه چیزی نه. */
@@ -30033,6 +30574,7 @@ $_pct=$detailTotal>0?(int)round($detailDone/$detailTotal*100):0;
 $logs=['🔍 جزئیات '.$detailDone.' از '.$detailTotal.' ('.$_pct.'٪)'];
 $_sum='   • ✅ '.$detailOk.' صفحه باز شد';
 if($detailFail>0)$_sum.=' · ❌ '.$detailFail.' باز نشد';
+if($_detailCapped>0)$_sum.=' · 🛡 '.$_detailCapped.' با حفظ دادهٔ قبلی رد شد';
 if($detailFields>0)$_sum.=' · 🏷 '.$detailFields.' فیلد';
 if($varFound>0)$_sum.=' · 🎨 '.$varFound.' محصول تنوع‌دار';
 $logs[]=$_sum;
@@ -30085,6 +30627,7 @@ $_sumLines=$_detailIncomplete
   : ['✅ فاز ۲ تمام شد — '.$detailDone.' محصول بررسی شد'];
 $_sumLines[]='   • ✅ '.$detailOk.' صفحه باز شد'
   .($detailFail>0?(' · ❌ '.$detailFail.' باز نشد'):'')
+  .($_detailCapped>0?(' · 🛡 '.$_detailCapped.' با حفظ دادهٔ قبلی رد شد'):'')
   .' · 🏷 '.$detailFields.' فیلد استخراج شد';
 if($galleryCfg['enabled'])
 $_sumLines[]='   • 🖼 گالری: '.$galleryImgsTotal.' تصویر از '.$galleryFound.' محصول';
@@ -30119,9 +30662,23 @@ if ($_detailExtractMode === 'inline' && $_inlineDetailDone > 0) {
 /* Never persist parser placeholders as products. Detail extraction gets the
    first chance to supply missing title/price; anything still invalid is now
    discarded. Invalid historical rows were also removed from the comparison
-   baseline above, so this cleanup does not archive destination products. */
+   baseline above, so this cleanup does not archive destination products.
+   v10.475: هنگام ناتمام‌بودن فاز ۲ برای پروفایل‌هایی که قیمت را از صفحهٔ جزئیات می‌گیرند،
+   آیتم‌های هنوز بازنشده را حذف نکن تا در برش بعدی قیمتشان استخراج شود. */
 $_invalidExtracted=0;
-foreach($allProducts as $_ivk=>$_ivp){if(!is_array($_ivp)||!extractedProductIsValid($_ivp)){unset($allProducts[$_ivk]);$_invalidExtracted++;}}
+foreach($allProducts as $_ivk=>$_ivp){
+    if(!is_array($_ivp)){unset($allProducts[$_ivk]);$_invalidExtracted++;continue;}
+    if(!extractedProductIsValid($_ivp)){
+        if(!empty($_detailIncomplete) && $_detailSuppliesPrice
+            && trim(strip_tags((string)($_ivp['title']??'')))!==''
+            && trim((string)($_ivp['link']??''))!==''
+            && (string)($_ivp['_detail_cycle']??'')!==$_detailCycle){
+            continue;
+        }
+        unset($allProducts[$_ivk]);
+        $_invalidExtracted++;
+    }
+}
 
 $newCount=0;$priceChanged=0;$unchanged=0;$removedCount=0;
 $newItems=[];$changedItems=[];$removedItems=[];
@@ -30155,15 +30712,39 @@ foreach($prevMap as $_ivk=>$_ivp){if(!is_array($_ivp)||!extractedProductIsValid(
    وارد removed_items می‌کند تا مقصدها هم بازنشسته شوند. روی اجرای ناقص یا
    فقط-list اعمال نمی‌شود تا خطای موقت استخراج باعث حذف کاذب نشود. */
 $_profilePrunedUnavailable = [];
+$_oosPruneBlocked = false;
 if ($phase !== 'list' && empty($_detailIncomplete) && empty($_listRanOut)) {
+    $_candOosKeys = [];
     foreach ($allProducts as $_apuKey => $_apuProduct) {
         if (is_array($_apuProduct) && array_key_exists('in_stock', $_apuProduct) && empty($_apuProduct['in_stock'])) {
-            $_apuProduct['key'] = (string)$_apuKey;
-            $_apuProduct['reason'] = 'ناموجود در مبدأ — حذف از snapshot پروفایل';
-            $_profilePrunedUnavailable[] = $_apuProduct;
-            unset($allProducts[$_apuKey]);
+            $_candOosKeys[] = $_apuKey;
         }
     }
+    if (!empty($_candOosKeys)) {
+        $_preOosValid  = max(count($prevMap), extractCountValidProducts($allProducts));
+        $_postOosValid = max(0, extractCountValidProducts($allProducts) - count($_candOosKeys));
+        $_oosGuard = extractShouldBlockShrinkage($_preOosValid, $_postOosValid, [
+            'had_errors' => ($detailFail > 0 || $detailNoField > 0 || ($_detailCapped ?? 0) > 0),
+            'stage'      => 'oos_prune',
+        ]);
+        if (!empty($_oosGuard['blocked'])) {
+            $_oosPruneBlocked = true;
+            foreach ($_candOosKeys as $_rkOos) {
+                if (isset($prevMap[$_rkOos]) && (!array_key_exists('in_stock', $prevMap[$_rkOos]) || !empty($prevMap[$_rkOos]['in_stock']))) {
+                    $allProducts[$_rkOos]['in_stock'] = true;
+                }
+            }
+        } else {
+            foreach ($_candOosKeys as $_apuKey) {
+                $_apuProduct = $allProducts[$_apuKey];
+                $_apuProduct['key'] = (string)$_apuKey;
+                $_apuProduct['reason'] = 'ناموجود در مبدأ — حذف از snapshot پروفایل';
+                $_profilePrunedUnavailable[] = $_apuProduct;
+                unset($allProducts[$_apuKey]);
+            }
+        }
+    }
+    unset($_candOosKeys);
 }
 $finalCmp=extractLiveCompare($allProducts,$prevMap,100000);
 if ($_profilePrunedUnavailable) {
@@ -30194,13 +30775,42 @@ foreach($allProducts as $key=>$p){$productsData[]=[$key,$p];}
 
    حالا فقط چیزی نوشته می‌شود که واقعاً حاصل این اجراست.
    v8.94: $pkFinal بالاتر — قبل از اولین نقطهٔ امن — تعیین شده است. */
+$_productsSavedFinal = true;
+$_finalShrinkGuard = '';
+$_finalPrevValidCount = count($prevMap);
 $_endLfp=@fopen(PROFILES_FILE.'.extract.lock','c');if($_endLfp)@flock($_endLfp,LOCK_EX);
 try{
 $profilesNow=loadProfiles();
 $profileOnDisk=is_array($profilesNow[$pkFinal]??null)?$profilesNow[$pkFinal]:$profile;
-$profileOnDisk['products']=$productsData;
-$profileOnDisk['productsOrder']=$productsOrder;
-$profileOnDisk['updatedAt']=time();
+$_diskValidNow = extractCountValidProducts((array)($profileOnDisk['products'] ?? []));
+$_finalPrevValidCount = max($_finalPrevValidCount, $_diskValidNow);
+$_finalNewValidCount  = extractCountValidProducts($allProducts);
+$_finalShrinkRes = extractShouldBlockShrinkage($_finalPrevValidCount, $_finalNewValidCount, [
+    'incomplete'    => (!empty($_detailIncomplete) || !empty($_listRanOut)),
+    'had_errors'    => ($detailFail > 0 || $detailNoField > 0 || ($_detailCapped ?? 0) > 0 || !empty($_hadListFetchErrors)),
+    'stopped_early' => !empty($_stoppedByEarlySignal),
+    'stage'         => 'final_save',
+]);
+if (!empty($_finalShrinkRes['blocked'])) {
+    /* v10.475: حفظ ۱۰۰٪ نتایج استخراج قبلی روی دیسک در صورت خطا/گیرکردن/کاهش غیرعادی */
+    $_productsSavedFinal = false;
+    $_finalShrinkGuard = (string)$_finalShrinkRes['reason'];
+    $removedItems = [];
+    $removedCount = 0;
+    if (!empty($_detailIncomplete) && $_detailSuppliesPrice) {
+        extractWriteStagingRawFile($pkFinal, $allProducts, $_detailCycle);
+    } else {
+        extractClearListStaging($pkFinal);
+    }
+} else {
+    $profileOnDisk['products']=$productsData;
+    $profileOnDisk['productsOrder']=$productsOrder;
+    $profileOnDisk['updatedAt']=time();
+    $profileOnDisk['_extract_shrink_guard_tries']=0;
+    if (empty($_detailIncomplete) && empty($_listRanOut)) {
+        extractClearListStaging($pkFinal);
+    }
+}
 /* v8.94: کار تمام شد — نشانهٔ «نیمه‌کاره» برداشته شود، وگرنه محافظِ
    ارسال تا ابد بسته می‌ماند و هیچ محصولی هرگز فرستاده نمی‌شود. */
 /* v8.97: اگر فاز جزئیات به‌خاطر سقف زمانی ناتمام مانده، «complete»
@@ -30242,7 +30852,7 @@ if(isset($GLOBALS['_extractDetailFatalCtx']))$GLOBALS['_extractDetailFatalCtx'][
    پروفایل که توضیح/دسته ندارند AI بزن — قبل از ارسال به باسلام. */
 try {
     $_aiCfg = aiContentAutoCfg(loadConnections());
-    if (!empty($_aiCfg['enabled']) && $phase !== 'list') {
+    if (!empty($_aiCfg['enabled']) && $phase !== 'list' && $_productsSavedFinal) {
         $_aiN = 0; $_aiFilled = 0;
         $_aiMax = min(12, (int)$_aiCfg['per_run']);
         $_aiProds = is_array($profileOnDisk['products'] ?? null) ? $profileOnDisk['products'] : [];
@@ -30276,8 +30886,14 @@ try {
    (چند صفحه باز شد، چند عکس آمد، چه چیزی نیامد) از بین می‌رفت. */
 $_finalComplete=($phase==='list'||(empty($_detailIncomplete)&&empty($_listRanOut)));
 $finalLog=$_finalComplete
-    ? ['✅ استخراج تکمیل شد — '.count($allProducts).' محصول']
+    ? ['✅ استخراج تکمیل شد — '.($_productsSavedFinal?count($allProducts):$_finalPrevValidCount).' محصول']
     : ['⏸ استخراج جزئیات موقتاً متوقف شد — صفِ باقی‌مانده حفظ شده است'];
+if(!$_productsSavedFinal){
+    $finalLog[]='🛡 گارد حفاظت نتایج: '.$_finalPrevValidCount.' محصول قبلی ثابت نگه داشته شد (خروجی ناقص/کاهش‌یافته ذخیره نشد)';
+}
+if($_oosPruneBlocked){
+    $finalLog[]='🛡 گارد حفاظت موجودی: حذف دسته‌جمعی ناموجودهای مشکوک متوقف شد تا کاتالوگ پروفایل آسیب نبیند';
+}
 if($_invalidOld>0||$_invalidExtracted>0)$finalLog[]='🧹 '.($_invalidOld+$_invalidExtracted).' ردیف بدون عنوان یا قیمت از پروفایل کنار گذاشته شد';
 if (!empty($GLOBALS['_aiContentFilled'])) {
     $finalLog[] = '   • 🤖 تولید خودکار توضیح/دسته: ' . (int)$GLOBALS['_aiContentFilled'] . ' محصول';
@@ -30287,6 +30903,7 @@ $finalLog[]='   • 🆕 '.$newCount.' جدید · 💰 '.$priceChanged.' تغی
 if($detailTotal>0){
 $finalLog[]='   • 🔍 جزئیات: '.$detailOk.' صفحه باز شد'
   .($detailFail>0?(' · '.$detailFail.' باز نشد'):'')
+  .((($_detailCapped??0)>0)?(' · '.($_detailCapped??0).' با حفظ دادهٔ قبلی رد شد'):'')
   .' · '.$detailFields.' فیلد';
 if($galleryCfg['enabled'])
 $finalLog[]='   • 🖼 گالری: '.$galleryImgsTotal.' تصویر از '.$galleryFound.' محصول';
@@ -30307,7 +30924,8 @@ $finalLog[]='   • 📦 موجودی: '.$_stockOut.' ناموجود شد · '.$
 if($detailNoField>0)$finalLog[]='   • ⚠️ '.$detailNoField.' محصول هیچ فیلدی نداد — سلکتورها را بررسی کنید';
 if($failSamples)$finalLog[]='   • ✗ '.implode(' | ',$failSamples);
 }
-writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>(($phase!=='list'&&$detailTotal>0)?($_detailExtractMode==='inline'&&$phase!=='detail'?'list_detail':'detail'):'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$_stageProgressMeta));
+$_reportedFinalCount = $_productsSavedFinal ? count($allProducts) : $_finalPrevValidCount;
+writeProgress(EXTRACT_PROGRESS_FILE,array_merge(['running'=>false,'done'=>$_finalComplete,'paused'=>!$_finalComplete,'resume_needed'=>!$_finalComplete,'total'=>(($autoPageMode?$totalPages:$maxPages)+$detailTotal),'current'=>$totalPages+$detailDone,'started_at'=>$startedAt,'finished_at'=>time(),'avg_ppm'=>max(0,(int)round(count($allProducts)*60/max(1,time()-$startedAt))),'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$finalLog,'total_log_count'=>$totalPages+$detailDone+1,'extracted'=>$_reportedFinalCount,'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>$_productsSavedFinal,'guard'=>$_finalShrinkGuard,'profile_key'=>$profileKey??profileKey($url),'total_pages'=>$totalPages,'detail_current'=>$detailDone,'detail_skip_why'=>$_skipWhy,'detail_no_link'=>$_noLink,'detail_already'=>$_alreadyDone,'phase'=>(($phase!=='list'&&$detailTotal>0)?($_detailExtractMode==='inline'&&$phase!=='detail'?'list_detail':'detail'):'list'),'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_capped'=>$_detailCapped??0,'detail_fields'=>$detailFields,'detail_nofield'=>$detailNoField,'detail_total'=>$detailTotal,'gallery_products'=>$galleryFound,'gallery_images'=>$galleryImgsTotal,'variation_products'=>$varFound],$_stageProgressMeta));
 
 $queue=extractReadQueue();
 // v8.25: نتیجهٔ کامل هر اجرا جداگانه ذخیره می‌شود تا مودالِ کارهای
@@ -30319,20 +30937,22 @@ extractSaveReport($queueId, [
     'unchanged'     => $unchanged,
     'price_up'      => $priceUp,
     'price_down'    => $priceDown,
-    'extracted'     => count($allProducts),
+    'extracted'     => $_reportedFinalCount,
+    'products_saved'=> $_productsSavedFinal,
+    'guard'         => $_finalShrinkGuard,
     'profile_name'  => $profile['name'] ?? ($profileKey ?? ''),
     'started_at'    => $startedAt,
     'finished_at'   => time(),
     'avg_ppm'       => max(0, (int)round(count($allProducts) * 60 / max(1, time() - $startedAt))),
 ]);
 
-foreach($queue['entries'] as &$qe){if($qe['id']===$queueId){$qe['status']=$_finalComplete?'done':'paused';$qe['products_count']=count($allProducts);$qe['total']=$detailTotal;$qe['current']=$detailDone;$qe['resume_needed']=$_finalComplete?0:1;if($_finalComplete)$qe['done_at']=time();else unset($qe['done_at']);$qe['new']=$newCount;$qe['price_changed']=$priceChanged;$qe['removed']=$removedCount;$qe['unchanged']=$unchanged;$qe['price_up']=$priceUp;$qe['price_down']=$priceDown;$qe['gallery_images']=$galleryImgsTotal;$qe['gallery_products']=$galleryFound;$qe['detail_ok']=$detailOk;$qe['detail_fail']=$detailFail;$qe['detail_fields']=$detailFields;$qe['variation_products']=$varFound;$qe['detail_total']=$detailTotal;$qe['detail_skip_why']=$_skipWhy;$qe['detail_no_link']=$_noLink;$qe['detail_already']=$_alreadyDone;$qe['gallery_enabled']=!empty($galleryCfg['enabled']);$qe['gallery_blank']=($galleryCfg['enabled']&&$detailOk>0&&$galleryImgsTotal===0)?1:0;$qe['gallery_box']=(string)$galleryCfg['box'];$qe['has_report']=true;break;}}unset($qe);
+foreach($queue['entries'] as &$qe){if($qe['id']===$queueId){$qe['status']=$_finalComplete?'done':'paused';$qe['products_count']=$_reportedFinalCount;$qe['products_saved']=$_productsSavedFinal;if($_finalShrinkGuard!=='')$qe['guard']=$_finalShrinkGuard;$qe['total']=$detailTotal;$qe['current']=$detailDone;$qe['resume_needed']=$_finalComplete?0:1;if($_finalComplete)$qe['done_at']=time();else unset($qe['done_at']);$qe['new']=$newCount;$qe['price_changed']=$priceChanged;$qe['removed']=$removedCount;$qe['unchanged']=$unchanged;$qe['price_up']=$priceUp;$qe['price_down']=$priceDown;$qe['gallery_images']=$galleryImgsTotal;$qe['gallery_products']=$galleryFound;$qe['detail_ok']=$detailOk;$qe['detail_fail']=$detailFail;$qe['detail_capped']=$_detailCapped??0;$qe['detail_fields']=$detailFields;$qe['variation_products']=$varFound;$qe['detail_total']=$detailTotal;$qe['detail_skip_why']=$_skipWhy;$qe['detail_no_link']=$_noLink;$qe['detail_already']=$_alreadyDone;$qe['gallery_enabled']=!empty($galleryCfg['enabled']);$qe['gallery_blank']=($galleryCfg['enabled']&&$detailOk>0&&$galleryImgsTotal===0)?1:0;$qe['gallery_box']=(string)$galleryCfg['box'];$qe['has_report']=true;break;}}unset($qe);
 extractWriteQueue($queue);
 
 // v10.21 (۳۴الف): سینکِ «بدون استخراج» باید بداند چند صفحه واقعاً باز شد و
 // آیا بودجهٔ زمانی تمام شد (تا در نوبتِ بعدی از همان‌جا ادامه دهد)
 extractLockRelease($queueId);   // v10.32 (۴۵ب)
-return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>true,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'ran_out'=>!empty($_ranOut),'resume_needed'=>!$_finalComplete,'extract_stage'=>(!$_finalComplete?'detail':(($phase==='list'&&$detailConfigured)?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
+return ['__early_sent'=>$emitEarlyResponse, 'ok'=>true,'queue_id'=>$queueId,'extracted'=>$_reportedFinalCount,'new'=>$newCount,'price_changed'=>$priceChanged,'removed'=>$removedCount,'unchanged'=>$unchanged,'price_up'=>$priceUp,'price_down'=>$priceDown,'new_items'=>$newItems,'changed_items'=>$changedItems,'removed_items'=>$removedItems,'products_saved'=>$_productsSavedFinal,'guard'=>$_finalShrinkGuard,'profile_key'=>$profileKey??profileKey($url),'detail_done'=>$detailDone,'detail_total'=>$detailTotal,'detail_ok'=>$detailOk,'detail_fail'=>$detailFail,'detail_capped'=>$_detailCapped??0,'ran_out'=>!empty($_ranOut),'resume_needed'=>!$_finalComplete,'extract_stage'=>(!$_finalComplete?'detail':(($phase==='list'&&$detailConfigured)?'list_done':'complete')),'stock_out'=>$_stockOut??0,'stock_back'=>$_stockBack??0];
 }
 
 if(isset($_GET['worker_status'])){
@@ -34030,8 +34650,8 @@ if (isset($_GET['manual_sync'])) {
         if (!in_array($_msTarget, ['woo', 'bsl', 'both', 'none'], true)) $_msTarget = 'woo';
         $_msResults['target'] = $_msTarget;
 
-        /* v10.101: بازنشستگی مشترک (کرون + دستی) — removed + OOS */
-        if (!empty($_msEx['ok'])) {
+        /* v10.101 / v10.475: بازنشستگی مشترک فقط وقتی مجاز است که استخراج کامل و بدون گارد کاهش ذخیره شده باشد */
+        if (!empty($_msEx['ok']) && empty($_msEx['partial']) && empty($_msEx['ran_out']) && empty($_msEx['resume_needed']) && empty($_msEx['cancelled']) && ($_msEx['products_saved'] ?? true) !== false && (string)($_msEx['guard'] ?? '') === '') {
             try {
                 /* پروفایل تازه از دیسک بعد از extract */
                 $_msProfRet = is_array($_msProf) ? $_msProf : [];
@@ -56452,6 +57072,66 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.475', 'محافظ سراسری حفظ ۱۰۰٪ نتایج استخراج قبلی هر پروفایل در صورت خطا، توقف زودهنگام یا گیرکردن استخراج + سقف تلاش ضدحلقهٔ فاز جزئیات',
+         function_exists('extractAnalyzeProductSet')
+      && function_exists('extractCountValidProducts')
+      && function_exists('extractShouldBlockShrinkage')
+      && function_exists('detailPageHasExplicitOosSignal')
+      && function_exists('digikalaDetailFromSeoHtml')
+      && (function () {
+             /* ۱) تست دقیق گارد حفاظت نتایج روی سناریوهای واقعی آوندپرینتر (۱۱۸۹ به ۷۴۵)، اسنپ‌شاپ (۵۳۰۸ به ۵۰۹۲) و دیجی‌کالا (۱۵۵۵ به ۲۵۴) */
+             $gAvand = extractShouldBlockShrinkage(1189, 745, ['stopped_early' => true]);
+             $gSnapp = extractShouldBlockShrinkage(5308, 5092, ['had_errors' => true]);
+             $gDk    = extractShouldBlockShrinkage(1555, 254, []);
+             $gInc   = extractShouldBlockShrinkage(500, 499, ['incomplete' => true]);
+             $gAuto  = extractShouldBlockShrinkage(500, 420, ['autosave' => true]);
+             $gNorm  = extractShouldBlockShrinkage(1000, 996, []);
+             if (empty($gAvand['blocked']) || empty($gSnapp['blocked']) || empty($gDk['blocked']) || empty($gInc['blocked']) || empty($gAuto['blocked']) || !empty($gNorm['blocked'])) {
+                 return false;
+             }
+             /* ۲) فیلتر کالاهای ناموجود بدون قیمت در لیست API دیجی‌کالا تا شمارش لیست باد نکند */
+             $dkMeta = [];
+             $dkMix = digikalaProductsFromApiPayload([
+                 'status' => 200,
+                 'data' => [
+                     'pager' => ['current_page' => 1, 'total_pages' => 5],
+                     'products' => [
+                         [
+                             'id' => 101,
+                             'title_fa' => 'کالای موجود تستی',
+                             'status' => 'marketable',
+                             'url' => ['uri' => '/product/dkp-101/'],
+                             'default_variant' => ['price' => ['selling_price' => 1900000]],
+                         ],
+                         [
+                             'id' => 102,
+                             'title_fa' => 'کالای ناموجود بدون قیمت',
+                             'status' => 'out_of_stock',
+                             'url' => ['uri' => '/product/dkp-102/'],
+                             'default_variant' => [],
+                         ],
+                     ],
+                 ],
+             ], 'https://www.digikala.com/search/category-diaper/', 1, $dkMeta);
+             if (count($dkMix) !== 1 || ($dkMeta['raw_rows_count'] ?? 0) !== 2 || !empty($dkMeta['all_rows_out_of_stock'])) {
+                 return false;
+             }
+             /* ۳) جلوگیری از ناموجودشدن کاذب روی صفحهٔ پوسته/رندرنشده بدون سیگنال صریح ناموجودی */
+             [$dBlank, $xpBlank] = load_dom('<!doctype html><html><body><div id="app">Loading...</div></body></html>');
+             [$dOos, $xpOos]     = load_dom('<!doctype html><html><body><p class="stock out-of-stock">ناموجود</p></body></html>');
+             if (detailPageHasExplicitOosSignal($xpBlank, '<html><body>Loading</body></html>') !== false) return false;
+             if (detailPageHasExplicitOosSignal($xpOos, '<html><body><p class="stock out-of-stock">ناموجود</p></body></html>') !== true) return false;
+             /* ۴) جلوگیری از بازنشستگی مقصد هنگام فعال‌شدن گارد حفاظت نتایج یا ذخیره نشدن محصولات */
+             $retGuard = retireAfterExtract([], ['products' => []], ['ok' => true, 'products_saved' => false, 'guard' => 'catalog_collapse'], 'bsl', [], 'pk_test');
+             if (($retGuard['skipped'] ?? '') !== 'extract_incomplete_or_guarded') return false;
+             /* ۵) پشتیبان SEO/JSON-LD جزئیات دیجی‌کالا هنگام ۴۰۴ روی API */
+             $seoHtml = '<!doctype html><html><head><script type="application/ld+json">{"@type":"Product","name":"پوشک تست","offers":{"price":"2500000","priceCurrency":"IRR","availability":"https://schema.org/InStock"},"image":["https://dkstatics-public.digikala.com/digikala-products/a.jpg"]}</script></head><body></body></html>';
+             $seoSynth = digikalaDetailFromSeoHtml($seoHtml, 'https://www.digikala.com/product/dkp-777/');
+             return strpos($seoSynth, 'data-digikala-api-detail="1"') !== false && strpos($seoSynth, '250,000 تومان') !== false;
+         })()
+      && strpos($selfSrc, "'_detail_capped'") !== false
+      && strpos($selfSrc, "{v:'10." . "475'") !== false
+      && version_compare(APP_VERSION, '10.475', '>='));
     $add('10.474', 'تکمیل اجرای کاملاً سرورساید «ادامه همه» در کران داخلی/خارجی (چندکاره و بدون وابستگی به مرورگر) + تیک «فقط ساخت جدول دوره‌ای» بدون اصلاح مغایرت‌ها',
          function_exists('s4CanSpawnCliTask')
       && function_exists('reconAutoCfg')
@@ -64163,6 +64843,10 @@ function retireAfterExtract(array $cn, array $profile, array $exRes, string $tar
     $empty = ['items' => [], 'result' => null, 'mode' => 'off', 'target' => $target, 'skipped' => ''];
     if (empty($exRes['ok'])) {
         $empty['skipped'] = 'extract_not_ok';
+        return $empty;
+    }
+    if (!empty($exRes['partial']) || !empty($exRes['ran_out']) || !empty($exRes['resume_needed']) || !empty($exRes['cancelled']) || ($exRes['products_saved'] ?? true) === false || trim((string)($exRes['guard'] ?? '')) !== '') {
+        $empty['skipped'] = 'extract_incomplete_or_guarded';
         return $empty;
     }
     if (!in_array($target, ['woo', 'bsl', 'both'], true)) {
@@ -91456,6 +92140,7 @@ function saveProfileSilent() {
     fd.append('loaded_updated_at',String(currentProfileUpdatedAt));
     if (hasActiveKey) fd.append('target_key', currentProfileKey);
     if (window._userClearedProducts) fd.append('allow_empty_products', '1');
+    if (window._userPrunedProducts) fd.append('allow_shrink_products', '1');
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise FormData converts object to "[object Object]"
         if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'listImageEdit' || k === 'productSource') {
@@ -91471,6 +92156,7 @@ function saveProfileSilent() {
             if (d.ok) {
                 markClean(d.key);
                 window._userClearedProducts = false;
+                window._userPrunedProducts = false;
                 currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
                 currentProfileUrl=data.url;profileFormReady=true;
                 rememberProfile(data.url, d.key);
@@ -91527,6 +92213,9 @@ function saveProfile() {
     if (window._userClearedProducts) {
         fd.append('allow_empty_products', '1');
     }
+    if (window._userPrunedProducts) {
+        fd.append('allow_shrink_products', '1');
+    }
     for (const k in data) {
         // v7.66: syncConfig must also be JSON.stringify'd — otherwise "[object Object]"
         if (k === 'selectors' || k === 'detailSelectors' || k === 'products' || k === 'productsOrder' || k === 'syncConfig' || k === 'bslFallbackCatIds' || k === 'gallery' || k === 'listImageEdit' || k === 'productSource') {
@@ -91543,6 +92232,7 @@ function saveProfile() {
                 const wasPartialOnly = hasActiveKey && !profileFormReady;
                 markClean(d.key);
                 window._userClearedProducts = false;
+                window._userPrunedProducts = false;
                 currentProfileUrl=data.url;
                 currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
                 if (!wasPartialOnly) profileFormReady=true;
@@ -93801,6 +94491,7 @@ function removeNoPrice() {
         products.delete(k);
         order = order.filter(x => x !== k);
     });
+    window._userPrunedProducts = true;
 
     refreshViews();
     log(`✓ ${keysToDelete.length} محصول بدون قیمت حذف شد`, 'ok');
@@ -93826,6 +94517,7 @@ function removeBelowMinPrice() {
         products.delete(k);
         order = order.filter(x => x !== k);
     });
+    window._userPrunedProducts = true;
 
     refreshViews();
     log(`✓ ${keysToDelete.length} محصول زیر حداقل قیمت حذف شد`, 'ok');
@@ -95338,6 +96030,7 @@ function start(useSel=false){
   fxBusy($('status'),true);          // v10.06: نوارِ نورِ «در حال کار»
 
   let sUrl=`?stream=1&url=${encodeURIComponent(url)}&pages=${$('pages').value}&pagType=${encodeURIComponent($('pagType').value)}&pagVal=${encodeURIComponent($('pagVal').value)}&extractionEngine=${encodeURIComponent(s4EngineValue())}`;
+  if(currentProfileKey) sUrl+='&profile_key='+encodeURIComponent(currentProfileKey);
   if(useSel&&sel.container){
     sUrl+='&selectors='+encodeURIComponent(JSON.stringify(sel));
     log('🎯 سلکتور: '+sel.container,'info');
@@ -95356,6 +96049,14 @@ function start(useSel=false){
       if(stagedStreamProducts.size===0){
           log('⚠️ هیچ محصولی استخراج نشد — نتایج قبلی دست‌نخورده حفظ شد','err');
           showToast('⚠️ هیچ محصولی استخراج نشد — نتایج قبلی حفظ شد',true);
+          return;
+      }
+      const prevClientSize=products.size;
+      const clientLoss=prevClientSize-stagedStreamProducts.size;
+      const clientCollapseLimit=prevClientSize>=200?Math.min(80,Math.ceil(prevClientSize*0.18)):Math.max(6,Math.ceil(prevClientSize*0.18));
+      if(d.shrinkage_blocked || (prevClientSize>=8 && clientLoss>=clientCollapseLimit)){
+          log(`🛡 گارد حفاظت نتایج: خروجی جدید (${stagedStreamProducts.size}) کمتر از نتایج قبلی (${prevClientSize}) بود — نتایج قبلی ثابت نگه داشته شد`,'err');
+          showToast(`🛡 نتایج قبلی (${toFa(prevClientSize)} محصول) حفظ شد`,true);
           return;
       }
       streamCompleted=true;
@@ -95745,6 +96446,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.475', t:'🛡️ محافظ سراسری حفظ ۱۰۰٪ نتایج قبلی هر پروفایل در صورت خطا، توقف زودهنگام یا گیرکردن استخراج + حذف حلقهٔ بی‌نهایت فاز جزئیات', items:[
+    'افزودن محافظ یکپارچهٔ extractShouldBlockShrinkage و extractAnalyzeProductSet در تمام نقاط ذخیرهٔ محصولات هر پروفایل (پایان فاز ۱، چک‌پوینت‌های فاز ۲ در extractCheckpoint، هرس ناموجودها، ذخیرهٔ نهایی runBackendExtract، مسیر استریم مرورگر ?stream=1 و ذخیرهٔ خودکار save_profile): اگر استخراج هر پروفایل به دلیل قطعی شبکه، چالش WAF، صفحات خالی میانی (مانند توقف صفحهٔ ۴۰ از ۶۰ در آوندپرینتر)، خطای موقت API اسنپ‌شاپ/دیجی‌کالا یا عدم تطبیق سلکتور ناقص بماند یا تعداد زیادی از محصولاتش کم شود، محصولات قبلی پروفایل (products و productsOrder) ۱۰۰٪ ثابت و دست‌نخورده باقی می‌مانند، ادامهٔ کار تا ۲ نوبت از صفحهٔ سالم قبلی روی فایل مجزای extract_staging تلاش می‌شود و هیچ بازنشستگی کاذبی (retireAfterExtract) در باسلام یا ووکامرس رخ نمی‌دهد.',
+    'رفع گیرکردن بی‌پایان فاز ۲ استخراج جزئیات و حذف ناموجودشدن کاذب محصولات: ۱) افزودن سقف هوشمند تلاش به ازای هر محصول (_detail_fail_tries: حداکثر ۲ نوبت برای ۴۰۴/۴۱۰ و ۳ نوبت برای سایر خطاها) با حفظ کامل دادهٔ قبلی محصول تا یک صفحهٔ خراب هرگز حلقهٔ ۱۷۵+ باره نسازد و اسلات استخراج سایر پروفایل‌ها مسدود نشود، ۲) الزام سیگنال صریح ناموجودی (detailPageHasExplicitOosSignal) پیش از تغییر موجودی به ناموجود در فاز ۲، ۳) نگهداری بافر فاز ۲ در staging برای پروفایل‌هایی که قیمتشان فقط در صفحهٔ جزئیات است، و ۴) تکمیل زنجیرهٔ v2 ← v1 ← ریدایرکت وب و JSON-LD در جزئیات دیجی‌کالا به همراه حذف آیتم‌های ناموجود بدون قیمت از شمارش لیست.'
+  ]},
   {v:'10.474', t:'⚡ اجرای کاملاً سرورساید و چندکارهٔ «ادامهٔ همه» در کران داخلی/بیرونی + تیک «فقط ساخت جدول دوره‌ای» در بخش مغایرت‌گیری', items:[
     'اجرای ۱۰۰٪ سرورساید دکمهٔ «▶▶ ادامهٔ همه» (tasksResumeAllExecute / s4CronAutoResumeAllTasks) توسط کران‌جاب‌های داخلی و بیرونی بدون کوچک‌ترین وابستگی به باز بودن مرورگر: راه‌اندازی هم‌زمان همهٔ کارهای رهاشدهٔ قابل‌ادامه در هر تیک کران از طریق پردازهٔ مستقل CLI (s4CanSpawnCliTask)، اجرای کران داخلی جداگانه توسط worker دائمی حتی هنگام مشغول بودن صف کارها (s4SpawnInternalCronDetached)، حذف گیرکردن همگام‌سازی دستی روی پروفایل‌های حذف‌شده، اصلاح بازیابی checkpoint در sync_matrix_fix_start و افزودن تیک کنترلی سرورساید در سربرگ مدیر وظایف.',
     'افزودن تیک «📊 فقط ساخت جدول به‌صورت دوره‌ای (بدون اصلاح مغایرت‌ها)» در نوار ابزار بالای بخش مغایرت‌گیری با مقصد و نیز داخل کارت مغایرت‌گیری دوره‌ای (recon_auto.build_only): با فعال‌سازی این گزینه، در نوبت‌های دوره‌ای کران فقط ساخت/تازه‌سازی جدول مقایسه اجرا می‌شود، هیچ job اصلاح مغایرت (matrix_fix / apply / enqueue_missing) صف یا اجرا نمی‌شود و jobهای اصلاح دوره‌ای در صف نیز بلافاصله لغو می‌گردند.'
