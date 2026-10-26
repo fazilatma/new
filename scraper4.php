@@ -392,7 +392,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.472';
+const APP_VERSION = '10.473';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -18148,7 +18148,6 @@ function digikalaApiHttpRequest(string $endpoint, int $timeout = 25): array {
         'Origin: https://www.digikala.com',
         'Referer: https://www.digikala.com/',
         'X-Web-Client: desktop',
-        'X-Web-Optimize-Response: 1',
     ];
     $net = function_exists('s4JinaIndirectNet') ? s4JinaIndirectNet() : [];
     $modes = ['direct', 'doh'];
@@ -18675,28 +18674,50 @@ function fetch_html_digikala_api(string $url, int $timeout = 25, array $prev = [
         return ['ok' => false, 'error' => (string)($prev['error'] ?? 'آدرس دیجی‌کالا پشتیبانی نمی‌شود'), 'code' => (int)($prev['code'] ?? 0), 'url' => $target, 'html' => '', 'mode' => 'digikala-api'];
     }
     if (($route['kind'] ?? '') === 'product') {
-        $ep = digikalaBuildApiEndpoint($route);
-        $res = digikalaApiHttpRequest($ep, $timeout);
-        $d = is_array($res['data']['data'] ?? null) ? $res['data']['data'] : [];
-        if (!empty($res['ok']) && !empty($d['product'])) {
-            $html = digikalaDetailSyntheticHtml($d, $target);
-            return [
-                'ok'                  => true,
-                'error'               => '',
-                'code'                => (int)($res['code'] ?? 200),
-                'url'                 => $target,
-                'html'                => $html,
-                'mode'                => 'digikala-api',
-                'digikala_api'        => (string)($res['api_url'] ?? ''),
-                'digikala_api_via'    => (string)($res['via'] ?? 'direct'),
-                'digikala_route_kind' => 'product',
-                'jina_product_count'  => 1,
-            ];
+        $pid = rawurlencode((string)($route['product_id'] ?? ''));
+        $epCandidates = ['v2/product/' . $pid . '/', 'v1/product/' . $pid . '/'];
+        $lastRes = [];
+        $lastKeys = [];
+        foreach ($epCandidates as $ep) {
+            $res = digikalaApiHttpRequest($ep, $timeout);
+            $lastRes = $res;
+            $d = is_array($res['data']['data'] ?? null) ? $res['data']['data'] : [];
+            if (is_array($d)) $lastKeys = array_keys($d);
+            if ($redirectDepth < 2 && !empty($res['ok'])) {
+                $redirUri = (string)($d['redirect_url']['uri'] ?? ($res['data']['redirect_url']['uri'] ?? ''));
+                if ($redirUri !== '' && preg_match('~/product/dkp-(\d+)~i', $redirUri, $rm) && (string)$rm[1] !== (string)($route['product_id'] ?? '')) {
+                    $redirUrl = 'https://www.digikala.com/product/dkp-' . $rm[1] . '/';
+                    return fetch_html_digikala_api($redirUrl, $timeout, $prev, $redirectDepth + 1);
+                }
+            }
+            $prodNode = is_array($d['product'] ?? null) ? $d['product'] : ((isset($d['id']) && (isset($d['title_fa']) || isset($d['title_en']))) ? $d : []);
+            if (!empty($res['ok']) && !empty($prodNode) && (isset($prodNode['id']) || isset($prodNode['title_fa']) || isset($prodNode['images']))) {
+                if (empty($d['product'])) $d['product'] = $prodNode;
+                $html = digikalaDetailSyntheticHtml($d, $target);
+                return [
+                    'ok'                  => true,
+                    'error'               => '',
+                    'code'                => (int)($res['code'] ?? 200),
+                    'url'                 => $target,
+                    'html'                => $html,
+                    'mode'                => 'digikala-api',
+                    'digikala_api'        => (string)($res['api_url'] ?? ''),
+                    'digikala_api_via'    => (string)($res['via'] ?? 'direct'),
+                    'digikala_route_kind' => 'product',
+                    'jina_product_count'  => 1,
+                ];
+            }
+            if ((int)($res['code'] ?? 0) === 404 || (int)($res['api_status'] ?? 0) === 404) break;
+        }
+        $errMsg = trim((string)($lastRes['error'] ?? ''));
+        if ($errMsg === '') {
+            $errMsg = 'Digikala product API empty (status=' . (int)($lastRes['api_status'] ?? ($lastRes['code'] ?? 0))
+                . ($lastKeys ? ', keys=' . implode(',', array_slice($lastKeys, 0, 6)) : '') . ')';
         }
         return [
             'ok'    => false,
-            'error' => (string)($res['error'] ?? 'Digikala product API failed'),
-            'code'  => (int)($res['code'] ?? 0),
+            'error' => $errMsg,
+            'code'  => (int)($lastRes['code'] ?? 0),
             'url'   => $target,
             'html'  => '',
             'mode'  => 'digikala-api',
@@ -18918,14 +18939,16 @@ function fetch_html(string $url, int $timeout = 25): array {
         if (($__dkFastRoute['kind'] ?? '') === 'product') {
             $__dkDirectPdp = fetch_html_digikala_api($url, $timeout, []);
             if (!empty($__dkDirectPdp['ok'])) return $__dkDirectPdp;
-            return [
-                'ok'    => false,
-                'error' => trim((string)($__dkDirectPdp['error'] ?? '')) !== '' ? (string)$__dkDirectPdp['error'] : 'Digikala API PDP failed',
-                'code'  => (int)($__dkDirectPdp['code'] ?? 0),
-                'url'   => $url,
-                'html'  => '',
-                'mode'  => 'digikala-api',
-            ];
+            if ((int)($__dkDirectPdp['code'] ?? 0) === 404) {
+                return [
+                    'ok'    => false,
+                    'error' => trim((string)($__dkDirectPdp['error'] ?? '')) !== '' ? (string)$__dkDirectPdp['error'] : 'Digikala API PDP 404',
+                    'code'  => 404,
+                    'url'   => $url,
+                    'html'  => '',
+                    'mode'  => 'digikala-api',
+                ];
+            }
         }
     }
     $__profileForcedDirect = array_key_exists('_srcNetProfileIndirect', $GLOBALS) && empty($GLOBALS['_srcNetProfileIndirect']);
@@ -56354,6 +56377,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.473', 'رفع فشرده‌سازی دیکشنری هدر X-Web-Optimize-Response در جزئیات محصول API دیجی‌کالا + پشتیبان خودکار v2/v1 و ریدایرکت dkp',
+         strpos($selfSrc, "'X-Web-Optimize-" . "Response: 1'") === false
+      && strpos($selfSrc, "\$epCandidates = ['v2/product/' . \$pid . '/', 'v1/product/' . \$pid . '/'];") !== false
+      && strpos($selfSrc, "{v:'10." . "473'") !== false
+      && version_compare(APP_VERSION, '10.473', '>='));
     $add('10.472', 'فشردن خودکار دکمهٔ «ادامه همه» در مدیریت وظایف با هر بار رسیدن کران‌جاب داخلی یا خارجی + اجرای مستقیم CLI بدون وابستگی به HTTP_HOST',
          defined('TASKS_RESUME_ALL_STATE_FILE')
       && function_exists('tasksResumeAllExecute')
@@ -95602,6 +95630,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.473', t:'🔎 تکمیل فاز ۲ (جزئیات محصول PDP) در موتور اختصاصی «دیجی‌کالا API»', items:[
+    'حذف هدر X-Web-Optimize-Response در درخواست‌های api.digikala.com که در مسیر v2/product باعث فشرده‌سازی دیکشنری پاسخ و مخفی‌شدن گرهٔ data.product می‌شد.',
+    'افزودن زنجیرهٔ پشتیبان خودکار v2/product ← v1/product، دنبال‌کردن ریدایرکت‌های ۳۰۱ شناسه‌های ادغام‌شده (redirect_url.uri) و افتادن نرم روی صفحهٔ SEO در صورت نبود گرهٔ API.'
+  ]},
   {v:'10.472', t:'⚡ فشردن خودکار دکمهٔ «ادامه همه» در مدیریت وظایف با هر بار رسیدن کران‌جاب داخلی یا خارجی + رفع قطع اجرای CLI در کارهای پس‌زمینه', items:[
     'اجرای خودکار منطق دکمهٔ «▶▶ ادامهٔ همه» (tasksResumeAllExecute / s4CronAutoResumeAllTasks) در تمام نقاط ورود کران‌جاب — چه کران خارجی (?cron_run=1 و CLI)، چه کران داخلی سرویس worker (حتی هنگام مشغول بودن صف کارها و ماتریس)، چه کران کمکی مرورگر (internal_cron_feedback / internal_browser_keep) و چه auto_tick؛ حتی اگر قفل cron_run در دست اجرای قبلی باشد، کارهای رهاشدهٔ مدیریت وظایف به ترتیب اولویت ادامه می‌یابند.',
     'چرخشی‌سازی هوشمند ضدگرسنگی (anti-starvation) در ادامهٔ خودکار همهٔ کارها: اگر یک کار اولویت‌بالاتر در ۴ دقیقهٔ اخیر راه‌اندازی شده اما پیشرفتش تغییر نکرده باشد، نوبت بلافاصله به کارهای رهاشدهٔ بعدی (مانند catfix، ai_test، matrix_fix و...) داده می‌شود تا هیچ وظیفه‌ای پشت کار دیگر معطل نماند.',
