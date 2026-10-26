@@ -388,10 +388,11 @@ const BACKUP_CFG_FILE  = __DIR__ . '/.backup-config.json';
 const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 const ORDERS_MGR_NOTES_FILE = __DIR__ . '/orders_mgr_notes.json';
+const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.471';
+const APP_VERSION = '10.472';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -2562,7 +2563,7 @@ function s4WorkerLoopFromCli(): void {
         s4WorkerStateWrite(['running' => false, 'phase' => 'stopped', 'stopped_at' => time()]);
         if (is_resource($lockFp)) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
     });
-    $lastCron = time();$restartAfterUpdate=false;
+    $lastCron = time();$lastWorkerResumeAll = 0;$restartAfterUpdate=false;
     echo '[' . date('Y-m-d H:i:s') . "] scraper4 worker started (pid=$pid, tick=$tick)\n";
     while (true) {
         if (($stopFile !== '' && is_file($stopFile)) || is_file(WORKER_STOP_FILE)) break;
@@ -2572,8 +2573,24 @@ function s4WorkerLoopFromCli(): void {
         $px=s4DispatchParallelExtractJobs();
         if(!empty($px['failed']))$GLOBALS['_s4ParallelExtractDisabled']=true;
         if(function_exists('s4AutoResumeInterruptedExtractions'))s4AutoResumeInterruptedExtractions('worker_loop',true);
+        /* v10.472: کران داخلی worker حتی هنگام مشغول بودن صف jobها یا ماتریس هم
+           به‌محض رسیدن زمان کران داخلی، دکمهٔ «ادامه همه» در مدیریت وظایف را می‌زند. */
+        $workerCn = loadConnections();
+        $cronEnabled = !array_key_exists('internal_cron_enabled', $workerCn) || !empty($workerCn['internal_cron_enabled']);
+        $rawTick = array_key_exists('internal_cron_sec', $workerCn) ? (int)$workerCn['internal_cron_sec'] : $tick;
+        $effectiveTick = ($cronEnabled && $rawTick > 0) ? max(5, min(86400, $rawTick)) : 0;
+        if ($effectiveTick > 0 && (time() - $lastWorkerResumeAll) >= $effectiveTick) {
+            $lastWorkerResumeAll = time();
+            if (function_exists('s4CronAutoResumeAllTasks')) {
+                try { s4CronAutoResumeAllTasks('internal_worker'); } catch (Throwable $_wraErr) {}
+            }
+        }
         $job = s4WorkerClaimJob();
         if ($job) {
+            if ($effectiveTick > 0 && (time() - $lastCron) >= $effectiveTick) {
+                $lastCron = time();
+                if (function_exists('cronVisualPulseWrite')) cronVisualPulseWrite('internal');
+            }
             $jid = (string)($job['id'] ?? '');
             s4WorkerStateWrite(['running' => true, 'phase' => 'job', 'job_id' => $jid, 'job_type' => (string)($job['type'] ?? '')]);
             echo '[' . date('Y-m-d H:i:s') . "] job start: $jid " . (string)($job['type'] ?? '') . "\n";
@@ -2601,24 +2618,23 @@ function s4WorkerLoopFromCli(): void {
             if ($once) break;
             continue;
         }
-        /* v10.248: فاصلهٔ کران داخلی از تنظیمات عمومی و برحسب ثانیه؛
-           در هر دور دوباره خوانده می‌شود تا بدون restart سرویس اعمال شود. */
-        $workerCn = loadConnections();
-        $cronEnabled = !array_key_exists('internal_cron_enabled', $workerCn) || !empty($workerCn['internal_cron_enabled']);
-        $rawTick = array_key_exists('internal_cron_sec', $workerCn) ? (int)$workerCn['internal_cron_sec'] : $tick;
-        $effectiveTick = ($cronEnabled && $rawTick > 0) ? max(5, min(86400, $rawTick)) : 0;
         $mxPriority=matrixProgressRead();
         $matrixNeedsWorker=!empty($mxPriority['running'])||!empty($mxPriority['yielded']);
         if ($effectiveTick > 0 && !$matrixNeedsWorker && (time() - $lastCron) >= $effectiveTick) {
             s4WorkerStateWrite(['phase' => 'cron_tick', 'cron_tick' => $effectiveTick]);
             $cr = s4WorkerRunCronChild();
             $lastCron = time();
+            $lastWorkerResumeAll = $lastCron;
             s4WorkerStateWrite(['phase' => 'idle', 'last_cron_at' => $lastCron,
                 'last_cron_ok' => !empty($cr['ok']), 'last_cron_code' => (int)($cr['exit_code'] ?? 0),
                 'last_cron_tail' => (string)($cr['tail'] ?? '')]);
             echo '[' . date('Y-m-d H:i:s') . '] cron tick ok=' . (!empty($cr['ok']) ? '1' : '0') . ' code=' . (int)($cr['exit_code'] ?? 0) . "\n";
             if ($once) break;
         } else {
+            if ($effectiveTick > 0 && $matrixNeedsWorker && (time() - $lastCron) >= $effectiveTick) {
+                $lastCron = time();
+                if (function_exists('cronVisualPulseWrite')) cronVisualPulseWrite('internal');
+            }
             s4WorkerStateWrite(['phase' => 'idle']);
             if ($once) break;
             sleep($idle);
@@ -33341,6 +33357,26 @@ if (isCliRun()) {
         }
         foreach((array)($queueJob['get']??[])as$queueGetKey=>$queueGetValue)$_GET[(string)$queueGetKey]=$queueGetValue;
         $_POST=is_array($queueJob['post']??null)?$queueJob['post']:[];
+    } elseif ($_cliCmd === 'task_dispatch') {
+        $encodedTaskJob=(string)($_cliArgs[1]??'');$encodedTaskJob=strtr($encodedTaskJob,'-_','+/');
+        $padTaskJob=strlen($encodedTaskJob)%4;if($padTaskJob)$encodedTaskJob.=str_repeat('=',4-$padTaskJob);
+        $taskJob=json_decode((string)base64_decode($encodedTaskJob,true),true);
+        if(!is_array($taskJob)||!is_array($taskJob['get']??null)){
+            if(defined('STDERR'))fwrite(STDERR,"invalid task_dispatch payload\n");exit(2);
+        }
+        $taskGet=(array)$taskJob['get'];
+        if(((string)($taskGet['action']??''))==='backend_extract'){
+            $_GET['backend_extract_cli']='1';
+            if(isset($taskGet['profile_key']))$_GET['profile_key']=(string)$taskGet['profile_key'];
+            elseif(isset($taskGet['url']))$_GET['profile_key']=profileKey((string)$taskGet['url']);
+            $_GET['phase']=(string)($taskGet['phase']??'list');
+            if(!empty($taskGet['resume']))$_GET['resume']='1';
+            if(!empty($taskGet['force_all']))$_GET['force_all']='1';
+            $_GET['direct']='1';
+        }else{
+            foreach($taskGet as $tgk=>$tgv)$_GET[(string)$tgk]=$tgv;
+            $_POST=is_array($taskJob['post']??null)?$taskJob['post']:[];
+        }
     } elseif ($_cliCmd === 'worker' || $_cliCmd === 'queue_worker') {
         $_GET['worker_run'] = '1';                 // php scraper4.php worker
     } elseif ($_cliCmd === 'worker_once') {
@@ -34149,6 +34185,9 @@ if(isset($_GET['matrix_execution_status'])){
 if(isset($_GET['cron_run'])||((string)($_POST['action']??'')==='cron_run')){
     $_queueCronHandoff=queueCronHandoffPrepare();
     if(is_array($_queueCronHandoff)){
+        if(function_exists('s4CronAutoResumeAllTasks')){
+            $GLOBALS['_cronTasksResumeAll']=s4CronAutoResumeAllTasks(cronVisualPulseKind().'_cron_handoff');
+        }
         unset($_GET['cron_run']);
         if((string)($_POST['action']??'')==='cron_run')unset($_POST['action']);
         $_GET=array_merge($_GET,(array)$_queueCronHandoff['get']);
@@ -34191,6 +34230,8 @@ if((string)getenv('S4_INTERNAL_CRON')!=='1'){
    its destination owner, reusing the completed extraction checkpoint. */
 $GLOBALS['_syncSendReconciliation']=syncPipelineReconcileMissingSendQueues(true);
 $GLOBALS['_cellEqualizeReconciliation']=syncCellEqualizeReconcile();
+/* v10.472: با هر بار رسیدن کران (داخلی یا خارجی)، دکمهٔ «ادامه همه» در مدیریت وظایف خودکار زده می‌شود */
+$GLOBALS['_cronTasksResumeAll']=s4CronAutoResumeAllTasks($_cronVisualKind.'_cron');
 
 /* v8.92: «اجرای الان» مثل دکمهٔ «استخراج بک‌اند» رفتار کند.
    کران‌جاب واقعی باید منتظر بماند تا curl نتیجه را بگیرد، ولی دکمهٔ
@@ -34318,7 +34359,8 @@ if ($cronLockHeld) {
    هر کار فقط لایهٔ دومِ محافظت‌اند. */
 if (!$cronLockHeld) {
     $lockOut = ['ok' => true, 'skipped' => true, 'locked' => true,
-        'reason' => 'اجرای قبلی کران هنوز قفلِ واقعی را در اختیار دارد'];
+        'reason' => 'اجرای قبلی کران هنوز قفلِ واقعی را در اختیار دارد',
+        'tasks_resume_all' => $GLOBALS['_cronTasksResumeAll'] ?? null];
     cronEmit($lockOut);
     exit;
 }
@@ -34374,6 +34416,7 @@ try { if(!s4WorkerIsActive()) { $workerWake=s4SpawnPersistentWorker(); } } catch
 // v8.37: ok صریح، تا ابزارهای بیرونی بتوانند موفقیت اجرا را تشخیص دهند
 $results = ['ok' => true, 'time' => $now, 'profiles' => []];
 if(isset($workerWake))$results['worker_wake']=$workerWake;
+if(isset($GLOBALS['_cronTasksResumeAll']))$results['tasks_resume_all']=$GLOBALS['_cronTasksResumeAll'];
 // v10.21 (۳۴ج): نبضِ ابتدای اجرا در گزارش هم بماند
 if (!empty($results_heartbeat)) $results['heartbeat'] = $results_heartbeat;
 
@@ -35413,6 +35456,7 @@ saveSyncState($syncState);
 try {
     $wd = cronWatchdogs($cn);
     foreach ($wd as $k => $v) { if (!empty($v) && empty($results[$k])) $results[$k] = $v; }
+    $results['tasks_resume_all_after'] = s4CronAutoResumeAllTasks(cronVisualPulseKind() . '_cron_after');
 } catch (Throwable $e) {
     $results['watchdog_error'] = mb_substr($e->getMessage(), 0, 200);
 }
@@ -37877,7 +37921,17 @@ function tasksBuildRow(string $key, array $def, int $now): array {
         }
     }
     if($profileName===''&&$profileKey!==''){
-        $profilesNow=loadProfiles();$profileName=trim((string)($profilesNow[$profileKey]['name']??$profileKey));
+        static $_s4TaskProfileNames = null;
+        if ($_s4TaskProfileNames === null) {
+            $_s4TaskProfileNames = [];
+            $profilesNow = loadProfiles();
+            foreach ($profilesNow as $_tpk => $_tpv) {
+                if (is_array($_tpv)) $_s4TaskProfileNames[(string)$_tpk] = trim((string)($_tpv['name'] ?? $_tpk));
+            }
+            unset($profilesNow);
+            if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
+        }
+        $profileName = trim((string)($_s4TaskProfileNames[$profileKey] ?? $profileKey));
     }
     return [
         'key'       => $key,
@@ -38251,10 +38305,12 @@ if (isset($_GET['tasks_list'])) {
     }
     $running = 0; $stale = 0;
     foreach ($rows as $r) { if ($r['state'] === 'running') $running++; if ($r['state'] === 'stale') $stale++; }
+    $autoResumeAllState = function_exists('tasksResumeAllStateRead') ? tasksResumeAllStateRead() : [];
     echo json_encode(['ok' => true, 'now' => $now, 'tasks' => $rows, 'jobs' => $jobs,
         'running' => $running, 'stale' => $stale,
         'extract_task_concurrency'=>extractTaskConcurrency(),
         'extract_running'=>s4WorkerParallelExtractRunning(),
+        'auto_resume_all_last' => $autoResumeAllState['last'] ?? null,
         'stale_after' => TASKS_STALE_SEC], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -38306,46 +38362,150 @@ if (isset($_GET['tasks_resume'])) {
     exit;
 }
 
+function tasksResumeAllStateRead(): array {
+    if (!defined('TASKS_RESUME_ALL_STATE_FILE') || !is_file(TASKS_RESUME_ALL_STATE_FILE)) return [];
+    $d = @json_decode((string)@file_get_contents(TASKS_RESUME_ALL_STATE_FILE), true);
+    return is_array($d) ? $d : [];
+}
+
+function tasksResumeAllStateWrite(array $st): void {
+    if (!defined('TASKS_RESUME_ALL_STATE_FILE')) return;
+    $tmp = TASKS_RESUME_ALL_STATE_FILE . '.tmp.' . (int)@getmypid();
+    $json = json_encode($st, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (is_string($json) && @file_put_contents($tmp, $json, LOCK_EX) !== false) {
+        @rename($tmp, TASKS_RESUME_ALL_STATE_FILE);
+    } else {
+        @unlink($tmp);
+    }
+}
+
+/**
+ * v10.24 / v10.472: موتور مشترک دکمهٔ «▶▶ ادامهٔ همه» در مدیریت وظایف،
+ * هم برای کلیک مستقیم کاربر در رابط و هم برای اجرای خودکار در هر بار رسیدن
+ * کران‌جاب داخلی یا خارجی.
+ */
+function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual'): array {
+    $isCronAuto = ($trigger !== 'manual');
+    $lf = @fopen(__DIR__ . '/.tasks_resume_all.lock', 'c');
+    if (!$lf || !@flock($lf, LOCK_EX | LOCK_NB)) {
+        if ($lf) @fclose($lf);
+        return ['ok' => true, 'busy' => true, 'trigger' => $trigger, 'resumed' => [], 'skipped' => [], 'count' => 0, 'sequential' => true];
+    }
+    try {
+        $now = time();
+        $raState = tasksResumeAllStateRead();
+        if ($isCronAuto) {
+            $lastCronTriggerAt = (int)($raState['last_cron_trigger_at'] ?? 0);
+            if ($lastCronTriggerAt > 0 && ($now - $lastCronTriggerAt) < 4) {
+                return ['ok' => true, 'debounced' => true, 'trigger' => $trigger, 'resumed' => [], 'skipped' => [], 'count' => 0, 'sequential' => true];
+            }
+            $raState['last_cron_trigger_at'] = $now;
+        }
+        $reg = tasksRegistry();
+        $rows = tasksRowsOrdered($now);
+        $done = []; $skipped = []; $dispatched = false;
+        $primaryRows = []; $deferredRows = [];
+        $perTask = is_array($raState['per_task'] ?? null) ? $raState['per_task'] : [];
+
+        foreach ($rows as $r) {
+            $st = (string)$r['state'];
+            $want = $only === 'stale_done' ? in_array($st, ['stale', 'done'], true) : ($st === 'stale');
+            if (!$want) continue;
+            if (empty($r['resumable'])) { $skipped[] = ['key' => $r['key'], 'why' => 'ادامه ندارد']; continue; }
+            $rKey = (string)$r['key'];
+            if ($isCronAuto) {
+                $stopF = tasksStopFile($rKey);
+                if ($stopF !== '' && is_file($stopF) && ($now - (int)@filemtime($stopF)) < 45) {
+                    $skipped[] = ['key' => $rKey, 'why' => 'سیگنال توقف تازه در جریان است'];
+                    continue;
+                }
+                $defT = $reg[$rKey] ?? [];
+                $fT = is_array($defT) ? (string)($defT['file'] ?? '') : '';
+                $pT = $fT !== '' ? localTaskStateRead($fT, []) : [];
+                $curSig = taskProgressSig($pT);
+                $prevMeta = is_array($perTask[$rKey] ?? null) ? $perTask[$rKey] : [];
+                $prevAt = (int)($prevMeta['at'] ?? 0);
+                $prevSig = (string)($prevMeta['sig'] ?? '');
+                if ($prevAt > 0 && ($now - $prevAt) < 240 && $prevSig !== '' && $prevSig === $curSig) {
+                    $deferredRows[] = ['row' => $r, 'sig' => $curSig, 'age_since_try' => ($now - $prevAt)];
+                    continue;
+                }
+                $r['_cur_sig'] = $curSig;
+            }
+            $primaryRows[] = $r;
+        }
+
+        /* اگر کارهای اولویت‌بالاتر در ۴ دقیقهٔ اخیر بدون تغییر پیشرفت امتحان شده‌اند،
+           ابتدا نوبت به کارهای عقب‌تر می‌رسد تا هیچ کاری پشت کارِ سریعِ بدون‌پیشرفت گرسنه نماند. */
+        $orderedCandidates = $primaryRows;
+        foreach ($deferredRows as $df) {
+            if (!$isCronAuto || (int)$df['age_since_try'] >= 120) {
+                $rDf = $df['row'];
+                $rDf['_cur_sig'] = (string)$df['sig'];
+                $orderedCandidates[] = $rDf;
+            } else {
+                $skipped[] = ['key' => (string)$df['row']['key'], 'why' => 'به‌تازگی راه‌اندازی شده؛ نوبت به کار بعدی داده شد'];
+            }
+        }
+
+        foreach ($orderedCandidates as $r) {
+            if ($dispatched) {
+                /* worker قبلی با پاسخِ زودهنگام هنوز ممکن است زنده باشد؛
+                   این ردیف عمداً در checkpoint خودش می‌ماند تا کران بعدی، پس
+                   از آزادشدنِ قبلی، آن را به همان ترتیب بردارد. */
+                $skipped[] = ['key' => $r['key'], 'why' => 'پس از پایانِ کارِ اولویتِ بالاتر، در کران بعدی ادامه می‌یابد'];
+                continue;
+            }
+            $rKey = (string)$r['key'];
+            $one = tasksResumeOne($rKey, $isCronAuto ? 1800 : 2500, true);
+            if (!empty($one['ok'])) {
+                $done[] = ['key' => $rKey, 'title' => $r['title'], 'rank' => $r['rank']];
+                $perTask[$rKey] = ['at' => $now, 'sig' => (string)($r['_cur_sig'] ?? ''), 'trigger' => $trigger];
+                if (empty($one['already_dispatched'])) {
+                    $dispatched = true;
+                }
+            } else {
+                $errStr = (string)($one['error'] ?? '');
+                $skipped[] = ['key' => $rKey, 'why' => $errStr];
+                if (strpos($errStr, 'پاسخ نداد') !== false) {
+                    $dispatched = true;
+                }
+            }
+        }
+
+        $raState['per_task'] = $perTask;
+        $raState['last'] = [
+            'at'      => $now,
+            'trigger' => $trigger,
+            'count'   => count($done),
+            'resumed' => $done,
+            'skipped_count' => count($skipped),
+        ];
+        tasksResumeAllStateWrite($raState);
+
+        return ['ok' => true, 'trigger' => $trigger, 'resumed' => $done, 'skipped' => $skipped,
+            'count' => count($done), 'sequential' => true];
+    } finally {
+        @flock($lf, LOCK_UN);
+        @fclose($lf);
+    }
+}
+
+function s4CronAutoResumeAllTasks(string $trigger = 'cron'): array {
+    try {
+        return tasksResumeAllExecute('stale', $trigger);
+    } catch (Throwable $e) {
+        return ['ok' => false, 'trigger' => $trigger, 'error' => mb_substr($e->getMessage(), 0, 200), 'count' => 0, 'sequential' => true];
+    }
+}
+
 /**
  * v10.24 (۳۷ج): «ادامهٔ همهٔ کارهای گیرکرده» — با رعایتِ اولویت.
- *
- * وقتی هاست یک بار ری‌استارت می‌شود، معمولاً چند کار با هم می‌میرند. تا
- * اینجا کاربر باید تک‌تک روی «▶ ادامه» می‌زد. حالا یک دکمه همه را برمی‌گرداند،
- * و مهم‌تر: **به ترتیبِ اولویتی که خودش چیده** — چون پاسخِ workerها
- * زودهنگام است، فقط یک کار در هر dispatch آغاز می‌شود و بقیه بعد از آزادشدنِ
- * کارِ بالاتر در کران بعدی جان می‌گیرند؛ فاصلهٔ ثابت جایِ ترتیب را نمی‌گیرد.
  */
 if (isset($_GET['tasks_resume_all'])) {
     header('Content-Type: application/json; charset=UTF-8');
-    $now  = time();
     $only = (string)($_GET['only'] ?? 'stale');   // stale | stale_done
-    $rows = tasksRowsOrdered($now);
-    $done = []; $skipped = []; $dispatched = false;
-    foreach ($rows as $r) {
-        $st = (string)$r['state'];
-        $want = $only === 'stale_done' ? in_array($st, ['stale', 'done'], true) : ($st === 'stale');
-        if (!$want) continue;
-        if (empty($r['resumable'])) { $skipped[] = ['key' => $r['key'], 'why' => 'ادامه ندارد']; continue; }
-        if ($dispatched) {
-            /* worker قبلی با پاسخِ زودهنگام هنوز ممکن است زنده باشد؛
-               این ردیف عمداً در checkpoint خودش می‌ماند تا کران بعدی، پس
-               از آزادشدنِ قبلی، آن را به همان ترتیب بردارد. */
-            $skipped[] = ['key' => $r['key'], 'why' => 'پس از پایانِ کارِ اولویتِ بالاتر، در کران بعدی ادامه می‌یابد'];
-            continue;
-        }
-        $one = tasksResumeOne((string)$r['key'],2500,true);
-        if (!empty($one['ok'])) {
-            $done[] = ['key' => $r['key'], 'title' => $r['title'], 'rank' => $r['rank']];
-            $dispatched = true;
-        } else {
-            $skipped[] = ['key' => $r['key'], 'why' => (string)($one['error'] ?? '')];
-            /* قفلِ فعال یا dispatch نامطمئن: به کارِ بعدی نرو تا overlap نسازیم. */
-            if (strpos((string)($one['error'] ?? ''), 'فعال') !== false
-                || strpos((string)($one['error'] ?? ''), 'پاسخ نداد') !== false) $dispatched = true;
-        }
-    }
-    echo json_encode(['ok' => true, 'resumed' => $done, 'skipped' => $skipped,
-        'count' => count($done), 'sequential' => true], JSON_UNESCAPED_UNICODE);
+    echo json_encode(tasksResumeAllExecute($only, 'manual'), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -38616,8 +38776,9 @@ if (isset($_GET['auto_run_now'])) {
 /** تیکِ دستیِ زمان‌بند — برای آزمایش یا کرانِ اختصاصی */
 if (isset($_GET['auto_tick'])) {
     header('Content-Type: application/json; charset=UTF-8');
+    $_autoTickResumeAll = s4CronAutoResumeAllTasks('auto_tick');
     $r = autoTick(loadConnections());
-    echo json_encode(array_merge(['ok' => true], $r), JSON_UNESCAPED_UNICODE);
+    echo json_encode(array_merge(['ok' => true, 'tasks_resume_all' => $_autoTickResumeAll], $r), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -42754,13 +42915,14 @@ if(isset($_GET['internal_cron_feedback'])){
         if($lock)@fclose($lock);echo json_encode(['ok'=>true,'enabled'=>true,'busy'=>true,'worker_active'=>$workerActive,'interval'=>$sec]);exit;
     }
     $prev=json_decode((string)@file_get_contents($stateFile),true);if(!is_array($prev))$prev=[];
-    $last=(int)($prev['at']??0);$due=$last<=0||($now-$last)>=$sec;$pulse=[];$cron=[];
+    $last=(int)($prev['at']??0);$due=$last<=0||($now-$last)>=$sec;$pulse=[];$cron=[];$resumeAll=[];
     if($due){
         /* Reserve before spawn: simultaneous tabs cannot create a process storm.
            cron's own flock remains the final overlap guard. */
         $next=['at'=>$now,'version'=>APP_VERSION,'source'=>'browser_internal','interval'=>$sec];
         @file_put_contents($stateFile,json_encode($next,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
         $pulse=matrixCronPulse('browser_internal');
+        $resumeAll=s4CronAutoResumeAllTasks('internal_browser_feedback');
         $cron=s4SpawnInternalCronDetached('browser_feedback');
         /* Shared hosting may disable exec/nohup. Keep the browser-assisted mode
            useful there by firing the same protected cron route over loopback HTTP. */
@@ -42769,6 +42931,7 @@ if(isset($_GET['internal_cron_feedback'])){
     @flock($lock,LOCK_UN);@fclose($lock);
     echo json_encode(['ok'=>true,'enabled'=>true,'due'=>$due,'interval'=>$sec,'last_at'=>$due?$now:$last,
         'worker_active'=>$workerActive,'worker_action'=>$workerAction,'matrix_pulse'=>$pulse,'cron'=>$cron,
+        'tasks_resume_all'=>$resumeAll,
         'reference'=>'https://scraper4.42web.io/scraper4.php'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
@@ -56191,6 +56354,18 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.472', 'فشردن خودکار دکمهٔ «ادامه همه» در مدیریت وظایف با هر بار رسیدن کران‌جاب داخلی یا خارجی + اجرای مستقیم CLI بدون وابستگی به HTTP_HOST',
+         defined('TASKS_RESUME_ALL_STATE_FILE')
+      && function_exists('tasksResumeAllExecute')
+      && function_exists('s4CronAutoResumeAllTasks')
+      && function_exists('fireAndForgetCliTask')
+      && strpos($selfSrc, "s4CronAutoResumeAllTasks(\$_cronVisualKind.'_cron')") !== false
+      && strpos($selfSrc, "s4CronAutoResumeAllTasks('internal_worker')") !== false
+      && strpos($selfSrc, "s4CronAutoResumeAllTasks('internal_browser_feedback')") !== false
+      && strpos($selfSrc, "\$_cliCmd === 'task_dispatch'") !== false
+      && strpos($selfSrc, "if(fireAndForgetCliTask(\$get,\$post))return true;") !== false
+      && strpos($selfSrc, "{v:'10." . "472'") !== false
+      && version_compare(APP_VERSION, '10.472', '>='));
     $add('10.471', 'تضمین اتمی عدم ذخیرهٔ نتایج ناقص پیش از پایان صفحهٔ آخر، بازیابی ردیف‌های بی‌حرکت صف همگام‌سازی و افزودن موتور استخراج API دیجی‌کالا (digikala_api)',
          function_exists('extractSaveListStaging')
       && function_exists('extractLoadListStaging')
@@ -61302,10 +61477,25 @@ function notifCheckProducts(array $cn, bool $test = false, bool $send = true): a
 
 /** آدرس خود اسکریپت برای فراخوانی داخلی */
 function selfBaseUrl(): string {
+    $cacheFile = __DIR__ . '/.self_base_url.txt';
     $host = $_SERVER['HTTP_HOST'] ?? '';
-    if ($host === '') return '';
-    $https = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
-    return ($https ? 'https' : 'http') . '://' . $host . ($_SERVER['SCRIPT_NAME'] ?? '');
+    if ($host === '') {
+        if (is_file($cacheFile)) {
+            $cached = trim((string)@file_get_contents($cacheFile));
+            if ($cached !== '' && preg_match('~^https?://[^\s]+$~i', $cached)) {
+                return $cached;
+            }
+        }
+        return '';
+    }
+    $https = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
+    $url = ($https ? 'https' : 'http') . '://' . $host . ($_SERVER['SCRIPT_NAME'] ?? '');
+    if (preg_match('~^https?://[^\s]+$~i', $url)) {
+        $prev = is_file($cacheFile) ? trim((string)@file_get_contents($cacheFile)) : '';
+        if ($prev !== $url) @file_put_contents($cacheFile, $url, LOCK_EX);
+    }
+    return $url;
 }
 
 /* =====================================================================
@@ -61850,6 +62040,43 @@ function fireAndForgetCliQueueBackend(array $get, ?array $post = null): bool {
     return true;
 }
 
+function fireAndForgetCliTask(array $get, ?array $post = null): bool {
+    $taskKeys = [
+        'catfix_start', 'dedup_start', 'ai_test_unstick', 'ai_test_start',
+        'sync_matrix_fix_start', 'sync_matrix_start', 'recon', 'suffix_report',
+        'bulk_edit', 'photo_fix', 'aicontent_start', 'selagent_start',
+        'agent_start', 'manual_sync',
+    ];
+    $matched = (((string)($get['action'] ?? '')) === 'backend_extract');
+    if (!$matched) {
+        foreach ($taskKeys as $tk) {
+            if (!empty($get[$tk]) || ((string)($post['action'] ?? '')) === $tk) {
+                $matched = true;
+                break;
+            }
+        }
+    }
+    if (!$matched) return false;
+    if (!function_exists('exec') || strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return false;
+    if (!is_dir(__DIR__ . '/logs')) @mkdir(__DIR__ . '/logs', 0755, true);
+    $payload = ['get' => $get, 'post' => is_array($post) ? $post : []];
+    $encoded = rtrim(strtr(base64_encode((string)json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)), '+/', '-_'), '=');
+    $php = s4CliPhpBinary();
+    $mem = '1024M';
+    $log = __DIR__ . '/logs/task-dispatch.log';
+    $cmd = 'nohup ' . s4CliPhpCommand($php, $mem) . ' ' . escapeshellarg(__FILE__)
+         . ' task_dispatch ' . escapeshellarg($encoded) . ' >> ' . escapeshellarg($log) . ' 2>&1 < /dev/null & echo $!';
+    $out = [];
+    $rc = 0;
+    @exec($cmd, $out, $rc);
+    $pid = 0;
+    foreach ($out as $line) {
+        $line = trim((string)$line);
+        if (ctype_digit($line)) { $pid = (int)$line; break; }
+    }
+    return ($rc === 0 && $pid > 0);
+}
+
 function fireAndForget(string $qs, int $timeoutMs = 1200, ?array $post = null): bool {
     $get=[];parse_str(ltrim($qs,'?'),$get);
     if(in_array((string)($get['action']??''),['bsl_backend','woo_backend'],true)){
@@ -61858,6 +62085,7 @@ function fireAndForget(string $qs, int $timeoutMs = 1200, ?array $post = null): 
            without exec transparently retain the durable HTTP handoff below. */
         if(fireAndForgetCliQueueBackend($get,$post))return true;
     }
+    if(fireAndForgetCliTask($get,$post))return true;
     $base = selfBaseUrl();
     if ($base === '') return false;
     $GLOBALS['_queueDispatchMode']='http_curl';$GLOBALS['_queueDispatchPid']=0;
@@ -95374,6 +95602,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.472', t:'⚡ فشردن خودکار دکمهٔ «ادامه همه» در مدیریت وظایف با هر بار رسیدن کران‌جاب داخلی یا خارجی + رفع قطع اجرای CLI در کارهای پس‌زمینه', items:[
+    'اجرای خودکار منطق دکمهٔ «▶▶ ادامهٔ همه» (tasksResumeAllExecute / s4CronAutoResumeAllTasks) در تمام نقاط ورود کران‌جاب — چه کران خارجی (?cron_run=1 و CLI)، چه کران داخلی سرویس worker (حتی هنگام مشغول بودن صف کارها و ماتریس)، چه کران کمکی مرورگر (internal_cron_feedback / internal_browser_keep) و چه auto_tick؛ حتی اگر قفل cron_run در دست اجرای قبلی باشد، کارهای رهاشدهٔ مدیریت وظایف به ترتیب اولویت ادامه می‌یابند.',
+    'چرخشی‌سازی هوشمند ضدگرسنگی (anti-starvation) در ادامهٔ خودکار همهٔ کارها: اگر یک کار اولویت‌بالاتر در ۴ دقیقهٔ اخیر راه‌اندازی شده اما پیشرفتش تغییر نکرده باشد، نوبت بلافاصله به کارهای رهاشدهٔ بعدی (مانند catfix، ai_test، matrix_fix و...) داده می‌شود تا هیچ وظیفه‌ای پشت کار دیگر معطل نماند.',
+    'رفع ریشه‌ای عدم راه‌اندازی کارهای مدیریت وظایف در محیط CLI: افزودن دیسپچر مستقیم CLI (task_dispatch و fireAndForgetCliTask) برای تمام ۱۴ موتور مدیریت وظایف + کش پایدار آدرس پایه در selfBaseUrl() و حذف بارگذاری تکراری ۱۸۰ مگابایتی profiles.json در tasksBuildRow + نمایش نشان وضعیت زندهٔ ادامهٔ خودکار در پنجرهٔ مدیریت وظایف.'
+  ]},
   {v:'10.471', t:'🛡️ استخراج اتمی تا پایان صفحهٔ آخر، احیای ردیف‌های بی‌حرکت صف همگام‌سازی و افزودن موتور اختصاصی «دیجی‌کالا API» (digikala_api)', items:[
     'تضمین اتمی عدم تغییر محصولات نهایی پیش از پایان کامل صفحهٔ آخر: در استخراج بک‌اند (runBackendExtract) محصولات صفحات میانی فقط در فایل موقت مجزای extract_staging ذخیره می‌شوند (products_saved=false) و در استخراج جریانی مرورگر (stream=1) در آرایهٔ موقت stagedStreamProducts نگهداری می‌شوند؛ اگر استخراج در میانهٔ راه متوقف، قطع یا دچار خطا شود، محصولات قبلیِ تب نتایج کوچک‌ترین تغییری نمی‌کنند و تنها پس از اتمام کامل آخرین صفحه در نتایج نهایی ثبت می‌شوند.',
     'ریشه‌یابی و رفع کامل بی‌حرکتی ردیف‌های «صف همگام‌سازی»: ۱) حذف بارگذاری مضاعف ۱۸۰ مگابایتی profiles.json در cron_run که باعث خطای حافظه (exit 255) حین استخراج دوره‌ای می‌شد، ۲) زنجیره‌سازی خودکار برش‌های چندصفحه‌ای استخراج در manual_sync و s4WorkerRunJob تا مراحل قیمت‌گذاری و ارسال پس از پایان استخراج حتماً اجرا شوند، ۳) آشتی‌ساز خودکار syncPipelineReconcileActiveRows برای سپردن ردیف‌های بی‌مالک (extract/pricing/queued) به worker پایدار و بستن خودکار ردیف‌های send و cell_equalize پس از تکمیل صف مقصد.',
@@ -108292,6 +108525,11 @@ function tmRender(){
   /* v10.24 (۳۷ج): چند کارِ گیرکرده معمولاً با هم می‌میرند (یک ری‌استارتِ
      هاست)، پس دکمهٔ جمعی کنارِ شمارندهٔ «رهاشده» می‌نشیند. */
   const staleResumable=(d.tasks||[]).filter(t=>t.state==='stale'&&t.resumable).length;
+  const arLast=d.auto_resume_all_last||null;
+  const arAgo=arLast&&arLast.at?Math.max(0,(parseInt(d.now)||Math.floor(Date.now()/1000))-parseInt(arLast.at)):null;
+  const arLabel=arLast&&arLast.at
+    ? ('⚡ ادامهٔ همه خودکار فعال · آخرین تیک کران: '+(arAgo<60?(toFa(arAgo)+' ثانیه پیش'):(toFa(Math.floor(arAgo/60))+' دقیقه پیش'))+((arLast.count>0)?(' ('+toFa(arLast.count)+' کار ادامه یافت)'):''))
+    : '⚡ ادامهٔ همه خودکار در هر کران داخلی و خارجی فعال است';
   let h='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
     +'<span class="tmc-badge '+(run>0?'tmb-run':'tmb-idle')+'">'+toFa(run)+' در حال اجرا</span>'
     +(st>0?'<span class="tmc-badge tmb-stale">'+toFa(st)+' رهاشده</span>':'')
@@ -108299,6 +108537,7 @@ function tmRender(){
     +(staleResumable>0?'<button class="btn btn-green" style="font-size:10px;padding:3px 10px" '
       +'onclick="tmResumeAll()" title="همهٔ کارهای گیرکرده را به ترتیبِ اولویت دوباره شروع کن">'
       +'▶▶ ادامهٔ همه ('+toFa(staleResumable)+')</button>':'')
+    +'<span style="font-size:9.5px;color:#34d399;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);border-radius:999px;padding:2px 9px;align-self:center">'+esc(arLabel)+'</span>'
     +'<span style="flex:1"></span>'
     +'<span style="font-size:9.5px;color:#64748b;align-self:center">به‌روزرسانیِ خودکار هر ۲.۵ ثانیه</span></div>';
 
