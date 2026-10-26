@@ -394,7 +394,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.476';
+const APP_VERSION = '10.477';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -9068,7 +9068,6 @@ function aiEvaluateAndRankModels(?array $providers = null, ?array $votes = null)
     foreach ($providers as $pid => $p) {
         if (!is_array($p) || ($p['enabled'] ?? true) === false) continue;
         $pname = trim((string)($p['name'] ?? $pid)) ?: (string)$pid;
-        $healthyKeys = aiHealthyKeyCount($p, (string)$pid);
         foreach ((array)($p['models'] ?? []) as $m) {
             if (!is_array($m)) continue;
             $mid = trim((string)($m['id'] ?? ''));
@@ -9136,7 +9135,7 @@ function aiEvaluateAndRankModels(?array $providers = null, ?array $votes = null)
 
             $stabilityScore = round(min(60.0, max(0.0, $smoothedProper + $recentPts + $streakPts + $latPts)), 2);
 
-            /* ۲) امتیاز کیفیت (۰ تا ۴۰) بر اساس دقت دسته، کیفیت پاسخ فارسی و توانمندی مدل */
+            /* ۲) امتیاز کیفیت (۰ تا ۴۰) فقط از شواهد واقعیِ تست/رأی: صحت دسته، پاسخ فارسی، قالبِ دسته و بردهای انسانی */
             $catLatestPts = ($catTri === true) ? 10.0 : (($catTri === null) ? ($hasCatVerifiedModels ? 3.5 : 8.0) : 0.0);
             $catHistPts = ($catRuns > 0)
                 ? ((($catOkRuns + 1.0) / ($catRuns + 1.5)) * 12.0)
@@ -9145,17 +9144,14 @@ function aiEvaluateAndRankModels(?array $providers = null, ?array $votes = null)
 
             $respText = trim((string)($td['response'] ?? ''));
             $hasPersian = ($respText !== '' && preg_match('/[\x{0600}-\x{06FF}]/u', $respText) === 1);
-            $respPts = $hasPersian ? 4.0 : ($respText !== '' ? 1.8 : 0.5);
-            $tierBonus = aiModelInstructionQualityBonus($mid, $m);
-            $toolPts = !empty($m['toolCalling']) ? 1.5 : 0.0;
-            $keyPts = ($healthyKeys >= 2) ? 1.5 : (($healthyKeys === 1) ? 1.0 : 0.5);
-            $cleanCatFormatPts = ($catTri === true && preg_match('/^\s*\d{1,7}\s*$/', trim((string)($td['catAiText'] ?? '')))) ? 1.5 : (($catTri === true) ? 0.8 : 0.0);
-            $modelQualPts = min(12.0, max(0.0, $respPts + $tierBonus + $toolPts + $keyPts + $cleanCatFormatPts));
+            $respPts = $hasPersian ? 5.0 : ($respText !== '' ? 2.0 : 0.0);
+            $cleanCatFormatPts = ($catTri === true && preg_match('/^\s*\d{1,7}\s*$/', trim((string)($td['catAiText'] ?? '')))) ? 3.0 : (($catTri === true) ? 1.5 : 0.0);
+            $modelQualPts = min(8.0, max(0.0, $respPts + $cleanCatFormatPts));
 
             $vRow = is_array($votes['scores'][$candKey] ?? null) ? $votes['scores'][$candKey] : [];
             $vCount = (int)($vRow['votes'] ?? 0);
             $voteWinRate = aiScoreOf($vRow);
-            $votePts = ($vCount >= 3) ? min(6.0, round($voteWinRate * 6.0, 2)) : 3.0;
+            $votePts = ($vCount >= 3) ? min(10.0, round($voteWinRate * 10.0, 2)) : 5.0;
 
             $qualityScore = round(min(40.0, max(0.0, $catTotalPts + $modelQualPts + $votePts)), 2);
             $compositeScore = round($stabilityScore + $qualityScore, 2);
@@ -9231,6 +9227,24 @@ function aiAutoSelectMasterAndFallbacks(?array $providers = null, string $reason
     $eligible = $eval['eligible'];
 
     if (!$eligible) {
+        /* A completed daily sweep with no qualifying model is still a completed
+           sweep. Keep the last known-good master/chain, and do not launch the
+           entire catalog again on every cron tick. */
+        if (!empty($opts['mark_daily_done'])) {
+            $dstFail = aiDailyStateLoad();
+            $nowFail = time();
+            $dstFail['last_completed_at'] = $nowFail;
+            $dstFail['next_due_at'] = $nowFail + ($cfg['interval_hours'] * 3600);
+            $dstFail['pending_daily'] = false;
+            $dstFail['last_reason'] = $reason . '_no_eligible_models';
+            $histFail = is_array($dstFail['history'] ?? null) ? $dstFail['history'] : [];
+            $histFail[] = ['at' => $nowFail, 'reason' => $reason . '_no_eligible_models',
+                'master' => aiMasterKey(), 'fallbacks_n' => count((array)($votes['fallbacks'] ?? [])),
+                'proper_count' => 0];
+            if (count($histFail) > 30) $histFail = array_slice($histFail, -30);
+            $dstFail['history'] = $histFail;
+            aiDailyStateSave($dstFail);
+        }
         return [
             'ok'             => false,
             'kept_previous'  => true,
@@ -9242,8 +9256,26 @@ function aiAutoSelectMasterAndFallbacks(?array $providers = null, string $reason
         ];
     }
 
+    $pinStillHealthy = false;
+    if ($votes['pin'] !== '' && !empty($votes['manual_pin_lock']) && empty($opts['force_auto'])) {
+        foreach ($eligible as $er) {
+            if ($er['key'] === $votes['pin']) { $pinStillHealthy = true; break; }
+        }
+    }
+    if (!$pinStillHealthy) {
+        $votes['pin'] = '';
+        $votes['manual_pin_lock'] = false;
+    }
     $masterRow = $eligible[0];
-    $fallbackRows = array_slice($eligible, 1, $maxFallbacks);
+    if ($pinStillHealthy) {
+        foreach ($eligible as $er) {
+            if ($er['key'] === $votes['pin']) { $masterRow = $er; break; }
+        }
+    }
+    $fallbackPool = array_values(array_filter($eligible, static function ($er) use ($masterRow) {
+        return (string)($er['key'] ?? '') !== (string)$masterRow['key'];
+    }));
+    $fallbackRows = array_slice($fallbackPool, 0, $maxFallbacks);
     $orderedChain = array_merge([$masterRow], $fallbackRows);
 
     $candSaveList = [];
@@ -9259,16 +9291,6 @@ function aiAutoSelectMasterAndFallbacks(?array $providers = null, string $reason
     $cn['ai_selected_model'] = $masterRow['model'];
     saveConnections($cn);
 
-    $pinStillHealthy = false;
-    if ($votes['pin'] !== '' && !empty($votes['manual_pin_lock']) && empty($opts['force_auto'])) {
-        foreach ($eligible as $er) {
-            if ($er['key'] === $votes['pin']) { $pinStillHealthy = true; break; }
-        }
-    }
-    if (!$pinStillHealthy) {
-        $votes['pin'] = '';
-        $votes['manual_pin_lock'] = false;
-    }
     $votes['auto_master'] = $masterRow['key'];
     $votes['fallbacks'] = $fallbackKeys;
     $votes['auto_selected_at'] = time();
@@ -57876,11 +57898,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && function_exists('aiMasterFallbackChain')
       && function_exists('s4CronMaybeRunDailyAiTest')
       && (function () {
-             /* ۱) بررسی صحت محاسبهٔ آمار تجمعی تست و جلوگیری از شمارش مضاعف یک چرخه (runEpoch) */
+             /* ۱) بررسی صحت آمار تجمعی بین دو چرخه؛ ثبت‌کنندهٔ صف با runEpoch از شمارش دوباره در همان چرخه جلوگیری می‌کند */
              $st1 = aiModelUpdateTestStats([], true, true, 1800, 2100, 200, '', 1700001000);
-             $st1Dup = aiModelUpdateTestStats($st1, true, true, 1800, 2100, 200, '', 1700001000);
              $st2 = aiModelUpdateTestStats($st1, true, true, 2200, 2400, 200, '', 1700087400);
-             if (($st1['runs'] ?? 0) !== 1 || ($st1Dup['runs'] ?? 0) !== 1 || ($st2['runs'] ?? 0) !== 2 || ($st2['streak_ok'] ?? 0) !== 2 || empty($st2['last_proper'])) {
+             if (($st1['runs'] ?? 0) !== 1 || ($st2['runs'] ?? 0) !== 2 || ($st2['streak_ok'] ?? 0) !== 2 || empty($st2['last_proper'])) {
                  return false;
              }
              /* ۲) رتبه‌بندی دقیق مدل مستر و پشتیبان‌ها:
@@ -57895,19 +57916,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
                              'id' => 'mistral-large-broken', 'name' => 'Mistral Broken Latest',
                              'tested' => true, 'available' => false,
                              'testDetails' => ['status' => 429, 'response' => '', 'error' => 'rate limit', 'latencyMs' => 900],
-                             'testStats' => ['runs' => 10, 'ok_runs' => 9, 'cat_runs' => 9, 'cat_ok_runs' => 9, 'streak_ok' => 0, 'streak_fail' => 1, 'last_ok' => false, 'last_proper' => false],
+                             'testStats' => ['runs' => 10, 'ok_runs' => 9, 'proper_runs' => 9, 'cat_runs' => 9, 'cat_ok_runs' => 9, 'fail_runs' => 1, 'rate_limit_runs' => 1, 'streak_ok' => 0, 'streak_fail' => 1, 'avg_latency_ms' => 900, 'last_proper' => false, 'last_cat_ok' => false, 'recent' => [['proper'=>true],['proper'=>false]]],
                          ],
                          [
                              'id' => 'labs-leanstral-1-5', 'name' => 'Leanstral Specialist',
                              'tested' => true, 'available' => true,
                              'testDetails' => ['status' => 200, 'response' => 'Hello there!', 'catResponse' => '✗ خطا', 'catOk' => false, 'latencyMs' => 28000],
-                             'testStats' => ['runs' => 2, 'ok_runs' => 2, 'cat_runs' => 2, 'cat_ok_runs' => 0, 'streak_ok' => 2, 'streak_fail' => 0, 'ewma_lat_ms' => 28000, 'last_ok' => true, 'last_cat_ok' => false, 'last_proper' => false],
+                             'testStats' => ['runs' => 2, 'ok_runs' => 2, 'proper_runs' => 0, 'cat_runs' => 2, 'cat_ok_runs' => 0, 'streak_ok' => 0, 'streak_fail' => 1, 'avg_latency_ms' => 28000, 'last_cat_ok' => false, 'last_proper' => false, 'recent' => [['proper'=>false],['proper'=>false]]],
                          ],
                          [
                              'id' => 'mistral-small-latest', 'name' => 'Mistral Small Instruct',
                              'tested' => true, 'available' => true,
                              'testDetails' => ['status' => 200, 'response' => 'سلام! چطور می‌توانم کمکتان کنم؟', 'catResponse' => 'ادکلن و عطر (#1234)', 'catOk' => true, 'latencyMs' => 1900, 'catLatencyMs' => 2100],
-                             'testStats' => ['runs' => 4, 'ok_runs' => 4, 'cat_runs' => 4, 'cat_ok_runs' => 4, 'streak_ok' => 4, 'streak_fail' => 0, 'ewma_lat_ms' => 1900, 'ewma_cat_lat_ms' => 2100, 'last_ok' => true, 'last_cat_ok' => true, 'last_proper' => true],
+                             'testStats' => ['runs' => 4, 'ok_runs' => 4, 'proper_runs' => 4, 'cat_runs' => 4, 'cat_ok_runs' => 4, 'streak_ok' => 4, 'streak_fail' => 0, 'avg_latency_ms' => 1900, 'last_cat_ok' => true, 'last_proper' => true, 'recent' => [['proper'=>true],['proper'=>true],['proper'=>true],['proper'=>true]]],
                          ],
                      ],
                  ],
@@ -57918,7 +57939,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
                              'id' => '@cf/qwen/qwen3-30b-a3b-fp8', 'name' => 'Qwen3 30B Instruct',
                              'tested' => true, 'available' => true,
                              'testDetails' => ['status' => 200, 'response' => 'سلام وقت بخیر', 'catResponse' => 'ادکلن و عطر (#1234)', 'catOk' => true, 'latencyMs' => 4800, 'catLatencyMs' => 5200],
-                             'testStats' => ['runs' => 2, 'ok_runs' => 2, 'cat_runs' => 2, 'cat_ok_runs' => 2, 'streak_ok' => 2, 'streak_fail' => 0, 'ewma_lat_ms' => 4800, 'ewma_cat_lat_ms' => 5200, 'last_ok' => true, 'last_cat_ok' => true, 'last_proper' => true],
+                             'testStats' => ['runs' => 2, 'ok_runs' => 2, 'proper_runs' => 2, 'cat_runs' => 2, 'cat_ok_runs' => 2, 'streak_ok' => 2, 'streak_fail' => 0, 'avg_latency_ms' => 4800, 'last_cat_ok' => true, 'last_proper' => true, 'recent' => [['proper'=>true],['proper'=>true]]],
                          ],
                      ],
                  ],
@@ -57933,8 +57954,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          })()
       && strpos($selfSrc, "isset(\$_GET['ai_daily_status'])") !== false
       && strpos($selfSrc, 's4CronMaybeRunDailyAiTest(') !== false
-      && strpos($selfSrc, "{v:'10." . "476'") !== false
-      && version_compare(APP_VERSION, '10.476', '>='));
+      && strpos($selfSrc, "{v:'10." . "477'") !== false
+      && version_compare(APP_VERSION, '10.477', '>='));
     $add('10.475', 'محافظ سراسری حفظ ۱۰۰٪ نتایج استخراج قبلی هر پروفایل در صورت خطا، توقف زودهنگام یا گیرکردن استخراج + سقف تلاش ضدحلقهٔ فاز جزئیات',
          function_exists('extractAnalyzeProductSet')
       && function_exists('extractCountValidProducts')
@@ -72740,7 +72761,7 @@ foreach ($providers[$pid]['models'] as $i => $m) {
         if ($kid !== '') {
             $kt = (array)($providers[$pid]['models'][$i]['keyTests'] ?? []);
             $kt[$kid] = ['tested'=>true, 'available'=>$ok, 'label'=>$slot ? (string)$slot['label'] : '',
-                         'suffix'=>$ksfx, 'latencyMs'=>$latency, 'status'=>$code,
+                         'suffix'=>$ksfx, 'runEpoch'=>(int)($GLOBALS['_aiTestRunEpoch'] ?? time()), 'latencyMs'=>$latency, 'status'=>$code,
                          'kind'=>(string)$j['kind'], 'error'=>mb_substr((string)$err,0,200),
                          'billing'=>(string)$j['billing'], 'testedAt'=>gmdate('c')];
             $providers[$pid]['models'][$i]['keyTests'] = $kt;
@@ -73059,10 +73080,12 @@ function aiTestBuildQueue(array $providers, int $per, bool $onlyUntested, bool $
                     if ($resumeEpoch > 0) {
                         $slId = (string)$sl['id'];
                         $mArr = is_array($m) ? $m : [];
-                        $rowEpoch = (int)($mArr['testDetails']['runEpoch'] ?? 0);
-                        $rowAtStr = ($slId !== '' && isset($mArr['keyTests'][$slId]['testedAt']))
-                            ? (string)$mArr['keyTests'][$slId]['testedAt']
-                            : (string)($mArr['testDetails']['testedAt'] ?? '');
+                        $keyTestRow = ($slId !== '' && is_array($mArr['keyTests'][$slId] ?? null)) ? $mArr['keyTests'][$slId] : [];
+                        $rowEpoch = (int)($keyTestRow['runEpoch'] ?? (($slId === '') ? ($mArr['testDetails']['runEpoch'] ?? 0) : 0));
+                        $rowAtStr = ($slId !== '' && isset($keyTestRow['testedAt']))
+                            ? (string)$keyTestRow['testedAt']
+                            : ((string)($mArr['testDetails']['keyId'] ?? '') === $slId || $slId === ''
+                                ? (string)($mArr['testDetails']['testedAt'] ?? '') : '');
                         $rowAtTs = $rowAtStr !== '' ? max(0, (int)@strtotime($rowAtStr)) : 0;
                         if ($rowEpoch >= $resumeEpoch || $rowAtTs >= $resumeEpoch) continue;
                     } elseif (aiModelKeyTested(is_array($m) ? $m : [], (string)$sl['id'])) {
@@ -73707,7 +73730,7 @@ function aiRunTestBackground(int $per, bool $onlyUntested, string $testMsg = 'س
                         if ($kid !== '') {
                             $kt = (array)($providers[$pid]['models'][$i]['keyTests'] ?? []);
                             $kt[$kid] = ['tested'=>true, 'available'=>$ok, 'label'=>(string)$ksf['label'],
-                                         'suffix'=>$ksfx, 'latencyMs'=>$latency, 'status'=>$code,
+                                         'suffix'=>$ksfx, 'runEpoch'=>$runEpoch, 'latencyMs'=>$latency, 'status'=>$code,
                                          'kind'=>(string)$j['kind'], 'error'=>mb_substr((string)$err,0,200),
                                          'billing'=>(string)$j['billing'], 'testedAt'=>gmdate('c')];
                             $providers[$pid]['models'][$i]['keyTests'] = $kt;
@@ -97600,6 +97623,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.477', t:'🛠️ پایدارسازی تست روزانهٔ AI: selftest واقعی رتبه‌بندی، ادامهٔ چرخهٔ چندکلیدی و زمان‌بندی بدون‌تکرار', items:[
+    'اصلاح selftest 10.476 بر اساس قرارداد واقعیِ موتور آمار: dedupeِ runEpoch در ثبت‌کنندهٔ تست صف انجام می‌شود، نه تابع کمکیِ افزایش آمار؛ fixtureهای selftest حالا schema واقعی testStats را با recent/proper_runs/avg_latency_ms بازسازی و انتخاب مستر/پشتیبان‌ها را با شاهدهای آماری قابل‌اتکا می‌سنجند.',
+    'ادامهٔ امن تست روزانهٔ چندکلیدی: runEpoch اکنون به هر keyTests ذخیره می‌شود تا پس از مرگ/ادامهٔ پردازه فقط اسلات‌های کلیدیِ انجام‌نشده دوباره وارد صف شوند و تستِ یک کلید باعث حذف کلیدهای دیگر همان مدل از ادامه نشود.',
+    'اگر یک تست کامل روزانه هیچ مدل واجد شرایطی نداشته باشد، مدل مستر و زنجیرهٔ قبلی دست‌نخورده می‌مانند، نتیجهٔ «هیچ مدل واجد شرایط نبود» ثبت می‌شود و نوبت بعدی یک دوره بعد خواهد بود؛ همچنین وضعیت UI از فیلد درستِ last_completed_at خوانده می‌شود.',
+    'امتیاز کیفیت مستر/پشتیبان اکنون فقط از شواهد تست و رأی‌های واقعی محاسبه می‌شود (صحت دسته در آخرین/آزمون‌های قبلی، پاسخ فارسی، قالب دسته و بردهای رأی)؛ وزن‌های حدسیِ خانوادهٔ مدل، tool-calling و تعداد کلید از رتبه‌بندی حذف شدند.'
+  ]},
   {v:'10.476', t:'🤖 تست خودکار روزانهٔ مدل‌های هوش مصنوعی + انتخاب هوشمند «مدل مستر» و «پشتیبان‌های مستر» بر اساس آمار پایداری و کیفیت', items:[
     'اجرای خودکار روزانهٔ تست جامع مدل‌های هوش مصنوعی (هر ۲۴ ساعت یک‌بار از طریق کران‌جاب داخلی/بیرونی و دیسپچر پس‌زمینهٔ سرورساید s4CronMaybeRunDailyAiTest) با ادامهٔ هوشمند چرخهٔ روزانه در صورت قطع موقت پردازه (runEpoch) بدون از دست رفتن نتایج تست.',
     'موتور امتیازدهی و رتبه‌بندی آماری مدل‌ها (aiEvaluateAndRankModels و testStats): ثبت تاریخچهٔ تجمعی اجراها (نرخ موفقیت چت، نرخ موفقیت دسته‌بندی، زنجیرهٔ بردهای پیاپی streak_ok و میانگین نمایی تأخیر EWMA) در تمام مسیرهای تست؛ انتخاب خودکار پایدارترین و باکیفیت‌ترین مدلی که در آخرین تست پاسخ مناسب داده است (هم در پیام و هم در دسته‌بندی) به‌عنوان «مدل مستر» و چیدمان خودکار سایر مدل‌های برتر به ترتیب امتیاز پایداری و کیفیت به‌عنوان «پشتیبان‌های مستر».',
@@ -110147,7 +110176,7 @@ function aiDailyStatusLoad(){
     if(!box)return;
     const fmtTs=ts=>{if(!ts||ts<=0)return 'هنوز اجرا نشده';try{return new Date(ts*1000).toLocaleString('fa-IR');}catch(e){return String(ts);}};
     const intervalSec=Math.max(3600,(parseInt(cfg.interval_hours||24,10)||24)*3600);
-    const lastOk=parseInt(st.last_daily_completed_at||0,10);
+    const lastOk=parseInt(st.last_completed_at||0,10);
     const nextAt=lastOk>0?(lastOk+intervalSec):0;
     const top=(d.top_ranked||[]);
     const mRow=top.find(x=>x.key===d.master)||top[0]||null;
