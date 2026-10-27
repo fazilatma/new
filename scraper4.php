@@ -56,6 +56,7 @@ ignore_user_abort(true);
 const DEFAULT_URL = 'https://barfbox.ir/search/?page=1';
 const FETCH_MISSING_IMAGES = true;
 const PROFILES_FILE = __DIR__ . '/profiles.json';
+const PROFILE_SUMMARY_CACHE_FILE = __DIR__ . '/.profile_summary_cache.json'; // v10.478: lightweight dashboard bootstrap
 const PROFILES_DELETED_FILE = __DIR__ . '/profiles_deleted.json';
 const CONNECTIONS_FILE = __DIR__ . '/connections.json';
 const BSL_PROGRESS_FILE = __DIR__ . '/bsl_progress.json';
@@ -394,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.477';
+const APP_VERSION = '10.478';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -417,7 +418,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/04';
+const APP_VERSION_DATE = '1405/08/05';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -4380,6 +4381,74 @@ function s4SalvageTruncatedProfilesJson(string $raw): array {
     return [];
 }
 
+/** Build the small profile list needed by the first screen without shipping products. */
+function s4ProfileSummaryRows(array $profiles): array {
+    if (function_exists('s4StripDeletedProfiles')) $profiles = s4StripDeletedProfiles($profiles);
+    $rows = [];
+    foreach ($profiles as $key => $profile) {
+        if (!is_string($key) || $key === '' || !is_array($profile)) continue;
+        $rows[] = [
+            'key' => $key,
+            'name' => $profile['name'] ?? $key,
+            'url' => $profile['url'] ?? '',
+            'updatedAt' => $profile['updatedAt'] ?? 0,
+            'productCount' => is_array($profile['products'] ?? null) ? count($profile['products']) : 0,
+        ];
+    }
+    usort($rows, static function ($a, $b) {
+        return ((int)($b['updatedAt'] ?? 0)) <=> ((int)($a['updatedAt'] ?? 0));
+    });
+    return $rows;
+}
+
+function s4ProfileSummarySourceStamp(): array {
+    clearstatcache(true, PROFILES_FILE);
+    clearstatcache(true, PROFILES_DELETED_FILE);
+    return [
+        'size' => is_file(PROFILES_FILE) ? (int)@filesize(PROFILES_FILE) : 0,
+        'mtime' => is_file(PROFILES_FILE) ? (int)@filemtime(PROFILES_FILE) : 0,
+        'inode' => is_file(PROFILES_FILE) && function_exists('fileinode') ? (int)@fileinode(PROFILES_FILE) : 0,
+        'deleted_size' => is_file(PROFILES_DELETED_FILE) ? (int)@filesize(PROFILES_DELETED_FILE) : 0,
+        'deleted_mtime' => is_file(PROFILES_DELETED_FILE) ? (int)@filemtime(PROFILES_DELETED_FILE) : 0,
+        'deleted_inode' => is_file(PROFILES_DELETED_FILE) && function_exists('fileinode') ? (int)@fileinode(PROFILES_DELETED_FILE) : 0,
+    ];
+}
+
+/** Cache only the dashboard's lightweight profile metadata, keyed to the source file's identity. */
+function s4ProfileSummaryCacheWrite(array $profiles): void {
+    if (!is_file(PROFILES_FILE)) return;
+    $source = s4ProfileSummarySourceStamp();
+    $json = @json_encode(['schema' => 1, 'source' => $source, 'profiles' => s4ProfileSummaryRows($profiles)],
+        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    if (!is_string($json) || $json === '') return;
+    $tmp = PROFILE_SUMMARY_CACHE_FILE . '.tmp.' . getmypid() . '.' . mt_rand(1000, 9999);
+    if (@file_put_contents($tmp, $json, LOCK_EX) !== strlen($json)) { @unlink($tmp); return; }
+    if (!@rename($tmp, PROFILE_SUMMARY_CACHE_FILE)) @unlink($tmp);
+}
+
+/** Main-screen fast path: read a tiny sidecar instead of decoding every product in profiles.json. */
+function loadProfileSummaries(): array {
+    if (!is_file(PROFILES_FILE)) return [];
+    $source = s4ProfileSummarySourceStamp();
+    if (is_file(PROFILE_SUMMARY_CACHE_FILE)) {
+        $cached = @json_decode((string)@file_get_contents(PROFILE_SUMMARY_CACHE_FILE), true);
+        if (is_array($cached) && (int)($cached['schema'] ?? 0) === 1
+            && is_array($cached['source'] ?? null) && is_array($cached['profiles'] ?? null)
+            && (int)($cached['source']['size'] ?? -1) === $source['size']
+            && (int)($cached['source']['mtime'] ?? -1) === $source['mtime']
+            && (int)($cached['source']['inode'] ?? -1) === $source['inode']
+            && (int)($cached['source']['deleted_size'] ?? -1) === $source['deleted_size']
+            && (int)($cached['source']['deleted_mtime'] ?? -1) === $source['deleted_mtime']
+            && (int)($cached['source']['deleted_inode'] ?? -1) === $source['deleted_inode']) {
+            return $cached['profiles'];
+        }
+    }
+    $profiles = loadProfiles();
+    $rows = s4ProfileSummaryRows($profiles);
+    s4ProfileSummaryCacheWrite($profiles);
+    return $rows;
+}
+
 function loadProfiles(): array {
 $GLOBALS['_profilesCorrupt'] = false;
 s4ReclaimPluginQuotaBloat(false);
@@ -4854,6 +4923,7 @@ function writeJsonFile(string $path, $data): array {
     };
     if ($tryAtomicTmp(true) || $tryAtomicTmp(false)) {
         localTaskDbSave($path, $data);
+        if ($path === PROFILES_FILE && function_exists('s4ProfileSummaryCacheWrite')) s4ProfileSummaryCacheWrite((array)$data);
         return ['ok' => true, 'error' => ''];
     }
     $errFirst = (string)(error_get_last()['message'] ?? '');
@@ -4861,6 +4931,7 @@ function writeJsonFile(string $path, $data): array {
         s4ReclaimPluginQuotaBloat(true);
         if ($tryAtomicTmp(true) || $tryAtomicTmp(false)) {
             localTaskDbSave($path, $data);
+            if ($path === PROFILES_FILE && function_exists('s4ProfileSummaryCacheWrite')) s4ProfileSummaryCacheWrite((array)$data);
             return ['ok' => true, 'error' => ''];
         }
     }
@@ -4876,6 +4947,7 @@ function writeJsonFile(string $path, $data): array {
         if ($r === false) $r = @file_put_contents($path, $json);
         if ($r === $need) {
             localTaskDbSave($path, $data);
+            if ($path === PROFILES_FILE && function_exists('s4ProfileSummaryCacheWrite')) s4ProfileSummaryCacheWrite((array)$data);
             return ['ok' => true, 'error' => ''];
         }
         if ($r !== false) @unlink($path);
@@ -57889,6 +57961,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.478', 'کش خلاصهٔ پروفایل و فشرده‌سازی gzip داشبورد',
+         function_exists('s4ProfileSummaryRows')
+      && function_exists('s4ProfileSummaryCacheWrite')
+      && function_exists('loadProfileSummaries')
+      && strpos($selfSrc, 'PROFILE_SUMMARY_CACHE_FILE') !== false
+      && strpos($selfSrc, "@ob_start('ob_gzhandler')") !== false
+      && strpos($selfSrc, "{v:'10." . "478'") !== false
+      && version_compare(APP_VERSION, '10.478', '>='));
     $add('10.476', 'تست خودکار روزانهٔ مدل‌های هوش مصنوعی + انتخاب خودکار مدل مستر و پشتیبان‌های مستر بر اساس آمار پایداری و کیفیت در آخرین تست',
          function_exists('aiDailyTestCfg')
       && function_exists('aiModelNormalizeTestStats')
@@ -85893,17 +85973,16 @@ send_sse('done',[]);exit;
 if (defined('SCRAPER4_NO_RENDER') && SCRAPER4_NO_RENDER) {
     return;
 }
-$initialProfiles = [];
-foreach (loadProfiles() as $key => $p) {
-$initialProfiles[] = [
-'key' => $key,
-'name' => $p['name'] ?? $key,
-'url' => $p['url'] ?? '',
-'updatedAt' => $p['updatedAt'] ?? 0,
-'productCount' => is_array($p['products'] ?? null) ? count($p['products']) : 0,
-];
+$initialProfiles = loadProfileSummaries();
+/* Compress the large, inline dashboard HTML for supporting browsers. Keep the
+   general JSON/API buffer untouched and avoid double-compressing host output. */
+$__s4AcceptEncoding = strtolower((string)($_SERVER['HTTP_ACCEPT_ENCODING'] ?? ''));
+$__s4ZlibSetting = strtolower(trim((string)@ini_get('zlib.output_compression')));
+if (function_exists('ob_gzhandler') && strpos($__s4AcceptEncoding, 'gzip') !== false
+    && !in_array($__s4ZlibSetting, ['1', 'on', 'true'], true) && !headers_sent()) {
+    @header('Vary: Accept-Encoding', false);
+    @ob_start('ob_gzhandler');
 }
-usort($initialProfiles, fn($a, $b) => ($b['updatedAt'] ?? 0) <=> ($a['updatedAt'] ?? 0));
 app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کاربر روی کلِ خروجی
 ?>
 <!DOCTYPE html>
@@ -97623,6 +97702,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.478', t:'⚡ آماده‌شدن سریع‌تر داشبورد و بارگذاری کم‌حجم‌تر کل رابط', items:[
+    'نمای شروع برای نمایش نام، نشانی، زمان و شمار محصولات دیگر در هر بارگذاری کل فایل بزرگ profiles.json را دوباره decode نمی‌کند؛ sidecar کوچک و اتمیکِ profile_summary_cache.json به‌صورت خودکار هنگام ذخیرهٔ پروفایل تازه می‌شود و با اندازه/زمان/شناسهٔ فایل مبدأ اعتبارسنجی می‌شود.',
+    'HTML حجیم داشبورد که CSS و JavaScript درون‌خطی دارد، برای مرورگرهای پشتیبان به‌صورت gzip فرستاده می‌شود؛ پاسخ‌های JSON/API و داده‌های دیگر وارد این مسیر فشرده‌سازیِ اختصاصی نمی‌شوند.'
+  ]},
   {v:'10.477', t:'🛠️ پایدارسازی تست روزانهٔ AI: selftest واقعی رتبه‌بندی، ادامهٔ چرخهٔ چندکلیدی و زمان‌بندی بدون‌تکرار', items:[
     'اصلاح selftest 10.476 بر اساس قرارداد واقعیِ موتور آمار: dedupeِ runEpoch در ثبت‌کنندهٔ تست صف انجام می‌شود، نه تابع کمکیِ افزایش آمار؛ fixtureهای selftest حالا schema واقعی testStats را با recent/proper_runs/avg_latency_ms بازسازی و انتخاب مستر/پشتیبان‌ها را با شاهدهای آماری قابل‌اتکا می‌سنجند.',
     'ادامهٔ امن تست روزانهٔ چندکلیدی: runEpoch اکنون به هر keyTests ذخیره می‌شود تا پس از مرگ/ادامهٔ پردازه فقط اسلات‌های کلیدیِ انجام‌نشده دوباره وارد صف شوند و تستِ یک کلید باعث حذف کلیدهای دیگر همان مدل از ادامه نشود.',
