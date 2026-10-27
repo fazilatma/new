@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.478';
+const APP_VERSION = '10.479';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -35127,33 +35127,13 @@ if(isset($_GET['sync_pipeline_clear_done'])){
 }
 if(isset($_GET['sync_pipeline_control'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
-    $pk=trim((string)($_POST['profile_key']??$_GET['profile_key']??''));$action=(string)($_POST['control']??$_GET['control']??'');
+    $pk=trim((string)($_POST['profile_key']??$_GET['profile_key']??''));
+    $pipelineKey=trim((string)($_POST['pipeline_key']??$_GET['pipeline_key']??$pk));
+    $action=(string)($_POST['control']??$_GET['control']??'');
     if($pk===''||!in_array($action,['stop','continue'],true)){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'invalid_control'],JSON_UNESCAPED_UNICODE);exit;}
-    $row=null;foreach(syncPipelineRows() as $candidate)if((string)($candidate['profile_key']??'')===$pk){$row=$candidate;break;}
-    if(!$row){http_response_code(404);echo json_encode(['ok'=>false,'error'=>'pipeline_not_found'],JSON_UNESCAPED_UNICODE);exit;}
-    if($action==='stop'){
-        if((string)($row['trigger']??'')==='manual')@file_put_contents(MANUAL_SYNC_STOP_FILE,json_encode(['at'=>time(),'profile_key'=>$pk],JSON_UNESCAPED_UNICODE),LOCK_EX);
-        $extract=extractStopActiveRows($pk);$paused=[];
-        foreach([['bslReadQueue','bslWriteQueue',BSL_STOP_FILE],['wooReadQueue','wooWriteQueue',WOO_STOP_FILE]] as $spec){
-            if(!function_exists($spec[0])||!function_exists($spec[1]))continue;$q=$spec[0]();$changed=false;
-            foreach($q['entries'] as &$entry){if(!is_array($entry)||(string)($entry['profile_key']??'')!==$pk||!in_array((string)($entry['status']??''),['waiting','running'],true))continue;
-                if((string)$entry['status']==='running')@file_put_contents($spec[2],json_encode(['stop'=>true,'time'=>time(),'queue_id'=>(string)($entry['id']??''),'by'=>'sync_pipeline'],JSON_UNESCAPED_UNICODE),LOCK_EX);
-                $entry['status']='paused';$entry['paused_by']='sync_pipeline';$entry['stopped_by_user']=true;$entry['paused_at']=time();$paused[]=(string)($entry['id']??'');$changed=true;
-            }unset($entry);if($changed)$spec[1]($q);
-        }
-        syncPipelineMark($pk,(string)($row['profile_name']??$pk),'stopped',(string)($row['trigger']??'manual'),['message'=>'با درخواست کاربر متوقف شد','control_at'=>time()]);
-        echo json_encode(['ok'=>true,'stopped'=>true,'extract'=>$extract,'paused_queues'=>$paused],JSON_UNESCAPED_UNICODE);exit;
-    }
-    @unlink(MANUAL_SYNC_STOP_FILE);
-    syncPipelineMark($pk,(string)($row['profile_name']??$pk),'queued','manual',['message'=>'ادامه از checkpoint ذخیره‌شده','failed_stage'=>'','resume_control'=>true]);
-    $wEnq=s4WorkerEnqueueManualSync($pk,true);
-    if(!empty($wEnq['ok'])){
-        s4SpawnPersistentWorker();
-        $queued=true;
-    }else{
-        $queued=fireAndForget('manual_sync=1&profile='.rawurlencode($pk).'&resume=1&force=1',1200);
-    }
-    echo json_encode(['ok'=>$queued,'continued'=>$queued,'profile_key'=>$pk,'worker_job_id'=>(string)($wEnq['job_id']??''),'error'=>$queued?'':'worker_start_failed'],JSON_UNESCAPED_UNICODE);exit;
+    $control=syncPipelineControlExecute($pipelineKey,$action,$pk);
+    if(empty($control['ok'])&&($control['error']??'')==='pipeline_not_found')http_response_code(404);
+    echo json_encode($control,JSON_UNESCAPED_UNICODE);exit;
 }
 if(isset($_GET['sync_pipeline_status'])){
     header('Content-Type: application/json; charset=UTF-8');
@@ -39833,6 +39813,151 @@ function tasksRowsOrdered(int $now): array {
     return $rows;
 }
 
+/** Build one Task Manager row per active profile sync pipeline. These are
+ * durable pipeline identities, not aliases for the singleton manual_sync card. */
+function tasksProfilePipelineRows(int $now): array {
+    if (!function_exists('syncPipelineRows')) return [];
+    $workerRows = (array)(function_exists('s4WorkerLoadQueue') ? (s4WorkerLoadQueue()['entries'] ?? []) : []);
+    $extractRows = (array)(function_exists('extractReadQueue') ? (extractReadQueue()['entries'] ?? []) : []);
+    $sendRows = [];
+    foreach (['bslReadQueue','wooReadQueue'] as $reader) {
+        if (function_exists($reader)) {
+            $q = $reader();
+            foreach ((array)($q['entries'] ?? []) as $e) if (is_array($e)) $sendRows[] = $e;
+        }
+    }
+    $extractProgress = function_exists('readProgress') ? readProgress(EXTRACT_PROGRESS_FILE) : [];
+    $workerActive = function_exists('s4WorkerIsActive') ? s4WorkerIsActive() : false;
+    $rows = [];
+    foreach (syncPipelineRows() as $pipe) {
+        if (!is_array($pipe) || (string)($pipe['operation'] ?? '') === 'cell_equalize') continue;
+        $pk = trim((string)($pipe['profile_key'] ?? ''));
+        $pipeKey = trim((string)($pipe['pipeline_key'] ?? $pk));
+        $stage = (string)($pipe['stage'] ?? '');
+        $terminalControl=in_array($stage,['stopped','error'],true);
+        if ((!empty($pipe['done'])&&!$terminalControl) || $pk === '' || $pipeKey === ''
+            || !in_array($stage, ['queued','extract','pricing','send','stopped','error'], true)) continue;
+        $updated = (int)($pipe['updated_at'] ?? $pipe['started_at'] ?? 0);
+        $idle = $updated > 0 ? max(0, $now - $updated) : PHP_INT_MAX;
+        $hasOwner = false;
+        if (!$terminalControl && !empty($extractProgress['running']) && (string)($extractProgress['profile_key'] ?? '') === $pk
+            && $now - (int)($extractProgress['last_progress_ts'] ?? $extractProgress['ts'] ?? 0) < 120) $hasOwner = true;
+        if (!$terminalControl && !$hasOwner) foreach ($extractRows as $e) {
+            if (!is_array($e) || (string)($e['profile_key'] ?? '') !== $pk) continue;
+            if (in_array((string)($e['status'] ?? ''), ['running','waiting'], true)
+                && $now - (int)($e['updated_at'] ?? $e['started_at'] ?? 0) < 180) { $hasOwner = true; break; }
+        }
+        if (!$terminalControl && !$hasOwner) foreach ($workerRows as $j) {
+            if (!is_array($j) || !in_array((string)($j['status'] ?? ''), ['pending','running'], true)) continue;
+            $payload = is_array($j['payload'] ?? null) ? $j['payload'] : [];
+            if ((string)($payload['profile_key'] ?? '') === $pk
+                && in_array((string)($j['type'] ?? ''), ['manual_sync','backend_extract'], true)
+                && ((string)($j['status']??'')==='running'||$workerActive)) { $hasOwner = true; break; }
+        }
+        $ownedIds = array_values(array_filter(array_map('strval', (array)($pipe['send_queue_ids'] ?? []))));
+        if (!$terminalControl && !$hasOwner) foreach ($sendRows as $e) {
+            if (!is_array($e)) continue;
+            $createdAt=(int)($e['created_at']??$e['started_at']??$e['updated_at']??0);
+            $pipelineStarted=(int)($pipe['started_at']??0);
+            $belongs = in_array((string)($e['id'] ?? ''), $ownedIds, true)
+                || ((string)($e['profile_key'] ?? '') === $pk && ($pipelineStarted<=0||$createdAt<=0||$createdAt>=($pipelineStarted-30)));
+            if ($belongs && in_array((string)($e['status'] ?? ''), ['waiting','running'], true)
+                && $now - (int)($e['updated_at'] ?? $e['started_at'] ?? 0) < 240) { $hasOwner = true; break; }
+        }
+        $state = $terminalControl || (!$hasOwner && $idle > TASKS_STALE_SEC) ? 'stale' : 'running';
+        $titleName = trim((string)($pipe['profile_name'] ?? $pk)) ?: $pk;
+        $stageNames = ['queued'=>'در صف worker','extract'=>'استخراج','pricing'=>'قیمت‌گذاری','send'=>'ارسال','stopped'=>'متوقف‌شده','error'=>'خطا'];
+        $displayStage = (string)($stageNames[$stage] ?? $stage);
+        $details = is_array($pipe['stage_details'][$stage] ?? null) ? $pipe['stage_details'][$stage] : [];
+        $counts = is_array($details['counts'] ?? null) ? $details['counts'] : [];
+        $cur = (int)($counts['current'] ?? $counts['processed'] ?? $counts['sent'] ?? $counts['extracted'] ?? 0);
+        $total = (int)($counts['total'] ?? $counts['queued'] ?? 0);
+        $pct = $total > 0 ? (int)max(0, min(100, round($cur * 100 / $total))) : -1;
+        $logs = [];
+        foreach ([(string)($pipe['message'] ?? ''), (string)($details['report'] ?? '')] as $line) if (trim($line) !== '') $logs[] = trim($line);
+        $key = 'profile_sync_' . substr(hash('sha256', $pipeKey), 0, 20);
+        $rows[] = [
+            'key'=>$key,'title'=>'همگام‌سازی · '.$titleName,'icon'=>'🔄','queue_id'=>'','profile_key'=>$pk,
+            'profile_name'=>$titleName,'shop_name'=>'','tab'=>'همگام‌سازی','pane'=>'start','smenu'=>'','ai'=>'','el'=>'','open'=>'',
+            'resume'=>'','resumable'=>$state==='stale','bulk_resumable'=>$stage!=='stopped','state'=>$state,'percent'=>$pct,'total'=>$total,'current'=>$cur,
+            'phase'=>$displayStage.' · '.((string)($pipe['trigger']??'periodic')==='periodic'?'دوره‌ای':'دستی'),
+            'last'=>(string)($pipe['message']??''),'started'=>(int)($pipe['started_at']??0),'ts'=>$updated,
+            'age'=>$idle,'cancelled'=>false,'stoppable'=>$state==='running','stop'=>'sync_pipeline_control',
+            'clearable'=>false,'stats'=>[],'log'=>array_slice($logs,-12),'profile_task'=>'sync_pipeline',
+            'pipeline_key'=>$pipeKey,'pipeline_stage'=>$stage,
+        ];
+    }
+    return $rows;
+}
+
+/** Stable identity lookup for a dynamic profile pipeline card. */
+function tasksProfilePipelineFind(string $taskKey): ?array {
+    foreach (tasksProfilePipelineRows(time()) as $row) if (hash_equals((string)$row['key'], $taskKey)) return $row;
+    return null;
+}
+
+/** Independent extraction queue rows not already represented by a sync pipeline. */
+function tasksProfileExtractionRows(int $now):array{
+    if(!function_exists('extractReadQueue'))return[];
+    $q=extractReadQueue();$rows=[];
+    foreach((array)($q['entries']??[])as$entry){
+        if(!is_array($entry)||!empty($entry['sync_stage']))continue;
+        $qid=trim((string)($entry['id']??''));$pk=trim((string)($entry['profile_key']??''));
+        $status=(string)($entry['status']??'');
+        if($qid===''||$pk===''||!in_array($status,['waiting','running','paused','failed'],true))continue;
+        /* Queue rows persist their display name; fall back to the stable key
+           rather than decoding the potentially very large products file on every poll. */
+        $name=trim((string)($entry['profile_name']??$pk))?:$pk;
+        $updated=(int)($entry['updated_at']??$entry['started_at']??0);$age=$updated>0?max(0,$now-$updated):PHP_INT_MAX;
+        $owner=false;
+        if(function_exists('extractQueueRowHasLiveOwner'))$owner=extractQueueRowHasLiveOwner($entry);
+        if(!$owner&&function_exists('extractLockHeldForQueue'))$owner=extractLockHeldForQueue($qid);
+        $activeStatus=in_array($status,['waiting','running'],true);
+        $state=$activeStatus?((!$owner&&$age>TASKS_STALE_SEC)?'stale':'running'):'stale';
+        $canResume=!empty($entry['resumable'])||!empty($entry['resume_needed'])
+            ||($activeStatus&&$state==='stale');
+        $key='profile_extract_'.substr(hash('sha256',$qid),0,20);
+        $rows[]=[
+            'key'=>$key,'title'=>'استخراج بک‌اند · '.$name,'icon'=>'🔎','queue_id'=>$qid,'profile_key'=>$pk,
+            'profile_name'=>$name,'shop_name'=>'','tab'=>'استخراج','pane'=>'start','smenu'=>'','ai'=>'','el'=>'','open'=>'',
+            'resume'=>'','resumable'=>$canResume,
+            'state'=>$state,'percent'=>(int)($entry['total']??0)>0?(int)max(0,min(100,round((int)($entry['current']??0)*100/(int)$entry['total']))):-1,
+            'total'=>(int)($entry['total']??0),'current'=>(int)($entry['current']??0),
+            'phase'=>(string)($entry['phase']??$entry['resume_phase']??'استخراج'),'last'=>(string)($entry['error']??''),
+            'started'=>(int)($entry['started_at']??0),'ts'=>$updated,'age'=>$age,'cancelled'=>false,
+            'stoppable'=>$activeStatus&&$state==='running','stop'=>'extract_stop','clearable'=>false,'stats'=>[],'log'=>[],
+            'profile_task'=>'extract_queue','pipeline_key'=>'','pipeline_stage'=>'','bulk_resumable'=>empty($entry['stopped_by_user'])&&(string)($entry['paused_by']??'')!=='user',
+        ];
+    }
+    return$rows;
+}
+function tasksProfileTaskFind(string $taskKey):?array{
+    $allRows=array_merge(tasksProfilePipelineRows(time()),tasksProfileExtractionRows(time()));
+    foreach($allRows as $row){
+        if(is_array($row)&&hash_equals((string)($row['key']??''),$taskKey))return $row;
+    }
+    return null;
+}
+function tasksProfileTaskControl(array $row,string $action,int $waitMs=1800):array{
+    if($action==='stop'){
+        if(($row['profile_task']??'')==='sync_pipeline')return syncPipelineControlExecute((string)($row['pipeline_key']??''),'stop',(string)($row['profile_key']??''));
+        if(($row['profile_task']??'')==='extract_queue'){
+            $qid=trim((string)($row['queue_id']??''));if($qid==='')return['ok'=>false,'error'=>'missing_queue_id'];
+            $ok=fireAndForget('extract_stop=1&queue_id='.rawurlencode($qid),$waitMs);
+            return['ok'=>(bool)$ok,'stopped'=>(bool)$ok,'queue_id'=>$qid,'error'=>$ok?'':'stop_dispatch_failed'];
+        }
+    }
+    if($action==='continue'){
+        if(($row['profile_task']??'')==='sync_pipeline')return syncPipelineControlExecute((string)($row['pipeline_key']??''),'continue',(string)($row['profile_key']??''));
+        if(($row['profile_task']??'')==='extract_queue'){
+            $qid=trim((string)($row['queue_id']??''));if($qid==='')return['ok'=>false,'error'=>'missing_queue_id'];
+            $ok=fireAndForget('extract_resume=1&queue_id='.rawurlencode($qid),$waitMs);
+            return['ok'=>(bool)$ok,'continued'=>(bool)$ok,'queue_id'=>$qid,'error'=>$ok?'':'resume_dispatch_failed'];
+        }
+    }
+    return['ok'=>false,'error'=>'unsupported_profile_task'];
+}
+
 /* v10.400: compact event feed for the animated header health pulser.
    The page embeds the current cursor; later reads use it so closely spaced
    cron arrivals are not lost or replayed from before the page was opened. */
@@ -39875,6 +40000,7 @@ if (isset($_GET['tasks_list'])) {
     $now  = time();
     /* v10.24 (۳۷الف): ترتیب دیگر ترتیبِ ثابتِ رجیستری نیست — اولویتِ کاربر است */
     $rows = tasksRowsOrdered($now);
+    foreach (array_merge(tasksProfilePipelineRows($now),tasksProfileExtractionRows($now)) as $_pipelineTask) { $_pipelineTask['rank'] = count($rows) + 1; $rows[] = $_pipelineTask; }
 
     /* کارهای زمان‌بندی‌شدهٔ ایجنت هم بخشی از «وظایفِ پس‌زمینه»اند، ولی
        جنسشان فرق دارد: تکرارشونده‌اند و اولویت/فاصله دارند. جدا برمی‌گردند
@@ -39906,6 +40032,11 @@ if (isset($_GET['tasks_list'])) {
 if (isset($_GET['tasks_stop'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $key = (string)($_GET['key'] ?? '');
+    if (str_starts_with($key, 'profile_sync_') || str_starts_with($key, 'profile_extract_')) {
+        $profileTask = tasksProfileTaskFind($key);
+        if (!$profileTask) { echo json_encode(['ok'=>false,'error'=>'profile_task_not_found'], JSON_UNESCAPED_UNICODE); exit; }
+        echo json_encode(tasksProfileTaskControl($profileTask,'stop'), JSON_UNESCAPED_UNICODE); exit;
+    }
     $reg = tasksRegistry();
     if (!isset($reg[$key])) { echo json_encode(['ok' => false, 'error' => 'کارِ ناشناخته'], JSON_UNESCAPED_UNICODE); exit; }
     $sf = tasksStopFile($key);
@@ -39942,7 +40073,13 @@ if (isset($_GET['tasks_stop'])) {
  */
 if (isset($_GET['tasks_resume'])) {
     header('Content-Type: application/json; charset=UTF-8');
-    $res = tasksResumeOne((string)($_GET['key'] ?? ''),2500,true);
+    $resumeKey=(string)($_GET['key']??'');
+    if (str_starts_with($resumeKey,'profile_sync_') || str_starts_with($resumeKey,'profile_extract_')) {
+        $profileTask=tasksProfileTaskFind($resumeKey);
+        $res=$profileTask?tasksProfileTaskControl($profileTask,'continue'):['ok'=>false,'error'=>'profile_task_not_found'];
+        echo json_encode($res,JSON_UNESCAPED_UNICODE);exit;
+    }
+    $res = tasksResumeOne($resumeKey,2500,true);
     echo json_encode($res, JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -39994,6 +40131,7 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
         $periodicBuildOnly = !empty($reconCfgRa['build_only']);
         $reg = tasksRegistry();
         $rows = tasksRowsOrdered($now);
+        foreach (array_merge(tasksProfilePipelineRows($now),tasksProfileExtractionRows($now)) as $_pipelineTask) { $_pipelineTask['rank'] = count($rows) + 1; $rows[] = $_pipelineTask; }
         $done = []; $skipped = []; $dispatchedCount = 0;
         $maxDispatchPerPass = (function_exists('s4CanSpawnCliTask') && s4CanSpawnCliTask()) ? ($isCronAuto ? 6 : 8) : 1;
         $primaryRows = []; $deferredRows = [];
@@ -40004,16 +40142,19 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
             $want = $only === 'stale_done' ? in_array($st, ['stale', 'done'], true) : ($st === 'stale');
             if (!$want) continue;
             if (empty($r['resumable'])) { $skipped[] = ['key' => $r['key'], 'why' => 'ادامه ندارد']; continue; }
+            if (array_key_exists('bulk_resumable',$r) && empty($r['bulk_resumable'])) { $skipped[]=['key'=>$r['key'],'why'=>'این اجرا صریحاً توسط کاربر متوقف شده است']; continue; }
             $rKey = (string)$r['key'];
             if ($isCronAuto) {
-                $stopF = tasksStopFile($rKey);
+                $stopF = !empty($r['profile_task']) ? '' : tasksStopFile($rKey);
                 if ($stopF !== '' && is_file($stopF) && ($now - (int)@filemtime($stopF)) < 45) {
                     $skipped[] = ['key' => $rKey, 'why' => 'سیگنال توقف تازه در جریان است'];
                     continue;
                 }
                 $defT = $reg[$rKey] ?? [];
                 $fT = is_array($defT) ? (string)($defT['file'] ?? '') : '';
-                $pT = $fT !== '' ? localTaskStateRead($fT, []) : [];
+                $pT = !empty($r['profile_task'])
+                    ? ['phase'=>$r['phase']??'','current'=>$r['current']??0,'total'=>$r['total']??0,'sent'=>$r['current']??0]
+                    : ($fT !== '' ? localTaskStateRead($fT, []) : []);
                 if ($rKey === 'matrix_fix' && $periodicBuildOnly && (string)($pT['source'] ?? '') === 'recon_auto') {
                     $skipped[] = ['key' => $rKey, 'why' => 'تیک فقط ساخت جدول دوره‌ای روشن است'];
                     continue;
@@ -40050,9 +40191,11 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
                 continue;
             }
             $rKey = (string)$r['key'];
-            $one = tasksResumeOne($rKey, $isCronAuto ? 1800 : 2500, true);
+            $one = !empty($r['profile_task'])
+                ? tasksProfileTaskControl($r,'continue',$isCronAuto?1800:2500)
+                : tasksResumeOne($rKey, $isCronAuto ? 1800 : 2500, true);
             if (!empty($one['ok'])) {
-                $done[] = ['key' => $rKey, 'title' => $r['title'], 'rank' => $r['rank']];
+                $done[] = ['key' => $rKey, 'title' => $r['title'], 'rank' => $r['rank'], 'profile_key'=>(string)($r['profile_key']??'')];
                 $perTask[$rKey] = ['at' => $now, 'sig' => (string)($r['_cur_sig'] ?? ''), 'trigger' => $trigger];
                 if (empty($one['already_dispatched'])) {
                     $dispatchedCount++;
@@ -57961,6 +58104,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.479', 'نمایش ردیف‌های مستقل همگام‌سازی هر پروفایل در مدیر وظایف و کنترل توقف/ادامهٔ اختصاصی',
+         function_exists('tasksProfilePipelineRows')
+      && function_exists('syncPipelineControlExecute')
+      && function_exists('tasksProfileExtractionRows')
+      && function_exists('tasksProfileTaskControl')
+      && strpos($selfSrc, "'profile_task'=>'sync_pipeline'") !== false
+      && strpos($selfSrc, "'profile_task'=>'extract_queue'") !== false
+      && strpos($selfSrc, 'foreach (tasksProfilePipelineRows($now) as $_pipelineTask)') !== false
+      && strpos($selfSrc, "'pipeline_key'=>$pipelineKey") !== false
+      && version_compare(APP_VERSION, '10.479', '>='));
     $add('10.478', 'کش خلاصهٔ پروفایل و فشرده‌سازی gzip داشبورد',
          function_exists('s4ProfileSummaryRows')
       && function_exists('s4ProfileSummaryCacheWrite')
@@ -63320,6 +63473,58 @@ function syncPipelineRows():array{
     $all=json_decode((string)@file_get_contents(SYNC_PIPELINE_FILE),true);if(!is_array($all))return[];
     uasort($all,static fn($a,$b)=>(int)($b['updated_at']??0)<=>(int)($a['updated_at']??0));
     return array_values($all);
+}
+
+/** Stop or continue the exact durable profile-pipeline row exposed to Task Manager. */
+function syncPipelineControlExecute(string $pipelineKey,string $action,string $profileKey=''):array{
+    $pipelineKey=trim($pipelineKey);$profileKey=trim($profileKey);
+    if($pipelineKey===''||!in_array($action,['stop','continue'],true))return ['ok'=>false,'error'=>'invalid_control'];
+    $row=null;
+    foreach(syncPipelineRows() as $candidate){
+        if(!is_array($candidate))continue;
+        $candidateKey=(string)($candidate['pipeline_key']??$candidate['profile_key']??'');
+        if($candidateKey!==$pipelineKey)continue;
+        if($profileKey!==''&&(string)($candidate['profile_key']??'')!==$profileKey)continue;
+        $row=$candidate;break;
+    }
+    if(!$row)return ['ok'=>false,'error'=>'pipeline_not_found'];
+    if((string)($row['operation']??'')==='cell_equalize')return ['ok'=>false,'error'=>'pipeline_control_unsupported'];
+    $pk=trim((string)($row['profile_key']??''));if($pk==='')return ['ok'=>false,'error'=>'invalid_profile'];
+    $pName=(string)($row['profile_name']??$pk);$trigger=(string)($row['trigger']??'manual');
+    if($action==='stop'){
+        /* MANUAL_SYNC_STOP_FILE is a legacy singleton signal. Only write it
+           when its current owner is this profile; queue/extraction controls
+           below are already scoped to the selected profile. */
+        $manualProgress=readProgress(MANUAL_SYNC_PROGRESS_FILE);
+        if($trigger==='manual'&&(string)($manualProgress['profile_key']??'')===$pk)
+            @file_put_contents(MANUAL_SYNC_STOP_FILE,json_encode(['at'=>time(),'profile_key'=>$pk],JSON_UNESCAPED_UNICODE),LOCK_EX);
+        $extract=extractStopActiveRows($pk);$paused=[];
+        $ownedSendIds=array_values(array_filter(array_map('strval',(array)($row['send_queue_ids']??[]))));
+        $pipelineStarted=(int)($row['started_at']??0);
+        foreach([['bslReadQueue','bslWriteQueue',BSL_STOP_FILE],['wooReadQueue','wooWriteQueue',WOO_STOP_FILE]] as $spec){
+            if(!function_exists($spec[0])||!function_exists($spec[1]))continue;$q=$spec[0]();$changed=false;
+            foreach($q['entries'] as &$entry){
+                if(!is_array($entry)||(string)($entry['profile_key']??'')!==$pk||!in_array((string)($entry['status']??''),['waiting','running'],true))continue;
+                $entryId=(string)($entry['id']??'');$entryCreated=(int)($entry['created_at']??$entry['started_at']??$entry['updated_at']??0);
+                if($ownedSendIds?!in_array($entryId,$ownedSendIds,true):($pipelineStarted>0&&$entryCreated>0&&$entryCreated<($pipelineStarted-30)))continue;
+                if((string)$entry['status']==='running')@file_put_contents($spec[2],json_encode(['stop'=>true,'time'=>time(),'queue_id'=>(string)($entry['id']??''),'by'=>'sync_pipeline'],JSON_UNESCAPED_UNICODE),LOCK_EX);
+                $entry['status']='paused';$entry['paused_by']='sync_pipeline';$entry['stopped_by_user']=true;$entry['paused_at']=time();$paused[]=(string)($entry['id']??'');$changed=true;
+            }unset($entry);if($changed)$spec[1]($q);
+        }
+        syncPipelineMark($pk,$pName,'stopped',$trigger,['pipeline_key'=>$pipelineKey,'message'=>'با درخواست کاربر متوقف شد','control_at'=>time()]);
+        return ['ok'=>true,'stopped'=>true,'profile_key'=>$pk,'pipeline_key'=>$pipelineKey,'extract'=>$extract,'paused_queues'=>$paused];
+    }
+    $stopState=json_decode((string)@file_get_contents(MANUAL_SYNC_STOP_FILE),true);
+    if(!is_array($stopState)||(string)($stopState['profile_key']??'')===''||(string)($stopState['profile_key']??'')===$pk)@unlink(MANUAL_SYNC_STOP_FILE);
+    syncPipelineMark($pk,$pName,'queued','manual',['pipeline_key'=>$pipelineKey,'message'=>'ادامه از checkpoint ذخیره‌شده','failed_stage'=>'','resume_control'=>true]);
+    $wEnq=s4WorkerEnqueueManualSync($pk,true);
+    if(!empty($wEnq['ok'])){
+        s4SpawnPersistentWorker();$queued=true;
+    }else{
+        $queued=fireAndForget('manual_sync=1&profile='.rawurlencode($pk).'&resume=1&force=1',1200);
+    }
+    return ['ok'=>(bool)$queued,'continued'=>(bool)$queued,'profile_key'=>$pk,'pipeline_key'=>$pipelineKey,
+        'worker_job_id'=>(string)($wEnq['job_id']??''),'error'=>$queued?'':'worker_start_failed'];
 }
 
 /**
@@ -97702,6 +97907,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.479', t:'🔄 نمایش و کنترل مستقل اجرای همگام‌سازیِ هر پروفایل در مدیر وظایف', items:[
+    'ردیف‌های پایدار sync pipeline و استخراج‌های مستقل backend اکنون کنار کارهای عمومی در مدیر وظایف دیده می‌شوند؛ هر پروفایل/صف کارت جداگانه با وضعیت مالکیت صف و worker دارد.',
+    'توقف و ادامهٔ کارت استخراج مستقل به همان queue_id محدود است؛ توقف/ادامهٔ pipeline نیز پروفایل‌محور است و «ادامهٔ همه»/بازیابی خودکار checkpointها را از مسیرهای صف‌دار و dedupشده پیش می‌برد، بدون ساختن worker تکراری.'
+  ]},
   {v:'10.478', t:'⚡ آماده‌شدن سریع‌تر داشبورد و بارگذاری کم‌حجم‌تر کل رابط', items:[
     'نمای شروع برای نمایش نام، نشانی، زمان و شمار محصولات دیگر در هر بارگذاری کل فایل بزرگ profiles.json را دوباره decode نمی‌کند؛ sidecar کوچک و اتمیکِ profile_summary_cache.json به‌صورت خودکار هنگام ذخیرهٔ پروفایل تازه می‌شود و با اندازه/زمان/شناسهٔ فایل مبدأ اعتبارسنجی می‌شود.',
     'HTML حجیم داشبورد که CSS و JavaScript درون‌خطی دارد، برای مرورگرهای پشتیبان به‌صورت gzip فرستاده می‌شود؛ پاسخ‌های JSON/API و داده‌های دیگر وارد این مسیر فشرده‌سازیِ اختصاصی نمی‌شوند.'
@@ -110626,14 +110835,14 @@ function tmCard(t){
     +'<div class="tmc-head" onclick="tmToggleCard(\''+jsAttr(t.key)+'\')" style="cursor:pointer"'
     +' title="'+(opened?'کلیک: بستنِ جزئیات':'کلیک: نمایشِ جزئیاتِ این کار')+'">'
     +'<span class="tmchev" aria-hidden="true">'+(opened?'▾':'▸')+'</span>'
-    +'<span class="tmord" onclick="event.stopPropagation()" style="margin-left:2px">'
+    +(t.profile_task?'':('<span class="tmord" onclick="event.stopPropagation()" style="margin-left:2px">'
     + '<button onclick="event.stopPropagation();tmOrder(\''+jsAttr(t.key)+'\',\'up\')" '+(first?'disabled':'')+' title="یک پله بالاتر — زودتر بازیابی می‌شود">▲</button>'
-    + '<button onclick="event.stopPropagation();tmOrder(\''+jsAttr(t.key)+'\',\'down\')" '+(last?'disabled':'')+' title="یک پله پایین‌تر">▼</button></span>'
-    +'<span class="tmrank" onclick="event.stopPropagation();tmOrder(\''+jsAttr(t.key)+'\',\'top\')" '
-    + 'style="cursor:pointer" title="کلیک: بردن به ابتدای صف">'+toFa(t.rank||0)+'</span>'
+    + '<button onclick="event.stopPropagation();tmOrder(\''+jsAttr(t.key)+'\',\'down\')" '+(last?'disabled':'')+' title="یک پله پایین‌تر">▼</button></span>'))
+    +(t.profile_task?'<span class="tmrank">'+toFa(t.rank||0)+'</span>':('<span class="tmrank" onclick="event.stopPropagation();tmOrder(\''+jsAttr(t.key)+'\',\'top\')" '
+    + 'style="cursor:pointer" title="کلیک: بردن به ابتدای صف">'+toFa(t.rank||0)+'</span>'))
     +'<span style="font-size:15px">'+esc(t.icon)+'</span>'
     +'<span class="tmc-t">'+esc(t.title)+'</span>'
-    +((t.key==='bsl_send'||t.key==='woo_send')&&t.profile_name
+    +((t.profile_task||t.key==='bsl_send'||t.key==='woo_send')&&t.profile_name
       ?'<span class="tmc-tab" style="color:#67e8f9;border-color:#0e7490;font-weight:800" title="پروفایل مالک این checkpoint">👤 '+esc(t.profile_name)+(t.shop_name?' · '+esc(t.shop_name):'')+'</span>':'')
     +'<span class="tmc-tab">'+esc(t.tab)+(nav?' ↗':'')+'</span>'
     +'<span class="tmc-badge '+bcl+'">'+esc(lbl)+'</span>';
@@ -110770,7 +110979,7 @@ function tmRender(){
 
   /* v10.24 (۳۷ج): چند کارِ گیرکرده معمولاً با هم می‌میرند (یک ری‌استارتِ
      هاست)، پس دکمهٔ جمعی کنارِ شمارندهٔ «رهاشده» می‌نشیند. */
-  const staleResumable=(d.tasks||[]).filter(t=>t.state==='stale'&&t.resumable).length;
+  const staleResumable=(d.tasks||[]).filter(t=>t.state==='stale'&&t.resumable&&t.bulk_resumable!==false).length;
   const arEnabled=d.auto_resume_all_enabled!==false;
   const arLast=d.auto_resume_all_last||null;
   const arAgo=arLast&&arLast.at?Math.max(0,(parseInt(d.now)||Math.floor(Date.now()/1000))-parseInt(arLast.at)):null;
@@ -110869,7 +111078,7 @@ function tmOrderReset(){
 /* v10.24 (۳۷ج): ادامهٔ همهٔ کارهای گیرکرده، به ترتیبِ اولویت */
 function tmResumeAll(){
   if(tmBusy)return;
-  const stale=((tmData&&tmData.tasks)||[]).filter(t=>t.state==='stale'&&t.resumable);
+  const stale=((tmData&&tmData.tasks)||[]).filter(t=>t.state==='stale'&&t.resumable&&t.bulk_resumable!==false);
   if(!stale.length){showToast('کارِ رهاشده‌ای برای ادامه نیست');return;}
   if(!confirm(toFa(stale.length)+' کارِ گیرکرده به ترتیبِ اولویت دوباره شروع شوند؟\n'
      +stale.map((t,i)=>'  '+toFa(i+1)+'. '+t.title).join('\n')))return;
@@ -110891,7 +111100,9 @@ function tmResume(key){
   const t=((tmData&&tmData.tasks)||[]).find(x=>x.key===key);
   const isStale=!!(t&&t.state==='stale');
   const q=isStale
-    ? 'کارِ گیرکردهٔ «'+((t&&t.title)||key)+'» دوباره شروع شود؟\nقفل و ردِ اجرای قبلی پاک می‌شود.'
+    ? (t&&t.profile_task
+      ? 'ادامهٔ اجرای پروفایل «'+((t&&t.profile_name)||((t&&t.title)||key))+'» از checkpoint خودش انجام شود؟\nفقط همین pipeline/صف ادامه می‌یابد.'
+      : 'کارِ گیرکردهٔ «'+((t&&t.title)||key)+'» دوباره شروع شود؟\nقفل و ردِ اجرای قبلی پاک می‌شود.')
     : 'کارِ «'+((t&&t.title)||key)+'» با تنظیماتِ اجرای قبلی دوباره اجرا شود؟';
   if(!confirm(q))return;
   tmBusy=true;
