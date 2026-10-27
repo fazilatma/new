@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.479';
+const APP_VERSION = '10.480';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1087,7 +1087,59 @@ function s4WorkerStateLoad(): array {
     return is_array($d) ? $d : [];
 }
 
+/** Configurable per-PHP-process CPU duty-cycle governor.
+ * It is cooperative: long-running work yields at progress/worker checkpoints. */
+function s4CpuGuardSettings(?array $cn=null):array{
+    $cn=$cn??loadConnections();
+    return [
+        'enabled'=>!array_key_exists('cpu_guard_enabled',$cn)||!empty($cn['cpu_guard_enabled']),
+        'percent'=>max(10,min(100,(int)($cn['cpu_guard_percent']??50))),
+        'max_parallel'=>max(1,min(8,(int)($cn['cpu_guard_max_parallel']??1))),
+        'supported'=>function_exists('getrusage'),
+    ];
+}
+function s4CpuGuardMaxParallel(?array $cn=null):int{
+    $cfg=s4CpuGuardSettings($cn);return !empty($cfg['enabled'])?(int)$cfg['max_parallel']:8;
+}
+function s4CpuGuardProcessSeconds():?float{
+    if(!function_exists('getrusage'))return null;
+    $u=@getrusage();if(!is_array($u))return null;
+    $us=((float)($u['ru_utime.tv_sec']??0))+((float)($u['ru_utime.tv_usec']??0))/1000000;
+    $ss=((float)($u['ru_stime.tv_sec']??0))+((float)($u['ru_stime.tv_usec']??0))/1000000;
+    return $us+$ss;
+}
+function s4CpuGuardTick():array{
+    static $wallBase=null,$cpuBase=null,$lastSample=0.0,$lastConfig=null,$configAt=0,$configSignature='';
+    if($lastConfig===null||time()-$configAt>=10){
+        $lastConfig=s4CpuGuardSettings();$configAt=time();
+        $newSignature=(int)!empty($lastConfig['enabled']).':'.(int)($lastConfig['percent']??50);
+        if($configSignature!==''&&$newSignature!==$configSignature){$wallBase=null;$cpuBase=null;$lastSample=0.0;}
+        $configSignature=$newSignature;
+    }
+    $cfg=$lastConfig;
+    if(empty($cfg['enabled'])||(int)$cfg['percent']>=100){$wallBase=null;$cpuBase=null;$lastSample=0.0;return['enabled'=>(bool)$cfg['enabled'],'slept_ms'=>0];}
+    $cpuNow=s4CpuGuardProcessSeconds();
+    if($cpuNow===null)return['enabled'=>true,'supported'=>false,'slept_ms'=>0];
+    $wallNow=microtime(true);
+    if($wallBase===null||$cpuBase===null){$wallBase=$wallNow;$cpuBase=$cpuNow;$lastSample=$wallNow;return['enabled'=>true,'slept_ms'=>0];}
+    if(($wallNow-$lastSample)<0.35)return['enabled'=>true,'slept_ms'=>0];
+    $elapsed=max(0.001,$wallNow-$wallBase);$cpuUsed=max(0.0,$cpuNow-$cpuBase);
+    $target=max(0.10,min(1.0,(int)$cfg['percent']/100));$sleepSec=0.0;
+    if($cpuUsed>($elapsed*$target)){
+        /* CPU / (wall + sleep) <= target. Keep any remaining debt for the next
+           checkpoint; bounded chunks avoid one enormous uninterruptible wait. */
+        $sleepSec=min(15.0,max(0.0,($cpuUsed/$target)-$elapsed));
+        if($sleepSec>0.002)usleep((int)round($sleepSec*1000000));
+    }
+    $after=microtime(true);$lastSample=$after;
+    $afterElapsed=max(0.001,$after-$wallBase);$afterCpu=max(0.0,s4CpuGuardProcessSeconds()-$cpuBase);
+    if(($afterCpu/$afterElapsed)<=$target){$wallBase=$after;$cpuBase=s4CpuGuardProcessSeconds();}
+    return['enabled'=>true,'target_percent'=>(int)$cfg['percent'],'cpu_percent'=>(int)min(100,round(100*$afterCpu/$afterElapsed)),
+        'slept_ms'=>(int)round($sleepSec*1000)];
+}
+
 function s4WorkerStateWrite(array $patch): void {
+    s4CpuGuardTick();
     $cur = s4WorkerStateLoad();
     /* deploy ممکن است فایل state را در حالی حذف کند که daemon قدیمی هنوز زنده
        است. هر heartbeat خود daemon باید هویت را دوباره بسازد، وگرنه active=false
@@ -1207,7 +1259,8 @@ function s4WorkerEnqueue(string $type, array $payload, string $label = ''): arra
 
 function extractTaskConcurrency(?array $cn = null): int {
     $cn = $cn ?? loadConnections();
-    return max(1, min(8, (int)($cn['extract_task_concurrency'] ?? 3)));
+    $configured=max(1,min(8,(int)($cn['extract_task_concurrency']??3)));
+    return min($configured,s4CpuGuardMaxParallel($cn));
 }
 function s4ParallelExtractSupported(): bool {
     return function_exists('exec') && strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN'
@@ -4962,6 +5015,7 @@ function writeJsonFile(string $path, $data): array {
 
 function writeProgress(string $file, array $data): void {
 writeJsonFile($file, $data);
+s4CpuGuardTick();
 /* v10.421: the shared progress file can later be replaced by another parallel
    extractor. Persist positive product progress on the owning extraction row
    while it is available, so a later cron can decide safely whether this exact
@@ -36274,6 +36328,7 @@ foreach ($profiles as $_ckStrip => &$_cvStrip) {
 unset($_ckStrip, $_cvStrip);
 if (function_exists('gc_collect_cycles')) @gc_collect_cycles();
 foreach ($profiles as $key => $profile) {
+s4CpuGuardTick();
 if ($_onlyKey !== '' && $key !== $_onlyKey) continue;
 /* v10.61 (۷۵): ضربانِ اتصالِ دستی — پردازندهٔ بی‌خروجی را هاست می‌کُشد؛
    هر پروفایل یک خطِ ndjson می‌زند تا اتصال «زنده» بماند. */
@@ -39981,6 +40036,17 @@ if(isset($_POST['tasks_extract_concurrency'])){
     echo json_encode(['ok'=>$ok,'extract_task_concurrency'=>$n,'default'=>3,'dispatch'=>$dispatch],JSON_UNESCAPED_UNICODE);exit;
 }
 
+if(isset($_POST['tasks_cpu_guard'])){
+    header('Content-Type: application/json; charset=UTF-8');
+    $cnCpu=loadConnections();
+    $enabled=$_POST['enabled']??'1';
+    $cnCpu['cpu_guard_enabled']=!in_array(strtolower((string)$enabled),['0','false','off',''],true);
+    $cnCpu['cpu_guard_percent']=max(10,min(100,(int)($_POST['percent']??50)));
+    $cnCpu['cpu_guard_max_parallel']=max(1,min(8,(int)($_POST['max_parallel']??1)));
+    $saved=saveConnections($cnCpu);
+    echo json_encode(['ok'=>$saved,'cpu_guard'=>s4CpuGuardSettings($cnCpu)],JSON_UNESCAPED_UNICODE);exit;
+}
+
 if (isset($_POST['tasks_auto_resume_toggle']) || isset($_GET['tasks_auto_resume_toggle'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $cnT = loadConnections();
@@ -40020,6 +40086,7 @@ if (isset($_GET['tasks_list'])) {
         'running' => $running, 'stale' => $stale,
         'extract_task_concurrency'=>extractTaskConcurrency(),
         'extract_running'=>s4WorkerParallelExtractRunning(),
+        'cpu_guard'=>s4CpuGuardSettings($cnTl),
         'auto_resume_all_enabled' => $autoResumeAllEnabled,
         'auto_resume_all_last' => $autoResumeAllState['last'] ?? null,
         'stale_after' => TASKS_STALE_SEC], JSON_UNESCAPED_UNICODE);
@@ -40134,6 +40201,7 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
         foreach (array_merge(tasksProfilePipelineRows($now),tasksProfileExtractionRows($now)) as $_pipelineTask) { $_pipelineTask['rank'] = count($rows) + 1; $rows[] = $_pipelineTask; }
         $done = []; $skipped = []; $dispatchedCount = 0;
         $maxDispatchPerPass = (function_exists('s4CanSpawnCliTask') && s4CanSpawnCliTask()) ? ($isCronAuto ? 6 : 8) : 1;
+        $maxDispatchPerPass=min($maxDispatchPerPass,s4CpuGuardMaxParallel($cnRa));
         $primaryRows = []; $deferredRows = [];
         $perTask = is_array($raState['per_task'] ?? null) ? $raState['per_task'] : [];
 
@@ -58104,6 +58172,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.480', 'محافظ CPU قابل تنظیم با محدودسازی سهم پردازه، همزمانی استخراج و fanout ادامهٔ خودکار',
+         function_exists('s4CpuGuardSettings')
+      && function_exists('s4CpuGuardTick')
+      && function_exists('s4CpuGuardMaxParallel')
+      && strpos($selfSrc, "'cpu_guard_percent'") !== false
+      && strpos($selfSrc, "'tasks_cpu_guard'") !== false
+      && strpos($selfSrc, "id=\"tmCpuGuardEnabled\"") !== false
+      && version_compare(APP_VERSION, '10.480', '>='));
     $add('10.479', 'نمایش ردیف‌های مستقل همگام‌سازی هر پروفایل در مدیر وظایف و کنترل توقف/ادامهٔ اختصاصی',
          function_exists('tasksProfilePipelineRows')
       && function_exists('syncPipelineControlExecute')
@@ -97907,6 +97983,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.480', t:'🛡️ محافظ CPU قابل تنظیم برای کاهش بار پردازه و همزمانی worker', items:[
+    'افزودن محافظ CPU تعاونی در checkpointهای پیشرفت و heartbeat: سقف duty-cycle هر پردازه از مدیر وظایف قابل تنظیم است و هنگام مصرف CPU بیش از حد، پردازه به‌صورت کوتاه yield/sleep می‌کند؛ در عملیات I/O-bound که CPU زیر سقف است مکثی افزوده نمی‌شود.',
+    'افزودن تنظیم سقف همزمانی worker (پیش‌فرض ۱) که هم pool استخراج موازی و هم تعداد dispatch ادامهٔ خودکار را محدود می‌کند؛ این محافظ سهم کل حساب هاست را اندازه‌گیری/تضمین نمی‌کند و مقدارهای پایین‌تر زمان پایان کار را افزایش می‌دهند.'
+  ]},
   {v:'10.479', t:'🔄 نمایش و کنترل مستقل اجرای همگام‌سازیِ هر پروفایل در مدیر وظایف', items:[
     'ردیف‌های پایدار sync pipeline و استخراج‌های مستقل backend اکنون کنار کارهای عمومی در مدیر وظایف دیده می‌شوند؛ هر پروفایل/صف کارت جداگانه با وضعیت مالکیت صف و worker دارد.',
     'توقف و ادامهٔ کارت استخراج مستقل به همان queue_id محدود است؛ توقف/ادامهٔ pipeline نیز پروفایل‌محور است و «ادامهٔ همه»/بازیابی خودکار checkpointها را از مسیرهای صف‌دار و dedupشده پیش می‌برد، بدون ساختن worker تکراری.'
@@ -110643,6 +110723,7 @@ function tmPulse(){
     tmPaintBtn(d);
     const ec=document.getElementById('tmExtractConcurrency');
     if(ec&&document.activeElement!==ec)ec.value=d.extract_task_concurrency||3;
+    tmSyncCpuGuardControls();
     if(document.getElementById('tmModal')) tmRender();
   }).catch(()=>{});
 }
@@ -110675,6 +110756,12 @@ function tmOpen(){
     +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
     +'<label style="font-size:10px;color:#93c5fd;display:flex;gap:4px;align-items:center" title="تعداد پروفایل‌هایی که worker استخراج می‌تواند همزمان اجرا کند">استخراج همزمان:'
     +'<input type="number" id="tmExtractConcurrency" value="3" min="1" max="8" step="1" onchange="tmSaveExtractConcurrency(this.value)" style="width:55px;padding:4px 6px"></label>'
+    +'<label style="font-size:10px;color:#fbbf24;display:flex;gap:4px;align-items:center;cursor:pointer" title="محدودکردن سهم CPU هر پردازه در checkpointها">'
+    +'<input type="checkbox" id="tmCpuGuardEnabled" onchange="tmSaveCpuGuard()"> محافظ CPU</label>'
+    +'<label style="font-size:10px;color:#fbbf24;display:flex;gap:4px;align-items:center">سقف:'
+    +'<select id="tmCpuGuardPercent" onchange="tmSaveCpuGuard()" style="width:62px;padding:4px 5px"><option>25</option><option>35</option><option>50</option><option>60</option><option>75</option><option>90</option><option>100</option></select>%</label>'
+    +'<label style="font-size:10px;color:#fbbf24;display:flex;gap:4px;align-items:center">همزمانی:'
+    +'<select id="tmCpuGuardParallel" onchange="tmSaveCpuGuard()" style="width:48px;padding:4px 5px"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>'
     +'<label style="font-size:10px;color:#94a3b8;display:flex;gap:4px;align-items:center;cursor:pointer">'
     +'<input type="checkbox" id="tmOnlyActive" onchange="tmToggleFilter()"> فقط فعال‌ها</label>'
     +'<button class="btn btn-gray" onclick="tmClearAll()" style="font-size:10px;padding:4px 9px" title="پاک‌کردنِ ردِ همهٔ کارهای تمام‌شده">🧽 پاک‌سازی</button>'
@@ -110687,6 +110774,7 @@ function tmOpen(){
   const b=document.getElementById('tasksBtn'); if(b)b.classList.add('active');
   const c=document.getElementById('tmOnlyActive'); if(c)c.checked=tmOnlyActive;
   const ec=document.getElementById('tmExtractConcurrency');if(ec&&tmData)ec.value=tmData.extract_task_concurrency||3;
+  tmSyncCpuGuardControls();
   if(tmData)tmRender();
   tmPulse();
   if(tmTimer)clearInterval(tmTimer);
@@ -110713,6 +110801,24 @@ function tmSaveExtractConcurrency(value){
     if(tmData)tmData.extract_task_concurrency=n;
     showToast('✓ همزمانی استخراج روی '+toFa(n)+' وظیفه تنظیم شد');tmPulse();
   }).catch(()=>showToast('خطا در ذخیرهٔ همزمانی استخراج',true));
+}
+
+function tmSyncCpuGuardControls(){
+  const c=(tmData&&tmData.cpu_guard)||{enabled:true,percent:50,max_parallel:1};
+  const en=document.getElementById('tmCpuGuardEnabled'),pc=document.getElementById('tmCpuGuardPercent'),mp=document.getElementById('tmCpuGuardParallel');
+  if(en&&document.activeElement!==en)en.checked=c.enabled!==false;
+  if(pc&&document.activeElement!==pc)pc.value=String(c.percent||50);
+  if(mp&&document.activeElement!==mp)mp.value=String(c.max_parallel||1);
+}
+function tmSaveCpuGuard(){
+  const en=document.getElementById('tmCpuGuardEnabled'),pc=document.getElementById('tmCpuGuardPercent'),mp=document.getElementById('tmCpuGuardParallel');
+  const cfg={enabled:!!(en&&en.checked),percent:Math.max(10,Math.min(100,parseInt(pc&&pc.value)||50)),max_parallel:Math.max(1,Math.min(8,parseInt(mp&&mp.value)||1))};
+  const fd=new FormData();fd.append('tasks_cpu_guard','1');fd.append('enabled',cfg.enabled?'1':'0');fd.append('percent',String(cfg.percent));fd.append('max_parallel',String(cfg.max_parallel));
+  fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok){showToast('ذخیرهٔ محافظ CPU ناموفق بود',true);return;}
+    if(tmData)tmData.cpu_guard=cfg;
+    showToast(cfg.enabled?'محافظ CPU فعال · سقف '+toFa(cfg.percent)+'٪ · همزمانی '+toFa(cfg.max_parallel):'محافظ CPU خاموش شد');tmPulse();
+  }).catch(()=>showToast('خطا در ذخیرهٔ محافظ CPU',true));
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -110999,7 +111105,7 @@ function tmRender(){
     +'<input type="checkbox" '+(arEnabled?'checked ':'')+'onchange="tmToggleAutoResumeAll(this.checked)" style="width:12px;height:12px;margin:0">'
     +'<span>'+esc(arLabel)+'</span></label>'
     +'<span style="flex:1"></span>'
-    +'<span style="font-size:9.5px;color:#64748b;align-self:center">به‌روزرسانیِ خودکار هر ۲.۵ ثانیه</span></div>';
+    +'<span style="font-size:9.5px;color:#64748b;align-self:center">به‌روزرسانیِ خودکار هر ۲.۵ ثانیه · محافظ CPU سقفِ duty-cycle پردازه است، نه تضمینِ سهمِ کلِ هاست</span></div>';
 
   // v10.37 (۵۰ب): برچسبِ دکمهٔ جمعی از وضعیتِ فعلی خوانده می‌شود
   const anyOpen=tasks.some(t=>tmIsOpen(t.key));
