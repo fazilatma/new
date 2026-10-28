@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.482';
+const APP_VERSION = '10.483';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -28130,7 +28130,7 @@ $exRunningRows=0;foreach((array)($queue['entries']??[]) as $__qeCount){if(is_arr
 $exIdleMax=max(120,(int)(loadConnections()['stall_after']??300));
 foreach($queue['entries'] as &$qe){
     if(($qe['status']??'')!=='running')continue;
-    if(!empty($qe['stop_requested']))continue;
+    if(!empty($qe['stop_requested'])||!empty($qe['stopped_by_user'])||(string)($qe['paused_by']??'')==='user')continue;
     /* پردازه‌ای که مرده، خودش running=true را در فایل پیشرفت جا گذاشته —
        دقیقاً چون فرصت نکرده done بنویسد. پس «زنده بودن» را نمی‌شود از
        همان فایل پرسید؛ تنها شاهد قابل اعتماد، زمان آخرین نوشتن است. */
@@ -28162,16 +28162,19 @@ foreach($queue['entries'] as &$qe){
             $qe['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامهٔ خودکار از checkpoint';
             unset($qe['done_at']);
         } else {
-            $qe['status']='failed';
-            $qe['resumable']=false;
-            $qe['resume_needed']=0;
-            $qe['auto_resume_blocked']='zero_products';
-            $qe['error']='بدون محصول متوقف شد ('.$idle.'ث)';
-            $qe['done_at']=$now;
+            $qe['status']='paused';
+            $qe['resumable']=true;
+            $qe['resume_needed']=1;
+            $qe['retryable']=true;
+            $qe['retry_reason']='worker_stalled_before_products';
+            $qe['resume_phase']=$_rowPh;
+            if($_rowPh==='list')$qe['resume_page']=$_rpQ;
+            $qe['error']='بی‌حرکت ماند پیش از ثبت محصول ('.$idle.'ث) — ادامهٔ امن دوباره صف می‌شود';
+            unset($qe['done_at'],$qe['auto_resume_blocked'],$qe['auto_resume_blocked_at']);
         }
         $dirty=true;
         $_pkQ=(string)($qe['profile_key']??'');
-        if($_pkQ!=='' && $_rowProds > 0){
+        if($_pkQ!=='' && ($_rowProds > 0 || !empty($qe['retryable']))){
             try{
                 $_psQ=loadProfiles();
                 if(isset($_psQ[$_pkQ])&&is_array($_psQ[$_pkQ])){
@@ -28473,21 +28476,22 @@ if(!empty($p['running'])&&empty($p['done'])&&!$_pQueuedPending){
         $_hasProds=((int)($p['extracted']??0))>0;
         $_rp = max(1, (int)($p['page'] ?? $p['resume_page'] ?? 1));
         if ($_rp > 1) $_rp = max(1, $_rp - 1);
-        $p['running']=false;$p['done']=!$_hasProds;$p['paused']=$_hasProds;
-        $p['resume_needed']=$_hasProds;$p['stalled']=true;$p['resumable']=$_hasProds;
+        $p['running']=false;$p['done']=false;$p['paused']=true;
+        $p['resume_needed']=true;$p['stalled']=true;$p['resumable']=true;
+        $p['retryable']=!$_hasProds;$p['retry_reason']=$_hasProds?'':'worker_stalled_before_products';
         $p['resume_phase']=$_stalePhase;
         if($_stalePhase==='list')$p['resume_page']=$_rp;
         $p['error']=$_hasProds
             ? ('استخراج '.$_pIdle.' ثانیه بی‌حرکت ماند — در حال ادامهٔ خودکار از checkpoint')
-            : ('استخراج بدون محصول متوقف شد ('.$_pIdle.'ث)');
+            : ('استخراج پیش از ثبت محصول بی‌حرکت ماند؛ ادامهٔ امن دوباره صف می‌شود');
         $p['recent_log']=array_slice(array_merge((array)($p['recent_log']??[]),
             $_hasProds
                 ? ['♻️ توقف پردازش پس از '.$_pIdle.' ثانیه — کارِ انجام‌شده ذخیره شده و خودکار ادامه می‌یابد ('
                    .($_stalePhase==='detail'?'فاز ۲: جزئیات':('فاز ۱: از صفحه '.$_rp)).')']
-                : ['⛔ استخراج بدون دریافت محصول متوقف شد']),-40);
+                : ['♻️ استخراج پیش از دریافت محصول متوقف شد؛ checkpoint امن برای تلاش دوباره نگه داشته شد']),-40);
         writeProgress(EXTRACT_PROGRESS_FILE,$p);
         $_pkSave = (string)($p['profile_key'] ?? '');
-        if ($_pkSave !== '' && $_hasProds) {
+        if ($_pkSave !== '' ) {
             try {
                 $_ps = loadProfiles();
                 if (isset($_ps[$_pkSave]) && is_array($_ps[$_pkSave])) {
@@ -28506,27 +28510,26 @@ if(!empty($p['running'])&&empty($p['done'])&&!$_pQueuedPending){
         }
         $_q=extractReadQueue();$_qd=false;
         foreach($_q['entries'] as &$_qe){
-            if(($_qe['status']??'')!=='running')continue;
+            if(($_qe['status']??'')!=='running'||!empty($_qe['stopped_by_user'])||(string)($_qe['paused_by']??'')==='user')continue;
             if(((string)($p['queue_id']??''))!==''&&((string)($_qe['id']??''))!==((string)$p['queue_id']))continue;
-            if($_hasProds){
-                $_qe['status']='paused';
-                $_qe['error']='بی‌حرکت ماند ('.$_pIdle.'ث) — ادامهٔ خودکار در همین ردیف';
-                $_qe['resumable']=true;$_qe['resume_needed']=1;$_qe['resume_phase']=$_stalePhase;
-                if($_stalePhase==='list')$_qe['resume_page']=$_rp;
-                unset($_qe['done_at']);
-            }else{
-                $_qe['status']='failed';$_qe['resumable']=false;$_qe['resume_needed']=0;
-                $_qe['auto_resume_blocked']='zero_products';$_qe['done_at']=time();
-            }
+            $_qe['status']='paused';
+            $_qe['error']=$_hasProds
+                ? 'بی‌حرکت ماند ('.$_pIdle.'ث) — ادامهٔ خودکار در همین ردیف'
+                : 'بی‌حرکت ماند پیش از ثبت محصول — ادامهٔ امن دوباره صف می‌شود';
+            $_qe['resumable']=true;$_qe['resume_needed']=1;$_qe['resume_phase']=$_stalePhase;
+            $_qe['retryable']=!$_hasProds;
+            $_qe['retry_reason']=$_hasProds?'':'worker_stalled_before_products';
+            if($_stalePhase==='list')$_qe['resume_page']=$_rp;
+            unset($_qe['done_at'],$_qe['auto_resume_blocked'],$_qe['auto_resume_blocked_at']);
             $_qd=true;
         }
         unset($_qe);
         if($_qd)extractWriteQueue($_q);
-        if($_hasProds){
-            $_arPoll = s4AutoResumeInterruptedExtractions('poll_stall', false);
-            clearstatcache(true,EXTRACT_PROGRESS_FILE);
-            $p=readProgress(EXTRACT_PROGRESS_FILE);
-        }
+        elseif(!$_hasProds&&$_pkSave!=='')
+            s4QueueRetryableExtraction($_pkSave,$_stalePhase,(int)($p['max_pages']??-1),(string)($p['detail_mode']??''));
+        $_arPoll = s4AutoResumeInterruptedExtractions('poll_stall', false);
+        clearstatcache(true,EXTRACT_PROGRESS_FILE);
+        $p=readProgress(EXTRACT_PROGRESS_FILE);
     }
 }
 if((!empty($p['done']) || !empty($p['ran_out']) || !empty($p['resume_needed']) || !empty($p['paused']))
@@ -29318,8 +29321,8 @@ function extractQueueRunHasProducts(array $row,array $progress=[],int $runningRo
 
 /**
  * Atomically close one abandoned/stale extraction row without replacing its
- * ID or checkpoint. A positive-product run becomes resumable; a zero-product
- * run becomes terminal so an unavailable source cannot loop forever.
+ * ID or checkpoint. Zero-product stalls remain retryable with the normal
+ * auto-resume backoff instead of becoming a permanent dead end.
  * When $ownerAbsent is true, definitive owner loss is enough and no age wait
  * is imposed. Otherwise the row must have at least $staleAfter seconds without
  * real progress. The live lock/PID is rechecked while mutating the row.
@@ -29363,17 +29366,19 @@ function extractQueuePauseStaleRow(string $queueId, int $staleAfter, bool $owner
             $row['resume_phase']=$phase;$row['error']='بی‌حرکت ماند ('.$idle.'ث) — ادامه در همین ردیف';
             unset($row['done_at'],$row['auto_resume_blocked'],$row['auto_resume_blocked_at'],$row['resuming'],$row['resume_requested_at']);
         }else{
-            $row['status']='failed';$row['resumable']=false;$row['resume_needed']=0;
-            $row['done_at']=$now;$row['auto_resume_blocked']='zero_products';$row['auto_resume_blocked_at']=$now;
-            $row['error']='استخراج بدون هیچ محصولی متوقف شد؛ ادامهٔ خودکار غیرفعال شد';
-            unset($row['resuming'],$row['resume_requested_at']);
+            $row['status']='paused';$row['resumable']=true;$row['resume_needed']=1;
+            $row['retryable']=true;$row['retry_reason']='worker_stalled_before_products';
+            $row['resume_phase']=$phase;
+            if($phase==='list')$row['resume_page']=max(1,(int)($row['resume_page']??$row['current']??1));
+            $row['error']='استخراج پیش از ثبت محصول متوقف شد؛ تلاش امن بعدی با backoff انجام می‌شود';
+            unset($row['done_at'],$row['auto_resume_blocked'],$row['auto_resume_blocked_at'],$row['resuming'],$row['resume_requested_at']);
         }
         $entries[$idx]=$row;$q['entries']=array_values($entries);
         $json=json_encode($q,JSON_UNESCAPED_UNICODE);
         if($json===false||@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)===false)return null;
         $result=['row'=>$row,'idle'=>$idle,'phase'=>$phase,'progress_owned'=>$progressOwned,
-            'progress'=>$progressForRow,'products'=>$productCount,'resumable'=>$productCount>0,
-            'terminal_zero_products'=>$productCount<=0,'owner_absent'=>$ownerAbsent];
+            'progress'=>$progressForRow,'products'=>$productCount,'resumable'=>true,
+            'retryable_empty'=>$productCount<=0,'terminal_zero_products'=>false,'owner_absent'=>$ownerAbsent];
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
     return $result;
 }
@@ -29576,12 +29581,16 @@ function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $
         if($status==='waiting'&&!$cronPendingWait){$busy[$key]=true;continue;}
         if(!in_array($status,['paused','failed'],true)&&!$cronPendingWait)continue;
         $at=max((int)($e['updated_at']??0),(int)($e['done_at']??0),(int)($e['paused_at']??0),(int)($e['started_at']??0));
-        /* Automatic continuation is permitted only after this queue run has
-           actually produced products. Cursors and historical profile products
-           are deliberately insufficient evidence. A newer zero-product row is
-           also a barrier against reviving an older positive checkpoint. */
+        /* Historical profile products alone never prove that a run progressed.
+           Explicitly retryable zero-product stalls (including legacy rows blocked
+           by the old watchdog) are allowed back through the normal backoff; a
+           newer non-retryable zero-product row remains a barrier. */
         $runProducts=extractQueueRunProductCount($e,$progress,max(1,$runningRows));
-        if(!empty($e['auto_resume_blocked'])||$runProducts<=0){
+        $legacyZeroRetry=$runProducts<=0&&$status==='failed'
+            &&(string)($e['auto_resume_blocked']??'')==='zero_products'
+            &&empty($e['stopped_by_user'])&&(string)($e['paused_by']??'')!=='user';
+        $retryableEmpty=$runProducts<=0&&(!empty($e['retryable'])||$legacyZeroRetry);
+        if((!empty($e['auto_resume_blocked'])&&!$legacyZeroRetry)||($runProducts<=0&&!$retryableEmpty)){
             $oldBarrier=$resumeBarriers[$key]??null;
             if(!is_array($oldBarrier)||$at>(int)($oldBarrier['updated_at']??0)
                 ||($at===(int)($oldBarrier['updated_at']??0)&&$seq>(int)($oldBarrier['sequence']??0)))
@@ -29595,11 +29604,11 @@ function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $
             ||(int)($profile['_extract_resume_from']??0)>0;
         $hasRowCheckpoint=!empty($e['resumable'])||!empty($e['resume_needed'])||!empty($e['partial'])
             ||(int)($e['resume_page']??0)>0||in_array((string)($e['resume_phase']??''),['list','detail'],true);
-        if(!$hasProfileCheckpoint&&!$hasRowCheckpoint)continue;
+        if(!$hasProfileCheckpoint&&!$hasRowCheckpoint&&!$retryableEmpty)continue;
         if(!isset($latestRows[$key])||$at>(int)$latestRows[$key]['updated_at']
             ||($at===(int)$latestRows[$key]['updated_at']&&$seq>(int)$latestRows[$key]['sequence'])){
             $latestRows[$key]=['queue_id'=>(string)($e['id']??''),'updated_at'=>$at,'sequence'=>$seq,
-                'run_extracted'=>$runProducts,
+                'run_extracted'=>$runProducts,'retryable_empty'=>$retryableEmpty,
                 'user_stopped'=>!empty($e['stopped_by_user'])||(string)($e['paused_by']??'')==='user'];
         }
     }
@@ -29619,7 +29628,7 @@ function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $
         /* A profile checkpoint without an eligible queue row cannot prove that
            this interrupted run extracted anything; never infer it from the
            profile's historical product catalogue. */
-        if(!is_array($row)||(int)($row['run_extracted']??0)<=0)continue;
+        if(!is_array($row)||((int)($row['run_extracted']??0)<=0&&empty($row['retryable_empty'])))continue;
         $barrier=$resumeBarriers[$key]??null;
         if(is_array($barrier)){
             $barrierAt=(int)($barrier['updated_at']??0);$rowAt=(int)($row['updated_at']??0);
@@ -58326,6 +58335,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.483', 'ادامهٔ خودکار توقف‌های بی‌محصول با backoff و حفظ توقف صریح کاربر',
+         function_exists('cronExtractResumeCandidates')
+      && strpos($selfSrc, 'retryable_empty') !== false
+      && strpos($selfSrc, 'worker_stalled_before_products') !== false
+      && version_compare(APP_VERSION, '10.483', '>='));
     $add('10.481', 'نگه‌داشتن checkpoint استخراج هنگام برخورد قفل و ادامهٔ خودکار مستقل از دورهٔ سینک',
          function_exists('extractRememberRetryableCheckpoint')
       && function_exists('extractQueueMarkRetryWaiting')
@@ -98146,6 +98160,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.483', t:'🔁 ادامهٔ خودکار توقف‌های بی‌محصول با backoff', items:[
+    'استخراج‌هایی که worker یا میزبان پیش از ثبت محصول متوقف می‌کند دیگر در «صفر محصول» قفل نمی‌شوند: checkpoint امن از صفحهٔ اول/فاز ثبت‌شده با backoff ادامه می‌یابد، حتی برای ردیف‌های قدیمی که watchdog قبلاً مسدود کرده بود. توقف صریح کاربر همچنان محترم است؛ خطاهای دائمی منبع/پیکربندی تضمین‌شده قابل بازیابی نیستند.'
+  ]},
   {v:'10.482', t:'🧪 اصلاح تطبیق رشته در خودآزمایی بازیابی استخراج', items:[
     'بررسی ایستای v10.481 از interpolation ناخواستهٔ PHP در نشانگر رشته استفاده می‌کرد و نتیجهٔ کاذب ناموفق می‌داد؛ نشانگر اکنون بدون interpolation سنجیده می‌شود. رفتار استخراج تغییر نکرده است.'
   ]},
