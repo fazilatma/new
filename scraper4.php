@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.484';
+const APP_VERSION = '10.485';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -28200,6 +28200,17 @@ if (!empty($_arQueueRes['resumed']) || !empty($_arQueueRes['paused_stalled'])) {
     $queue = extractReadQueue();
     $progress = readProgress(EXTRACT_PROGRESS_FILE);
 }
+$_retryOwners=[];
+foreach((array)($queue['entries']??[])as$_ownerRow){
+    if(!is_array($_ownerRow)||!in_array((string)($_ownerRow['status']??''),['waiting','running'],true))continue;
+    $_ownerPk=trim((string)($_ownerRow['profile_key']??''));$_ownerId=trim((string)($_ownerRow['id']??''));
+    if($_ownerPk===''||$_ownerId==='')continue;
+    $_ownerAt=(int)($_ownerRow['updated_at']??$_ownerRow['started_at']??0);
+    if(!isset($_retryOwners[$_ownerPk])||$_ownerAt>$_retryOwners[$_ownerPk]['at'])
+        $_retryOwners[$_ownerPk]=['id'=>$_ownerId,'at'=>$_ownerAt];
+}
+foreach($_retryOwners as$_ownerPk=>$_owner)extractQueueSupersedeOlderPausedRows((string)$_ownerPk,(string)$_owner['id']);
+$queue=extractReadQueue();
 echo json_encode(['ok'=>true,'entries'=>$queue['entries'],'progress'=>$progress,'auto_resume'=>$_arQueueRes['resumed']??[]],JSON_UNESCAPED_UNICODE);
 exit;
 }
@@ -29677,7 +29688,12 @@ function extractQueueSupersedeOlderPausedRows(string $profileKey,string $keeperQ
     $now=time();$changed=0;
     foreach($entries as &$e){
         if(!is_array($e)||(string)($e['profile_key']??'')!==$profileKey||(string)($e['id']??'')===$keeperQueueId
-            ||(string)($e['status']??'')!=='paused'||!empty($e['stopped_by_user'])||(string)($e['paused_by']??'')==='user')continue;
+            ||!empty($e['stopped_by_user'])||(string)($e['paused_by']??'')==='user')continue;
+        $_oldStatus=(string)($e['status']??'');
+        $_retryableFailed=$_oldStatus==='failed'
+            &&(!empty($e['retryable'])||(string)($e['auto_resume_blocked']??'')==='zero_products'
+                ||preg_match('~(?:قفل|در حال اجراست|lock[_ -]?held|another extraction is (?:already )?in progress)~iu',(string)($e['error']??''))===1);
+        if($_oldStatus!=='paused'&&!$_retryableFailed)continue;
         $e['status']='superseded';$e['superseded_by']=$keeperQueueId;$e['superseded_at']=$now;
         $e['updated_at']=$now;$e['done_at']=$now;$e['error']='این checkpoint با ردیف تازه‌تر ادامه می‌یابد: '.$keeperQueueId;$changed++;
     }unset($e);
@@ -58337,6 +58353,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.485', 'بستن ردیف خطای قفلِ تکراری پس از تحویل checkpoint به مالک فعال',
+         function_exists('extractQueueSupersedeOlderPausedRows')
+      && strpos($selfSrc, 'retryableFailed') !== false
+      && strpos($selfSrc, 'superseded_by') !== false
+      && version_compare(APP_VERSION, '10.485', '>='));
     $add('10.484', 'بازیابی ردیف‌های قدیمیِ شکست‌خورده بر اثر قفل',
          function_exists('cronExtractResumeCandidates')
       && strpos($selfSrc, 'legacyLockRetry') !== false
@@ -98167,6 +98188,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.485', t:'🧹 بستن ردیف‌های خطای تکراری پس از بازیابی checkpoint', items:[
+    'وقتی extraction تازه‌تر برای همان پروفایل در صف انتظار/اجرا باشد، ردیف‌های قدیمیِ lock-contention یا صفرمحصولِ قابل‌بازیابی به‌جای ماندن در وضعیت failed به superseded پیوند می‌خورند؛ ردیف صریحاً متوقف‌شدهٔ کاربر مستثناست.'
+  ]},
   {v:'10.484', t:'♻️ بازیابی ردیف‌های قدیمیِ شکست‌خورده بر اثر قفل', items:[
     'ردیف‌های تاریخی که خطای «استخراج دیگری در حال اجراست» یا قفل استخراج دارند، اکنون به‌عنوان contention موقت شناسایی و با backoff از checkpoint/فهرست ذخیره‌شده ادامه می‌یابند؛ توقف صریح کاربر دست‌نخورده می‌ماند.'
   ]},
