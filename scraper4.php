@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.483';
+const APP_VERSION = '10.484';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -29586,11 +29586,13 @@ function cronExtractResumeCandidates(array $profiles,array $queueEntries,array $
            by the old watchdog) are allowed back through the normal backoff; a
            newer non-retryable zero-product row remains a barrier. */
         $runProducts=extractQueueRunProductCount($e,$progress,max(1,$runningRows));
+        $notUserStopped=empty($e['stopped_by_user'])&&(string)($e['paused_by']??'')!=='user';
         $legacyZeroRetry=$runProducts<=0&&$status==='failed'
-            &&(string)($e['auto_resume_blocked']??'')==='zero_products'
-            &&empty($e['stopped_by_user'])&&(string)($e['paused_by']??'')!=='user';
-        $retryableEmpty=$runProducts<=0&&(!empty($e['retryable'])||$legacyZeroRetry);
-        if((!empty($e['auto_resume_blocked'])&&!$legacyZeroRetry)||($runProducts<=0&&!$retryableEmpty)){
+            &&(string)($e['auto_resume_blocked']??'')==='zero_products'&&$notUserStopped;
+        $legacyLockRetry=$runProducts<=0&&$status==='failed'&&$notUserStopped
+            &&preg_match('~(?:قفل|در حال اجراست|lock[_ -]?held|another extraction is (?:already )?in progress)~iu',(string)($e['error']??''))===1;
+        $retryableEmpty=$runProducts<=0&&(!empty($e['retryable'])||$legacyZeroRetry||$legacyLockRetry);
+        if((!empty($e['auto_resume_blocked'])&&!$legacyZeroRetry&&!$legacyLockRetry)||($runProducts<=0&&!$retryableEmpty)){
             $oldBarrier=$resumeBarriers[$key]??null;
             if(!is_array($oldBarrier)||$at>(int)($oldBarrier['updated_at']??0)
                 ||($at===(int)($oldBarrier['updated_at']??0)&&$seq>(int)($oldBarrier['sequence']??0)))
@@ -58335,6 +58337,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.484', 'بازیابی ردیف‌های قدیمیِ شکست‌خورده بر اثر قفل',
+         function_exists('cronExtractResumeCandidates')
+      && strpos($selfSrc, 'legacyLockRetry') !== false
+      && strpos($selfSrc, 'another extraction is') !== false
+      && version_compare(APP_VERSION, '10.484', '>='));
     $add('10.483', 'ادامهٔ خودکار توقف‌های بی‌محصول با backoff و حفظ توقف صریح کاربر',
          function_exists('cronExtractResumeCandidates')
       && strpos($selfSrc, 'retryable_empty') !== false
@@ -98160,6 +98167,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.484', t:'♻️ بازیابی ردیف‌های قدیمیِ شکست‌خورده بر اثر قفل', items:[
+    'ردیف‌های تاریخی که خطای «استخراج دیگری در حال اجراست» یا قفل استخراج دارند، اکنون به‌عنوان contention موقت شناسایی و با backoff از checkpoint/فهرست ذخیره‌شده ادامه می‌یابند؛ توقف صریح کاربر دست‌نخورده می‌ماند.'
+  ]},
   {v:'10.483', t:'🔁 ادامهٔ خودکار توقف‌های بی‌محصول با backoff', items:[
     'استخراج‌هایی که worker یا میزبان پیش از ثبت محصول متوقف می‌کند دیگر در «صفر محصول» قفل نمی‌شوند: checkpoint امن از صفحهٔ اول/فاز ثبت‌شده با backoff ادامه می‌یابد، حتی برای ردیف‌های قدیمی که watchdog قبلاً مسدود کرده بود. توقف صریح کاربر همچنان محترم است؛ خطاهای دائمی منبع/پیکربندی تضمین‌شده قابل بازیابی نیستند.'
   ]},
