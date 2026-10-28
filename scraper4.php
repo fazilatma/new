@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.481';
+const APP_VERSION = '10.482';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -58330,7 +58330,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          function_exists('extractRememberRetryableCheckpoint')
       && function_exists('extractQueueMarkRetryWaiting')
       && function_exists('s4WorkerRequeueForRetry')
-      && strpos($selfSrc, "'retryable'     => is_array($payload)") !== false
+      && strpos($selfSrc, "'retryable'     => is_array(") !== false
       && strpos($selfSrc, 'retryable_extract') !== false
       && strpos($selfSrc, 'deferred_by_extract_retry') !== false
       && strpos($selfSrc, 'A rejected contender does not own EXTRACT_PROGRESS_FILE') !== false
@@ -98146,6 +98146,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.482', t:'🧪 اصلاح تطبیق رشته در خودآزمایی بازیابی استخراج', items:[
+    'بررسی ایستای v10.481 از interpolation ناخواستهٔ PHP در نشانگر رشته استفاده می‌کرد و نتیجهٔ کاذب ناموفق می‌داد؛ نشانگر اکنون بدون interpolation سنجیده می‌شود. رفتار استخراج تغییر نکرده است.'
+  ]},
   {v:'10.481', t:'♻️ بازیابی اجباری استخراج‌های پشت‌قفل بدون خطای کاذب یا از دست‌رفتن checkpoint', items:[
     'در برخورد با قفل استخراج، پردازهٔ منتظر دیگر فایل پیشرفتِ استخراجِ فعال را به running=false بازنویسی نمی‌کند؛ این تداخل در فایل پیشرفت مشترک باعث staleشدنِ کارِ سالم و خطاهای زنجیره‌ای می‌شد. checkpoint پروفایل و فهرست محصولات قبلی حفظ می‌شود.',
     'برخورد قفل اکنون وضعیت retryable/queued می‌گیرد، نه خطای نهایی؛ worker با backoff همان job را دوباره در صف می‌گذارد و استخراج دوره‌ایِ عقب‌افتاده هم یک ادامهٔ مستقل از بازهٔ زمانی بعدی صف می‌کند. هنگام انتظار، همگام‌سازی دادهٔ کهنه را به مقصد نمی‌فرستد.'
