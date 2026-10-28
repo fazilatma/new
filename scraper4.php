@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.480';
+const APP_VERSION = '10.481';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -418,7 +418,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/05';
+const APP_VERSION_DATE = '1405/08/06';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -1319,8 +1319,8 @@ function s4DispatchParallelExtractJobs(): array {
         try{$extractRowsSnap=(array)(extractReadQueue()['entries']??[]);}catch(Throwable $_e){}
         try{$progSnap=readProgress(EXTRACT_PROGRESS_FILE);}catch(Throwable $_e){}
     }
-    $running=0;$claimed=[];$recoveredOrphans=[];
-    s4WorkerQueueMutate(function(&$q)use($limit,&$running,&$claimed,&$recoveredOrphans,$profilesSnap,$extractRowsSnap,$progSnap){$now=time();
+    $running=0;$claimed=[];$recoveredOrphans=[];$heldSlots=extractLockHeldCount();
+    s4WorkerQueueMutate(function(&$q)use($limit,$heldSlots,&$running,&$claimed,&$recoveredOrphans,$profilesSnap,$extractRowsSnap,$progSnap){$now=time();
         foreach($q['entries']as &$re){
             if(!is_array($re)||!s4WorkerBackendExtractRowIsDeadOrphan($_re=$re))continue;
             $rpk=trim((string)($re['payload']['profile_key']??''));
@@ -1367,10 +1367,13 @@ function s4DispatchParallelExtractJobs(): array {
         }unset($re);
         foreach($q['entries']as $e)if(is_array($e)&&(string)($e['type']??'')==='backend_extract'&&(string)($e['status']??'')==='running'){
             $pid=(int)($e['worker_pid']??0);if($pid<=0||s4WorkerPidAlive($pid))$running++;}
+        /* Count manual/legacy extractors holding slots even when they are not worker jobs. */
+        $running=max($running,$heldSlots);
         $room=max(0,$limit-$running);
         foreach($q['entries'] as &$e){
             if(count($claimed)>=$room)break;
-            if(!is_array($e)||(string)($e['type']??'')!=='backend_extract'||(string)($e['status']??'')!=='pending')continue;
+            if(!is_array($e)||(string)($e['type']??'')!=='backend_extract'||(string)($e['status']??'')!=='pending'
+                ||(int)($e['retry_after']??0)>$now)continue;
             $e['status']='running';$e['started_at']=$now;$e['updated_at']=$now;
             $e['attempts']=(int)($e['attempts']??0)+1;$e['worker_pid']=0;$claimed[]=(string)($e['id']??'');
         }unset($e);return['ok'=>true];});
@@ -1392,7 +1395,9 @@ function s4RunParallelExtractJob(string $jobId): array {
     if((string)($job['status']??'')!=='running')return ['ok'=>false,'error'=>'parallel_extract_job_not_running'];
     $GLOBALS['_s4ParallelExtractChild']=true;
     try{$res=s4WorkerRunJob($job);$ok=!empty($res['ok']);
-        if($ok&&!empty($res['daemon_recycle'])&&s4WorkerRequeueForRecycle($jobId)){
+        if(!empty($res['retryable'])&&s4WorkerRequeueForRetry($jobId,(string)($res['retry_reason']??'extract_lock_busy'),(int)($res['retry_delay']??10))){
+            $res['parallel_requeued']=true;$res['requeued_for_retry']=true;
+        }elseif($ok&&!empty($res['daemon_recycle'])&&s4WorkerRequeueForRecycle($jobId)){
             $res['parallel_requeued']=true;
         }else{
             $summary=['ok'=>$ok,'extracted'=>(int)($res['extracted']??0),'queue_id'=>(string)($res['queue_id']??''),
@@ -1414,7 +1419,7 @@ function s4WorkerClaimJob(): ?array {
            otherwise “Start extraction” can remain pending for hours. FIFO is
            preserved inside each rank. */
         foreach($q['entries'] as $i=>$e){
-            if(!is_array($e)||(string)($e['status']??'')!=='pending')continue;
+            if(!is_array($e)||(string)($e['status']??'')!=='pending'||(int)($e['retry_after']??0)>$now)continue;
             $type=(string)($e['type']??'');
             if($parallelExtract&&$type==='backend_extract')continue;
             $rank=$type==='manual_sync'?0:($type==='backend_extract'?(!empty($e['payload']['resume'])?1:0):2);
@@ -1520,6 +1525,28 @@ function s4WorkerRequeueForRecycle(string $jobId): bool {
         }
         return ['ok'=>false,'error'=>'job_not_found'];});
     return !empty($ret['requeued']);
+}
+/** Retry transient extraction contention without marking the durable job failed. */
+function s4WorkerRequeueForRetry(string $jobId,string $reason='extract_lock_busy',int $delay=10):bool{
+    $ret=s4WorkerQueueMutate(function(&$q)use($jobId,$reason,$delay){$now=time();
+        foreach($q['entries'] as $i=>$e){if(!is_array($e)||(string)($e['id']??'')!==$jobId)continue;
+            if((string)($e['status']??'')==='cancelled')return['ok'=>false,'cancelled'=>true];
+            $type=(string)($e['type']??'');$e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;
+            $e['retry_after']=$now+max(3,min(300,$delay));$e['retry_count']=(int)($e['retry_count']??0)+1;
+            $e['last_retry_reason']=$reason;$e['error']='';$e['attempts']=max(0,(int)($e['attempts']??0)-1);unset($e['done_at']);
+            $e['payload']=is_array($e['payload']??null)?$e['payload']:[];
+            if($type==='backend_extract')$e['payload']['resume']=true;
+            unset($q['entries'][$i]);$q['entries']=array_values($q['entries']);$q['entries'][]=$e;
+            return['ok'=>true,'requeued'=>true,'type'=>$type,'retry_after'=>$e['retry_after']];
+        }return['ok'=>false,'error'=>'job_not_found'];});
+    if(empty($ret['requeued']))return false;
+    if((string)($ret['type']??'')==='backend_extract'){
+        foreach((array)(s4WorkerLoadQueue()['entries']??[])as$job){if((string)($job['id']??'')!==$jobId)continue;
+            $payload=is_array($job['payload']??null)?$job['payload']:[];$qid=trim((string)($payload['extract_queue_id']??''));
+            if($qid!=='')extractQueueMarkRetryWaiting($qid,$reason,(int)($ret['retry_after']??time()+10));break;
+        }
+    }
+    return true;
 }
 
 function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $preferredQueueId = '', bool $allowUserStoppedResume = false, string $detailMode = ''): array {
@@ -2069,6 +2096,8 @@ function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
         'error'         => (!$logicalOk ? (string)($payload['error'] ?? 'manual_sync_rejected') : ($rc !== 0 ? 'manual_sync_child_exit_' . $rc : '')),
         'busy'          => is_array($payload) && !empty($payload['busy']),
         'resume_needed' => is_array($payload) && !empty($payload['resume_needed']),
+        'retryable'     => is_array($payload) && !empty($payload['retryable']),
+        'retry_delay'   => is_array($payload) ? max(3,(int)($payload['retry_delay']??10)) : 10,
         'ran_out'       => is_array($payload) && !empty($payload['ran_out']),
         'resume_page'   => is_array($payload) ? (int)($payload['resume_page'] ?? 0) : 0,
         'tail'          => mb_substr($txt, -2000),
@@ -2345,13 +2374,6 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
     $pid = 0;
     foreach ($out as $line) { $line = trim((string)$line); if (ctype_digit($line)) { $pid = (int)$line; break; } }
     if ($rc !== 0 || $pid <= 0) return ['ok' => false, 'error' => 'spawn_failed', 'exit_code' => $rc, 'log' => $log];
-    writeProgress(EXTRACT_PROGRESS_FILE, [
-        'running' => true, 'done' => false, 'worker_child' => true, 'child_pid' => $pid,
-        'profile_key' => $profileKey, 'phase' => 'starting', 'total' => 0, 'current' => 0,
-        'started_at' => time(), 'last_progress_ts' => time(), 'extracted' => 0,
-        'recent_log' => ['🧵 استخراج در پردازهٔ CLI جدا شروع شد — مستقل از request مرورگر ادامه می‌دهد'],
-        'total_log_count' => 1,
-    ]);
     return ['ok' => true, 'pid' => $pid, 'log' => $log];
 }
 
@@ -2408,6 +2430,7 @@ function s4WorkerRunJob(array $job): array {
             s4WorkerStateWrite(['phase' => 'manual_sync', 'job_type' => 'manual_sync', 'job_profile' => $pk, 'job_segment' => $msSeg, 'heartbeat' => time()]);
             $msLast = s4WorkerRunManualSyncChild($pk, $msResume);
             $msLast['worker_segments'] = $msSeg;
+            if (!empty($msLast['retryable'])) { $msLast['retry_delay'] = 10; break; }
             if (empty($msLast['ok']) || empty($msLast['resume_needed'])) break;
             if (function_exists('s4DiskCodeMeta') && ((string)(s4DiskCodeMeta()['version'] ?? APP_VERSION) !== APP_VERSION)) {
                 $msLast['daemon_recycle'] = true;
@@ -2460,7 +2483,10 @@ function s4WorkerRunJob(array $job): array {
             if ($resumeNext) {
                 $prep = extractResumePrepare($pk, loadConnections(), $extractQueueId, !empty($payload['allow_user_stopped']) || $segments > 1);
                 if (empty($prep['ok'])) {
-                    $res = ['ok' => false, 'error' => 'checkpoint استخراج قابل رزرو نیست: ' . (string)($prep['reason'] ?? ''), 'worker_segments' => $segments];
+                    $isLockBusy=(string)($prep['reason']??'')==='lock_held';
+                    $res = ['ok' => false, 'error' => 'checkpoint استخراج قابل رزرو نیست: ' . (string)($prep['reason'] ?? ''),
+                        'worker_segments' => $segments,'retryable'=>$isLockBusy,'resume_needed'=>$isLockBusy,
+                        'locked'=>$isLockBusy,'retry_reason'=>$isLockBusy?'extract_lock_busy':''];
                     break;
                 }
                 $runPhase = (string)($prep['phase'] ?? $runPhase);
@@ -2474,6 +2500,7 @@ function s4WorkerRunJob(array $job): array {
             try{$res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride, $detailModeJob);}
             finally{unset($GLOBALS['_s4WorkerJobId']);}
             $res['worker_segments'] = $segments;
+            if(!empty($res['retryable'])){$res['resume_needed']=true;$res['retry_reason']='extract_lock_busy';$res['retry_delay']=10;break;}
             $budgetResume = !empty($res['ran_out']);
             $transientResume = !empty($res['resume_needed']) && !$budgetResume;
             if ($transientResume) $transientResumes++;
@@ -2659,6 +2686,12 @@ function s4WorkerLoopFromCli(): void {
             try {
                 $res = s4WorkerRunJob($job);
                 $ok = !empty($res['ok']);
+                if(!empty($res['retryable'])&&s4WorkerRequeueForRetry($jid,(string)($res['retry_reason']??'extract_lock_busy'),(int)($res['retry_delay']??10))){
+                    s4WorkerStateWrite(['phase'=>'idle','last_job_id'=>$jid,'last_job_ok'=>true,'last_error'=>'',
+                        'last_retry_reason'=>(string)($res['retry_reason']??'extract_lock_busy')]);
+                    echo '['.date('Y-m-d H:i:s')."] transient extraction contention; job requeued: $jid\n";
+                    if($once)break;continue;
+                }
                 if($ok&&!empty($res['daemon_recycle'])&&s4WorkerRequeueForRecycle($jid)){
                     s4WorkerStateWrite(['phase'=>'recycle','last_job_id'=>$jid,'last_job_ok'=>true,'last_error'=>'','recycle_reason'=>'matrix_fix_host_budget']);
                     echo '['.date('Y-m-d H:i:s')."] matrix fix checkpoint handed to fresh worker: $jid\n";
@@ -28929,6 +28962,21 @@ function extractLockIsHeld(): bool {
     }
     return false;
 }
+function extractLockHeldCount():int{
+    $count=0;foreach(extractLockKnownSlotFiles()as$file){$fp=@fopen($file,'c');if(!$fp){$count++;continue;}
+        $held=!@flock($fp,LOCK_EX|LOCK_NB);if($held)$count++;else @flock($fp,LOCK_UN);@fclose($fp);}
+    return$count;
+}
+function extractQueueMarkRetryWaiting(string $queueId,string $reason,int $retryAt):bool{
+    if($queueId==='')return false;$lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return false;}
+    $changed=false;try{$q=extractReadQueue();foreach($q['entries']as&$row){
+        if(!is_array($row)||(string)($row['id']??'')!==$queueId||!empty($row['stopped_by_user']))continue;
+        if((string)($row['status']??'')==='running')$row['status']='waiting';
+        $row['resumable']=true;$row['resume_needed']=1;$row['retry_after']=$retryAt;$row['retry_reason']=$reason;
+        $row['updated_at']=time();unset($row['done_at']);$changed=true;break;
+    }unset($row);if($changed){$json=json_encode($q,JSON_UNESCAPED_UNICODE);$changed=$json!==false&&@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)!==false;}}
+    finally{@flock($lf,LOCK_UN);@fclose($lf);}return$changed;
+}
 
 /** One stop-signal file per extraction row; the legacy file remains an all-row signal. */
 function extractStopSignalFileForQueue(string $queueId): string {
@@ -29385,6 +29433,29 @@ function extractResumePhase(array $profile): string {
     if($stage==='list'||!empty($profile['_extract_list_incomplete'])
         ||(int)($profile['_extract_resume_from']??0)>0)return 'list';
     return 'all';
+}
+/** Preserve a retryable extraction checkpoint without touching saved products. */
+function extractRememberRetryableCheckpoint(string $profileKey,string $phase,string $reason='extract_lock_busy'):bool{
+    if($profileKey==='')return false;$phase=$phase==='detail'?'detail':'list';
+    try{$profiles=loadProfiles();$profile=$profiles[$profileKey]??null;if(!is_array($profile))return false;
+        $now=time();$stage=(string)($profile['_extract_stage']??'');
+        if($phase==='list'){
+            if(empty($profile['_extract_list_incomplete'])&&!in_array($stage,['list','stopped'],true)){
+                $profile['_extract_resume_from']=1;$profile['_extract_list_page_try']=1;$profile['_extract_list_page_ok']=0;
+            }elseif(empty($profile['_extract_resume_from']))$profile['_extract_resume_from']=extractResumeStartPage($profile);
+            $profile['_extract_stage']='list';$profile['_extract_list_incomplete']=true;
+        }else{$profile['_extract_stage']='detail';$profile['_extract_list_incomplete']=false;}
+        $profile['_extract_stage_at']=$now;$profile['_extract_resume_phase']=$phase;
+        $profile['_extract_resume_needed']=1;$profile['_extract_resume_req']=$now;
+        $profile['_extract_retry_at']=$now;$profile['_extract_retry_reason']=$reason;
+        return saveOneProfileAtomic($profileKey,$profile);
+    }catch(Throwable $e){return false;}
+}
+function s4QueueRetryableExtraction(string $profileKey,string $phase,int $maxPages=-1,string $detailMode=''):array{
+    extractRememberRetryableCheckpoint($profileKey,$phase,'extract_lock_busy');
+    $enq=s4WorkerEnqueueBackendExtract($profileKey,$phase,false,true,$maxPages,'',true,$detailMode);
+    if(!empty($enq['ok'])&&!s4WorkerIsActive())s4SpawnPersistentWorker();
+    return$enq;
 }
 
 function extractResumePrepare(string $profileKey, array $cn, string $preferredQueueId = '', bool $allowUserStopped = false): array {
@@ -30074,10 +30145,14 @@ if(empty($_lk['ok'])){
     $msg='استخراجِ دیگری در حال اجراست'.($_lkWho!==''?(' («'.$_lkWho.'»)'):'')
         .' — '.(int)($_lk['age']??0).' ثانیه پیش شروع شده. برای اینکه دو اجرا'
         .' نتایج همدیگر را خراب نکنند، این نوبت رد شد.';
-    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'error'=>$msg,
-    'total'=>0,'current'=>0,'started_at'=>$startedAt,'recent_log'=>['⏭ '.$msg],'total_log_count'=>1]);
-    return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'error'=>$msg,
-    'locked'=>true,'busy_queue_id'=>(string)($_lk['queue_id']??'')];
+    /* A rejected contender does not own EXTRACT_PROGRESS_FILE. Writing there
+       used to erase the live extractor's queue_id/heartbeat and made watchdogs
+       mark healthy work stale. Preserve products and persist a retry checkpoint. */
+    extractRememberRetryableCheckpoint($profileKey,$phase,'extract_lock_busy');
+    return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'retryable'=>true,'resume_needed'=>true,
+    'queued'=>true,'error'=>$msg,'locked'=>true,'phase'=>$phase,'profile_key'=>$profileKey,
+    'queue_id'=>$reservedLockQueueId,'retry_reason'=>'extract_lock_busy',
+    'busy_queue_id'=>(string)($_lk['queue_id']??'')];
 }
 /* A cancelled worker may have been spawned just before its queue row was
    deleted. Recheck job + row-specific user-stop state after taking the slot,
@@ -31984,8 +32059,15 @@ $resumeLockQueueId = '';
 if ($resumeRequested) {
     $resumePrep = extractResumePrepare($profileKey, loadConnections(), $resumeQueueId, true);
     if (empty($resumePrep['ok'])) {
+        if((string)($resumePrep['reason']??'')==='lock_held'){
+            $queued=s4QueueRetryableExtraction($profileKey,$phaseIn,$requestedMaxPages,$detailModeIn);
+            header('Content-Type: application/json; charset=UTF-8');
+            echo json_encode(['ok'=>!empty($queued['ok']),'queued'=>!empty($queued['ok']),'retryable'=>true,'locked'=>true,
+                'profile_key'=>$profileKey,'message'=>'استخراج در صف ادامه پس از آزادشدن قفل قرار گرفت','job'=>$queued],JSON_UNESCAPED_UNICODE);
+            exit;
+        }
         header('Content-Type: application/json; charset=UTF-8');
-        echo json_encode(['ok' => false, 'locked' => ($resumePrep['reason'] ?? '') === 'lock_held',
+        echo json_encode(['ok' => false, 'locked' => false,
             'error' => 'checkpoint استخراج قابل رزرو نیست — اجرای موازی ساخته نشد'], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -31993,6 +32075,11 @@ if ($resumeRequested) {
     $resumeLockQueueId = (string)($resumePrep['queue_id'] ?? '');
 }
 $res=runBackendExtract($profileKey,isCliRun()?'worker_child':'manual',!isCliRun(),$phaseIn,$forceAllIn,$resumeLockQueueId,$requestedMaxPages,$detailModeIn);
+if(!empty($res['retryable'])){
+    $queued=s4QueueRetryableExtraction($profileKey,$phaseIn,$requestedMaxPages,$detailModeIn);
+    $res['queued']=!empty($queued['ok']);$res['retry_job_id']=(string)($queued['job_id']??'');
+    if(!empty($queued['ok']))$res['ok']=true;
+}
 // v8.30: همان اعلان‌های تغییر مبدأ که کران‌جاب می‌فرستد
 if(!empty($res['ok'])){
 $cnNow=loadConnections();
@@ -35082,6 +35169,12 @@ if (isset($_GET['backend_extract_cli'])) {
         }
         $prepCli = extractResumePrepare($pk, loadConnections(), $preferredQidCli, true);
         if (empty($prepCli['ok'])) {
+            if((string)($prepCli['reason']??'')==='lock_held'){
+                $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,-1,'');
+                echo json_encode(['ok'=>!empty($retryCli['ok']),'retryable'=>true,'queued'=>!empty($retryCli['ok']),
+                    'resume_needed'=>true,'locked'=>true,'job_id'=>(string)($retryCli['job_id']??'')],JSON_UNESCAPED_UNICODE).PHP_EOL;
+                exit(!empty($retryCli['ok'])?0:2);
+            }
             echo json_encode(['ok'=>false,'error'=>'checkpoint استخراج قابل رزرو نیست: '.(string)($prepCli['reason']??'')], JSON_UNESCAPED_UNICODE) . PHP_EOL;
             exit(2);
         }
@@ -35092,6 +35185,11 @@ if (isset($_GET['backend_extract_cli'])) {
     $pagesCli=array_key_exists('pages',$_GET)?max(0,(int)$_GET['pages']):-1;
     $detailModeCli=isset($_GET['detail_mode'])&&trim((string)$_GET['detail_mode'])!==''?normalizeDetailExtractMode($_GET['detail_mode']):'';
     $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli, $detailModeCli);
+    if(!empty($resCli['retryable'])){
+        $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,$pagesCli,$detailModeCli);
+        $resCli['queued']=!empty($retryCli['ok']);$resCli['retry_job_id']=(string)($retryCli['job_id']??'');
+        if(!empty($retryCli['ok']))$resCli['ok']=true;
+    }
     $cliSegs = 1;
     $cliTransientRetries = 0;
     while (!empty($resCli['ok']) && empty($resCli['cancelled'])
@@ -35100,7 +35198,14 @@ if (isset($_GET['backend_extract_cli'])) {
         if (empty($resCli['ran_out'])) $cliTransientRetries++;
         sleep(!empty($resCli['ran_out']) ? 2 : min(30, 5 + ($cliTransientRetries * 3)));
         $prepNext = extractResumePrepare($pk, loadConnections(), (string)($resCli['queue_id'] ?? ''), false);
-        if (empty($prepNext['ok'])) break;
+        if (empty($prepNext['ok'])) {
+            if((string)($prepNext['reason']??'')==='lock_held'){
+                $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,$pagesCli,$detailModeCli);
+                $resCli['retryable']=true;$resCli['resume_needed']=true;$resCli['queued']=!empty($retryCli['ok']);
+                $resCli['retry_job_id']=(string)($retryCli['job_id']??'');if(!empty($retryCli['ok']))$resCli['ok']=true;
+            }
+            break;
+        }
         $nextPh = (string)($prepNext['phase'] ?? 'detail');
         if ($initialPhaseCli === 'all' && $nextPh === 'list') $nextPh = 'all';
         $resCli = runBackendExtract($pk, 'worker_child', false, $nextPh, $forceCli, (string)($prepNext['queue_id'] ?? ''), $pagesCli, $detailModeCli);
@@ -35429,6 +35534,23 @@ if (isset($_GET['manual_sync'])) {
         }
         /* emitEarlyResponse=false چون خودمان پاسخ را فرستادیم */
         $_msEx = runBackendExtract($_msKey, $_msExTrig, false, $_msPhase, false, $_msReservedQid);
+    }
+    if (!empty($_msEx['retryable'])) {
+        $retryMsg='قفل استخراج مشغول است؛ checkpoint حفظ شد و این همگام‌سازی پس از آزادشدن قفل دوباره ادامه می‌یابد';
+        $oldRetryProgress=readProgress(MANUAL_SYNC_PROGRESS_FILE);
+        $retryCheckpoint=is_array($oldRetryProgress['checkpoint']??null)?$oldRetryProgress['checkpoint']:[];
+        $retryCheckpoint['profile_key']=$_msKey;$retryCheckpoint['phase']='در انتظار استخراج';
+        $retryCheckpoint['extract']=$_msEx;$retryCheckpoint['current']=1;$retryCheckpoint['total']=4;
+        manualSyncProgress(['running'=>false,'done'=>false,'queued'=>true,'resumable'=>true,'resume_needed'=>true,
+            'stale'=>false,'phase'=>'در انتظار آزادشدن قفل استخراج','checkpoint'=>$retryCheckpoint], '⏳ '.$retryMsg);
+        syncPipelineMark($_msKey,$_msName,'queued','manual',['message'=>$retryMsg,'retryable_extract'=>true,
+            'retry_reason'=>(string)($_msEx['retry_reason']??'extract_lock_busy')]);
+        $manualRetryJob=s4WorkerEnqueueManualSync($_msKey,true);
+        if(!empty($manualRetryJob['ok'])&&!s4WorkerIsActive())s4SpawnPersistentWorker();
+        if(PHP_SAPI==='cli')echo json_encode(['ok'=>true,'resume_needed'=>true,'retryable'=>true,'locked'=>true,
+            'queued'=>!empty($manualRetryJob['ok']),'job_id'=>(string)($manualRetryJob['job_id']??''),
+            'profile_key'=>$_msKey,'error'=>$retryMsg],JSON_UNESCAPED_UNICODE).PHP_EOL;
+        exit;
     }
     if (!empty($_msEx['ok']) && (!empty($_msEx['ran_out']) || !empty($_msEx['resume_needed']))) {
         $_msResPage = max(1, (int)($_msEx['resume_page'] ?? 1));
@@ -36440,10 +36562,12 @@ if ($noExtract) {
             $_oneNeDone = loadProfiles();
             $profile    = $_oneNeDone[$key] ?? $profile;
             unset($_oneNeDone);
+        } else if (!empty($exRes['retryable'])) {
+            $pResult['extract_retry_queued']=true;
         } else {
             $pResult['extract_error'] = $exRes['error'] ?? 'خطای نامشخص';
             notifRunFailure($cn, 'تازه‌سازی جزئیات', $profile['name'] ?? $key, $pResult['extract_error']);
-            // شکستِ تازه‌سازی نباید جلوی ارسالِ دوره‌ای را بگیرد، ولی ردیف صف باید خطای واقعی را نشان دهد
+            // Permanent/configuration errors remain visible; lock contention is retried below.
             $exRes = ['ok'=>true,'extracted'=>0,'no_extract'=>true,'sync_stage_error'=>$pResult['extract_error'],
                       'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
                       'new_items'=>[],'changed_items'=>[],'removed_items'=>[],
@@ -36463,6 +36587,19 @@ if ($noExtract) {
                   'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
                   'new_items'=>[],'changed_items'=>[],'removed_items'=>[],
                   'price_up'=>0,'price_down'=>0];
+    }
+    if(!empty($exRes['retryable'])&&!manualSyncActive()){
+        $retryMessage='استخراج به‌دلیل مشغول‌بودن قفل به تعویق افتاد؛ پس از آزادشدن قفل، ادامه مستقل از زمان‌بندی دوره‌ای اجرا می‌شود';
+        $pResult['status']='extract_retry_queued';$pResult['extract_retry_queued']=true;
+        $pResult['retry_reason']=(string)($exRes['retry_reason']??'extract_lock_busy');
+        unset($pResult['extract_error'],$pResult['add_update_hold']);
+        syncPipelineMark((string)$key,(string)($profile['name']??$key),'queued','periodic',[
+            'message'=>$retryMessage,'retryable_extract'=>true,'retry_reason'=>$pResult['retry_reason']]);
+        $retryJob=s4WorkerEnqueueManualSync((string)$key,true);
+        if(!empty($retryJob['ok'])&&!s4WorkerIsActive())s4SpawnPersistentWorker();
+        if(!empty($retryJob['job_id']))$pResult['retry_job_id']=(string)$retryJob['job_id'];
+        $results['profiles'][]=$pResult;$results['deferred_by_extract_retry']=true;
+        continue;
     }
     if((!empty($exRes['ran_out'])||!empty($exRes['resume_needed']))&&!manualSyncActive()){
         $pResult['status']='extract_checkpoint';$pResult['extract_resume']=true;
@@ -36593,6 +36730,19 @@ if ($stepMode === 'list' && empty($exRes['ran_out']) && empty($exRes['resume_nee
         }
     }elseif(!empty($exRes['ok']))$pResult['detail_skipped']='no_detail_selectors';
 }
+if(!empty($exRes['retryable'])&&!manualSyncActive()){
+    $retryMessage='استخراج به‌دلیل مشغول‌بودن قفل به تعویق افتاد؛ پس از آزادشدن قفل، ادامه مستقل از زمان‌بندی دوره‌ای اجرا می‌شود';
+    $pResult['status']='extract_retry_queued';$pResult['extract_retry_queued']=true;
+    $pResult['retry_reason']=(string)($exRes['retry_reason']??'extract_lock_busy');
+    unset($pResult['extract_error'],$pResult['add_update_hold']);
+    syncPipelineMark((string)$key,(string)($profile['name']??$key),'queued','periodic',[
+        'message'=>$retryMessage,'retryable_extract'=>true,'retry_reason'=>$pResult['retry_reason']]);
+    $retryJob=s4WorkerEnqueueManualSync((string)$key,true);
+    if(!empty($retryJob['ok'])&&!s4WorkerIsActive())s4SpawnPersistentWorker();
+    if(!empty($retryJob['job_id']))$pResult['retry_job_id']=(string)$retryJob['job_id'];
+    $results['profiles'][]=$pResult;$results['deferred_by_extract_retry']=true;
+    continue;
+}
 if (!empty($exRes['ok'])) {
 $pResult['extracted'] = (int)($exRes['extracted'] ?? 0);
 $pResult['extract_method'] = 'backend_extract';
@@ -36664,8 +36814,12 @@ if (!empty($_retPack['result'])) {
 $profiles = loadProfiles();
 $profile  = $profiles[$key] ?? $profile;
 } else {
-$pResult['extract_error'] = $exRes['error'] ?? 'خطای نامشخص';
-notifRunFailure($cn, 'استخراج', $profile['name'] ?? $key, $pResult['extract_error']);
+if (!empty($exRes['retryable'])) {
+    $pResult['extract_retry_queued']=true;
+} else {
+    $pResult['extract_error'] = $exRes['error'] ?? 'خطای نامشخص';
+    notifRunFailure($cn, 'استخراج', $profile['name'] ?? $key, $pResult['extract_error']);
+}
 }
 /* v10.67 (81): رابطِ همگام‌سازیِ دستی باید نتیجهٔ واقعیِ استخراج را ببیند.
    تا حالا وقتی استخراج رد می‌شد (ردیف تکراری در صف، قفلِ سراسری، یا
@@ -58172,6 +58326,15 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $add('10.481', 'نگه‌داشتن checkpoint استخراج هنگام برخورد قفل و ادامهٔ خودکار مستقل از دورهٔ سینک',
+         function_exists('extractRememberRetryableCheckpoint')
+      && function_exists('extractQueueMarkRetryWaiting')
+      && function_exists('s4WorkerRequeueForRetry')
+      && strpos($selfSrc, "'retryable'     => is_array($payload)") !== false
+      && strpos($selfSrc, 'retryable_extract') !== false
+      && strpos($selfSrc, 'deferred_by_extract_retry') !== false
+      && strpos($selfSrc, 'A rejected contender does not own EXTRACT_PROGRESS_FILE') !== false
+      && version_compare(APP_VERSION, '10.481', '>='));
     $add('10.480', 'محافظ CPU قابل تنظیم با محدودسازی سهم پردازه، همزمانی استخراج و fanout ادامهٔ خودکار',
          function_exists('s4CpuGuardSettings')
       && function_exists('s4CpuGuardTick')
@@ -97983,6 +98146,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.481', t:'♻️ بازیابی اجباری استخراج‌های پشت‌قفل بدون خطای کاذب یا از دست‌رفتن checkpoint', items:[
+    'در برخورد با قفل استخراج، پردازهٔ منتظر دیگر فایل پیشرفتِ استخراجِ فعال را به running=false بازنویسی نمی‌کند؛ این تداخل در فایل پیشرفت مشترک باعث staleشدنِ کارِ سالم و خطاهای زنجیره‌ای می‌شد. checkpoint پروفایل و فهرست محصولات قبلی حفظ می‌شود.',
+    'برخورد قفل اکنون وضعیت retryable/queued می‌گیرد، نه خطای نهایی؛ worker با backoff همان job را دوباره در صف می‌گذارد و استخراج دوره‌ایِ عقب‌افتاده هم یک ادامهٔ مستقل از بازهٔ زمانی بعدی صف می‌کند. هنگام انتظار، همگام‌سازی دادهٔ کهنه را به مقصد نمی‌فرستد.'
+  ]},
   {v:'10.480', t:'🛡️ محافظ CPU قابل تنظیم برای کاهش بار پردازه و همزمانی worker', items:[
     'افزودن محافظ CPU تعاونی در checkpointهای پیشرفت و heartbeat: سقف duty-cycle هر پردازه از مدیر وظایف قابل تنظیم است و هنگام مصرف CPU بیش از حد، پردازه به‌صورت کوتاه yield/sleep می‌کند؛ در عملیات I/O-bound که CPU زیر سقف است مکثی افزوده نمی‌شود.',
     'افزودن تنظیم سقف همزمانی worker (پیش‌فرض ۱) که هم pool استخراج موازی و هم تعداد dispatch ادامهٔ خودکار را محدود می‌کند؛ این محافظ سهم کل حساب هاست را اندازه‌گیری/تضمین نمی‌کند و مقدارهای پایین‌تر زمان پایان کار را افزایش می‌دهند.'
