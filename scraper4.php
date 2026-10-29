@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.496';
+const APP_VERSION = '10.497';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -40510,9 +40510,9 @@ function tasksProfileTaskControl(array $row,string $action,int $waitMs=1800):arr
     return['ok'=>false,'error'=>'unsupported_profile_task'];
 }
 
-/** Stop every registered/dynamic activity, then delete resumable state only
- * after all owners have released their locks. Product data and catalogs are
- * deliberately preserved; only task/progress/checkpoint state is cleared. */
+/** Stop every registered/dynamic activity, then clear operational task rows
+ * and resumable state only after owners release their locks. Extracted products
+ * and catalog/business data are deliberately preserved. */
 function tasksStopAllLocksBusy(): array {
     $files=[];
     foreach(tasksRegistry() as $key=>$def){
@@ -40520,7 +40520,12 @@ function tasksStopAllLocksBusy(): array {
     }
     foreach([WORKER_LOCK_FILE,EXTRACT_LOCK_FILE,EXTRACT_WATCHDOG_LOCK_FILE,
              MANUAL_SYNC_LOCK_FILE,SYNC_PIPELINE_LOCK_FILE,AUTO_LOCK_FILE,
-             PROFILES_FILE.'.extract.lock',EXTRACT_QUEUE_FILE.'.lock'] as $f)$files[(string)$f]=true;
+             PROFILES_FILE.'.extract.lock',EXTRACT_QUEUE_FILE.'.lock',
+             __DIR__.'/bsl_backend.lock',__DIR__.'/woo_backend.lock',
+             BSL_DUP_RECOVERY_LOCK_FILE,BSL_DUP_RECOVERY_QUEUE_LOCK,
+             BSL_AI_CAT_QUEUE_LOCK,QUEUE_CRON_HANDOFF_LOCK,
+             EXTRACT_QUEUE_FILE.'.lock',__DIR__.'/.sync_send_reconcile.lock',
+             __DIR__.'/.tasks_resume_all.lock'] as $f)$files[(string)$f]=true;
     $busy=[];
     foreach(array_keys($files) as $f)if(is_file($f)&&!tasksResumeLockDead($f))$busy[]=basename($f);
     $catalogProgress=bslCatalogProgressRead();
@@ -40550,74 +40555,147 @@ function tasksStripWorkerCheckpointFields(array &$data): void {
     }
 }
 
+/** Remove task rows and queued send payloads without touching products/catalogs. */
+function tasksStopAllClearOperationalQueues(): array {
+    $held=[];$lockFiles=[
+        'bsl'=>['file'=>null,'backend'=>true],'woo'=>['file'=>null,'backend'=>true],
+        'worker'=>['file'=>WORKER_LOCK_FILE],'extract_watchdog'=>['file'=>EXTRACT_WATCHDOG_LOCK_FILE],
+        'auto'=>['file'=>AUTO_LOCK_FILE],'profile_extract'=>['file'=>PROFILES_FILE.'.extract.lock'],
+        'duplicate_worker'=>['file'=>BSL_DUP_RECOVERY_LOCK_FILE],
+        'duplicate_queue'=>['file'=>BSL_DUP_RECOVERY_QUEUE_LOCK],
+        'ai_category'=>['file'=>BSL_AI_CAT_QUEUE_LOCK],
+        'cron_handoff'=>['file'=>QUEUE_CRON_HANDOFF_LOCK],
+        'extract_queue'=>['file'=>EXTRACT_QUEUE_FILE.'.lock'],
+        'sync_pipeline'=>['file'=>SYNC_PIPELINE_LOCK_FILE],
+        'send_reconcile'=>['file'=>__DIR__.'/.sync_send_reconcile.lock'],
+        'resume_all'=>['file'=>__DIR__.'/.tasks_resume_all.lock'],
+    ];
+    $seen=[__DIR__.'/bsl_backend.lock'=>true,__DIR__.'/woo_backend.lock'=>true];
+    foreach(tasksRegistry() as $taskKey=>$taskDef){
+        $taskLock=tasksLockFile((string)$taskKey);
+        if($taskLock!==''&&!isset($seen[$taskLock])){
+            $lockFiles['task:'.(string)$taskKey]=['file'=>$taskLock];$seen[$taskLock]=true;
+        }
+    }
+    foreach($lockFiles as $name=>$def){
+        if(!empty($def['backend']))$fp=queueBackendLock($name);
+        else{$fp=@fopen((string)$def['file'],'c');if($fp&&!@flock($fp,LOCK_EX|LOCK_NB)){@fclose($fp);$fp=null;}}
+        if(!is_resource($fp)){
+            foreach($held as $h){if($h['backend'])queueBackendUnlock($h['fp']);else{@flock($h['fp'],LOCK_UN);@fclose($h['fp']);}}
+            return ['ok'=>false,'pending'=>true,'busy'=>$name,'count'=>0];
+        }
+        $held[]=['backend'=>!empty($def['backend']),'fp'=>$fp];
+    }
+    try{
+        $profiles=loadProfiles();
+        if(!empty($GLOBALS['_profilesCorrupt']))return ['ok'=>false,'pending'=>true,'error'=>'profiles_json_unreadable','count'=>0];
+        $profileKeys=['_extract_stage','_extract_stage_at','_extract_resume_phase','_extract_resume_needed',
+            '_extract_resume_req','_extract_resume_from','_extract_resume_meta','_extract_list_incomplete',
+            '_extract_list_page_try','_extract_list_page_ok','_extract_list_next_url','_extract_list_last_url',
+            '_extract_list_saved_at','_extract_list_saved_count','_extract_detail_cycle','_extract_retry_at',
+            '_extract_retry_reason','_extract_shrink_guard_tries','_extract_last_guard'];
+        $profilesChanged=false;
+        foreach($profiles as &$profile){
+            if(!is_array($profile))continue;
+            foreach($profileKeys as $key)if(array_key_exists($key,$profile)){unset($profile[$key]);$profilesChanged=true;}
+        }unset($profile);
+        if($profilesChanged&&!saveProfiles($profiles))return ['ok'=>false,'pending'=>true,'error'=>'profiles_checkpoint_write_failed','count'=>0];
+
+        $bq=bslReadQueue();$wq=wooReadQueue();
+        $sendRows=count((array)($bq['entries']??[]))+count((array)($wq['entries']??[]));
+        $payloads=[];
+        foreach([['queue'=>$bq,'prefix'=>'bsl_queue_products_'],['queue'=>$wq,'prefix'=>'woo_queue_products_']] as $kind){
+            foreach((array)($kind['queue']['entries']??[]) as $row){
+                if(!is_array($row))continue;$base=basename((string)($row['products_file']??''));
+                if(str_starts_with($base,$kind['prefix'])&&str_ends_with($base,'.json'))$payloads[__DIR__.'/'.$base]=true;
+            }
+        }
+        $bq['entries']=[];$wq['entries']=[];
+        if(!sendQueueAtomicWrite(BSL_QUEUE_FILE,$bq)||!sendQueueAtomicWrite(WOO_QUEUE_FILE,$wq))
+            return ['ok'=>false,'pending'=>true,'error'=>'send_queue_write_failed','count'=>0];
+
+        $extractQueue=extractReadQueue();$extractRows=count((array)($extractQueue['entries']??[]));
+        foreach((array)($extractQueue['entries']??[]) as $row){
+            $qid=trim((string)($row['id']??''));if($qid!=='')@unlink(extractStopSignalFileForQueue($qid));
+        }
+        $syncRows=count((array)syncPipelineRows());$queueFiles=0;
+        foreach([EXTRACT_QUEUE_FILE,SYNC_PIPELINE_FILE] as $queueFile){
+            if(is_file($queueFile)){if(!@unlink($queueFile))return ['ok'=>false,'pending'=>true,'error'=>'activity_queue_unlink_failed','count'=>0];$queueFiles++;}
+        }
+
+        $dup=is_file(BSL_DUP_RECOVERY_QUEUE_FILE)?json_decode((string)@file_get_contents(BSL_DUP_RECOVERY_QUEUE_FILE),true):[];
+        if(!is_array($dup))$dup=[];$dupRows=count((array)($dup['entries']??[]));$dup['entries']=[];
+        $dup['version']=APP_VERSION;$dup['updated_at']=time();
+        $ai=is_file(BSL_AI_CAT_QUEUE_FILE)?json_decode((string)@file_get_contents(BSL_AI_CAT_QUEUE_FILE),true):[];
+        if(!is_array($ai))$ai=[];$aiRows=count((array)($ai['items']??[]));$ai['items']=[];
+        $ai['version']=APP_VERSION;$ai['updated_at']=time();
+        if(!sendQueueAtomicWrite(BSL_DUP_RECOVERY_QUEUE_FILE,$dup)||!sendQueueAtomicWrite(BSL_AI_CAT_QUEUE_FILE,$ai)
+            ||!sendQueueAtomicWrite(QUEUE_CRON_HANDOFF_FILE,[]))
+            return ['ok'=>false,'pending'=>true,'error'=>'aux_queue_write_failed','count'=>0];
+
+        $workerRows=0;
+        $worker=s4WorkerQueueMutate(function(&$q)use(&$workerRows){
+            $workerRows=count((array)($q['entries']??[]));$q['entries']=[];
+            return ['ok'=>true,'entries'=>$workerRows];
+        });
+        if(empty($worker['ok']))return ['ok'=>false,'pending'=>true,'error'=>'worker_queue_clear_failed','count'=>0];
+
+        foreach((array)glob(__DIR__.'/bsl_queue_products_*.json*') as $f)$payloads[$f]=true;
+        foreach((array)glob(__DIR__.'/woo_queue_products_*.json*') as $f)$payloads[$f]=true;
+        $payloads[BSL_PRODUCTS_FILE]=true;$payloads[WOO_PRODUCTS_FILE]=true;
+        $removed=0;foreach(array_keys($payloads) as $f){
+            if(is_file($f)){if(!@unlink($f))return ['ok'=>false,'pending'=>true,'error'=>'payload_unlink_failed','count'=>0];$removed++;}
+        }
+        $stateFiles=0;foreach([TASKS_RESUME_ALL_STATE_FILE,QUEUE_BEAT_FILE,
+            AUTO_RESUME_LOG_FILE,AUTO_RESUME_BOOK_FILE,__DIR__.'/queue_resume_book.json',
+            __DIR__.'/send_autorecover_state.json',SYNC_REPORT_FILE] as $f){
+            if(is_file($f)){if(!@unlink($f))return ['ok'=>false,'pending'=>true,'error'=>'activity_state_unlink_failed','count'=>0];$stateFiles++;}
+        }
+        $stagingFiles=0;$stagingPatterns=[
+            __DIR__.'/extract_staging_*.json*',BSL_QUEUE_FILE.'.tmp.*',WOO_QUEUE_FILE.'.tmp.*',
+            EXTRACT_QUEUE_FILE.'.tmp.*',SYNC_PIPELINE_FILE.'.tmp.*',
+            BSL_DUP_RECOVERY_QUEUE_FILE.'.tmp.*',BSL_AI_CAT_QUEUE_FILE.'.tmp.*',
+            QUEUE_CRON_HANDOFF_FILE.'.tmp.*',
+        ];
+        foreach($stagingPatterns as $pattern)foreach((array)glob($pattern) as $f){
+            if(is_file($f)){if(!@unlink($f))return ['ok'=>false,'pending'=>true,'error'=>'staging_unlink_failed','count'=>0];$stagingFiles++;}
+        }
+        $taskFiles=[];foreach(tasksRegistry() as $def)if(!empty($def['file']))$taskFiles[(string)$def['file']]=true;
+        foreach([BSL_CATALOG_PROGRESS_FILE,SYNC_MATRIX_CHECKPOINT_FILE,SYNC_MATRIX_FETCH_CURSOR_FILE,
+            SYNC_MATRIX_LIVE_FILE,__DIR__.'/recon_fetch_cache.ndjson',DEDUP_FETCH_CURSOR_FILE,
+            CATFIX_FETCH_CURSOR_FILE] as $f)$taskFiles[(string)$f]=true;
+        $progressFiles=0;foreach(array_keys($taskFiles) as $f){
+            if(is_file($f)){if(!@unlink($f))return ['ok'=>false,'pending'=>true,'error'=>'task_state_unlink_failed','count'=>0];$progressFiles++;}
+        }
+        $matrixTemps=0;foreach((array)glob(SYNC_MATRIX_CHECKPOINT_FILE.'.tmp.*') as $f){
+            if(is_file($f)){if(!@unlink($f))return ['ok'=>false,'pending'=>true,'error'=>'checkpoint_temp_unlink_failed','count'=>0];$matrixTemps++;}
+        }
+        return ['ok'=>true,'pending'=>false,'worker_rows'=>$workerRows,'send_rows'=>$sendRows,
+            'extract_rows'=>$extractRows,'sync_rows'=>$syncRows,'queue_files'=>$queueFiles,
+            'duplicate_rows'=>$dupRows,'ai_category_rows'=>$aiRows,'payload_files'=>$removed,
+            'activity_state_files'=>$stateFiles,'staging_files'=>$stagingFiles,
+            'progress_files'=>$progressFiles,'matrix_temps'=>$matrixTemps,
+            'count'=>$sendRows+$extractRows+$syncRows+$queueFiles+$dupRows+$aiRows+$workerRows+
+                $removed+$stateFiles+$stagingFiles+$progressFiles+$matrixTemps];
+    }finally{
+        foreach(array_reverse($held) as $h){if($h['backend'])queueBackendUnlock($h['fp']);else{@flock($h['fp'],LOCK_UN);@fclose($h['fp']);}}
+    }
+}
+
 function tasksStopAllClearCheckpoints(): array {
     if(!is_file(TASKS_STOP_ALL_CLEAR_FILE))return ['cleared'=>false,'pending'=>false,'count'=>0];
-    $state=json_decode((string)@file_get_contents(TASKS_STOP_ALL_CLEAR_FILE),true);
-    if(!is_array($state))$state=[];
     $busy=tasksStopAllLocksBusy();
     if($busy)return ['cleared'=>false,'pending'=>true,'busy'=>$busy,'count'=>0];
 
-    // Clear only extractor resume markers. Already-scraped products and
-    // counts remain unchanged in the profile data.
-    if(empty($state['profiles_cleared'])){
-        $profiles=loadProfiles();
-        if(!empty($GLOBALS['_profilesCorrupt'])){
-            $state['error']='profiles_json_unreadable';
-            @file_put_contents(TASKS_STOP_ALL_CLEAR_FILE,json_encode($state,JSON_UNESCAPED_UNICODE),LOCK_EX);
-            return ['cleared'=>false,'pending'=>true,'error'=>'profiles_json_unreadable','count'=>0];
-        }
-        $keys=['_extract_stage','_extract_stage_at','_extract_resume_phase','_extract_resume_needed',
-               '_extract_resume_req','_extract_resume_from','_extract_resume_meta','_extract_list_incomplete',
-               '_extract_list_page_try','_extract_list_page_ok','_extract_list_next_url','_extract_list_last_url',
-               '_extract_list_saved_at','_extract_list_saved_count','_extract_detail_cycle','_extract_retry_at',
-               '_extract_retry_reason','_extract_shrink_guard_tries','_extract_last_guard'];
-        $changed=false;
-        foreach($profiles as &$profile){
-            if(!is_array($profile))continue;
-            foreach($keys as $key)if(array_key_exists($key,$profile)){unset($profile[$key]);$changed=true;}
-        }unset($profile);
-        if($changed&&!saveProfiles($profiles)){
-            $state['error']='profiles_checkpoint_write_failed';
-            @file_put_contents(TASKS_STOP_ALL_CLEAR_FILE,json_encode($state,JSON_UNESCAPED_UNICODE),LOCK_EX);
-            return ['cleared'=>false,'pending'=>true,'error'=>'profiles_checkpoint_write_failed','count'=>0];
-        }
-        $state['profiles_cleared']=true;
-        @file_put_contents(TASKS_STOP_ALL_CLEAR_FILE,json_encode($state,JSON_UNESCAPED_UNICODE),LOCK_EX);
-    }
+    $activityCleanup=tasksStopAllClearOperationalQueues();
+    if(empty($activityCleanup['ok']))return ['cleared'=>false,'pending'=>true,
+        'error'=>(string)($activityCleanup['error']??'activity_queue_busy'),
+        'busy'=>(string)($activityCleanup['busy']??''),'count'=>0];
 
-    if(is_file(WORKER_QUEUE_FILE)){
-        $queueCleanup=s4WorkerQueueMutate(function(&$q){
-            foreach((array)($q['entries']??[]) as $job){
-                if(is_array($job)&&in_array((string)($job['status']??''),['pending','running','waiting'],true))
-                    return ['ok'=>false,'busy'=>true];
-            }
-            $n=0;
-            foreach($q['entries'] as &$job){
-                if(!is_array($job))continue;
-                if(is_array($job['payload']??null))tasksStripWorkerCheckpointFields($job['payload']);
-                tasksStripWorkerCheckpointFields($job);$n++;
-            }unset($job);
-            return ['ok'=>true,'entries'=>$n];
-        });
-        if(empty($queueCleanup['ok']))return ['cleared'=>false,'pending'=>true,'error'=>'worker_queue_busy','count'=>0];
-    }
-
-    $files=[];
-    foreach(tasksRegistry() as $def)if(!empty($def['file']))$files[(string)$def['file']]=true;
-    foreach([BSL_CATALOG_PROGRESS_FILE,EXTRACT_QUEUE_FILE,SYNC_PIPELINE_FILE,
-             SYNC_MATRIX_CHECKPOINT_FILE,SYNC_MATRIX_FETCH_CURSOR_FILE,SYNC_MATRIX_LIVE_FILE,
-             __DIR__.'/recon_fetch_cache.ndjson',DEDUP_FETCH_CURSOR_FILE,CATFIX_FETCH_CURSOR_FILE] as $f)$files[(string)$f]=true;
-    $extractQ=extractReadQueue();
-    foreach((array)($extractQ['entries']??[]) as $row){
-        $qid=trim((string)($row['id']??''));if($qid!=='')@unlink(extractStopSignalFileForQueue($qid));
-    }
-    $n=0;
-    foreach(array_keys($files) as $f)if(is_file($f)&&@unlink($f))$n++;
-    foreach([__DIR__.'/extract_staging_*.json*',SYNC_MATRIX_CHECKPOINT_FILE.'.tmp.*'] as $pattern){
-        foreach((array)@glob($pattern) as $tmpFile)if(is_file($tmpFile)&&@unlink($tmpFile))$n++;
-    }
-    @unlink(TASKS_STOP_ALL_CLEAR_FILE);
-    return ['cleared'=>true,'pending'=>false,'count'=>$n,'profiles_cleared'=>true];
+    if(is_file(TASKS_STOP_ALL_CLEAR_FILE)&&!@unlink(TASKS_STOP_ALL_CLEAR_FILE))
+        return ['cleared'=>false,'pending'=>true,'error'=>'cleanup_marker_unlink_failed','count'=>0];
+    return ['cleared'=>true,'pending'=>false,'count'=>(int)($activityCleanup['count']??0),
+        'activity_queues'=>$activityCleanup,'profiles_cleared'=>true];
 }
 
 function tasksStopAllRequest(): array {
@@ -47679,6 +47757,13 @@ if (isset($_GET['selftest'])) {
     $add('10.496','پاک‌سازیِ معوق با ورود کران هم دوباره بررسی می‌شود',
         strpos($selfSrc,'function_exists(' . "'tasksStopAllClearCheckpoints'))tasksStopAllClearCheckpoints()")!==false
         &&strpos($selfSrc,"{v:'10." . "496'")!==false&&version_compare(APP_VERSION,'10.' . '496','>='));
+    $add('10.497','توقف سراسری همهٔ ردیف‌های صف و فایل‌های payload ارسال را پاک می‌کند',
+        function_exists('tasksStopAllClearOperationalQueues')
+        &&strpos($selfSrc,'$q' . "['entries']=[]")!==false
+        &&strpos($selfSrc,'bsl_queue_products_*.json*')!==false
+        &&strpos($selfSrc,'woo_queue_products_*.json*')!==false
+        &&strpos($selfSrc,'BSL_DUP_RECOVERY_QUEUE_FILE')!==false
+        &&strpos($selfSrc,"{v:'10." . "497'")!==false&&version_compare(APP_VERSION,'10.' . '497','>='));
     $add('10.495','توقف همه، پاک‌سازی checkpoint امن و دکمهٔ مدیر وظیفه حاضرند',
         function_exists('tasksStopAllRequest')&&function_exists('tasksStopAllClearCheckpoints')
         &&strpos($selfSrc,'tasks_' . 'stop_all')!==false
@@ -98817,6 +98902,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.497', t:'🧹 حذف همهٔ ردیف‌های فعالیت و payloadهای صف هنگام توقف سراسری', items:[
+    'پس از آزادشدن امن قفل‌ها، ردیف‌های worker، استخراج، sync و ارسال باسلام/ووکامرس، صف‌های بازیابی تکراری و دسته‌بندی هوش مصنوعی، handoff کران و گزارش/وضعیت retry پاک می‌شوند؛ فایل‌های payload موقت ارسال و staging استخراج نیز حذف می‌شوند. محصولات استخراج‌شده، کاتالوگ‌ها و داده‌های کسب‌وکار دست‌نخورده می‌مانند.'
+  ]},
   {v:'10.496', t:'🧹 تکمیل پاک‌سازیِ معوق پس از توقف سراسری', items:[
     'اگر worker هنوز قفل دارد، پاک‌سازی checkpoint تا پایان امن عقب می‌افتد؛ تیک کران نیز آن را اجرا می‌کند تا پاک‌شدن وضعیت به بازبودن پنجرهٔ مدیر وظیفه وابسته نباشد.'
   ]},
