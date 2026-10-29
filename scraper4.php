@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.498';
+const APP_VERSION = '10.499';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -47757,9 +47757,12 @@ if (isset($_GET['selftest'])) {
     $add('10.496','پاک‌سازیِ معوق با ورود کران هم دوباره بررسی می‌شود',
         strpos($selfSrc,'function_exists(' . "'tasksStopAllClearCheckpoints'))tasksStopAllClearCheckpoints()")!==false
         &&strpos($selfSrc,"{v:'10." . "496'")!==false&&version_compare(APP_VERSION,'10.' . '496','>='));
-    $stopUiStart=strpos($selfSrc,'function tmStopAll(){');
+    $stopUiStart=strrpos($selfSrc,'function tmStopAll(){');
     $stopUiEnd=$stopUiStart===false?false:strpos($selfSrc,'function tmStop(key)', $stopUiStart);
     $stopUi=$stopUiStart!==false&&$stopUiEnd!==false?substr($selfSrc,$stopUiStart,$stopUiEnd-$stopUiStart):'';
+    $add('10.499','آزمون توقف همه از محل واقعی تابع رابط کد را بررسی می‌کند',
+        $stopUiStart!==false&&$stopUiEnd!==false&&$stopUi!==''
+        &&strpos($selfSrc,"{v:'10." . "499'")!==false&&version_compare(APP_VERSION,'10.' . '499','>='));
     $add('10.498','دکمهٔ توقف همه مستقل از عملیات‌های دیگر نتیجه و علتِ تأخیر را نشان می‌دهد',
         $stopUi!==''&&strpos($stopUi,'if(tmBusy)return')===false
         &&strpos($stopUi,'tmStopAllRunning')!==false&&strpos($stopUi,'checkpoint_cleanup')!==false
@@ -98909,6 +98912,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.499', t:'🧪 اصلاح آزمون خودکارِ رابط توقف همه', items:[
+    'آزمون نسخهٔ 10.498 اکنون آخرین اعلان واقعی تابع tmStopAll را بررسی می‌کند، نه رشتهٔ مرجعِ داخل خود آزمون؛ بررسی پویایی دکمه دیگر به‌اشتباه شکست نمی‌خورد.'
+  ]},
   {v:'10.498', t:'⏹ نمایش روشنِ نتیجهٔ دکمهٔ توقف همه', items:[
     'توقف سراسری دیگر پشتِ عملیات دیگری در مدیر وظیفه بی‌صدا نادیده گرفته نمی‌شود؛ مستقل ارسال می‌شود، تأیید فوری می‌دهد و نتیجهٔ سرور را با علتِ انتظار برای قفل‌ها یا خطای پاسخ نشان می‌دهد.'
   ]},
