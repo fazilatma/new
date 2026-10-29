@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.489';
+const APP_VERSION = '10.490';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -58387,7 +58387,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             'missing_detail'=>['link'=>'https://example.test/c'],
             'missing_link'=>['weight'=>''],
         ]]);
-    $_mainTabsAt488=strpos($selfSrc,'const MAIN_TABS =');
+    $_mainTabsAt488=strrpos($selfSrc,'const MAIN_TABS =');
     $_tabSwitchStart488=strpos($selfSrc,'function switchMainTab(name) {',$_mainTabsAt488===false?0:$_mainTabsAt488);
     $_tabSwitchEnd488=strpos($selfSrc,'// v8.17: Settings panel toggle',$_tabSwitchStart488===false?0:$_tabSwitchStart488);
     $_tabSwitchBody488=$_tabSwitchStart488!==false&&$_tabSwitchEnd488!==false
@@ -98276,6 +98276,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.490', t:'🧪 نشانه‌گیری دقیق بخش JavaScript در آزمون اسکرول تب‌ها', items:[
+    'خودآزمایی اسکرول، آخرین اعلانِ const MAIN_TABS را به‌عنوان بخش رابط انتخاب می‌کند تا رشتهٔ مشابه در کد آزمون باعث شکست کاذب نشود.'
+  ]},
   {v:'10.489', t:'🧪 دقیق‌کردن محدودهٔ بررسیِ خودآزمایی اسکرول تب‌ها', items:[
     'آزمونِ حفظ موقعیت اسکرول از خودِ تابع JavaScript در بخش تب‌های اصلی آغاز می‌شود، نه از رشتهٔ هم‌نام در کدِ خودآزمایی؛ نتیجهٔ آن اکنون رفتار واقعی تب را می‌سنجد.'
   ]},
