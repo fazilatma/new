@@ -255,6 +255,9 @@ const WORKER_QUEUE_FILE = __DIR__ . '/worker_queue.json';
 const WORKER_STATE_FILE = __DIR__ . '/worker_state.json';
 const WORKER_LOCK_FILE  = __DIR__ . '/worker.lock';
 const WORKER_STOP_FILE  = __DIR__ . '/worker_stop.json';
+/* v10.492: brief foreground lease for settings writes; background workers yield at checkpoints. */
+const SETTINGS_PRIORITY_FILE = __DIR__ . '/.settings_priority.json';
+const SETTINGS_PRIORITY_TTL = 90;
 /* v10.32 (۴۵ب): قفلِ سراسریِ استخراج. تا اینجا dedup/agent/catfix/selagent/
    auto هرکدام قفل داشتند ولی خودِ استخراج نداشت — تنها محافظش «تکراری‌نبودنِ
    پروفایل» بود، که فقط جلوی دو اجرای *همان* پروفایل را می‌گرفت. دو پروفایلِ
@@ -395,7 +398,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.491';
+const APP_VERSION = '10.492';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1087,6 +1090,43 @@ function s4WorkerStateLoad(): array {
     return is_array($d) ? $d : [];
 }
 
+/** A short shared lease lets foreground settings saves run ahead of background work. */
+function s4SettingsPriorityReadHandle($fp): array {
+    if(!is_resource($fp))return [];
+    @rewind($fp);$raw=stream_get_contents($fp);$d=json_decode((string)$raw,true);
+    return is_array($d)&&is_array($d['leases']??null)?$d['leases']:[];
+}
+function s4SettingsPriorityActive(): bool {
+    $fp=@fopen(SETTINGS_PRIORITY_FILE,'c+');if(!$fp)return false;
+    if(!@flock($fp,LOCK_SH)){@fclose($fp);return false;}
+    $leases=s4SettingsPriorityReadHandle($fp);@flock($fp,LOCK_UN);@fclose($fp);$now=time();
+    foreach($leases as $until)if((int)$until>$now)return true;
+    return false;
+}
+function s4SettingsPriorityBegin(): string {
+    $fp=@fopen(SETTINGS_PRIORITY_FILE,'c+');if(!$fp)return '';
+    if(!@flock($fp,LOCK_EX)){@fclose($fp);return '';}
+    $leases=s4SettingsPriorityReadHandle($fp);$now=time();
+    foreach($leases as $id=>$until)if((int)$until<=$now)unset($leases[$id]);
+    try{$token=bin2hex(random_bytes(10));}catch(Throwable $_e){$token=substr(md5(uniqid('',true)),0,20);}
+    $leases[$token]=$now+SETTINGS_PRIORITY_TTL;@rewind($fp);@ftruncate($fp,0);
+    @fwrite($fp,json_encode(['leases'=>$leases],JSON_UNESCAPED_UNICODE));@fflush($fp);
+    @flock($fp,LOCK_UN);@fclose($fp);return $token;
+}
+function s4SettingsPriorityEnd(string $token): void {
+    if($token==='')return;$fp=@fopen(SETTINGS_PRIORITY_FILE,'c+');if(!$fp)return;
+    if(!@flock($fp,LOCK_EX)){@fclose($fp);return;}
+    $leases=s4SettingsPriorityReadHandle($fp);$now=time();
+    foreach($leases as $id=>$until)if((string)$id===$token||(int)$until<=$now)unset($leases[$id]);
+    @rewind($fp);@ftruncate($fp,0);@fwrite($fp,json_encode(['leases'=>$leases],JSON_UNESCAPED_UNICODE));@fflush($fp);
+    @flock($fp,LOCK_UN);@fclose($fp);
+}
+function s4SettingsPriorityRequestBegin(): void {
+    $token=s4SettingsPriorityBegin();if($token==='')return;
+    $GLOBALS['_s4SettingsPriorityToken']=$token;
+    register_shutdown_function(static function()use($token){s4SettingsPriorityEnd($token);if(($GLOBALS['_s4SettingsPriorityToken']??'')===$token)unset($GLOBALS['_s4SettingsPriorityToken']);});
+}
+
 /** Configurable per-PHP-process CPU duty-cycle governor.
  * It is cooperative: long-running work yields at progress/worker checkpoints. */
 function s4CpuGuardSettings(?array $cn=null):array{
@@ -1110,6 +1150,11 @@ function s4CpuGuardProcessSeconds():?float{
 }
 function s4CpuGuardTick():array{
     static $wallBase=null,$cpuBase=null,$lastSample=0.0,$lastConfig=null,$configAt=0,$configSignature='';
+    if(empty($GLOBALS['_s4SettingsPriorityToken'])&&s4SettingsPriorityActive()){
+        $waitUntil=microtime(true)+0.5;$slept=0;
+        do{usleep(50000);$slept+=50;}while(microtime(true)<$waitUntil&&s4SettingsPriorityActive());
+        return ['enabled'=>true,'settings_priority'=>true,'slept_ms'=>$slept];
+    }
     if($lastConfig===null||time()-$configAt>=10){
         $lastConfig=s4CpuGuardSettings();$configAt=time();
         $newSignature=(int)!empty($lastConfig['enabled']).':'.(int)($lastConfig['percent']??50);
@@ -1301,6 +1346,7 @@ function s4SpawnParallelExtractJob(string $jobId): array {
 /** Fill only extraction slots. Other heavy job types remain serialized by the
  * main daemon; each extraction child owns one queue row and one extraction slot. */
 function s4DispatchParallelExtractJobs(): array {
+    if(s4SettingsPriorityActive())return ['ok'=>true,'skipped'=>'foreground_settings_priority'];
     $limit=extractTaskConcurrency();
     if($limit<1||!s4ParallelExtractSupported())return ['ok'=>false,'skipped'=>'unsupported_or_single','limit'=>$limit];
     /* v10.470: از خواندن بی‌موردِ ۱۸۰ مگابایت profiles.json وقتی نه orphan مرده‌ای هست و نه کارِ pending جلوگیری کن */
@@ -1411,6 +1457,7 @@ function s4RunParallelExtractJob(string $jobId): array {
 }
 
 function s4WorkerClaimJob(): ?array {
+    if(s4SettingsPriorityActive())return null;
     $ret = s4WorkerQueueMutate(function (&$q) {
         $now = time();$pick=-1;$pickRank=PHP_INT_MAX;
         $parallelExtract=s4ParallelExtractSupported()&&(extractTaskConcurrency()>=1||s4WorkerParallelExtractRunning()>0);
@@ -1439,6 +1486,7 @@ function s4WorkerClaimJob(): ?array {
 }
 
 function s4WorkerClaimMatrixWebJob(): ?array {
+    if(s4SettingsPriorityActive())return null;
     $ret=s4WorkerQueueMutate(function(&$q){$now=time();
         /* A request may have died while Apache kept its PID alive. Matrix flock,
            not PID, is authoritative; stale rows are returned to pending. */
@@ -2650,6 +2698,10 @@ function s4WorkerLoopFromCli(): void {
     echo '[' . date('Y-m-d H:i:s') . "] scraper4 worker started (pid=$pid, tick=$tick)\n";
     while (true) {
         if (($stopFile !== '' && is_file($stopFile)) || is_file(WORKER_STOP_FILE)) break;
+        if(s4SettingsPriorityActive()){
+            s4WorkerStateWrite(['phase'=>'settings_priority_wait','foreground_settings'=>true]);
+            if($once)break;usleep(250000);continue;
+        }
         if(function_exists('s4AutoCodeUpdateTick')){$au=s4AutoCodeUpdateTick(false);if(!empty($au['updated'])||!empty($au['restart_required'])){$restartAfterUpdate=true;echo '['.date('Y-m-d H:i:s')."] code updated; worker restart requested\n";break;}}
         /* Extraction has its own configurable pool; matrix/manual jobs remain
            serialized in this daemon. */
@@ -11654,6 +11706,24 @@ function bslNetCfg(?array $cn = null): array {
         // امتحان می‌شوند (برخلاف src_net که به تیکِ «روش‌های جایگزین» وابسته است).
         'fallback'   => true,
     ];
+}
+
+/** Return configured fallback transports in the same order used by bslReq. */
+function bslNetModes(array $net): array {
+    if(empty($net['indirect']))return ['direct'];
+    $allowed=['direct','doh','dns','proxy','worker'];
+    $primary=(string)($net['mode']??'direct');
+    if(!in_array($primary,$allowed,true)||$primary==='direct')return ['direct'];
+    $modes=[$primary];
+    if(!empty($net['fallback']))foreach(['doh','dns','proxy','worker'] as $mode){
+        if(in_array($mode,$modes,true))continue;
+        if($mode==='dns'&&trim((string)($net['resolve_ip']??''))==='')continue;
+        if($mode==='doh'&&trim((string)($net['doh_url']??''))==='')continue;
+        if($mode==='proxy'&&trim((string)($net['proxy']??''))==='')continue;
+        if($mode==='worker'&&trim((string)($net['worker_url']??''))==='')continue;
+        $modes[]=$mode;
+    }
+    $modes[]='direct';return array_values(array_unique($modes));
 }
 
 /** اجرای یک درخواست باسلام با یک روشِ اتصال مشخص (direct/doh/dns/proxy/worker). */
@@ -21750,6 +21820,7 @@ exit;
 }
 
 if (($_POST['action'] ?? '') === 'save_profile') {
+s4SettingsPriorityRequestBegin();
 header('Content-Type: application/json; charset=UTF-8');
 $url = s4NormalizeInputUrl((string)($_POST['url'] ?? ''));
 if (!$url || !filter_var($url, FILTER_VALIDATE_URL)) {
@@ -21773,7 +21844,6 @@ if ($isAutosave && (!$existingProfile || s4IsProfileDeletedTombstone($key) || $l
 if (!$isAutosave) {
     s4ClearProfileDeletedTombstone($key, $url);
 }
-$oldMxPriceSig = matrixPricingFingerprint($profiles, loadConnections());
 $detailSelectors = json_decode($_POST['detailSelectors'] ?? '{}', true) ?: [];
 $productsData = json_decode($_POST['products'] ?? '[]', true) ?: [];
 $productsOrder = json_decode($_POST['productsOrder'] ?? '[]', true) ?: [];
@@ -21970,6 +22040,7 @@ if ($lfSave && !@flock($lfSave, LOCK_EX)) { @fclose($lfSave); $lfSave = null; }
 $profiles = s4StripDeletedProfiles(loadProfiles());
 $key = s4ResolveSaveProfileTargetKey($url, $targetKeyIn, $profiles);
 $existingProfile = is_array($profiles[$key] ?? null) ? $profiles[$key] : $existingProfile;
+$oldProfilePriceSig=json_encode([(string)($existingProfile['priceMode']??'none'),(string)($existingProfile['priceVal']??0),(string)($existingProfile['roundPrice']??0)]);
 if (empty($_POST['partial_meta_only']) && !empty($existingProfile['products']) && empty($_POST['allow_empty_products'])) {
     if (empty($productsData)) {
         $profilePatch['products'] = (array)$existingProfile['products'];
@@ -21992,8 +22063,8 @@ $profiles[$key] = array_merge($existingProfile, $profilePatch);
 $_saved = writeJsonFile(PROFILES_FILE, $profiles);
 if ($lfSave) { @flock($lfSave, LOCK_UN); @fclose($lfSave); }
 if ($_saved['ok']) {
-$newMxPriceSig=matrixPricingFingerprint($profiles, loadConnections());
-$mxRefresh=$oldMxPriceSig!==$newMxPriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
+$newProfilePriceSig=json_encode([(string)($profiles[$key]['priceMode']??'none'),(string)($profiles[$key]['priceVal']??0),(string)($profiles[$key]['roundPrice']??0)]);
+$mxRefresh=$oldProfilePriceSig!==$newProfilePriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
 $savedProdCount = is_array($profiles[$key]['products'] ?? null) ? count($profiles[$key]['products']) : 0;
 echo json_encode(['ok' => true, 'key' => $key, 'url' => (string)($profiles[$key]['url'] ?? $url), 'name' => (string)($profiles[$key]['name'] ?? ''), 'product_count' => $savedProdCount, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'pages'=>(int)($profiles[$key]['pages']??10), 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } else {
@@ -27332,6 +27403,7 @@ exit;
 }
 
 if (($_POST['action'] ?? '') === 'save_connections') {
+s4SettingsPriorityRequestBegin();
 ob_clean();
 header('Content-Type: application/json; charset=UTF-8');
 $conn = loadConnections();
@@ -58407,6 +58479,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "else if(!automatic) showToast('ساخت روی سرور آغاز شد (برای ادامهٔ برش‌ها صفحه باز بماند)')")!==false
       && strpos($selfSrc,'syncMatrixStart(true,true)')!==false
       && version_compare(APP_VERSION,'10.491','>='));
+    $add('10.492', 'ذخیرهٔ تنظیمات اولویت جلوتر از کارهای پس‌زمینه است و زنجیرهٔ مسیر باسلام در دسترس است',
+         function_exists('s4SettingsPriorityBegin')&&function_exists('bslNetModes')
+      && bslNetModes(['indirect'=>true,'mode'=>'proxy','fallback'=>true,'proxy'=>'http://proxy.example'])===['proxy','direct']
+      && bslNetModes(['indirect'=>false,'mode'=>'proxy','fallback'=>true,'proxy'=>'http://proxy.example'])===['direct']
+      && strpos($selfSrc,'s4SettingsPriorityRequestBegin();')!==false
+      && strpos($selfSrc,"'skipped'=>'foreground_settings_priority'")!==false
+      && version_compare(APP_VERSION,'10.492','>='));
     $earlyPumpAt487=strpos($selfSrc,'$_earlySendPumpBlocking=false;');
     $resumeExitAt487=strpos($selfSrc,"if(!empty(\$wdEarly['resume_blocking'])||\$_earlySendPumpBlocking)");
     $add('10.487', 'پمپِ ارسال پیش از خروج زودهنگامِ ادامهٔ استخراج، هر دو صف را بازیابی می‌کند',
@@ -91704,7 +91783,7 @@ function scheduleSave() {
     if (!$('url').value.trim()) return;
     markDirty();
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveProfileSilent, 2000);
+    saveTimer = setTimeout(saveProfileSilent, 500);
     // v7.66: Update auto-extract button based on selector state
     if(sel.container && sel.title){
         $('startBtn').textContent='▶ استخراج اتوماتیک ✓ ('+sel.container+')';
@@ -98281,6 +98360,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.492', t:'⚡ اولویت سریع ذخیرهٔ تنظیمات و ترمیم مسیر جایگزین باسلام', items:[
+    'ذخیرهٔ تنظیمات پروفایل/اتصال یک lease کوتاهِ اولویت می‌گیرد؛ worker پیش از شروع کار تازه مکث می‌کند و کارهای درحال‌اجرا در checkpointها CPU را موقتاً واگذار می‌کنند. ذخیرهٔ خودکار پروفایل نیز پس از ۵۰۰ میلی‌ثانیه انجام می‌شود و تغییر تنظیمات غیرقیمتی دیگر ماتریس قیمت را بی‌دلیل اسکن نمی‌کند.',
+    'تابع جاافتادهٔ bslNetModes اضافه شد؛ fallback شبکهٔ باسلام در خواندن سفارش‌ها/اعلان‌ها دیگر به خطای undefined function ختم نمی‌شود.'
+  ]},
   {v:'10.491', t:'🔕 حذف پیام تکراری هنگام ادامهٔ خودکار ساخت', items:[
     'پیام سپرده‌شدن به worker فقط برای شروع/ادامهٔ دستی نمایش داده می‌شود؛ برش‌های خودکارِ بعدی در پس‌زمینه ادامه می‌یابند، بدون toast تکراری.'
   ]},
