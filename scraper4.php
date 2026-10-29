@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.485';
+const APP_VERSION = '10.486';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -418,7 +418,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/06';
+const APP_VERSION_DATE = '1405/08/07';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -31192,10 +31192,9 @@ $needDetail=[];
    می‌شود — برای وقتی که سلکتور گالری عوض شده یا مبدأ عکس‌ها را
    به‌روز کرده است. */
 $_forceAll=($phase==='detail'&&$forceAll);
-/* v10.433: a synchronization cycle may supply an explicit union of products
-   absent from one or more enabled destinations.  This scope is deliberately
-   independent of actionBasis: matrix/profile only controls what gets sent,
-   never which destination-presence test authorizes detail extraction. */
+/* v10.486: a synchronization cycle may supply explicit linked profile
+   products lacking resolved detail data. This scope is independent of the
+   destination action basis and survives checkpoints until the pass completes. */
 $_syncScope=[];
 if($phase==='detail'&&!$_forceAll){
     foreach((array)($profile['_sync_detail_scope_keys']??[]) as $_sk){
@@ -31868,7 +31867,7 @@ if(!empty($_listRanOut)){
 $profileOnDisk['_extract_stage_at']=time();
 $profileOnDisk['_extract_detail_done']=$detailDone;
 $profileOnDisk['_extract_detail_total']=$detailTotal;
-/* The explicit missing-destination scope survives checkpoints, then is cleared
+/* The explicit incomplete-profile scope survives checkpoints, then is cleared
    only after its detail pass really finishes. */
 if($phase==='detail'&&empty($_detailIncomplete)&&empty($_listRanOut)){
     unset($profileOnDisk['_sync_detail_scope_keys'],$profileOnDisk['_sync_detail_scope_meta']);
@@ -36550,8 +36549,8 @@ if ($noExtract) {
     // چند محصولِ روی دیسک لینکِ صفحهٔ محصول دارند؟
     $_neLinked = noExtractLinkedCount($profile);
     $_neAll=!empty($syncCfg['detailAllEachCycle']);
-    $_nePlan=$_neAll?['available'=>true,'keys'=>[],'by_destination'=>[]]
-        : syncMissingDestinationDetailPlan($profile,(string)$key,(string)$target,$cn);
+    $_nePlan=$_neAll?['available'=>true,'keys'=>[],'missing'=>0]
+        : syncMissingProfileDetailPlan($profile);
     $_neKeys=(array)($_nePlan['keys']??[]);
     $_neDue = $_neHasCfg && $_neLinked > 0 && noExtractRefreshOn($syncCfg)
         && ($_neAll||(!empty($_nePlan['available'])&&!empty($_neKeys)));
@@ -36559,13 +36558,11 @@ if ($noExtract) {
     if ($_neDue) {
         $pResult['step'] = 'no_extract_detail';
         $pResult['detail_linked'] = $_neLinked;
-        $pResult['detail_policy']=$_neAll?'all_each_cycle':'missing_destinations';
-        $pResult['detail_destination_counts']=[];
-        foreach((array)($_nePlan['by_destination']??[]) as $_dk=>$_ks)
-            $pResult['detail_destination_counts'][$_dk]=count((array)$_ks);
+        $pResult['detail_policy']=$_neAll?'all_each_cycle':'missing_profile_details';
+        $pResult['detail_scope_count']=$_neAll?$_neLinked:count($_neKeys);
+        $pResult['detail_missing_count']=(int)($_nePlan['missing']??count($_neKeys));
         if(!$_neAll&&!syncSetDetailScope((string)$key,$_neKeys,[
-            'policy'=>'missing_destinations','by_destination'=>$pResult['detail_destination_counts'],
-            'matrix_at'=>(int)($_nePlan['matrix_at']??0),
+            'policy'=>'missing_profile_details','missing_count'=>count($_neKeys),
         ])){
             $exRes=['ok'=>false,'error'=>'ذخیرهٔ دامنهٔ جزئیات ناموفق بود'];
         }else{
@@ -36607,8 +36604,8 @@ if ($noExtract) {
         if (!noExtractRefreshOn($syncCfg))  $pResult['no_refresh_why'] = 'disabled';
         elseif (!$_neHasCfg)                $pResult['no_refresh_why'] = 'no_detail_selectors';
         elseif ($_neLinked === 0)           $pResult['no_refresh_why'] = 'no_product_links';
-        elseif (!$_neAll&&empty($_nePlan['available'])) $pResult['no_refresh_why']='matrix_unavailable';
-        elseif (!$_neAll&&empty($_neKeys))  $pResult['no_refresh_why']='nothing_missing';
+        elseif (!$_neAll&&empty($_nePlan['available'])) $pResult['no_refresh_why']='no_detail_selectors';
+        elseif (!$_neAll&&empty($_neKeys))  $pResult['no_refresh_why']='nothing_missing_details';
         // برای ارسالِ «فقط محصولاتِ موجود»، exRes را موفق و بدون تغییراتِ جدید بگذار
         $exRes = ['ok'=>true, 'extracted'=>0, 'no_extract'=>true,
                   'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
@@ -36717,25 +36714,23 @@ if ($stepMode === 'list' && empty($exRes['ran_out']) && empty($exRes['resume_nee
     $_oneLstAll = loadProfiles();
     $profile    = $_oneLstAll[$key] ?? $profile;
     unset($_oneLstAll);
-    /* v10.433: run the configured detail policy after every successful list
-       extraction. Enabled = every linked profile product. Disabled = only the
-       union missing from Woo and/or each selected Basalam shop. */
+    /* v10.486: the unchecked policy selects incomplete linked products in
+       this profile; destination membership is unrelated to detail coverage. */
     if(!empty($exRes['ok'])&&syncProfileHasDetailSelectors($profile)){
         $_detailAll=!empty($syncCfg['detailAllEachCycle']);
         $_detailPlan=$_detailAll
-            ? ['available'=>true,'keys'=>[],'by_destination'=>[],'destinations'=>[]]
-            : syncMissingDestinationDetailPlan($profile,(string)$key,(string)$target,$cn);
+            ? ['available'=>true,'keys'=>[],'missing'=>0]
+            : syncMissingProfileDetailPlan($profile);
         $_detailKeys=(array)($_detailPlan['keys']??[]);
-        $pResult['detail_policy']=$_detailAll?'all_each_cycle':'missing_destinations';
-        $pResult['detail_destination_counts']=[];
-        foreach((array)($_detailPlan['by_destination']??[]) as $_dk=>$_ks)
-            $pResult['detail_destination_counts'][$_dk]=count((array)$_ks);
-        if(!$_detailAll&&empty($_detailPlan['available']))$pResult['detail_skipped']='matrix_unavailable';
-        elseif(!$_detailAll&&!$_detailKeys)$pResult['detail_skipped']='nothing_missing';
+        $pResult['detail_policy']=$_detailAll?'all_each_cycle':'missing_profile_details';
+        $pResult['detail_scope_count']=$_detailAll
+            ? count(profileOrderedProducts($profile,null,true)):count($_detailKeys);
+        $pResult['detail_missing_count']=(int)($_detailPlan['missing']??count($_detailKeys));
+        if(!$_detailAll&&empty($_detailPlan['available']))$pResult['detail_skipped']='no_detail_selectors';
+        elseif(!$_detailAll&&!$_detailKeys)$pResult['detail_skipped']='nothing_missing_details';
         else{
             if(!$_detailAll&&!syncSetDetailScope((string)$key,$_detailKeys,[
-                'policy'=>'missing_destinations','by_destination'=>$pResult['detail_destination_counts'],
-                'matrix_at'=>(int)($_detailPlan['matrix_at']??0),
+                'policy'=>'missing_profile_details','missing_count'=>count($_detailKeys),
             ])){
                 $_detailRes=['ok'=>false,'error'=>'ذخیرهٔ دامنهٔ جزئیات ناموفق بود'];
             }else{
@@ -57579,8 +57574,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, 'foreign_stopped_progress_is_scoped_and_ignored') !== false
       && strpos($selfSrc, "{v:'10." . "410'") !== false
       && version_compare(APP_VERSION, '10.' . '410', '>='));
-    $add('10.411', 'ردیف باسلام تا current=total بدون سقف تلاش از checkpoint ادامه می‌یابد',
-         strpos($selfSrc, "\$resumeUntilDone = \$which === 'bsl';") !== false
+    $add('10.411', 'صف باسلام و ووکامرس checkpoint را تا تکمیل ادامه می‌دهند',
+         strpos($selfSrc, "\$resumeUntilDone = in_array(\$which, ['bsl','woo'], true);") !== false
       && strpos($selfSrc, "if (!\$resumeUntilDone && !\$allowUserStopped && \$tries >= QUEUE_RESUME_MAX_TRIES)") !== false
       && substr_count($selfSrc, "!\$resumeUntilDone && !\$allowUserStopped") >= 2
       && (strpos($selfSrc, "'retry_policy' => \$resumeUntilDone ? 'until_row_complete' : 'bounded'") !== false
@@ -58353,6 +58348,22 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             && (int)($_resRect466['width'] ?? 0) === 850 && (int)($_resRect466['height'] ?? 0) === 850
             && empty($_resTiny466['ok']);
     }
+    $_detailPlan486=syncMissingProfileDetailPlan(['detailSelectors'=>['weight'=>['enabled'=>true,'selector'=>'.weight']],
+        'products'=>[
+            'complete_marker'=>['link'=>'https://example.test/a','_detail_checked_at'=>123],
+            'complete_legacy'=>['link'=>'https://example.test/b','weight'=>'500 g'],
+            'missing_detail'=>['link'=>'https://example.test/c'],
+            'missing_link'=>['weight'=>''],
+        ]]);
+    $add('10.486', 'جزئیات انتخابی بر اساس دادهٔ ناقص پروفایل و ارسال تا تکمیل checkpoint',
+         ($_detailPlan486['keys']??[])===['missing_detail']
+      && (int)($_detailPlan486['missing']??0)===1
+      && (int)($_detailPlan486['unlinked']??0)===1
+      && strpos($selfSrc, "\$resumeUntilDone = in_array(\$which, ['bsl','woo'], true);")!==false
+      && strpos($selfSrc, "'policy'=>'missing_profile_details'")!==false
+      && strpos($selfSrc, 'syncMissingProfileDetailPlan($profile)')!==false
+      && strpos($selfSrc, 'عضویت در مقصد اثری ندارد')!==false
+      && version_compare(APP_VERSION, '10.486', '>='));
     $add('10.485', 'بستن ردیف خطای قفلِ تکراری پس از تحویل checkpoint به مالک فعال',
          function_exists('extractQueueSupersedeOlderPausedRows')
       && strpos($selfSrc, 'retryableFailed') !== false
@@ -64613,7 +64624,7 @@ function queueResumeBook(string $which, string $qid, ?array $patch = null): arra
     return $row;
 }
 
-/** علامت‌زدن ردیف صف به‌عنوان failed بعد از ۳ تلاش ناموفق */
+/** علامت‌زدن ردیف صف به‌عنوان failed پس از اتمام سیاست تلاشِ محدود */
 function queueHasFreshUserStop(string $which,string $queueId=''): bool {
     $file=$which==='bsl'?BSL_STOP_FILE:WOO_STOP_FILE;
     $hold=$which==='bsl'?BSL_STOP_HOLD_SEC:WOO_STOP_HOLD_SEC;
@@ -64885,14 +64896,14 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     /* v10.56 (۷۰): resume_from = چک‌پوینتِ واقعی */
     $start = max(0, (int)($chk['resume_from'] ?? $chk['current'] ?? 0));
 
-    /* Woo keeps the v10.103 three-attempt ceiling. Basalam is completion-bound
-       from v10.411 and therefore never becomes failed merely due to restarts. */
+    /* Product sends are durable queue work for both destinations. Host kills
+       and transient dispatch failures must not exhaust a healthy checkpoint;
+       explicit user stops are still honored above. */
     $book = queueResumeBook($which, $qid);
-    /* Basalam rows are completion-bound, not attempt-bound. Shared hosting may
-       kill a long request many times; each cron pulse must keep resuming the
-       same queue/shop checkpoint until current reaches total. Woo retains the
-       bounded policy to avoid changing its established operational behavior. */
-    $resumeUntilDone = $which === 'bsl';
+    /* BSL and Woo rows are completion-bound, not attempt-bound. Shared hosting
+       may kill a long request many times; each cron pulse must keep resuming the
+       same destination checkpoint until current reaches total. */
+    $resumeUntilDone = in_array($which, ['bsl','woo'], true);
     $tries = (int)($book['tries'] ?? 0);
     $lastAt = (int)($book['at'] ?? 0);
     $now = time();
@@ -66423,11 +66434,26 @@ function syncProfileHasDetailSelectors(array $profile): bool {
     return false;
 }
 
-/**
- * Resolve destination absence independently for WooCommerce and every selected
- * Basalam shop.  Price/content warnings are intentionally ignored: this policy
- * is presence-only and is independent of the profile-vs-matrix action basis.
- */
+/** Select linked products from the saved profile that still lack resolved detail data. */
+function syncMissingProfileDetailPlan(array $profile): array {
+    $selectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
+    $out=['available'=>count($selectors)>0,'keys'=>[],'total'=>0,'missing'=>0,'unlinked'=>0];
+    if(!$selectors)return $out;
+    foreach(profileProductsMap($profile) as $mapKey=>$product){
+        if(!is_array($product))continue;
+        $out['total']++;
+        $key=trim((string)$mapKey);if($key==='')$key=trim((string)($product['key']??''));
+        if($key==='')continue;
+        if(trim((string)($product['link']??''))===''){$out['unlinked']++;continue;}
+        if(!extractProductHasDetailData($product,$selectors)){
+            $out['keys'][]=$key;$out['missing']++;
+        }
+    }
+    return $out;
+}
+
+/** Legacy matrix-based destination-presence planner, retained for compatibility
+ * and diagnostics. Current sync detail eligibility uses syncMissingProfileDetailPlan(). */
 function syncMissingDestinationDetailPlan(array $profile,string $profileKey,string $target,array $cn=[]): array {
     $out=['available'=>false,'keys'=>[],'by_destination'=>[],'destinations'=>[]];
     if(!in_array($target,['woo','bsl','both'],true))return $out;
@@ -89866,9 +89892,9 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                     <div style="display:flex;align-items:center;gap:8px;padding:7px 8px;background:#082f49;border:1px solid #0e7490;border-radius:10px">
                         <div style="flex:1">
                             <div style="font-size:10.5px;color:#a5f3fc">🔎 جزئیاتِ همهٔ محصولات در هر نوبت</div>
-                            <div id="profileSyncDetailPolicyHint" style="font-size:9px;color:#94a3b8;line-height:1.6;margin-top:2px">خاموش: فقط محصولاتی که در هر مقصدِ فعال وجود ندارند؛ ووکامرس و هر غرفهٔ باسلام جداگانه بررسی می‌شوند.</div>
+                            <div id="profileSyncDetailPolicyHint" style="font-size:9px;color:#94a3b8;line-height:1.6;margin-top:2px">خاموش: فقط محصولاتِ دارای لینک که در پروفایل دادهٔ جزئیات ندارند؛ عضویت در مقصد اثری ندارد.</div>
                         </div>
-                        <label class="prof-net-switch" title="روشن: جزئیات همهٔ محصولات · خاموش: فقط محصولاتِ غایب از مقصد">
+                        <label class="prof-net-switch" title="روشن: جزئیات همهٔ محصولات · خاموش: محصولاتِ فاقد جزئیات در پروفایل">
                             <input type="checkbox" id="profileSyncDetailAll" style="display:none" onchange="syncDetailPolicyUi();scheduleSave();updateSyncStatusText()"><span class="prof-net-slider"></span>
                         </label>
                     </div>
@@ -98188,6 +98214,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.486', t:'🔁 ادامهٔ ارسال Woo تا تکمیل و جزئیات فقط برای محصولاتِ ناقص پروفایل', items:[
+    'ارسال‌های WooCommerce مانند Basalam دیگر پس از سه تلاشِ میزبانی/dispatch به خطای نهاییِ resume_exhausted قفل نمی‌شوند؛ کران از checkpoint ذخیره‌شده ادامه می‌دهد تا ردیف تمام شود و توقف صریح کاربر همچنان محفوظ است.',
+    'وقتی گزینهٔ «همهٔ محصولات» خاموش است، جزئیات فقط برای محصولاتِ دارای لینک و فاقد نشانگر/دادهٔ جزئیات در خودِ پروفایل استخراج می‌شود؛ حضور یا نبود محصول در WooCommerce و غرفه‌های Basalam دیگر معیار انتخاب نیست. گزینهٔ استخراج همهٔ محصولات بدون تغییر باقی مانده است.'
+  ]},
   {v:'10.485', t:'🧹 بستن ردیف‌های خطای تکراری پس از بازیابی checkpoint', items:[
     'وقتی extraction تازه‌تر برای همان پروفایل در صف انتظار/اجرا باشد، ردیف‌های قدیمیِ lock-contention یا صفرمحصولِ قابل‌بازیابی به‌جای ماندن در وضعیت failed به superseded پیوند می‌خورند؛ ردیف صریحاً متوقف‌شدهٔ کاربر مستثناست.'
   ]},
@@ -98445,11 +98475,9 @@ const CHANGELOG = [
     'عملیات بزرگ به درخواست‌های مستقل با همزمانی محدود تقسیم می‌شود و هر محصول نتیجه یا خطای خودش را نشان می‌دهد.',
     'سرور پیش از هر اقدام دوباره بررسی می‌کند محصول هنوز متفرقهٔ فعال همان غرفه باشد و از توکن دقیق همان غرفه استفاده می‌کند.'
   ]},
-  {v:'10.433', t:'🔎 سیاست جزئیاتِ همگام‌سازی برای هر مقصد', items:[
-    'سوییچ تازه کنار کنترل‌های ووکامرس/باسلام تعیین می‌کند هر چرخه جزئیات همهٔ محصولات را بخواند یا فقط محصولاتِ غایب از مقصد را.',
-    'در حالت خاموش، حضور ووکامرس و هر غرفهٔ فعال باسلام جداگانه سنجیده و اتحاد محصولات غایب به گذر جزئیات داده می‌شود؛ مغایرت قیمت/محتوا به‌اشتباه غیبت محسوب نمی‌شود.',
-    'این سیاست از مبنای افزودن/آپدیت (پروفایل ذخیره‌شده یا جدول مغایرت) مستقل است و تنها با سلکتور فعال جزئیات اجرا می‌شود.',
-    'دامنهٔ انتخابی و چرخهٔ همه‌محصولی هر دو از صف استخراج، checkpoint و ادامهٔ امن موجود استفاده می‌کنند.'
+  {v:'10.433', t:'🔎 سیاست اولیهٔ جزئیاتِ همگام‌سازی بر پایهٔ مقصد', items:[
+    'نسخهٔ اولیه سوییچ همهٔ محصولات/محصولات غایب از مقصد را افزود؛ در v10.486 معیار خاموش به کمبود دادهٔ جزئیات در خودِ پروفایل تغییر کرد.',
+    'سیاست همچنان از مبنای افزودن/آپدیت مستقل است و دامنهٔ انتخابی و حالت همه‌محصولی از صف استخراج و checkpoint امن استفاده می‌کنند.'
   ]},
   {v:'10.432', t:'🔁 ادامهٔ کران هم‌سطح دکمهٔ Continue', items:[
     'نگهبان کران پیش از dispatch همان تراکنش Continue را انجام می‌دهد: مالک‌های running مرده کنار می‌روند، ردیف انتخابی مالک یکتا می‌شود و checkpoint تازه با queue_id نوشته می‌شود.',
@@ -117193,7 +117221,7 @@ function syncDetailPolicyUi(){
     const el=$('profileSyncDetailPolicyHint');if(!el)return;
     el.textContent=all
         ?'روشن: در هر چرخه، جزئیاتِ همهٔ محصولاتِ دارای لینک دوباره استخراج می‌شود.'
-        :'خاموش: فقط محصولاتی که در هر مقصدِ فعال وجود ندارند؛ ووکامرس و هر غرفهٔ باسلام جداگانه بررسی می‌شوند.';
+        :'خاموش: فقط محصولاتِ دارای لینک که در پروفایل دادهٔ جزئیات ندارند؛ عضویت در مقصد اثری ندارد.';
     el.style.color=all?'#67e8f9':'#94a3b8';
 }
 function loadProfileSyncConfig(){
