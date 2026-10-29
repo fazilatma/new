@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.499';
+const APP_VERSION = '10.500';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -20842,6 +20842,24 @@ function vc_defaults(): array {
     ];
 }
 
+/** Migrate the previously transferred session branch to this checkout's updater branch. */
+function vc_migrate_legacy_branch_config(array $c): array {
+    $legacy='arena/01a0ebf7-new';
+    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
+    $branches=vc_normalize_branches((array)($c['branches']??[]));
+    $pin=trim((string)($c['pinned_branch']??''));
+    $legacyPresent=(string)($c['branch']??'')===$legacy||$pin===$legacy||in_array($legacy,$branches,true);
+    if(!$legacyPresent)return ['config'=>$c,'changed'=>false];
+    $next=[];foreach($branches as $branch){$branch=$branch===$legacy?$canonical:$branch;if(!in_array($branch,$next,true))$next[]=$branch;}
+    if(!in_array($canonical,$next,true)){
+        if(count($next)>=20)array_pop($next);
+        $next[]=$canonical;
+    }
+    $c['branches']=$next;$c['branch']=$canonical;
+    if($pin===$legacy){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
+    return ['config'=>$c,'changed'=>true];
+}
+
 function vc_load(): array {
     $d = vc_defaults();
     if (!is_file(VC_FILE)) return $d;
@@ -20867,6 +20885,8 @@ function vc_load(): array {
     if($pin!==''&&!in_array($pin,$c['branches'],true)){
         $c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;
     }
+    $legacyBranch=vc_migrate_legacy_branch_config($c);$c=$legacyBranch['config'];
+    if(!empty($legacyBranch['changed']))vc_save($c);
     return $c;
 }
 /**
@@ -47760,6 +47780,14 @@ if (isset($_GET['selftest'])) {
     $stopUiStart=strrpos($selfSrc,'function tmStopAll(){');
     $stopUiEnd=$stopUiStart===false?false:strpos($selfSrc,'function tmStop(key)', $stopUiStart);
     $stopUi=$stopUiStart!==false&&$stopUiEnd!==false?substr($selfSrc,$stopUiStart,$stopUiEnd-$stopUiStart):'';
+    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new',
+        'branches'=>['arena/01a0ebf7-new'],'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $legacyBranchCfg=(array)($legacyBranchTest['config']??[]);
+    $add('10.500','تنظیمِ قدیمیِ updater خودکار به برنچ همین گفتگو منتقل می‌شود',
+        !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')===S4_CODE_UPDATE_BRANCH
+        &&(array)($legacyBranchCfg['branches']??[])===[S4_CODE_UPDATE_BRANCH]
+        &&(string)($legacyBranchCfg['pinned_branch']??'')==''
+        &&strpos($selfSrc,"{v:'10." . "500'")!==false&&version_compare(APP_VERSION,'10.' . '500','>='));
     $add('10.499','آزمون توقف همه از محل واقعی تابع رابط کد را بررسی می‌کند',
         $stopUiStart!==false&&$stopUiEnd!==false&&$stopUi!==''
         &&strpos($selfSrc,"{v:'10." . "499'")!==false&&version_compare(APP_VERSION,'10.' . '499','>='));
@@ -98912,6 +98940,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.500', t:'🔀 انتقال خودکار تنظیم updater از برنچ قدیمی', items:[
+    'اگر تنظیمات ذخیره‌شدهٔ updater هنوز روی arena/01a0ebf7-new باشد، هنگام خواندن تنظیمات به arena/e868e86a-new منتقل و pin قدیمی حذف می‌شود؛ دیگر نسخهٔ 10.498 از برنچ 10.447 به‌روزرسانی نمی‌شود.'
+  ]},
   {v:'10.499', t:'🧪 اصلاح آزمون خودکارِ رابط توقف همه', items:[
     'آزمون نسخهٔ 10.498 اکنون آخرین اعلان واقعی تابع tmStopAll را بررسی می‌کند، نه رشتهٔ مرجعِ داخل خود آزمون؛ بررسی پویایی دکمه دیگر به‌اشتباه شکست نمی‌خورد.'
   ]},
