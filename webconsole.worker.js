@@ -98,13 +98,21 @@ async function handleUniversalProxy(request, targetUrlStr, env) {
     }
 
     const forwardHeaders = new Headers();
-    const skipHeaders = ['host', 'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto', 'x-real-ip', 'true-client-ip', 'forwarded'];
+    const skipHeaders = ['host', 'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-for', 'x-forwarded-proto', 'x-real-ip', 'true-client-ip', 'forwarded', 'x-target-url', 'x-target-base', 'x-target-path', 'x-authorization', 'x-api-key-fwd'];
 
     for (const [key, value] of request.headers.entries()) {
       const lk = key.toLowerCase();
       if (!skipHeaders.includes(lk)) {
         forwardHeaders.set(key, value);
       }
+    }
+    const xAuth = request.headers.get('X-Authorization');
+    if (!forwardHeaders.has('Authorization') && xAuth) {
+      forwardHeaders.set('Authorization', xAuth);
+    }
+    const xKeyFwd = request.headers.get('X-API-Key-Fwd');
+    if (!forwardHeaders.has('x-api-key') && xKeyFwd) {
+      forwardHeaders.set('x-api-key', xKeyFwd);
     }
 
     forwardHeaders.set('Host', targetUrl.host);
