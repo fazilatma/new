@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.488';
+const APP_VERSION = '10.489';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -58387,7 +58387,8 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             'missing_detail'=>['link'=>'https://example.test/c'],
             'missing_link'=>['weight'=>''],
         ]]);
-    $_tabSwitchStart488=strpos($selfSrc,'function switchMainTab(name) {');
+    $_mainTabsAt488=strpos($selfSrc,'const MAIN_TABS =');
+    $_tabSwitchStart488=strpos($selfSrc,'function switchMainTab(name) {',$_mainTabsAt488===false?0:$_mainTabsAt488);
     $_tabSwitchEnd488=strpos($selfSrc,'// v8.17: Settings panel toggle',$_tabSwitchStart488===false?0:$_tabSwitchStart488);
     $_tabSwitchBody488=$_tabSwitchStart488!==false&&$_tabSwitchEnd488!==false
         ?substr($selfSrc,$_tabSwitchStart488,$_tabSwitchEnd488-$_tabSwitchStart488):'';
@@ -98275,6 +98276,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.489', t:'🧪 دقیق‌کردن محدودهٔ بررسیِ خودآزمایی اسکرول تب‌ها', items:[
+    'آزمونِ حفظ موقعیت اسکرول از خودِ تابع JavaScript در بخش تب‌های اصلی آغاز می‌شود، نه از رشتهٔ هم‌نام در کدِ خودآزمایی؛ نتیجهٔ آن اکنون رفتار واقعی تب را می‌سنجد.'
+  ]},
   {v:'10.488', t:'📍 حفظ اسکرول هر تب و متن اعلانِ بدون لینک سایت', items:[
     'هر تب اصلی موقعیت عمودی خودش را نگه می‌دارد؛ با رفتن به تب دیگر و برگشت، صفحه به همان جای قبلی بازمی‌گردد.',
     'اعلان‌ها فقط متنِ تنظیم‌شده در تکست‌باکس شناسایی را اضافه می‌کنند؛ لینک/مسیر سایت، شناسهٔ نمونه و شمارهٔ نسخه دیگر به متن پیام الصاق نمی‌شوند. متن خالی نیز چیزی اضافه نمی‌کند.'
