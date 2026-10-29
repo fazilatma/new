@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.500';
+const APP_VERSION = '10.501';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -20773,8 +20773,8 @@ function vc_defaults(): array {
     return [
         'check_on_load'   => false,
         'repo'            => 'fazilatma/new',
-        'branch'          => 'arena/e868e86a-new',
-        'branches'        => ['arena/e868e86a-new'],
+        'branch'          => 'arena/01a0ebf7-new',
+        'branches'        => ['arena/01a0ebf7-new'],
         'pinned_branch'   => '',
         'pinned_at'       => 0,
         'pinned_max_unix' => 0,
@@ -20790,8 +20790,8 @@ function vc_defaults(): array {
 
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
-    $legacy='arena/01a0ebf7-new';
-    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
+    $legacy='arena/e868e86a-new';
+    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
     $branches=vc_normalize_branches((array)($c['branches']??[]));
     $pin=trim((string)($c['pinned_branch']??''));
     $legacyPresent=(string)($c['branch']??'')===$legacy||$pin===$legacy||in_array($legacy,$branches,true);
@@ -20825,7 +20825,7 @@ function vc_load(): array {
     $rawBranches=array_key_exists('branches',$j)&&is_array($j['branches'])
         ? $j['branches'] : [(string)($c['branch']??'')];
     $c['branches']=vc_normalize_branches($rawBranches);
-    if(!$c['branches'])$c['branches']=['arena/e868e86a-new'];
+    if(!$c['branches'])$c['branches']=['arena/01a0ebf7-new'];
     if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0];
     $pin=trim((string)($c['pinned_branch']??''));
     if($pin!==''&&!in_array($pin,$c['branches'],true)){
@@ -20967,7 +20967,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/e868e86a-new';
+const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -21495,7 +21495,7 @@ if (isset($_GET['vc_settings'])) {
         }
         if (isset($_POST['branch']))      $c['branch']      = trim((string)$_POST['branch']);
         if(!$c['branches'])$c['branches']=vc_normalize_branches([(string)$c['branch']]);
-        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/e868e86a-new';
+        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/01a0ebf7-new';
         if (isset($_POST['path']))        $c['path']        = ltrim(trim((string)$_POST['path']), '/');
         if (isset($_POST['deploy_file'])) $c['deploy_file'] = basename(trim((string)$_POST['deploy_file']));
         foreach (['github_token', 'deploy_token'] as $k) {
@@ -34515,6 +34515,16 @@ if (isset($_GET['backup_peek'])) {
     exit;
 }
 
+/* v10.501: earliest lightweight browser bootstrap endpoint. It deliberately
+   does not load profiles or queues; stop-all cleanup has its own status endpoint. */
+if (isset($_GET['app_ready'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    echo json_encode(['ok'=>true,'ready'=>true,'version'=>APP_VERSION,'at'=>time(),
+        'stop_all_pending'=>is_file(TASKS_STOP_ALL_CLEAR_FILE)],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 if (isset($_GET['runtime_health'])) {
     header('Content-Type: application/json; charset=UTF-8');
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -40484,7 +40494,7 @@ function tasksStopAllLocksBusy(): array {
     foreach(tasksRegistry() as $key=>$def){
         $f=tasksLockFile((string)$key);if($f!=='')$files[$f]=true;
     }
-    foreach([WORKER_LOCK_FILE,EXTRACT_LOCK_FILE,EXTRACT_WATCHDOG_LOCK_FILE,
+    foreach([EXTRACT_LOCK_FILE,EXTRACT_WATCHDOG_LOCK_FILE,
              MANUAL_SYNC_LOCK_FILE,SYNC_PIPELINE_LOCK_FILE,AUTO_LOCK_FILE,
              PROFILES_FILE.'.extract.lock',EXTRACT_QUEUE_FILE.'.lock',
              __DIR__.'/bsl_backend.lock',__DIR__.'/woo_backend.lock',
@@ -40525,7 +40535,7 @@ function tasksStripWorkerCheckpointFields(array &$data): void {
 function tasksStopAllClearOperationalQueues(): array {
     $held=[];$lockFiles=[
         'bsl'=>['file'=>null,'backend'=>true],'woo'=>['file'=>null,'backend'=>true],
-        'worker'=>['file'=>WORKER_LOCK_FILE],'extract_watchdog'=>['file'=>EXTRACT_WATCHDOG_LOCK_FILE],
+        'extract_watchdog'=>['file'=>EXTRACT_WATCHDOG_LOCK_FILE],
         'auto'=>['file'=>AUTO_LOCK_FILE],'profile_extract'=>['file'=>PROFILES_FILE.'.extract.lock'],
         'duplicate_worker'=>['file'=>BSL_DUP_RECOVERY_LOCK_FILE],
         'duplicate_queue'=>['file'=>BSL_DUP_RECOVERY_QUEUE_LOCK],
@@ -40566,6 +40576,11 @@ function tasksStopAllClearOperationalQueues(): array {
             foreach($profileKeys as $key)if(array_key_exists($key,$profile)){unset($profile[$key]);$profilesChanged=true;}
         }unset($profile);
         if($profilesChanged&&!saveProfiles($profiles))return ['ok'=>false,'pending'=>true,'error'=>'profiles_checkpoint_write_failed','count'=>0];
+
+        // Scheduled Task-Manager activities are operational work too. Leaving
+        // them enabled would recreate queues on the next cron immediately.
+        $scheduledJobs=count(autoLoadJobs());
+        if($scheduledJobs>0&&!autoSaveJobs([]))return ['ok'=>false,'pending'=>true,'error'=>'scheduled_jobs_clear_failed','count'=>0];
 
         $bq=bslReadQueue();$wq=wooReadQueue();
         $sendRows=count((array)($bq['entries']??[]))+count((array)($wq['entries']??[]));
@@ -40640,8 +40655,8 @@ function tasksStopAllClearOperationalQueues(): array {
             'extract_rows'=>$extractRows,'sync_rows'=>$syncRows,'queue_files'=>$queueFiles,
             'duplicate_rows'=>$dupRows,'ai_category_rows'=>$aiRows,'payload_files'=>$removed,
             'activity_state_files'=>$stateFiles,'staging_files'=>$stagingFiles,
-            'progress_files'=>$progressFiles,'matrix_temps'=>$matrixTemps,
-            'count'=>$sendRows+$extractRows+$syncRows+$queueFiles+$dupRows+$aiRows+$workerRows+
+            'progress_files'=>$progressFiles,'matrix_temps'=>$matrixTemps,'scheduled_jobs'=>$scheduledJobs,
+            'count'=>$sendRows+$extractRows+$syncRows+$queueFiles+$dupRows+$aiRows+$workerRows+$scheduledJobs+
                 $removed+$stateFiles+$stagingFiles+$progressFiles+$matrixTemps];
     }finally{
         foreach(array_reverse($held) as $h){if($h['backend'])queueBackendUnlock($h['fp']);else{@flock($h['fp'],LOCK_UN);@fclose($h['fp']);}}
@@ -40666,6 +40681,9 @@ function tasksStopAllClearCheckpoints(): array {
 
 function tasksStopAllRequest(): array {
     $now=time();$signals=0;
+    // Stop means stop: cron must not recreate a queue while cleanup is pending.
+    $stopCn=loadConnections();$stopCn['auto_resume_all_cron']=false;
+    $autoResumeDisabled=saveConnections($stopCn);
     foreach(tasksRegistry() as $key=>$def){
         $sf=tasksStopFile((string)$key);
         if($sf!==''&&@file_put_contents($sf,json_encode(['at'=>$now,'by'=>'tasks_stop_all'],JSON_UNESCAPED_UNICODE),LOCK_EX)!==false)$signals++;
@@ -40701,7 +40719,8 @@ function tasksStopAllRequest(): array {
     @file_put_contents(TASKS_STOP_ALL_CLEAR_FILE,json_encode(['at'=>$now,'profiles_cleared'=>false],JSON_UNESCAPED_UNICODE),LOCK_EX);
     $clear=tasksStopAllClearCheckpoints();
     return ['ok'=>true,'stop_signals'=>$signals,'profile_stops'=>count($profileStops),
-        'extract_stops'=>count($extractStops),'worker_queue'=>$queue,'checkpoint_cleanup'=>$clear];
+        'extract_stops'=>count($extractStops),'auto_resume_disabled'=>$autoResumeDisabled,
+        'worker_queue'=>$queue,'checkpoint_cleanup'=>$clear];
 }
 
 /* v10.400: compact event feed for the animated header health pulser.
@@ -40749,8 +40768,14 @@ if (isset($_POST['tasks_auto_resume_toggle']) || isset($_GET['tasks_auto_resume_
     exit;
 }
 
+if(isset($_GET['tasks_stop_all_status'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $cleanup=tasksStopAllClearCheckpoints();
+    echo json_encode(['ok'=>true,'pending'=>is_file(TASKS_STOP_ALL_CLEAR_FILE),
+        'cleanup'=>$cleanup,'busy'=>tasksStopAllLocksBusy(),'version'=>APP_VERSION,'at'=>time()],JSON_UNESCAPED_UNICODE);exit;
+}
 if(isset($_GET['tasks_stop_all'])){
-    header('Content-Type: application/json; charset=UTF-8');
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
     echo json_encode(tasksStopAllRequest(),JSON_UNESCAPED_UNICODE);exit;
 }
 
@@ -47726,14 +47751,36 @@ if (isset($_GET['selftest'])) {
     $stopUiStart=strrpos($selfSrc,'function tmStopAll(){');
     $stopUiEnd=$stopUiStart===false?false:strpos($selfSrc,'function tmStop(key)', $stopUiStart);
     $stopUi=$stopUiStart!==false&&$stopUiEnd!==false?substr($selfSrc,$stopUiStart,$stopUiEnd-$stopUiStart):'';
-    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new',
-        'branches'=>['arena/01a0ebf7-new'],'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/e868e86a-new',
+        'branches'=>['arena/e868e86a-new'],'pinned_branch'=>'arena/e868e86a-new','pinned_at'=>123,'pinned_max_unix'=>456]);
     $legacyBranchCfg=(array)($legacyBranchTest['config']??[]);
     $add('10.500','تنظیمِ قدیمیِ updater خودکار به برنچ همین گفتگو منتقل می‌شود',
         !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')===S4_CODE_UPDATE_BRANCH
         &&(array)($legacyBranchCfg['branches']??[])===[S4_CODE_UPDATE_BRANCH]
         &&(string)($legacyBranchCfg['pinned_branch']??'')==''
         &&strpos($selfSrc,"{v:'10." . "500'")!==false&&version_compare(APP_VERSION,'10.' . '500','>='));
+    $_stopLocksStart501=strpos($selfSrc,'function tasksStopAllLocksBusy(): array {');
+    $_stopLocksEnd501=strpos($selfSrc,'function tasksStripWorkerCheckpointFields(',($_stopLocksStart501===false?0:$_stopLocksStart501));
+    $_stopLocksBody501=$_stopLocksStart501!==false&&$_stopLocksEnd501!==false?substr($selfSrc,$_stopLocksStart501,$_stopLocksEnd501-$_stopLocksStart501):'';
+    $_stopClearStart501=strpos($selfSrc,'function tasksStopAllClearOperationalQueues(): array {');
+    $_stopClearEnd501=strpos($selfSrc,'function tasksStopAllClearCheckpoints(',($_stopClearStart501===false?0:$_stopClearStart501));
+    $_stopClearBody501=$_stopClearStart501!==false&&$_stopClearEnd501!==false?substr($selfSrc,$_stopClearStart501,$_stopClearEnd501-$_stopClearStart501):'';
+    $add('10.501','توقف همه از endpoint تا حذف کامل همهٔ صف‌ها و فعالیت‌ها پیگیری می‌شود و worker بیکار مانع پاک‌سازی نیست',
+        $_stopLocksBody501!==''&&$_stopClearBody501!==''
+        &&strpos($_stopLocksBody501,'WORKER_LOCK_FILE')===false
+        &&strpos($_stopClearBody501,"'worker'=>['file'=>WORKER_LOCK_FILE]")===false
+        &&strpos($_stopClearBody501,'autoSaveJobs([])')!==false
+        &&strpos($selfSrc,"isset(\$_GET['tasks_stop_all_status'])")!==false
+        &&strpos($selfSrc,"fetch('?tasks_stop_all_status=1&_v='")!==false
+        &&strpos($selfSrc,"['auto_resume_all_cron']=false")!==false
+        &&S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'
+        &&strpos($selfSrc,"{v:'10." . "501'")!==false&&version_compare(APP_VERSION,'10.501','>='));
+    $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
+        strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
+        &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
+        &&strpos($selfSrc,"document.documentElement.dataset.s4Ready='1'")!==false
+        &&strpos($selfSrc,"loadProfileFromServer(url,silent,retryAttempt+1)")!==false
+        &&strpos($selfSrc,"profileFormReady=true;\n                if(applyError)")!==false);
     $add('10.499','آزمون توقف همه از محل واقعی تابع رابط کد را بررسی می‌کند',
         $stopUiStart!==false&&$stopUiEnd!==false&&$stopUi!==''
         &&strpos($selfSrc,"{v:'10." . "499'")!==false&&version_compare(APP_VERSION,'10.' . '499','>='));
@@ -56975,7 +57022,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'POST required'") !== false);
     $add('10.266', 'منبع updater ثابت و تزریق repo/branch از درخواست ناممکن است',
          strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "e868e86a-new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "01a0ebf7-new'") !== false
       && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false);
     $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
          strpos($selfSrc, "'git_blob_sha_mismatch'") !== false
@@ -94318,12 +94365,13 @@ function ghImportProducts(){
       .finally(()=>{if(btn){btn.disabled=false;btn.textContent='📥 دریافت و ثبت محصولات برای همین پروفایل';}});
 }
 
-function loadProfileFromServer(url, silent) {
+function loadProfileFromServer(url, silent, retryAttempt) {
+    retryAttempt=Math.max(0,parseInt(retryAttempt)||0);
     const seq=++profileLoadSeq;
     clearTimeout(saveTimer); profileFormReady=false;
     window._pendingEditedUrlForSeq = null;
     const isUrlRef = String(url || '').indexOf('://') !== -1;
-    fetch('?load_profile=' + encodeURIComponent(url))
+    fetch('?load_profile=' + encodeURIComponent(url) + '&_ready=' + Date.now(), {cache:'no-store',credentials:'same-origin'})
         .then(r => r.json())
         .then(d => {
             /* پاسخ دیررس پروفایل قبلی نباید انتخاب تازه‌تر را برگرداند. */
@@ -94336,8 +94384,11 @@ function loadProfileFromServer(url, silent) {
                 /* v9.91: در بازیابیِ خودکارِ بعد از رفرش (silent) نباید تبِ کاربر
                    عوض شود. قبلاً applyProfile در پایانش به «نتایج» می‌پرید و
                    همان علتِ اصلیِ «هر رفرش، تبِ من عوض می‌شود» بود. */
+                let applyError=null;
                 try {
                     applyProfile(d.profile, !!silent);
+                } catch(e) {
+                    applyError=e;console.error('profile apply failed',e);
                 } finally {
                     window._applyingProfileKey = '';
                 }
@@ -94345,6 +94396,7 @@ function loadProfileFromServer(url, silent) {
                 currentProfileUrl=d.profile.url||url;
                 currentProfileUpdatedAt=parseInt(d.profile.updatedAt||0)||0;
                 profileFormReady=true;
+                if(applyError)showToast('⚠️ پروفایل از endpoint دریافت شد؛ یک بخش رابط بازیابی نشد اما سایت آماده است',true);
                 setProfileSelectValue(currentProfileKey || currentProfileUrl);
                 rememberProfile(currentProfileUrl,currentProfileKey);
                 if (pendingEdited && pendingEdited !== currentProfileUrl) {
@@ -94356,13 +94408,26 @@ function loadProfileFromServer(url, silent) {
                     updateUrlTargetProfileHint();
                 }
                 if (silent) showToast('↩ آخرین پروفایل بازیابی شد: ' + (d.profile.name || url));
+            } else if (silent && retryAttempt < 4) {
+                throw new Error((d&&d.error)||'profile endpoint not ready');
             } else if (!silent) {
                 showToast('پروفایل یافت نشد', true);
             } else {
-                forgetProfile();                 // پروفایل دیگر نیست
+                forgetProfile();                 // پروفایل واقعاً دیگر نیست
+                profileFormReady=true;
             }
         })
-        .catch(() => { if(seq===profileLoadSeq&&!silent) showToast('خطا در بارگذاری', true); });
+        .catch(() => {
+            if(seq!==profileLoadSeq)return;
+            if(retryAttempt<4){
+                const wait=Math.min(5000,600*Math.pow(2,retryAttempt));
+                const st=$('profileStatus');if(st){st.textContent='تلاش مجدد…';st.className='profile-indicator unsaved';}
+                setTimeout(()=>{if(seq===profileLoadSeq)loadProfileFromServer(url,silent,retryAttempt+1);},wait);
+                return;
+            }
+            const st=$('profileStatus');if(st){st.textContent='آماده · بارگذاری مجدد';st.className='profile-indicator unsaved';}
+            if(!silent)showToast('خطا در بارگذاری پروفایل از endpoint',true);
+        });
 }
 
 function applyProfile(p, keepTab) {
@@ -98953,6 +99018,14 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.501', t:'⏹️ توقف و پاک‌سازی قطعی همهٔ فعالیت‌ها + آمادگی endpointمحور پس از رفرش', items:[
+    'دکمهٔ «توقف همه» اکنون با endpoint وضعیت اختصاصی تا آزادشدن کارهای فعال و حذف کامل صف‌های worker، استخراج، همگام‌سازی، ووکامرس، باسلام، بازیابی تکراری، دسته‌بندی AI، payloadها، checkpointها، فایل‌های staging و گزارش‌های عملیاتی پیگیری می‌شود.',
+    'قفل worker دائمیِ بیکار دیگر پاک‌سازی را برای همیشه pending نگه نمی‌دارد؛ زنده‌بودن job واقعی جداگانه بررسی می‌شود و فقط مالک فعال مانع حذف امن است.',
+    'کارهای زمان‌بندی‌شدهٔ Task Manager نیز پاک و ادامهٔ خودکار کران خاموش می‌شود تا صف‌ها بلافاصله پس از توقف دوباره ساخته نشوند.',
+    'endpoint جدید app_ready آمادگی runtime و وضعیت پاک‌سازی معوق را پس از هر رفرش اعلام می‌کند؛ کلاینت تا پاسخ معتبر retry می‌کند و پاک‌سازی نیمه‌تمام را خودکار ادامه می‌دهد.',
+    'updater پس از انتقال آخرین کد از برنچ مبدأ، روی برنچ ثابت همین نشست قرار گرفت تا نصب‌های بعدی تغییرات تازه را بازنویسی نکنند.',
+    'بارگذاری آخرین پروفایل از endpoint اکنون no-cache و دارای retry پلکانی است؛ خطای یک بخش apply دیگر کل فرم را برای همیشه در profile_form_not_ready نگه نمی‌دارد.'
+  ]},
   {v:'10.500', t:'🔀 انتقال خودکار تنظیم updater از برنچ قدیمی', items:[
     'اگر تنظیمات ذخیره‌شدهٔ updater هنوز روی arena/01a0ebf7-new باشد، هنگام خواندن تنظیمات به arena/e868e86a-new منتقل و pin قدیمی حذف می‌شود؛ دیگر نسخهٔ 10.498 از برنچ 10.447 به‌روزرسانی نمی‌شود.'
   ]},
@@ -112167,6 +112240,24 @@ function tmRender(){
   body.innerHTML=h;
 }
 
+let tmStopAllPollTimer=null;
+function tmStopAllPoll(attempt){
+  attempt=Math.max(0,parseInt(attempt)||0);clearTimeout(tmStopAllPollTimer);tmStopAllPollTimer=-1;
+  fetch('?tasks_stop_all_status=1&_v='+Date.now(),{cache:'no-store',credentials:'same-origin'}).then(r=>r.json()).then(d=>{
+    if(!d||!d.ok)throw new Error((d&&d.error)||'status endpoint failed');
+    const c=d.cleanup||{};tmPulse();
+    if(!d.pending||c.cleared){
+      tmStopAllRunning=false;tmStopAllPollTimer=null;
+      showToast('⏹ همهٔ صف‌ها، فعالیت‌ها، checkpointها و کارهای زمان‌بندی‌شده پاک شدند.');return;
+    }
+    if(attempt>=90){tmStopAllRunning=false;tmStopAllPollTimer=null;showToast('⚠️ توقف ثبت شد؛ پاک‌سازی سرورساید با endpoint و کران ادامه دارد',true);return;}
+    tmStopAllRunning=true;tmStopAllPollTimer=setTimeout(()=>tmStopAllPoll(attempt+1),1000);
+  }).catch(e=>{
+    if(attempt<12){tmStopAllPollTimer=setTimeout(()=>tmStopAllPoll(attempt+1),1500);return;}
+    tmStopAllRunning=false;tmStopAllPollTimer=null;showToast('✗ وضعیت توقف همه از endpoint خوانده نشد: '+String(e&&e.message||e),true);
+  });
+}
+
 function tmStopAll(){
   if(tmStopAllRunning){showToast('⏳ درخواستِ توقف سراسری در حالِ پردازش است');return;}
   if(!confirm('همهٔ فعالیت‌ها و ردیف‌های صف متوقف و پاک شوند؟ اگر کاری در حال اجراست، توقف امن انجام می‌شود و پاک‌سازی پس از آزادشدن قفل‌ها ادامه می‌یابد. محصولات استخراج‌شده و داده‌های کاتالوگ/کسب‌وکار حفظ می‌شوند.'))return;
@@ -112179,17 +112270,18 @@ function tmStopAll(){
     if(c.pending){
       const rawBusy=Array.isArray(c.busy)?c.busy:(c.busy?[String(c.busy)]:[]);
       const why=c.error||rawBusy.join('، ')||'منتظر پایان امنِ کارهای فعال';
-      showToast('⏹ درخواست ثبت شد؛ '+why+' · پاک‌سازی در تیک بعدی دوباره بررسی می‌شود');
+      showToast('⏹ درخواست ثبت شد؛ '+why+' · endpoint تا پاک‌شدن کامل پیگیری می‌شود');
+      tmStopAllPoll(0);
     }else{
-      const n=Number(c.count||0);
-      showToast('⏹ توقف همه انجام شد؛ '+toFa(n)+' ردیف فعالیت/صف و payload پاک شد. داده‌های محصولات و کاتالوگ حفظ شدند.');
+      const n=Number(c.count||0);tmStopAllRunning=false;
+      showToast('⏹ توقف همه انجام شد؛ '+toFa(n)+' ردیف فعالیت/صف و payload پاک شد.');
+      tmPulse();
     }
     if(!d.stop_signals&&!d.profile_stops&&!(w.cancelled||w.stop_requested))
-      showToast('ℹ️ درخواست رسید؛ کار فعالی برای سیگنال‌دادن گزارش نشد. وضعیت صف‌ها پاک شد.');
-    tmPulse();
+      showToast('ℹ️ کار زنده‌ای نبود؛ تمام وضعیت‌ها و صف‌های ذخیره‌شده پاک شدند.');
   }).catch(e=>{
     showToast('✗ توقف همه اجرا نشد: '+String(e&&e.message||e||'خطای شبکه'),true);
-  }).finally(()=>{tmStopAllRunning=false;});
+  }).finally(()=>{if(!tmStopAllPollTimer)tmStopAllRunning=false;});
 }
 
 function tmStop(key){
@@ -115206,6 +115298,20 @@ function finishBslClient(s,u,k,f,t){
     showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' تکراری, '+f+' خطا');
 }
 
+let s4AppReadyRetry=null;
+function s4AppReadyCheck(attempt){
+  attempt=Math.max(0,parseInt(attempt)||0);clearTimeout(s4AppReadyRetry);
+  fetch('?app_ready=1&_v='+Date.now(),{cache:'no-store',credentials:'same-origin'}).then(r=>r.json()).then(d=>{
+    if(!d||d.ok!==true||d.ready!==true)throw new Error('not ready');
+    document.documentElement.dataset.s4Ready='1';window._s4AppReady=true;
+    const st=$('status');if(st&&/در حال بارگذاری|آماده/i.test(st.textContent||''))st.textContent='آماده';
+    if(d.stop_all_pending&&typeof tmStopAllPoll==='function')tmStopAllPoll(0);
+  }).catch(()=>{
+    document.documentElement.dataset.s4Ready='0';window._s4AppReady=false;
+    if(attempt<20)s4AppReadyRetry=setTimeout(()=>s4AppReadyCheck(attempt+1),Math.min(5000,600+attempt*250));
+  });
+}
+s4AppReadyCheck(0);
 loadConn();
 // v8.68: آخرین پروفایل باز را برگردان
 try{ restoreLastProfile(); }catch(e){}
