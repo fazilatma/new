@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.487';
+const APP_VERSION = '10.488';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -57445,10 +57445,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     $add('10.391', 'ورودی 10.391 در CHANGELOG ثبت شده و نسخه عقب‌تر نیست',
          strpos($selfSrc, "{v:'10." . "391'") !== false
       && version_compare(APP_VERSION, '10.' . '391', '>='));
-    $add('10.392', 'متن شناسایی نصب ذخیره و به همهٔ اعلان‌ها افزوده می‌شود',
+    $add('10.392', 'متن شناساییِ ذخیره‌شده از تنظیمات خوانده می‌شود',
          strpos($selfSrc, "notif_source_text") !== false
       && strpos($selfSrc, 'id="notifSourceText"') !== false
-      && strpos($selfSrc, '🏷 " . mb_substr($_sourceText') !== false);
+      && function_exists('notifAppendSourceText'));
     $add('10.392', 'اسکن‌های همزمان کران و مرورگر اعلان تکراری نمی‌سازند',
          strpos($selfSrc, 'NOTIF_SCAN_LOCK_FILE') !== false
       && strpos($selfSrc, "'skipped' => 'scan_already_running'") !== false
@@ -58387,6 +58387,20 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             'missing_detail'=>['link'=>'https://example.test/c'],
             'missing_link'=>['weight'=>''],
         ]]);
+    $_tabSwitchStart488=strpos($selfSrc,'function switchMainTab(name) {');
+    $_tabSwitchEnd488=strpos($selfSrc,'// v8.17: Settings panel toggle',$_tabSwitchStart488===false?0:$_tabSwitchStart488);
+    $_tabSwitchBody488=$_tabSwitchStart488!==false&&$_tabSwitchEnd488!==false
+        ?substr($selfSrc,$_tabSwitchStart488,$_tabSwitchEnd488-$_tabSwitchStart488):'';
+    $add('10.488', 'هر تب اصلی موقعیت عمودی خودش را هنگام جابه‌جایی نگه می‌دارد',
+         strpos($selfSrc,'const MAIN_TAB_SCROLL_POS = Object.create(null);')!==false&&strpos($_tabSwitchBody488,'MAIN_TAB_SCROLL_POS[currentName]')!==false
+      && strpos($_tabSwitchBody488,'window.scrollTo(0,restoreY)')!==false
+      && strpos($_tabSwitchBody488,'softScrollTo({top:0')===false
+      && version_compare(APP_VERSION,'10.488','>='));
+    $add('10.488', 'اعلان فقط متنِ ذخیره‌شدهٔ تکست‌باکس را اضافه می‌کند، نه لینک سایت',
+         notifAppendSourceText('خبر',['notif_source_text'=>'شناسهٔ اصلی'])==="خبر\n\nشناسهٔ اصلی"
+      && notifAppendSourceText('خبر',['notif_source_text'=>''])==='خبر'
+      && strpos($selfSrc,'$msg=notifAppendSourceText($msg,$cn);')!==false
+      && version_compare(APP_VERSION,'10.488','>='));
     $earlyPumpAt487=strpos($selfSrc,'$_earlySendPumpBlocking=false;');
     $resumeExitAt487=strpos($selfSrc,"if(!empty(\$wdEarly['resume_blocking'])||\$_earlySendPumpBlocking)");
     $add('10.487', 'پمپِ ارسال پیش از خروج زودهنگامِ ادامهٔ استخراج، هر دو صف را بازیابی می‌کند',
@@ -59571,11 +59585,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && version_compare(APP_VERSION, '10.400', '>='));
     $_savedServer401=$_SERVER;$_SERVER['HTTP_HOST']='Example.COM:443';$_SERVER['SCRIPT_NAME']='/plugins/tst/scraper4.php';
     $_identity401=notifSourceIdentity(['notif_source_text'=>'test instance']);$_SERVER=$_savedServer401;
-    $add('10.401','پیام‌رسان مبدأِ host/path، شناسهٔ نمونه و نسخه را مشخص می‌کند',
+    $add('10.401','شناسهٔ نصب برای تشخیص داخلی محاسبه می‌شود، اما پیام فقط متن تکست‌باکس را می‌گیرد',
          ($_identity401['host_path']??'')==='example.com:443/plugins/tst/scraper4.php'
       && preg_match('~^[a-f0-9]{10}$~',(string)($_identity401['instance_id']??''))===1
       && (string)($_identity401['version']??'')===APP_VERSION
-      && strpos($selfSrc,'$msg .= "\n\n" . $_siteSuffix;')!==false);
+      && function_exists('notifAppendSourceText')
+      && strpos($selfSrc,'$msg=notifAppendSourceText($msg,$cn);')!==false);
     $add('10.401','فیدبک ارسال، صف و اعلان‌ها را بدون بازگرداندن توکن می‌سنجد',
          strpos($selfSrc,"isset(\$_GET['bsl_send_feedback'])")!==false
       && strpos($selfSrc,"'progress_belongs_to_active_row'=>\$progressOwnedFb")!==false
@@ -61819,6 +61834,12 @@ function notifSourceIdentity(array $cn = []): array {
         'runtime'=>PHP_SAPI,'http_request'=>$host !== ''];
 }
 
+/** Append only the user-configured source textbox text; never synthesize a site URL or instance metadata. */
+function notifAppendSourceText(string $msg,array $cn): string {
+    $text=trim((string)($cn['notif_source_text']??''));
+    return $text===''?$msg:$msg . "\n\n" . $text;
+}
+
 function notifAutoDedupFingerprint(string $coreMsg, ?string $feed): string {
     $norm = trim($coreMsg);
     $norm = (string)preg_replace('~^🔁\s*یادآوری\s*#\d+\s*(?:[—\-]\s*)?~u', '', $norm);
@@ -61885,14 +61906,8 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
     if (notifShouldSuppressAutoDuplicate($cn, $_coreMsgForDedup, $feed)) {
         return ['suppressed_duplicate' => 'sent_before'];
     }
-    /* Always identify the emitting installation. A user-supplied label alone
-       was optional, so several copies sharing one bot/chat looked identical. */
-    $_site = notifSourceIdentity($cn);
-    $_siteSuffix = '🏷 ' . (string)$_site['label'];
-    if (!empty($_site['host_path']) && (string)$_site['label'] !== (string)$_site['host_path'])
-        $_siteSuffix .= ' · ' . (string)$_site['host_path'];
-    $_siteSuffix .= ' · #' . (string)$_site['instance_id'] . ' · v' . (string)$_site['version'];
-    $msg .= "\n\n" . $_siteSuffix;
+    /* Add exactly the saved textbox text; no website URL, instance ID, or version. */
+    $msg=notifAppendSourceText($msg,$cn);
     $out = [];
     $bt = $cn['baleh']['token'] ?? '';  $bc = $cn['baleh']['chat_id'] ?? '';
     $rt = $cn['rubika']['token'] ?? ''; $rc = $cn['rubika']['chat_id'] ?? '';
@@ -88652,7 +88667,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <!-- v10.392: identify which installation/domain emitted a shared-channel notification. -->
 <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px;margin:6px 0 10px">
 <div class="crow" style="margin:0"><label style="min-width:120px">🏷 متن شناسایی این سایت:</label><input type="text" id="notifSourceText" maxlength="160" placeholder="مثلاً: صباشاپ — هاست ایران / sabashopping.ir" style="flex:1"></div>
-<div style="font-size:10px;color:#64748b;line-height:1.7;margin-top:5px">این متن به انتهای تمام اعلان‌های بله، تلگرام، روبیکا، Push و رویداد زنده افزوده می‌شود تا منبع پیام بین هاست‌ها و دامنه‌های مختلف مشخص باشد.</div>
+<div style="font-size:10px;color:#64748b;line-height:1.7;margin-top:5px">فقط همین متنِ ذخیره‌شده به انتهای اعلان‌ها افزوده می‌شود؛ لینک سایت، شناسهٔ نمونه و نسخه به پیام اضافه نمی‌شود. اگر خالی باشد، چیزی افزوده نمی‌شود.</div>
 </div>
 <div style="font-size:10px;color:#64748b;margin-bottom:6px">انتخاب کنید کدام رویدادهای باسلام به پیام‌رسان ارسال شوند:</div>
 <div style="display:flex;flex-direction:column;gap:4px">
@@ -91707,6 +91722,8 @@ function scheduleSave() {
  *  بازیابیِ پروفایل دیگر تب را عوض نمی‌کند. */
 const MAIN_TABS = ['start','settings','selectors','results','send','import'];
 const LAST_TAB_KEY = 'scraper_last_main_tab';
+/* v10.488: each footer tab owns its own document vertical scroll position. */
+const MAIN_TAB_SCROLL_POS = Object.create(null);
 function rememberMainTab(name){
     try { if (MAIN_TABS.includes(name)) localStorage.setItem(LAST_TAB_KEY, name); } catch(e) {}
 }
@@ -91716,16 +91733,21 @@ function lastMainTab(){
 }
 
 function switchMainTab(name) {
+    const target=document.getElementById('pane-'+name);
+    const currentPane=document.querySelector('.tab-pane.active');
+    const currentName=currentPane&&currentPane.id.startsWith('pane-')?currentPane.id.slice(5):'';
+    if(target&&currentName&&currentName!==name){
+        MAIN_TAB_SCROLL_POS[currentName]=Math.max(0,window.scrollY||document.documentElement.scrollTop||0);
+    }
     document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
     // v9.65: اگر پنلِ درخواست‌شده وجود نداشته باشد (مثلاً نامِ اشتباه)، هیچ پنلی را
     // خالی نکن. قبلاً switchMainTab('profiles') همهٔ پنل‌ها را deactivate می‌کرد
     // چون پنلی به نام pane-profiles وجود ندارد → کل محتوای تب‌ها خالی دیده می‌شد.
-    const target=document.getElementById('pane-'+name);
     if(target){
         document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p === target));
+        const restoreY=Math.max(0,Number(MAIN_TAB_SCROLL_POS[name]||0));
+        requestAnimationFrame(()=>window.scrollTo(0,restoreY));
     }
-    // v8.88: روی موبایل صفحه را به بالا نپران
-    softScrollTo({top:0,behavior:'smooth'});
     try { history.replaceState(null, '', '#' + name); } catch(e) {}
     rememberMainTab(name);   // v9.91: تا رفرشِ بعدی همین‌جا باز شود
     /* v10.31 (۴۴): نتایج تا لحظهٔ دیده‌شدن ساخته نمی‌شوند. ورود به تب
@@ -98253,6 +98275,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.488', t:'📍 حفظ اسکرول هر تب و متن اعلانِ بدون لینک سایت', items:[
+    'هر تب اصلی موقعیت عمودی خودش را نگه می‌دارد؛ با رفتن به تب دیگر و برگشت، صفحه به همان جای قبلی بازمی‌گردد.',
+    'اعلان‌ها فقط متنِ تنظیم‌شده در تکست‌باکس شناسایی را اضافه می‌کنند؛ لینک/مسیر سایت، شناسهٔ نمونه و شمارهٔ نسخه دیگر به متن پیام الصاق نمی‌شوند. متن خالی نیز چیزی اضافه نمی‌کند.'
+  ]},
   {v:'10.487', t:'🚦 بازیابی صف ارسال پیش از خروج زودهنگام کران', items:[
     'نگهبانِ کران اکنون هر دو صف Woo و Basalam را پیش از صف‌بندی checkpointهای استخراج بررسی می‌کند؛ اگر ادامهٔ استخراج باعث خروج همان تیک شود، صف ارسال stale دیگر فرصت dispatch را از دست نمی‌دهد—even وقتی watchdog عمومی خاموش است.',
     'قفل‌های مقصد، مهر handoff و توقف صریح کاربر همچنان جلوی worker موازی یا ادامهٔ ناخواسته را می‌گیرند.'
