@@ -352,6 +352,8 @@ const REMOTEMAP_MAX_ROWS = 20000;
    انجام می‌شود. شیر اطمینان: TTL و بازسازیِ دستی. */
 const BSL_CATALOG_PREFIX   = __DIR__ . '/bsl_catalog_v';
 const BSL_CATALOG_PROGRESS_FILE = __DIR__ . '/bsl_catalog_progress.json'; // v10.233: پیشرفت زندهٔ کاتالوگ/ماتریس باسلام
+const BSL_CATALOG_STOP_FILE = __DIR__ . '/bsl_catalog_stop.json'; // v10.495: cooperative stop for catalog rebuild
+const BSL_CATALOG_BUILD_LOCK_FILE = __DIR__ . '/bsl_catalog_build.lock'; // v10.495: serialize catalog/matrix cache writes
 /* v10.414: روی بعضی LiteSpeedها self-curl بعد از timeout واقعاً وارد backend
    نمی‌شود. این handoff دقیقِ صف را نگه می‌دارد تا درخواست cron بعدی خودش
    همان backend شود؛ بنابراین ادامه دیگر به عمر درخواست فرزند HTTP وابسته نیست. */
@@ -395,10 +397,11 @@ const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 const ORDERS_MGR_NOTES_FILE = __DIR__ . '/orders_mgr_notes.json';
 const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
+const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10.495: deferred safe checkpoint cleanup
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.494';
+const APP_VERSION = '10.495';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -15456,6 +15459,14 @@ function bslCatalogProgressRead(): array {
     return localTaskStateRead(BSL_CATALOG_PROGRESS_FILE, []);
 }
 
+function bslCatalogStopRequested(): bool {
+    if(!is_file(BSL_CATALOG_STOP_FILE))return false;
+    $state=json_decode((string)@file_get_contents(BSL_CATALOG_STOP_FILE),true);
+    $at=(int)(is_array($state)?($state['at']??$state['time']??0):0);
+    if($at>0&&time()-$at>900){@unlink(BSL_CATALOG_STOP_FILE);return false;}
+    return true;
+}
+
 /**
  * تعداد درخواست‌های همزمانِ امن برای ارسال/کاتالوگ باسلام.
  * send_parallel_auto=true یعنی برنامه بسته به حجم کار عدد را خودش پایین/بالا
@@ -15495,6 +15506,55 @@ function bslCatalogRowFromAny(array $row): array {
  */
 function bslCatalogWriteFromRows(int $vid, array $rows, array $meta = []): array {
     if ($vid <= 0) return ['ok' => false, 'error' => 'غرفهٔ نامعتبر'];
+    $scope = (string)($meta['status_scope'] ?? ($meta['scope'] ?? 'all'));
+    $partial = array_key_exists('partial', $meta) ? !empty($meta['partial']) : ($scope !== 'all');
+    /* An active-only matrix refresh is a delta for a fresh, complete catalog:
+       update matching active rows, but retain non-active rows until the normal
+       full-catalog TTL expires. This prevents the matrix from downgrading the
+       vendor catalog to an incomplete active-only cache. */
+    if ($scope === 'active_2976' && $partial) {
+        $old = bslCatalogRead($vid);
+        if (bslCatalogFresh($vid, $old) && empty($old['partial'])
+            && (string)($old['status_scope'] ?? '') === 'all'
+            && is_array($old['rows'] ?? null)) {
+            $byId=[];
+            foreach ($old['rows'] as $oldRow) {
+                if (!is_array($oldRow)) continue;
+                $oldId=(int)($oldRow['id']??0);if($oldId>0)$byId[$oldId]=$oldRow;
+            }
+            foreach ($rows as $freshRow) {
+                if (!is_array($freshRow)) continue;
+                $fresh=bslCatalogRowFromAny($freshRow);$freshId=(int)($fresh['id']??0);
+                if($freshId>0)$byId[$freshId]=$fresh;
+            }
+            $freshActiveIds=[];
+            foreach($rows as $freshRow){
+                if(!is_array($freshRow))continue;
+                $freshNorm=bslCatalogRowFromAny($freshRow);$freshId=(int)($freshNorm['id']??0);
+                $freshStatus=(int)($freshNorm['status']??0);
+                if($freshId>0&&($freshStatus===0||$freshStatus===2976))$freshActiveIds[]=$freshId;
+            }
+            $rows=array_values($byId);
+            $freshMatrixAt=(int)($meta['at']??0);
+            $mergeMeta=['status_scope'=>'all','scope'=>'all','partial'=>false,
+                'at'=>(int)($old['at']??time()),'pages'=>(int)($old['pages']??0),
+                'total_count'=>(int)($old['total_count']??count($byId)),
+                'source'=>'shared_catalog_matrix_delta',
+                'matrix_generated_at'=>$freshMatrixAt>0?$freshMatrixAt:(int)($old['matrix_generated_at']??0),
+                'detail'=>'کاتالوگ کامل حفظ شد؛ ردیف‌های فعال از ماتریس تازه شدند'];
+            if(!empty($meta['scope_complete'])){
+                $mergeMeta['active_ids']=array_values(array_unique($freshActiveIds));
+                $mergeMeta['active_scope_at']=$freshMatrixAt>0?$freshMatrixAt:time();
+            }else{
+                if(is_array($old['active_ids']??null))$mergeMeta['active_ids']=$old['active_ids'];
+                if((int)($old['active_scope_at']??0)>0)$mergeMeta['active_scope_at']=(int)$old['active_scope_at'];
+            }
+            $meta=array_merge($meta,$mergeMeta);
+            $scope='all';$partial=false;
+        }
+    }
+    $scopeComplete = array_key_exists('scope_complete',$meta)
+        ? !empty($meta['scope_complete']) : !$partial;
     $items = []; $rowsFull = []; $seenId = [];
     foreach ($rows as $row) {
         if (!is_array($row)) continue;
@@ -15508,13 +15568,15 @@ function bslCatalogWriteFromRows(int $vid, array $rows, array $meta = []): array
             if ($n !== '' && !isset($items[$n])) $items[$n] = $id;
         }
     }
-    $scope = (string)($meta['status_scope'] ?? ($meta['scope'] ?? 'all'));
-    $partial = array_key_exists('partial', $meta) ? !empty($meta['partial']) : ($scope !== 'all');
     $data = ['vendor_id' => $vid, 'at' => (int)($meta['at'] ?? time()),
         'pages' => (int)($meta['pages'] ?? 0), 'count' => count($items),
-        'partial' => $partial, 'items' => $items, 'rows' => $rowsFull,
+        'partial' => $partial, 'scope_complete'=>$scopeComplete,
+        'items' => $items, 'rows' => $rowsFull,
         'rows_count' => count($rowsFull), 'products' => count($seenId),
         'total_count' => (int)($meta['total_count'] ?? count($seenId)),
+        'matrix_generated_at' => (int)($meta['matrix_generated_at'] ?? 0),
+        'active_ids' => is_array($meta['active_ids']??null) ? array_values(array_map('intval',$meta['active_ids'])) : [],
+        'active_scope_at' => (int)($meta['active_scope_at']??0),
         'source' => (string)($meta['source'] ?? 'rows'), 'status_scope' => $scope,
         'detail' => (string)($meta['detail'] ?? '')];
     @file_put_contents(bslCatalogFile($vid), json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX);
@@ -15560,8 +15622,42 @@ function bslCatalogUsable(array $c): bool {
 /** منبع کش از جدول مغایرت/واکشی مغایرت است، نه برداشت مستقل کاتالوگ. */
 function bslCatalogFromReconTable(array $c): bool {
     $src = (string)($c['source'] ?? '');
-    if (in_array($src, ['sync_matrix', 'sync_matrix_fetch', 'recon_fetch'], true)) return true;
+    if (in_array($src, ['sync_matrix', 'sync_matrix_fetch', 'recon_fetch', 'shared_catalog_matrix_delta'], true)) return true;
     return (string)($c['status_scope'] ?? '') === 'active_2976' && !empty($c['partial']);
+}
+
+/** Return a fresh, complete active-product view from the same per-vendor
+ * cache used by sending. null means the cache cannot safely replace a fetch. */
+function bslCatalogRowsForMatrix(int $vid, ?array $cache = null): ?array {
+    if($vid<=0)return null;
+    if($cache===null)$cache=bslCatalogRead($vid);
+    if(!$cache)return null;
+    $cacheVid=(int)($cache['vendor_id']??0);
+    if($cacheVid>0&&$cacheVid!==$vid)return null;
+    $scope=(string)($cache['status_scope']??'');
+    $allComplete=$scope==='all'&&empty($cache['partial']);
+    $activeComplete=$scope==='active_2976'&&!empty($cache['scope_complete']);
+    if(!$allComplete&&!$activeComplete)return null;
+    $ttl=bslCatalogTtl();$now=time();
+    $catalogFresh=(int)($cache['at']??0)>0&&$now-(int)$cache['at']<=$ttl;
+    $activeScopeAt=(int)($cache['active_scope_at']??0);
+    $activeSnapshotFresh=$allComplete&&is_array($cache['active_ids']??null)
+        &&$activeScopeAt>0&&$now-$activeScopeAt<=$ttl;
+    if(!$catalogFresh&&!$activeSnapshotFresh)return null;
+    $activeIds=null;
+    if($activeSnapshotFresh)$activeIds=array_fill_keys(array_map('intval',$cache['active_ids']),true);
+    $out=[];
+    foreach((array)($cache['rows']??[]) as $row){
+        if(!is_array($row))continue;
+        $r=bslCatalogRowFromAny($row);$id=(int)($r['id']??0);$title=trim((string)($r['name']??''));
+        $status=(int)($r['status']??0);
+        if($activeIds!==null?!isset($activeIds[$id]):($status>0&&$status!==2976))continue;
+        if($id<=0||$title==='')continue;
+        $rial=(int)($r['price']??0);
+        $out[]=['id'=>$id,'title'=>$title,'price'=>$rial,'price_toman'=>(int)round($rial/10),
+            'status'=>$status,'stock'=>(int)($r['stock']??0)];
+    }
+    return $out;
 }
 
 function bslMatrixGeneratedAt(): int {
@@ -15616,7 +15712,15 @@ function bslCatalogGetForSend(string $tk, int $vid): array {
  * خروجی: ['ok','count','pages','partial','from'=>'cache|network']
  */
 function bslCatalogBuild(string $tk, int $vid, bool $force = false): array {
+    $fp=@fopen(BSL_CATALOG_BUILD_LOCK_FILE,'c');
+    if(!$fp||!@flock($fp,LOCK_EX|LOCK_NB)){if($fp)@fclose($fp);return ['ok'=>false,'busy'=>true,'error'=>'catalog_build_busy'];}
+    try{return bslCatalogBuildUnlocked($tk,$vid,$force);}
+    finally{@flock($fp,LOCK_UN);@fclose($fp);}
+}
+
+function bslCatalogBuildUnlocked(string $tk, int $vid, bool $force = false): array {
     if ($tk === '' || $vid <= 0) return ['ok' => false, 'error' => 'غرفهٔ نامعتبر'];
+    if (bslCatalogStopRequested()) return ['ok'=>false,'stopped'=>true,'error'=>'stopped_by_user'];
     if (!$force) {
         $c = bslCatalogRead($vid);
         if (bslCatalogFresh($vid, $c))
@@ -15668,6 +15772,11 @@ function bslCatalogBuild(string $tk, int $vid, bool $force = false): array {
         'log_add' => ['🏗 شروع برداشت کاتالوگ غرفه #' . $vid . ' — endpoint vendors/' . $vid
             . '/products — همزمانی: ' . $conc]]);
 
+    if(bslCatalogStopRequested()){
+        bslCatalogProgress(['running'=>false,'done'=>true,'stopped'=>true,'phase'=>'stopped','pct'=>100,
+            'vendor_id'=>$vid,'log_add'=>['⏹ بازسازی کاتالوگ در نقطهٔ امن متوقف شد؛ کش قبلی حفظ شد']]);
+        return ['ok'=>false,'stopped'=>true,'error'=>'stopped_by_user'];
+    }
     $firstEp = 'vendors/' . $vid . '/products?per_page=' . $perPage . '&page=1' . $statuses;
     $r1 = bslReq($tk, 'GET', $firstEp);
     if (empty($r1['ok'])) {
@@ -15691,6 +15800,7 @@ function bslCatalogBuild(string $tk, int $vid, bool $force = false): array {
 
     if (count($rows1) >= $perPage && $targetPages > 1) {
         for ($base = 2; $base <= $targetPages; $base += $conc) {
+            if(bslCatalogStopRequested())break;
             $jobs = [];
             $last = min($targetPages, $base + $conc - 1);
             for ($page = $base; $page <= $last; $page++) {
@@ -15720,12 +15830,18 @@ function bslCatalogBuild(string $tk, int $vid, bool $force = false): array {
             if ($base + $conc <= $targetPages) usleep(50000);
         }
     }
+    if(bslCatalogStopRequested()){
+        bslCatalogProgress(['running'=>false,'done'=>true,'stopped'=>true,'partial'=>true,'phase'=>'stopped','pct'=>100,
+            'vendor_id'=>$vid,'page'=>$pages,'rows'=>count($seenId),
+            'log_add'=>['⏹ بازسازی کاتالوگ در نقطهٔ امن متوقف شد؛ کش قبلی حفظ شد']]);
+        return ['ok'=>false,'stopped'=>true,'error'=>'stopped_by_user','pages'=>$pages,'products'=>count($seenId)];
+    }
     if ($targetPages >= $maxPages && ($totalCount <= 0 || count($seenId) < $totalCount)) $partial = true;
     $data = ['vendor_id' => $vid, 'at' => time(), 'pages' => $pages,
              'count' => count($items), 'partial' => $partial, 'items' => $items,
              'rows' => $rowsFull, 'rows_count' => count($rowsFull),
              'products' => count($seenId), 'total_count' => $totalCount,
-             'source' => 'network_parallel', 'status_scope' => 'all',
+             'source' => 'network_parallel', 'status_scope' => 'all', 'scope_complete' => !$partial,
              'concurrency' => $conc, 'took' => round(microtime(true) - $started, 2)];
     @file_put_contents(bslCatalogFile($vid), json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX);
     $GLOBALS['_bslCatalog'][$vid] = $data;
@@ -38652,6 +38768,7 @@ if (isset($_GET['bsl_catalog'])) {
     $shops = bslAllShops($cnC);
     $only  = (int)($_GET['vendor_id'] ?? 0);
     if (!empty($_GET['rebuild'])) {
+        @unlink(BSL_CATALOG_STOP_FILE);
         bslCatalogProgress(['running' => true, 'done' => false, 'phase' => 'start', 'pct' => 1,
             'vendor_id' => $only, 'log' => [], 'log_add' => ['🏗 بازسازی کاتالوگ شروع شد — اولویت با دادهٔ جدول مغایرت، سپس شبکهٔ موازی']]);
     }
@@ -39408,6 +39525,14 @@ function tasksRegistry(): array {
                 return ['پروفایل' => (int)($p['profiles_done'] ?? 0)];
             },
         ],
+        'bsl_catalog' => [
+            'title' => 'بازسازی کاتالوگ باسلام', 'icon' => '🏪', 'file' => BSL_CATALOG_PROGRESS_FILE,
+            'stop' => 'bsl_catalog_stop', 'tab' => 'باسلام', 'pane' => 'send',
+            'resume' => '',
+            'stat' => function (array $p): array {
+                return ['صفحه' => (int)($p['page'] ?? 0), 'محصول' => (int)($p['rows'] ?? 0)];
+            },
+        ],
         'bsl_send' => [
             'title' => 'ارسال به باسلام', 'icon' => '🚀', 'file' => BSL_PROGRESS_FILE,
             'stop' => 'bsl_stop', 'tab' => 'ارسال',
@@ -39955,6 +40080,7 @@ function tasksBuildRow(string $key, array $def, int $now): array {
 function tasksLockFile(string $key): string {
     $files = [
         'manual_sync' => MANUAL_SYNC_LOCK_FILE,
+        'bsl_catalog' => BSL_CATALOG_BUILD_LOCK_FILE,
         'bsl_send' => __DIR__ . '/bsl_backend.lock',
         'woo_send' => __DIR__ . '/woo_backend.lock',
         'extract' => EXTRACT_LOCK_FILE,
@@ -39977,6 +40103,7 @@ function tasksLockFile(string $key): string {
 function tasksStopFile(string $key): string {
     $files = [
         'manual_sync' => MANUAL_SYNC_STOP_FILE,
+        'bsl_catalog' => BSL_CATALOG_STOP_FILE,
         'bsl_send' => BSL_STOP_FILE,
         'woo_send' => WOO_STOP_FILE,
         'extract' => EXTRACT_STOP_FILE,
@@ -40382,6 +40509,156 @@ function tasksProfileTaskControl(array $row,string $action,int $waitMs=1800):arr
     return['ok'=>false,'error'=>'unsupported_profile_task'];
 }
 
+/** Stop every registered/dynamic activity, then delete resumable state only
+ * after all owners have released their locks. Product data and catalogs are
+ * deliberately preserved; only task/progress/checkpoint state is cleared. */
+function tasksStopAllLocksBusy(): array {
+    $files=[];
+    foreach(tasksRegistry() as $key=>$def){
+        $f=tasksLockFile((string)$key);if($f!=='')$files[$f]=true;
+    }
+    foreach([WORKER_LOCK_FILE,EXTRACT_LOCK_FILE,EXTRACT_WATCHDOG_LOCK_FILE,
+             MANUAL_SYNC_LOCK_FILE,SYNC_PIPELINE_LOCK_FILE,AUTO_LOCK_FILE,
+             PROFILES_FILE.'.extract.lock',EXTRACT_QUEUE_FILE.'.lock'] as $f)$files[(string)$f]=true;
+    $busy=[];
+    foreach(array_keys($files) as $f)if(is_file($f)&&!tasksResumeLockDead($f))$busy[]=basename($f);
+    $catalogProgress=bslCatalogProgressRead();
+    if(!empty($catalogProgress['running'])&&time()-(int)($catalogProgress['ts']??$catalogProgress['at']??0)<300)
+        $busy[]='bsl_catalog';
+    $workerActive=s4WorkerIsActive();
+    foreach((array)(s4WorkerLoadQueue()['entries']??[]) as $job){
+        if(!is_array($job))continue;$st=(string)($job['status']??'');
+        if(in_array($st,['pending','waiting'],true)){$busy[]='worker:'.(string)($job['type']??'job');break;}
+        if($st==='running'){
+            $pid=(int)($job['worker_pid']??0);
+            if(($pid>0&&s4WorkerPidAlive($pid))||($pid<=0&&$workerActive)){$busy[]='worker:'.(string)($job['type']??'job');break;}
+        }
+    }
+    foreach((array)(extractReadQueue()['entries']??[]) as $row){
+        if(!is_array($row)||!in_array((string)($row['status']??''),['running','waiting'],true))continue;
+        if(function_exists('extractQueueRowHasLiveOwner')&&extractQueueRowHasLiveOwner($row)){$busy[]='extract:'.(string)($row['id']??'row');break;}
+    }
+    return array_values(array_unique($busy));
+}
+
+function tasksStripWorkerCheckpointFields(array &$data): void {
+    $keys=['checkpoint','resume_checkpoint','resume_from','resume_page','resume_phase'];
+    foreach(array_keys($data) as $key){
+        if(in_array((string)$key,$keys,true)){unset($data[$key]);continue;}
+        if(is_array($data[$key]))tasksStripWorkerCheckpointFields($data[$key]);
+    }
+}
+
+function tasksStopAllClearCheckpoints(): array {
+    if(!is_file(TASKS_STOP_ALL_CLEAR_FILE))return ['cleared'=>false,'pending'=>false,'count'=>0];
+    $state=json_decode((string)@file_get_contents(TASKS_STOP_ALL_CLEAR_FILE),true);
+    if(!is_array($state))$state=[];
+    $busy=tasksStopAllLocksBusy();
+    if($busy)return ['cleared'=>false,'pending'=>true,'busy'=>$busy,'count'=>0];
+
+    // Clear only extractor resume markers. Already-scraped products and
+    // counts remain unchanged in the profile data.
+    if(empty($state['profiles_cleared'])){
+        $profiles=loadProfiles();
+        if(!empty($GLOBALS['_profilesCorrupt'])){
+            $state['error']='profiles_json_unreadable';
+            @file_put_contents(TASKS_STOP_ALL_CLEAR_FILE,json_encode($state,JSON_UNESCAPED_UNICODE),LOCK_EX);
+            return ['cleared'=>false,'pending'=>true,'error'=>'profiles_json_unreadable','count'=>0];
+        }
+        $keys=['_extract_stage','_extract_stage_at','_extract_resume_phase','_extract_resume_needed',
+               '_extract_resume_req','_extract_resume_from','_extract_resume_meta','_extract_list_incomplete',
+               '_extract_list_page_try','_extract_list_page_ok','_extract_list_next_url','_extract_list_last_url',
+               '_extract_list_saved_at','_extract_list_saved_count','_extract_detail_cycle','_extract_retry_at',
+               '_extract_retry_reason','_extract_shrink_guard_tries','_extract_last_guard'];
+        $changed=false;
+        foreach($profiles as &$profile){
+            if(!is_array($profile))continue;
+            foreach($keys as $key)if(array_key_exists($key,$profile)){unset($profile[$key]);$changed=true;}
+        }unset($profile);
+        if($changed&&!saveProfiles($profiles)){
+            $state['error']='profiles_checkpoint_write_failed';
+            @file_put_contents(TASKS_STOP_ALL_CLEAR_FILE,json_encode($state,JSON_UNESCAPED_UNICODE),LOCK_EX);
+            return ['cleared'=>false,'pending'=>true,'error'=>'profiles_checkpoint_write_failed','count'=>0];
+        }
+        $state['profiles_cleared']=true;
+        @file_put_contents(TASKS_STOP_ALL_CLEAR_FILE,json_encode($state,JSON_UNESCAPED_UNICODE),LOCK_EX);
+    }
+
+    if(is_file(WORKER_QUEUE_FILE)){
+        $queueCleanup=s4WorkerQueueMutate(function(&$q){
+            foreach((array)($q['entries']??[]) as $job){
+                if(is_array($job)&&in_array((string)($job['status']??''),['pending','running','waiting'],true))
+                    return ['ok'=>false,'busy'=>true];
+            }
+            $n=0;
+            foreach($q['entries'] as &$job){
+                if(!is_array($job))continue;
+                if(is_array($job['payload']??null))tasksStripWorkerCheckpointFields($job['payload']);
+                tasksStripWorkerCheckpointFields($job);$n++;
+            }unset($job);
+            return ['ok'=>true,'entries'=>$n];
+        });
+        if(empty($queueCleanup['ok']))return ['cleared'=>false,'pending'=>true,'error'=>'worker_queue_busy','count'=>0];
+    }
+
+    $files=[];
+    foreach(tasksRegistry() as $def)if(!empty($def['file']))$files[(string)$def['file']]=true;
+    foreach([BSL_CATALOG_PROGRESS_FILE,EXTRACT_QUEUE_FILE,SYNC_PIPELINE_FILE,
+             SYNC_MATRIX_CHECKPOINT_FILE,SYNC_MATRIX_FETCH_CURSOR_FILE,SYNC_MATRIX_LIVE_FILE,
+             __DIR__.'/recon_fetch_cache.ndjson',DEDUP_FETCH_CURSOR_FILE,CATFIX_FETCH_CURSOR_FILE] as $f)$files[(string)$f]=true;
+    $extractQ=extractReadQueue();
+    foreach((array)($extractQ['entries']??[]) as $row){
+        $qid=trim((string)($row['id']??''));if($qid!=='')@unlink(extractStopSignalFileForQueue($qid));
+    }
+    $n=0;
+    foreach(array_keys($files) as $f)if(is_file($f)&&@unlink($f))$n++;
+    foreach([__DIR__.'/extract_staging_*.json*',SYNC_MATRIX_CHECKPOINT_FILE.'.tmp.*'] as $pattern){
+        foreach((array)@glob($pattern) as $tmpFile)if(is_file($tmpFile)&&@unlink($tmpFile))$n++;
+    }
+    @unlink(TASKS_STOP_ALL_CLEAR_FILE);
+    return ['cleared'=>true,'pending'=>false,'count'=>$n,'profiles_cleared'=>true];
+}
+
+function tasksStopAllRequest(): array {
+    $now=time();$signals=0;
+    foreach(tasksRegistry() as $key=>$def){
+        $sf=tasksStopFile((string)$key);
+        if($sf!==''&&@file_put_contents($sf,json_encode(['at'=>$now,'by'=>'tasks_stop_all'],JSON_UNESCAPED_UNICODE),LOCK_EX)!==false)$signals++;
+    }
+    // Cross-engine orchestration and every active extraction row use their
+    // own existing cooperative stop paths (no worker is killed abruptly).
+    foreach([BSL_STOP_FILE,WOO_STOP_FILE,EXTRACT_STOP_FILE,MANUAL_SYNC_STOP_FILE,BSL_CATALOG_STOP_FILE] as $sf)
+        @file_put_contents($sf,json_encode(['stop'=>true,'at'=>$now,'by'=>'tasks_stop_all'],JSON_UNESCAPED_UNICODE),LOCK_EX);
+    $profileStops=[];
+    foreach(tasksProfilePipelineRows($now) as $row){
+        if(!empty($row['profile_task'])&&($row['state']??'')==='running')
+            $profileStops[]=syncPipelineControlExecute((string)($row['pipeline_key']??''),'stop',(string)($row['profile_key']??''));
+    }
+    $extractStops=extractStopActiveRows();
+    $queue=s4WorkerQueueMutate(function(&$q)use($now){$cancelled=0;$requested=0;
+        foreach($q['entries'] as &$job){
+            if(!is_array($job))continue;$st=(string)($job['status']??'');
+            if(in_array($st,['pending','paused','waiting'],true)){
+                $job['status']='cancelled';$job['cancel_requested_at']=$now;$job['updated_at']=$now;
+                $job['done_at']=$now;$job['error']='stopped_by_user';$cancelled++;
+            }elseif($st==='running'){
+                $pid=(int)($job['worker_pid']??0);
+                $ownerAlive=$pid>0?s4WorkerPidAlive($pid):s4WorkerIsActive();
+                if(!$ownerAlive){
+                    $job['status']='cancelled';$job['cancel_requested_at']=$now;$job['updated_at']=$now;
+                    $job['done_at']=$now;$job['error']='stopped_by_user_stale_worker';$cancelled++;
+                }else{
+                    $job['stop_requested']=true;$job['stop_requested_at']=$now;$job['updated_at']=$now;$requested++;
+                }
+            }
+        }unset($job);return ['ok'=>true,'cancelled'=>$cancelled,'stop_requested'=>$requested];
+    });
+    @file_put_contents(TASKS_STOP_ALL_CLEAR_FILE,json_encode(['at'=>$now,'profiles_cleared'=>false],JSON_UNESCAPED_UNICODE),LOCK_EX);
+    $clear=tasksStopAllClearCheckpoints();
+    return ['ok'=>true,'stop_signals'=>$signals,'profile_stops'=>count($profileStops),
+        'extract_stops'=>count($extractStops),'worker_queue'=>$queue,'checkpoint_cleanup'=>$clear];
+}
+
 /* v10.400: compact event feed for the animated header health pulser.
    The page embeds the current cursor; later reads use it so closely spaced
    cron arrivals are not lost or replayed from before the page was opened. */
@@ -40427,11 +40704,17 @@ if (isset($_POST['tasks_auto_resume_toggle']) || isset($_GET['tasks_auto_resume_
     exit;
 }
 
+if(isset($_GET['tasks_stop_all'])){
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(tasksStopAllRequest(),JSON_UNESCAPED_UNICODE);exit;
+}
+
 /** فهرستِ زندهٔ همهٔ کارها + کارهای زمان‌بندی‌شده در یک پاسخ.
  *  مدیر وظیفه فقط همین یک اندپوینت را poll می‌کند تا با باز بودنِ
  *  پنجره ده‌تا درخواستِ موازی روی هاستِ اشتراکی نریزد. */
 if (isset($_GET['tasks_list'])) {
     header('Content-Type: application/json; charset=UTF-8');
+    $checkpointCleanup=tasksStopAllClearCheckpoints();
     $now  = time();
     /* v10.24 (۳۷الف): ترتیب دیگر ترتیبِ ثابتِ رجیستری نیست — اولویتِ کاربر است */
     $rows = tasksRowsOrdered($now);
@@ -40458,6 +40741,7 @@ if (isset($_GET['tasks_list'])) {
         'cpu_guard'=>s4CpuGuardSettings($cnTl),
         'auto_resume_all_enabled' => $autoResumeAllEnabled,
         'auto_resume_all_last' => $autoResumeAllState['last'] ?? null,
+        'checkpoint_cleanup' => $checkpointCleanup,
         'stale_after' => TASKS_STALE_SEC], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -43004,8 +43288,18 @@ function matrixBuild(array $opts = []): array {
         $shopMeta = [];
         try {
             if (!$shopDone) {
-                /* v10.116: فقط محصولات فعال قابل‌مشاهدهٔ مشتری (2976)، با cursor صفحه‌ای */
-                $remote = reconFetchResumable('bsl', [], $tok, $vid, $shopMeta, true);
+                $hasFetchCheckpoint=!empty($remote)||(int)($matrixShopPages[(string)$vid]??0)>0;
+                $sharedCatalog=$hasFetchCheckpoint?[]:bslCatalogRead($vid);
+                $sharedRows=$hasFetchCheckpoint?null:bslCatalogRowsForMatrix($vid,$sharedCatalog);
+                if($sharedRows!==null){
+                    $remote=$sharedRows;
+                    $shopMeta=['complete'=>true,'partial'=>false,'page'=>(int)($sharedCatalog['pages']??0),
+                        'from_shared_catalog'=>true];
+                    matrixProgress(['log_add'=>['♻️ '.$sname.' از کاتالوگ مشترک خوانده شد: '.count($remote).' محصول · بدون برداشت جداگانه']]);
+                }else{
+                    /* v10.116: فقط محصولات فعال قابل‌مشاهدهٔ مشتری (2976)، با cursor صفحه‌ای */
+                    $remote = reconFetchResumable('bsl', [], $tok, $vid, $shopMeta, true);
+                }
             }
         } catch (Throwable $e) {
             $bslErr .= $sname . ': ' . $e->getMessage() . '; ';
@@ -43031,9 +43325,10 @@ function matrixBuild(array $opts = []): array {
            کش کاتالوگ همان غرفه را هم می‌سازد؛ پس کاربر برای کاتالوگ یک
            برداشتِ جداگانه و کند نمی‌بیند. فقط active است، بنابراین partial
            می‌ماند و missها هنوز امن fallback می‌شوند. */
-        if ($remote) {
+        if ($remote || (!empty($shopMeta['complete']) && empty($shopMeta['from_shared_catalog']))) {
             $catMx = bslCatalogWriteFromRows($vid, $remote, ['source' => 'sync_matrix_fetch',
                 'status_scope' => 'active_2976', 'partial' => true,
+                'scope_complete' => !empty($shopMeta['complete']),
                 'pages' => (int)($shopMeta['page'] ?? ($matrixShopPages[(string)$vid] ?? 0)),
                 'detail' => 'همان برداشت جدول مغایرت']);
             matrixProgress(['catalog_vendor_id' => $vid, 'catalog_rows' => (int)($catMx['products'] ?? 0),
@@ -47371,6 +47666,21 @@ if (isset($_GET['selftest'])) {
 
     // ۲) رفع خطای ۴۲۲ — نباید هیچ sort نامعتبری در کد مانده باشد
     $selfSrc = (string)@file_get_contents(__FILE__);
+    $sharedMxFixture=['vendor_id'=>710223,'at'=>time(),'partial'=>true,'scope_complete'=>true,
+        'status_scope'=>'active_2976','rows'=>[
+            ['id'=>11,'name'=>'محصول فعال','status'=>2976,'price'=>125000,'stock'=>4],
+            ['id'=>12,'name'=>'محصول غیرفعال','status'=>3790,'price'=>90000,'stock'=>0],
+        ]];
+    $sharedMxRows=function_exists('bslCatalogRowsForMatrix')?bslCatalogRowsForMatrix(710223,$sharedMxFixture):null;
+    $add('10.495','ماتریس از کش مشترکِ کاملِ active فقط محصول قابل مشاهده را می‌گیرد',
+        is_array($sharedMxRows)&&count($sharedMxRows)===1&&(int)($sharedMxRows[0]['id']??0)===11
+        &&(int)($sharedMxRows[0]['price']??0)===125000);
+    $add('10.495','توقف همه، پاک‌سازی checkpoint امن و دکمهٔ مدیر وظیفه حاضرند',
+        function_exists('tasksStopAllRequest')&&function_exists('tasksStopAllClearCheckpoints')
+        &&strpos($selfSrc,'tasks_' . 'stop_all')!==false
+        &&strpos($selfSrc,'tmStop' . 'All()')!==false
+        &&strpos($selfSrc,'shared_catalog_' . 'matrix_delta')!==false
+        &&strpos($selfSrc,"{v:'10." . "495'")!==false&&version_compare(APP_VERSION,'10.' . '495','>='));
     $__stVerFilter = trim((string)($_GET['ver'] ?? ''));
     $__stModernOnly = !empty($_GET['fast']) || ($__stVerFilter !== '' && (bool)preg_match('/^10\.(?:4(?:3[7-9]|[4-9]\d)|[5-9]\d\d)$/', $__stVerFilter));
     if (!$__stModernOnly) {
@@ -69342,7 +69652,8 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
             if ($target === 'bsl') {
                 bslCatalogWriteFromRows($vid, $rows, ['source' => 'recon_fetch',
                     'status_scope' => $customerVisibleOnly ? 'active_2976' : 'active_inactive',
-                    'partial' => true, 'pages' => $page,
+                    'partial' => true, 'scope_complete' => $customerVisibleOnly,
+                    'pages' => $page,
                     'detail' => 'همان برداشت مغایرت/فهرست']);
                 if (function_exists('matrixProgress')) matrixProgress(['log_add' => ['♻️ کاتالوگ غرفه #' . $vid . ' از همین واکشی به‌روز شد']]);
             }
@@ -98502,6 +98813,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.495', t:'⏹ توقف همهٔ فعالیت‌ها و هم‌استفاده‌شدن کاتالوگ/ماتریس', items:[
+    'مدیر وظیفه یک دکمهٔ توقف سراسری دارد: به همهٔ موتورهای فعال سیگنال امن می‌دهد، کارهای صف را لغو می‌کند و پس از آزادشدن قفل‌ها checkpointها و وضعیت صف استخراج را پاک می‌کند؛ محصولات استخراج‌شده و داده‌های کاتالوگ محفوظ می‌مانند.',
+    'ساخت جدول مغایرت ابتدا از کش مشترک و تازهٔ هر غرفه می‌خواند. برداشت فعالِ کامل نیز همان کش را به‌روز می‌کند، بدون اینکه کاتالوگ کاملِ تازه به کش ناقص تبدیل شود؛ درخواست‌های تکراری باسلام کمتر و بازسازی جدول سریع‌تر می‌شود.'
+  ]},
   {v:'10.494', t:'🛡 توقف قطعی اصلاح دوره‌ای هنگام انتخاب «فقط ساخت جدول»', items:[
     'تیک فقط ساخت/تازه‌سازی جدول، ردیف‌های اصلاح دوره‌ایِ منتظر یا متوقف را لغو می‌کند و اصلاح درحال‌اجرا در امن‌ترین checkpoint متوقف می‌شود؛ گارد پیش از هر کار، حتی اگر تنظیم هنگام اجرا عوض شود، از اصلاح بعدی جلوگیری می‌کند. اصلاح‌های دستی تحت تأثیر نیستند.',
     'اصلاح v10.493 نیز همراه است: شناسهٔ remote-map فقط با کاتالوگ کامل و همه‌وضعیت معتبر شمرده می‌شود؛ شناسهٔ حذف‌شده یا پاسخ 404 دیگر باعث رد خاموش محصول نمی‌شود.'
@@ -111331,6 +111646,7 @@ function tmOpen(){
     +'<label style="font-size:10px;color:#94a3b8;display:flex;gap:4px;align-items:center;cursor:pointer">'
     +'<input type="checkbox" id="tmOnlyActive" onchange="tmToggleFilter()"> فقط فعال‌ها</label>'
     +'<button class="btn btn-gray" onclick="tmClearAll()" style="font-size:10px;padding:4px 9px" title="پاک‌کردنِ ردِ همهٔ کارهای تمام‌شده">🧽 پاک‌سازی</button>'
+    +'<button class="btn btn-red" onclick="tmStopAll()" style="font-size:10px;padding:4px 9px" title="توقف همهٔ فعالیت‌ها؛ پس از آزادشدن workerها همهٔ checkpointها پاک می‌شوند">⏹ توقف همه و پاک‌کردن checkpointها</button>'
     +'<button class="btn btn-gray" onclick="tmClose()" style="font-size:11px;padding:4px 9px">✕</button></div></div>'
     +'<div class="bsl-modal-body" id="tmBody" style="min-height:320px;max-height:72vh;overflow:auto;padding:12px">'
     +'<div style="color:#93c5fd;font-size:11px">⏳ در حال خواندنِ وضعیت…</div></div></div>';
@@ -111694,6 +112010,20 @@ function tmRender(){
   else jobs.forEach((j,i)=>{h+=tmJobRow(j,i,jobs.length);});
 
   body.innerHTML=h;
+}
+
+function tmStopAll(){
+  if(tmBusy)return;
+  if(!confirm('همهٔ فعالیت‌های سایت متوقف شوند؟ پس از آزادشدن workerها، checkpointها و وضعیت صف‌های استخراج پاک می‌شوند؛ محصولات استخراج‌شده و داده‌های کاتالوگ حفظ می‌شوند.'))return;
+  tmBusy=true;
+  fetch('?tasks_stop_all=1').then(r=>r.json()).then(d=>{
+    tmBusy=false;
+    if(d&&d.ok){
+      const c=d.checkpoint_cleanup||{};
+      showToast(c.pending?'⏹ توقف ثبت شد؛ checkpointها پس از پایان امنِ workerها پاک می‌شوند':'⏹ همهٔ فعالیت‌ها متوقف و checkpointها پاک شدند');
+    }else showToast('✗ '+((d&&d.error)||'توقف همه ناموفق'),true);
+    tmPulse();
+  }).catch(()=>{tmBusy=false;showToast('✗ خطا شبکه',true);});
 }
 
 function tmStop(key){
