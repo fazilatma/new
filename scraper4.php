@@ -398,7 +398,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.492';
+const APP_VERSION = '10.493';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -15819,6 +15819,58 @@ function bslCatalogLookupRow(string $tk, int $vid, string $title, bool $build = 
     return !empty($c['partial']) ? ['state' => 'unknown'] : ['state' => 'miss'];
 }
 
+/** v10.493: A remote-map ID is authoritative only against a fresh, complete,
+ * all-status catalog snapshot. Active-only/recon snapshots cannot prove absence. */
+function bslCatalogSnapshotIdIndex(array $catalog): ?array {
+    if (!empty($catalog['partial']) || (string)($catalog['status_scope'] ?? '') !== 'all'
+        || !is_array($catalog['rows'] ?? null)) return null;
+    $vid = (int)($catalog['vendor_id'] ?? 0);
+    $sig = $vid . ':' . (int)($catalog['at'] ?? 0) . ':' . count($catalog['rows'])
+         . ':' . (int)($catalog['products'] ?? 0);
+    static $memo = [];
+    if ($vid > 0 && isset($memo[$vid]) && ($memo[$vid]['sig'] ?? '') === $sig)
+        return $memo[$vid]['ids'];
+    $ids = [];
+    foreach ($catalog['rows'] as $row) {
+        if (!is_array($row)) continue;
+        $id = (int)($row['id'] ?? $row['product_id'] ?? 0);
+        if ($id > 0) $ids[$id] = true;
+    }
+    if ($vid > 0) $memo[$vid] = ['sig' => $sig, 'ids' => $ids];
+    return $ids;
+}
+
+/** true/false only when a complete all-status snapshot proves the result; otherwise null. */
+function bslCatalogSnapshotHasId(array $catalog, int $id): ?bool {
+    if ($id <= 0) return null;
+    $index = bslCatalogSnapshotIdIndex($catalog);
+    if ($index === null) return null;
+    return isset($index[$id]);
+}
+
+/** Resolve a remembered ID using cached data first; build one full catalog only when safe. */
+function bslShopKnownIdPresence(string $tk, int $vid, int $id): ?bool {
+    if ($tk === '' || $vid <= 0 || $id <= 0) return null;
+    $catalog = bslCatalogGet($tk, $vid, false);
+    if (!is_array($catalog) || bslCatalogSnapshotIdIndex($catalog) === null) {
+        $progress = bslCatalogProgressRead();
+        if (!empty($progress['running'])) return null; // don't collide with another catalog job
+        /* bslCatalogBuild may prefer a partial active-only matrix. Force the
+           all-status network path here so a missing ID is actually conclusive. */
+        $hadNetwork = array_key_exists('network', $_GET);
+        $oldNetwork = $_GET['network'] ?? null;
+        $_GET['network'] = '1';
+        try { $built = bslCatalogBuild($tk, $vid, true); }
+        finally {
+            if ($hadNetwork) $_GET['network'] = $oldNetwork;
+            else unset($_GET['network']);
+        }
+        if (empty($built['ok'])) return null;
+        $catalog = $GLOBALS['_bslCatalog'][$vid] ?? bslCatalogRead($vid);
+    }
+    return is_array($catalog) ? bslCatalogSnapshotHasId($catalog, $id) : null;
+}
+
 /** محصولِ تازه‌ساخته/تازه‌پیداشده را همان لحظه وارد کش می‌کند */
 function bslCatalogNote(int $vid, string $title, int $id): void {
     if ($vid <= 0 || $id <= 0 || trim($title) === '') return;
@@ -15902,17 +15954,34 @@ function bslFindExisting(string $tk, int $vid, string $title, string $productKey
     if ($productKey !== '') {
         $mapped = (int)((remoteMapLoad()['bsl'][$productKey]['id'] ?? 0));
         if ($mapped > 0) {
-            $__mappedCat = bslCatalogLookupRow($tk, $vid, $title, true, $mapped);
-            if (($__mappedCat['state'] ?? '') === 'hit' && is_array($__mappedCat['row'] ?? null)) {
-                bslCatalogSaved(1);
-                $__row = $__mappedCat['row']; $__row['__from_ledger'] = true;
-                return $__row;
+            $__mappedPresent = bslShopKnownIdPresence($tk, $vid, $mapped);
+            if ($__mappedPresent === true) {
+                $__mappedCat = bslCatalogLookupRow($tk, $vid, $title, false, $mapped);
+                if (($__mappedCat['state'] ?? '') === 'hit' && is_array($__mappedCat['row'] ?? null)) {
+                    bslCatalogSaved(1);
+                    $__row = $__mappedCat['row']; $__row['__from_ledger'] = true;
+                    return $__row;
+                }
+            } elseif ($__mappedPresent === false) {
+                $__titleCat = bslCatalogLookupRow($tk, $vid, $title, false);
+                if (($__titleCat['state'] ?? '') === 'hit' && is_array($__titleCat['row'] ?? null)) {
+                    bslCatalogSaved(1);
+                    return $__titleCat['row'];
+                }
+                if (($__titleCat['state'] ?? '') === 'miss' && $trustCatalogMiss) {
+                    bslCatalogSaved(1);
+                    return null;
+                }
             }
             $one = bslReq($tk, 'GET', 'products/' . $mapped);
+            if ((int)($one['code'] ?? 0) === 404)
+                $one = bslReq($tk, 'GET', 'vendors/' . $vid . '/products/' . $mapped);
             $row = $one['body']['data'] ?? ($one['body'] ?? null);
             if (!empty($one['ok']) && is_array($row) && (int)($row['id'] ?? 0) > 0) return $row;
-            // حتی اگر خواندن مستقیم جواب نداد، خودِ شناسه برای PATCH کافی است
-            return ['id' => $mapped, 'title' => $title, '__from_ledger' => true];
+            /* A 404 proves the ledger ID is stale: continue with catalog/title
+               lookup instead of repeatedly returning a product that is gone. */
+            if ((int)($one['code'] ?? 0) !== 404)
+                return ['id' => $mapped, 'title' => $title, '__from_ledger' => true];
         }
     }
     /* =================================================================
@@ -32781,7 +32850,18 @@ function bslShopsFindExistingMulti(string $title, string $productKey, array $sho
         if ($vid <= 0 || trim((string)($sh['token'] ?? '')) === '') continue;
         $mk = bslShopMapKey($productKey, $sh);
         $known = $mk !== '' ? (int)($map[$mk]['id'] ?? 0) : 0;
-        if ($known > 0) { $ids[$vid] = $known; continue; }
+        if ($known > 0) {
+            /* A stale local ledger was previously treated as proof that the
+               destination product still exists. A fresh complete snapshot can
+               disprove that and safely route the item through create/search. */
+            $present = bslShopKnownIdPresence((string)$sh['token'], $vid, $known);
+            if ($present === true || $present === null) { $ids[$vid] = $known; continue; }
+            $hit = bslCatalogLookup((string)$sh['token'], $vid, $title, false);
+            if ($hit > 0) { $ids[$vid] = $hit; bslCatalogSaved(1); continue; }
+            if ($hit === 0) { bslCatalogSaved(1); continue; }
+            $need[$vid] = $sh;
+            continue;
+        }
         /* v10.35 (۴۷ب): پیش از فرستادنِ درخواست، از کشِ کاتالوگِ همان غرفه
            بپرس. کشِ کاملِ تازه هم «هست» را جواب می‌دهد و هم «نیست» — و
            «نیست» یعنی این غرفه اصلاً لازم نیست در موجِ درخواست‌ها باشد. */
@@ -58486,6 +58566,19 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'s4SettingsPriorityRequestBegin();')!==false
       && strpos($selfSrc,"'skipped'=>'foreground_settings_priority'")!==false
       && version_compare(APP_VERSION,'10.492','>='));
+    $__catFull493=['vendor_id'=>987654,'at'=>time(),'status_scope'=>'all','partial'=>false,
+        'rows'=>[['id'=>12345],['id'=>67890]]];
+    $__catPartial493=$__catFull493;$__catPartial493['partial']=true;
+    $__catActive493=$__catFull493;$__catActive493['status_scope']='active_2976';
+    $add('10.493', 'دفترچهٔ شناسهٔ باسلام با کاتالوگ کامل راستی‌آزمایی می‌شود و کش ناقص نبودن را ثابت نمی‌کند',
+         function_exists('bslCatalogSnapshotHasId')
+      && bslCatalogSnapshotHasId($__catFull493,12345)===true
+      && bslCatalogSnapshotHasId($__catFull493,54321)===false
+      && bslCatalogSnapshotHasId($__catPartial493,54321)===null
+      && bslCatalogSnapshotHasId($__catActive493,54321)===null
+      && strpos($selfSrc,'bslShopKnownIdPresence(')!==false
+      && strpos($selfSrc,'if ((int)($one[\'code\'] ?? 0) !== 404)')!==false
+      && version_compare(APP_VERSION,'10.493','>='));
     $earlyPumpAt487=strpos($selfSrc,'$_earlySendPumpBlocking=false;');
     $resumeExitAt487=strpos($selfSrc,"if(!empty(\$wdEarly['resume_blocking'])||\$_earlySendPumpBlocking)");
     $add('10.487', 'پمپِ ارسال پیش از خروج زودهنگامِ ادامهٔ استخراج، هر دو صف را بازیابی می‌کند',
@@ -98360,6 +98453,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.493', t:'🧭 راستی‌آزماییِ شناسهٔ غرفه پیش از ردکردن محصول باسلام', items:[
+    'شناسهٔ remote-map دیگر به‌تنهایی مدرکِ حضور محصول در غرفه نیست: کاتالوگ تازه، کامل و همه‌وضعیت، شناسهٔ حذف‌شده را رد می‌کند و محصول را وارد مسیر جست‌وجو/ایجاد می‌فرستد؛ کش فعال/ناقص هیچ‌وقت نبودن را ثابت نمی‌کند.',
+    'در مسیر بازیابی تکی نیز 404 برای شناسهٔ ثبت‌شده دیگر به همان شناسهٔ منقضی ختم نمی‌شود؛ مسیر جست‌وجو ادامه می‌یابد تا ارسال دوباره امکان‌پذیر شود.'
+  ]},
   {v:'10.492', t:'⚡ اولویت سریع ذخیرهٔ تنظیمات و ترمیم مسیر جایگزین باسلام', items:[
     'ذخیرهٔ تنظیمات پروفایل/اتصال یک lease کوتاهِ اولویت می‌گیرد؛ worker پیش از شروع کار تازه مکث می‌کند و کارهای درحال‌اجرا در checkpointها CPU را موقتاً واگذار می‌کنند. ذخیرهٔ خودکار پروفایل نیز پس از ۵۰۰ میلی‌ثانیه انجام می‌شود و تغییر تنظیمات غیرقیمتی دیگر ماتریس قیمت را بی‌دلیل اسکن نمی‌کند.',
     'تابع جاافتادهٔ bslNetModes اضافه شد؛ fallback شبکهٔ باسلام در خواندن سفارش‌ها/اعلان‌ها دیگر به خطای undefined function ختم نمی‌شود.'
