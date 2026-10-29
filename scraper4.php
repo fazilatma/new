@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.490';
+const APP_VERSION = '10.491';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -58402,6 +58402,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && notifAppendSourceText('خبر',['notif_source_text'=>''])==='خبر'
       && strpos($selfSrc,'$msg=notifAppendSourceText($msg,$cn);')!==false
       && version_compare(APP_VERSION,'10.488','>='));
+    $add('10.491', 'ادامهٔ خودکار ساخت به worker دائمی پیام تکراری نشان نمی‌دهد',
+         strpos($selfSrc, "if(!automatic) showToast('ساخت به worker دائمی سپرده شد؛ می‌توانید مرورگر را ببندید')")!==false
+      && strpos($selfSrc, "else if(!automatic) showToast('ساخت روی سرور آغاز شد (برای ادامهٔ برش‌ها صفحه باز بماند)')")!==false
+      && strpos($selfSrc,'syncMatrixStart(true,true)')!==false
+      && version_compare(APP_VERSION,'10.491','>='));
     $earlyPumpAt487=strpos($selfSrc,'$_earlySendPumpBlocking=false;');
     $resumeExitAt487=strpos($selfSrc,"if(!empty(\$wdEarly['resume_blocking'])||\$_earlySendPumpBlocking)");
     $add('10.487', 'پمپِ ارسال پیش از خروج زودهنگامِ ادامهٔ استخراج، هر دو صف را بازیابی می‌کند',
@@ -98276,6 +98281,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.491', t:'🔕 حذف پیام تکراری هنگام ادامهٔ خودکار ساخت', items:[
+    'پیام سپرده‌شدن به worker فقط برای شروع/ادامهٔ دستی نمایش داده می‌شود؛ برش‌های خودکارِ بعدی در پس‌زمینه ادامه می‌یابند، بدون toast تکراری.'
+  ]},
   {v:'10.490', t:'🧪 نشانه‌گیری دقیق بخش JavaScript در آزمون اسکرول تب‌ها', items:[
     'خودآزمایی اسکرول، آخرین اعلانِ const MAIN_TABS را به‌عنوان بخش رابط انتخاب می‌کند تا رشتهٔ مشابه در کد آزمون باعث شکست کاذب نشود.'
   ]},
@@ -108872,9 +108880,9 @@ function syncMatrixStart(resume,automatic){
       return;
     }
     if(d.worker){
-      showToast('ساخت به worker دائمی سپرده شد؛ می‌توانید مرورگر را ببندید');
+      if(!automatic) showToast('ساخت به worker دائمی سپرده شد؛ می‌توانید مرورگر را ببندید');
       if($('smBody')) $('smBody').innerHTML='<tr><td style="padding:16px;text-align:center;color:#4ade80">worker سرور مستقل در حال ساخت است — بستن مرورگر یا خواب گوشی اثری ندارد</td></tr>';
-    }else showToast('ساخت روی سرور آغاز شد (برای ادامهٔ برش‌ها صفحه باز بماند)');
+    }else if(!automatic) showToast('ساخت روی سرور آغاز شد (برای ادامهٔ برش‌ها صفحه باز بماند)');
     syncMatrixPoll();
   }).catch(e=>{
     /* v10.245: حتی اگر proxy پاسخ start را 500/غیر JSON کرد، worker ممکن است
