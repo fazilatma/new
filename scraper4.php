@@ -395,7 +395,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.486';
+const APP_VERSION = '10.487';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -36252,6 +36252,38 @@ try {
     $results['watchdog_error'] = 'ابتدایی: ' . mb_substr($e->getMessage(), 0, 200);
 }
 foreach ($wdEarly as $k => $v) { if (!empty($v)) $results[$k] = $v; }
+/* v10.487: the later send pump used to sit after the profile/extraction pass.
+   A cron tick that resumed an extraction checkpoint exits before reaching it;
+   when the generic watchdog is disabled, that left a stale Woo row stranded.
+   Probe both durable send queues here as well, before any checkpoint-driven
+   early exit. Queue locks, resume handoff stamps, and explicit user-stop checks
+   make this safe alongside cronWatchdogs and the legacy late pump. */
+$_earlySendPumpBlocking=false;
+if(!manualSyncActive()){
+    try{
+        $_earlyPumpStall=max(120,(int)($cn['stall_after']??300));
+        foreach(cronWatchdogQueueOrder() as $_earlyDest){
+            $_earlyDestStall=$_earlyDest==='bsl'?BSL_SEND_STALL_SEC:$_earlyPumpStall;
+            $_earlyChk=queueStallCheck($_earlyDest,$_earlyDestStall,true);
+            if(empty($_earlyChk['stalled']))continue;
+            $_earlyRec=queueStallRecover($_earlyDest,$_earlyDestStall,false,2500,true,false,true);
+            $results['send_pump'][$_earlyDest]=[
+                'from'=>(int)($_earlyChk['current']??0),'total'=>(int)($_earlyChk['total']??0),
+                'resumed'=>!empty($_earlyRec['resumed']),
+                'promoted_rows'=>(int)($_earlyRec['promoted_rows']??0),'early'=>true,
+            ];
+            $_earlyAfter=queueStallCheck($_earlyDest,$_earlyDestStall);
+            $results['send_pump'][$_earlyDest]['now']=(int)($_earlyAfter['current']??0);
+            if(!empty($_earlyRec['resumed'])){
+                $_earlySendPumpBlocking=true;
+                cronRecordResumeBlock($results,['kind'=>'queue','which'=>$_earlyDest,
+                    'queue_id'=>(string)($_earlyRec['queue_id']??$_earlyChk['queue_id']??'')]);
+            }
+        }
+    }catch(Throwable $_earlyPumpEx){
+        $results['send_pump_error']=mb_substr($_earlyPumpEx->getMessage(),0,200);
+    }
+}
 /* Recovery dispatches are checkpointed and lock-guarded. Do not exit here:
    first let the extraction pass enqueue every independent paused checkpoint;
    ordinary scheduled sync remains deferred below when any recovery was started. */
@@ -36434,7 +36466,7 @@ if($_resumeCandidates){
 }
 /* Send/registry recovery must not suppress the checkpoint scan above, but it
    still defers fresh scheduled sync when no extraction checkpoint was queued. */
-if(!empty($wdEarly['resume_blocking'])){
+if(!empty($wdEarly['resume_blocking'])||$_earlySendPumpBlocking){
     $results['deferred_by_resume']=true;
     cronEmit($results);exit;
 }
@@ -58355,6 +58387,13 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             'missing_detail'=>['link'=>'https://example.test/c'],
             'missing_link'=>['weight'=>''],
         ]]);
+    $earlyPumpAt487=strpos($selfSrc,'$_earlySendPumpBlocking=false;');
+    $resumeExitAt487=strpos($selfSrc,"if(!empty(\$wdEarly['resume_blocking'])||\$_earlySendPumpBlocking)");
+    $add('10.487', 'پمپِ ارسال پیش از خروج زودهنگامِ ادامهٔ استخراج، هر دو صف را بازیابی می‌کند',
+         $earlyPumpAt487!==false&&$resumeExitAt487!==false&&$earlyPumpAt487<$resumeExitAt487
+      && strpos($selfSrc,'queueStallRecover($_earlyDest,$_earlyDestStall,false,2500,true,false,true)')!==false
+      && strpos($selfSrc,"\$results['send_pump_error']")!==false
+      && version_compare(APP_VERSION,'10.487','>='));
     $add('10.486', 'جزئیات انتخابی بر اساس دادهٔ ناقص پروفایل و ارسال تا تکمیل checkpoint',
          ($_detailPlan486['keys']??[])===['missing_detail']
       && (int)($_detailPlan486['missing']??0)===1
@@ -98214,6 +98253,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.487', t:'🚦 بازیابی صف ارسال پیش از خروج زودهنگام کران', items:[
+    'نگهبانِ کران اکنون هر دو صف Woo و Basalam را پیش از صف‌بندی checkpointهای استخراج بررسی می‌کند؛ اگر ادامهٔ استخراج باعث خروج همان تیک شود، صف ارسال stale دیگر فرصت dispatch را از دست نمی‌دهد—even وقتی watchdog عمومی خاموش است.',
+    'قفل‌های مقصد، مهر handoff و توقف صریح کاربر همچنان جلوی worker موازی یا ادامهٔ ناخواسته را می‌گیرند.'
+  ]},
   {v:'10.486', t:'🔁 ادامهٔ ارسال Woo تا تکمیل و جزئیات فقط برای محصولاتِ ناقص پروفایل', items:[
     'ارسال‌های WooCommerce مانند Basalam دیگر پس از سه تلاشِ میزبانی/dispatch به خطای نهاییِ resume_exhausted قفل نمی‌شوند؛ کران از checkpoint ذخیره‌شده ادامه می‌دهد تا ردیف تمام شود و توقف صریح کاربر همچنان محفوظ است.',
     'وقتی گزینهٔ «همهٔ محصولات» خاموش است، جزئیات فقط برای محصولاتِ دارای لینک و فاقد نشانگر/دادهٔ جزئیات در خودِ پروفایل استخراج می‌شود؛ حضور یا نبود محصول در WooCommerce و غرفه‌های Basalam دیگر معیار انتخاب نیست. گزینهٔ استخراج همهٔ محصولات بدون تغییر باقی مانده است.'
