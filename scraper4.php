@@ -398,7 +398,7 @@ const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.493';
+const APP_VERSION = '10.494';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -1879,7 +1879,9 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
 }
 function s4WorkerRunMatrixFix(array $payload): array {
     $scope=(string)($payload['scope']??'all');$resume=!empty($payload['resume']);
-    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker','duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'selected_destinations'=>array_values((array)($payload['selected_destinations']??[])),'min_matrix_generated_at'=>max(0,(int)($payload['min_matrix_generated_at']??0)),'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
+    $opts=['scope'=>$scope,'delay_ms'=>(int)($payload['delay_ms']??180),'source'=>'worker',
+        'periodic_source'=>(string)($payload['source']??'manual'),
+        'duplicate_keep'=>(string)($payload['duplicate_keep']??'newest'),'view_filters'=>is_array($payload['view_filters']??null)?$payload['view_filters']:[],'selected_destinations'=>array_values((array)($payload['selected_destinations']??[])),'min_matrix_generated_at'=>max(0,(int)($payload['min_matrix_generated_at']??0)),'max_items'=>max(0,(int)($payload['max_items']??0)),'checkpoint'=>null];
     if($resume){$old=matrixFixProgressRead();$cp=is_array($old['checkpoint']??null)?$old['checkpoint']:null;if($cp&&(string)($cp['scope']??'all')===$scope)$opts['checkpoint']=$cp;}
     $fp=@fopen(SYNC_MATRIX_FIX_LOCK_FILE,'c');if(!$fp||!@flock($fp,LOCK_EX)){if($fp)@fclose($fp);return ['ok'=>false,'error'=>'matrix_fix_lock_failed'];}
     try{matrixFixClearStaleStop((float)($payload['requested_at']??0));matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'worker'=>true,'phase'=>'شروع worker','runner_pid'=>(int)@getmypid(),'runner_kind'=>'matrix_fix_worker']);return matrixFixRun($opts);}
@@ -27734,14 +27736,21 @@ if ($_savedC['ok']) {
             s4WorkerQueueMutate(static function(&$q){
                 $now=time();
                 foreach((array)($q['entries']??[]) as $idx=>$e){
-                    if(!is_array($e)||(string)($e['type']??'')!=='matrix_fix'||(string)($e['status']??'')!=='pending')continue;
+                    if(!is_array($e)||(string)($e['type']??'')!=='matrix_fix'
+                        ||!in_array((string)($e['status']??''),['pending','paused','running'],true))continue;
                     $dk=(string)($e['dedup_key']??'');
                     $src=(string)($e['payload']['source']??'');
                     if($src!=='recon_auto'&&strpos($dk,'matrix_fix|recon_auto')!==0)continue;
-                    $q['entries'][$idx]['status']='cancelled';
                     $q['entries'][$idx]['updated_at']=$now;
-                    $q['entries'][$idx]['done_at']=$now;
                     $q['entries'][$idx]['error']='periodic_build_only_enabled';
+                    if((string)($e['status']??'')==='running'){
+                        /* Let the owned worker reach its next safe checkpoint; the live guard
+                           in matrixFixRun will prevent any further periodic mutation. */
+                        $q['entries'][$idx]['periodic_build_only_requested_at']=$now;
+                    }else{
+                        $q['entries'][$idx]['status']='cancelled';
+                        $q['entries'][$idx]['done_at']=$now;
+                    }
                 }
                 return ['ok'=>true];
             });
@@ -44106,7 +44115,14 @@ function matrixFixRun(array $opts = []): array {
     if (!in_array($scope, ['all', 'woo', 'bsl'], true)) $scope = 'all';
     $delayMs = max(50, min(2000, (int)($opts['delay_ms'] ?? 180)));
     $source = (string)($opts['source'] ?? 'manual');
+    $periodicSource = (string)($opts['periodic_source'] ?? $source);
     $rowMode=!empty($opts['row_mode']);
+    if (s4PeriodicMatrixFixBlocked($periodicSource)) {
+        matrixFixProgress(['running'=>false,'done'=>true,'queued'=>false,'stale'=>false,
+            'periodic_build_only'=>true,'phase'=>'periodic_build_only','source'=>'recon_auto',
+            'log_add'=>['⏭ اصلاح دوره‌ای اجرا نشد؛ گزینهٔ «فقط ساخت جدول» روشن است']]);
+        return ['ok'=>true,'skipped'=>true,'periodic_build_only'=>true,'reason'=>'build_only'];
+    }
     $fixCp = is_array($opts['checkpoint'] ?? null) ? $opts['checkpoint'] : [];
     $duplicateKeep = (string)($fixCp['duplicate_keep'] ?? $opts['duplicate_keep'] ?? 'newest');
     if (!in_array($duplicateKeep, ['newest', 'expensive'], true)) $duplicateKeep = 'newest';
@@ -44234,6 +44250,7 @@ function matrixFixRun(array $opts = []): array {
     if(!array_key_exists('attempted_jobs',$fixCp)&&$failN>0)$failN=0;
     $sentN = (int)($fixCp['sent_n'] ?? 0); $delN = (int)($fixCp['del_n'] ?? 0); $priceN = (int)($fixCp['price_n'] ?? 0);
     $stopped = false;
+    $periodicBuildOnlyStop = false;
     $details = [];
     $rateLimited=false;$rateRetryAfter=0;
     $maxItems = max(0, (int)($opts['max_items'] ?? 0)); $segmentItems = 0;
@@ -44242,6 +44259,18 @@ function matrixFixRun(array $opts = []): array {
     foreach ($jobs as $ji => $job) {
         $jk = $jobKey($job);
         if ($ji < $resumeCursor || isset($doneJobSet[$jk]) || isset($attemptedJobSet[$jk])) continue;
+        if (s4PeriodicMatrixFixBlocked($periodicSource, loadConnections())) {
+            $periodicBuildOnlyStop = true;
+            $stopCheckpoint=['scope'=>$scope,'duplicate_keep'=>$duplicateKeep,'job_order'=>'row_order',
+                'done_jobs'=>$doneJobs,'attempted_jobs'=>$attemptedJobs,'view_filters'=>$viewFilters,
+                'started_at'=>$fixStartedAt,'ok_n'=>$okN,'fail_n'=>$failN,'skip_n'=>$skipN,
+                'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>count($doneJobSet)+count($attemptedJobSet),'total'=>$total];
+            matrixFixProgress(['running'=>false,'done'=>true,'queued'=>false,'stale'=>false,
+                'periodic_build_only'=>true,'phase'=>'periodic_build_only','source'=>'recon_auto',
+                'checkpoint'=>$stopCheckpoint,'finished_at'=>time(),
+                'log_add'=>['⏭ گزینهٔ «فقط ساخت جدول» روشن شد؛ اصلاح دوره‌ای پیش از کار بعدی متوقف شد']]);
+            break;
+        }
         if (matrixFixStopRequested()) {
             $stopped = true;
             matrixFixProgress(['log_add' => ['⏹ توقف توسط کاربر']]);
@@ -44626,6 +44655,11 @@ function matrixFixRun(array $opts = []): array {
                     'started_at'=>$fixStartedAt,'ok_n'=>$okN,'fail_n'=>$failN,'skip_n'=>$skipN,'sent_n'=>$sentN,'del_n'=>$delN,'price_n'=>$priceN,'cur'=>$n,'total'=>$total]]);
             return ['ok'=>true,'yielded'=>true,'resume_needed'=>true,'scheduler_wait'=>$waitCron,'total'=>$total,'cur'=>$n,'checkpoint'=>true];
         }
+    }
+
+    if ($periodicBuildOnlyStop) {
+        return ['ok'=>true,'skipped'=>true,'periodic_build_only'=>true,'reason'=>'build_only_enabled_during_run',
+            'total'=>$total,'cur'=>count($doneJobSet)+count($attemptedJobSet)];
     }
 
     /* recount summary؛ با patch پردازهٔ duplicate موازی race نکند. */
@@ -58579,6 +58613,16 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'bslShopKnownIdPresence(')!==false
       && strpos($selfSrc,'if ((int)($one[\'code\'] ?? 0) !== 404)')!==false
       && version_compare(APP_VERSION,'10.493','>='));
+    $__periodicBuildOnly494=['recon_auto'=>['enabled'=>true,'build_only'=>true,'matrix_fix'=>true,'apply'=>true,'enqueue_missing'=>true]];
+    $__periodicFixAllowed494=['recon_auto'=>['enabled'=>true,'build_only'=>false,'matrix_fix'=>true]];
+    $add('10.494', 'تیک فقط ساخت جدول، اصلاح دوره‌ایِ صف‌شده و درحال‌اجرا را هم متوقف می‌کند',
+         function_exists('s4PeriodicMatrixFixBlocked')
+      && s4PeriodicMatrixFixBlocked('recon_auto',$__periodicBuildOnly494)
+      && !s4PeriodicMatrixFixBlocked('manual',$__periodicBuildOnly494)
+      && !s4PeriodicMatrixFixBlocked('recon_auto',$__periodicFixAllowed494)
+      && strpos($selfSrc,'periodic_build_only_requested_at')!==false
+      && strpos($selfSrc,'s4PeriodicMatrixFixBlocked($periodicSource, loadConnections())')!==false
+      && version_compare(APP_VERSION,'10.494','>='));
     $earlyPumpAt487=strpos($selfSrc,'$_earlySendPumpBlocking=false;');
     $resumeExitAt487=strpos($selfSrc,"if(!empty(\$wdEarly['resume_blocking'])||\$_earlySendPumpBlocking)");
     $add('10.487', 'پمپِ ارسال پیش از خروج زودهنگامِ ادامهٔ استخراج، هر دو صف را بازیابی می‌کند',
@@ -69350,6 +69394,11 @@ function reconAutoCfg(?array $cn = null): array {
         'execution_pause_ms'=>max(0,min(2000,(int)($r['execution_pause_ms']??250))),
         'cron_lease_sec'=>max(30,min(900,(int)($r['cron_lease_sec']??180))),
     ];
+}
+
+/** A periodic matrix-fix job must never mutate destinations while build-only is enabled. */
+function s4PeriodicMatrixFixBlocked(string $source, ?array $cn = null): bool {
+    return $source === 'recon_auto' && !empty(reconAutoCfg($cn)['build_only']);
 }
 
 function reconAutoStateLoad(): array {
@@ -98453,6 +98502,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.494', t:'🛡 توقف قطعی اصلاح دوره‌ای هنگام انتخاب «فقط ساخت جدول»', items:[
+    'تیک فقط ساخت/تازه‌سازی جدول، ردیف‌های اصلاح دوره‌ایِ منتظر یا متوقف را لغو می‌کند و اصلاح درحال‌اجرا در امن‌ترین checkpoint متوقف می‌شود؛ گارد پیش از هر کار، حتی اگر تنظیم هنگام اجرا عوض شود، از اصلاح بعدی جلوگیری می‌کند. اصلاح‌های دستی تحت تأثیر نیستند.',
+    'اصلاح v10.493 نیز همراه است: شناسهٔ remote-map فقط با کاتالوگ کامل و همه‌وضعیت معتبر شمرده می‌شود؛ شناسهٔ حذف‌شده یا پاسخ 404 دیگر باعث رد خاموش محصول نمی‌شود.'
+  ]},
   {v:'10.493', t:'🧭 راستی‌آزماییِ شناسهٔ غرفه پیش از ردکردن محصول باسلام', items:[
     'شناسهٔ remote-map دیگر به‌تنهایی مدرکِ حضور محصول در غرفه نیست: کاتالوگ تازه، کامل و همه‌وضعیت، شناسهٔ حذف‌شده را رد می‌کند و محصول را وارد مسیر جست‌وجو/ایجاد می‌فرستد؛ کش فعال/ناقص هیچ‌وقت نبودن را ثابت نمی‌کند.',
     'در مسیر بازیابی تکی نیز 404 برای شناسهٔ ثبت‌شده دیگر به همان شناسهٔ منقضی ختم نمی‌شود؛ مسیر جست‌وجو ادامه می‌یابد تا ارسال دوباره امکان‌پذیر شود.'
