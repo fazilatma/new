@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.497';
+const APP_VERSION = '10.498';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -47757,6 +47757,13 @@ if (isset($_GET['selftest'])) {
     $add('10.496','پاک‌سازیِ معوق با ورود کران هم دوباره بررسی می‌شود',
         strpos($selfSrc,'function_exists(' . "'tasksStopAllClearCheckpoints'))tasksStopAllClearCheckpoints()")!==false
         &&strpos($selfSrc,"{v:'10." . "496'")!==false&&version_compare(APP_VERSION,'10.' . '496','>='));
+    $stopUiStart=strpos($selfSrc,'function tmStopAll(){');
+    $stopUiEnd=$stopUiStart===false?false:strpos($selfSrc,'function tmStop(key)', $stopUiStart);
+    $stopUi=$stopUiStart!==false&&$stopUiEnd!==false?substr($selfSrc,$stopUiStart,$stopUiEnd-$stopUiStart):'';
+    $add('10.498','دکمهٔ توقف همه مستقل از عملیات‌های دیگر نتیجه و علتِ تأخیر را نشان می‌دهد',
+        $stopUi!==''&&strpos($stopUi,'if(tmBusy)return')===false
+        &&strpos($stopUi,'tmStopAllRunning')!==false&&strpos($stopUi,'checkpoint_cleanup')!==false
+        &&strpos($selfSrc,"{v:'10." . "498'")!==false&&version_compare(APP_VERSION,'10.' . '498','>='));
     $add('10.497','توقف سراسری همهٔ ردیف‌های صف و فایل‌های payload ارسال را پاک می‌کند',
         function_exists('tasksStopAllClearOperationalQueues')
         &&strpos($selfSrc,'$q' . "['entries']=[]")!==false
@@ -98902,6 +98909,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.498', t:'⏹ نمایش روشنِ نتیجهٔ دکمهٔ توقف همه', items:[
+    'توقف سراسری دیگر پشتِ عملیات دیگری در مدیر وظیفه بی‌صدا نادیده گرفته نمی‌شود؛ مستقل ارسال می‌شود، تأیید فوری می‌دهد و نتیجهٔ سرور را با علتِ انتظار برای قفل‌ها یا خطای پاسخ نشان می‌دهد.'
+  ]},
   {v:'10.497', t:'🧹 حذف همهٔ ردیف‌های فعالیت و payloadهای صف هنگام توقف سراسری', items:[
     'پس از آزادشدن امن قفل‌ها، ردیف‌های worker، استخراج، sync و ارسال باسلام/ووکامرس، صف‌های بازیابی تکراری و دسته‌بندی هوش مصنوعی، handoff کران و گزارش/وضعیت retry پاک می‌شوند؛ فایل‌های payload موقت ارسال و staging استخراج نیز حذف می‌شوند. محصولات استخراج‌شده، کاتالوگ‌ها و داده‌های کسب‌وکار دست‌نخورده می‌مانند.'
   ]},
@@ -111680,7 +111690,7 @@ function aiCandReplyClose(){const m=document.getElementById('aiCandReplyModal');
  *  می‌شود. هدف این است که پولینگِ دائمی روی هاستِ اشتراکی بار نیندازد
  *  ولی کاربر همیشه بداند چیزی در حال اجراست.
  * ================================================================== */
-let tmTimer=null, tmPulseTimer=null, tmData=null, tmBusy=false, tmOnlyActive=false;
+let tmTimer=null, tmPulseTimer=null, tmData=null, tmBusy=false, tmStopAllRunning=false, tmOnlyActive=false;
 
 /** فاصلهٔ زمانی را خوانا می‌کند: «۴۲ ثانیه»، «۳ دقیقه»، «۲ ساعت» */
 function tmAgo(sec){
@@ -111741,7 +111751,7 @@ function tmOpen(){
     +'<label style="font-size:10px;color:#94a3b8;display:flex;gap:4px;align-items:center;cursor:pointer">'
     +'<input type="checkbox" id="tmOnlyActive" onchange="tmToggleFilter()"> فقط فعال‌ها</label>'
     +'<button class="btn btn-gray" onclick="tmClearAll()" style="font-size:10px;padding:4px 9px" title="پاک‌کردنِ ردِ همهٔ کارهای تمام‌شده">🧽 پاک‌سازی</button>'
-    +'<button class="btn btn-red" onclick="tmStopAll()" style="font-size:10px;padding:4px 9px" title="توقف همهٔ فعالیت‌ها؛ پس از آزادشدن workerها همهٔ checkpointها پاک می‌شوند">⏹ توقف همه و پاک‌کردن checkpointها</button>'
+    +'<button class="btn btn-red" onclick="tmStopAll()" style="font-size:10px;padding:4px 9px" title="توقف فعالیت‌ها و پاک‌کردن ردیف‌های صف؛ محصولات و کاتالوگ حفظ می‌شوند">⏹ توقف همه و پاک‌کردن صف‌ها</button>'
     +'<button class="btn btn-gray" onclick="tmClose()" style="font-size:11px;padding:4px 9px">✕</button></div></div>'
     +'<div class="bsl-modal-body" id="tmBody" style="min-height:320px;max-height:72vh;overflow:auto;padding:12px">'
     +'<div style="color:#93c5fd;font-size:11px">⏳ در حال خواندنِ وضعیت…</div></div></div>';
@@ -112108,17 +112118,28 @@ function tmRender(){
 }
 
 function tmStopAll(){
-  if(tmBusy)return;
-  if(!confirm('همهٔ فعالیت‌های سایت متوقف شوند؟ پس از آزادشدن workerها، checkpointها و وضعیت صف‌های استخراج پاک می‌شوند؛ محصولات استخراج‌شده و داده‌های کاتالوگ حفظ می‌شوند.'))return;
-  tmBusy=true;
-  fetch('?tasks_stop_all=1').then(r=>r.json()).then(d=>{
-    tmBusy=false;
-    if(d&&d.ok){
-      const c=d.checkpoint_cleanup||{};
-      showToast(c.pending?'⏹ توقف ثبت شد؛ checkpointها پس از پایان امنِ workerها پاک می‌شوند':'⏹ همهٔ فعالیت‌ها متوقف و checkpointها پاک شدند');
-    }else showToast('✗ '+((d&&d.error)||'توقف همه ناموفق'),true);
+  if(tmStopAllRunning){showToast('⏳ درخواستِ توقف سراسری در حالِ پردازش است');return;}
+  if(!confirm('همهٔ فعالیت‌ها و ردیف‌های صف متوقف و پاک شوند؟ اگر کاری در حال اجراست، توقف امن انجام می‌شود و پاک‌سازی پس از آزادشدن قفل‌ها ادامه می‌یابد. محصولات استخراج‌شده و داده‌های کاتالوگ/کسب‌وکار حفظ می‌شوند.'))return;
+  tmStopAllRunning=true;
+  showToast('⏳ درخواست توقف همه ارسال شد؛ در انتظار پاسخ سرور…');
+  fetch('?tasks_stop_all=1&_v='+Date.now(),{cache:'no-store',credentials:'same-origin'}).then(async r=>{
+    let d=null;try{d=await r.json();}catch(e){throw new Error('پاسخ سرور JSON معتبر نبود (HTTP '+r.status+')');}
+    if(!r.ok||!d||!d.ok)throw new Error((d&&d.error)||('درخواست ناموفق بود (HTTP '+r.status+')'));
+    const c=d.checkpoint_cleanup||{},w=d.worker_queue||{};
+    if(c.pending){
+      const rawBusy=Array.isArray(c.busy)?c.busy:(c.busy?[String(c.busy)]:[]);
+      const why=c.error||rawBusy.join('، ')||'منتظر پایان امنِ کارهای فعال';
+      showToast('⏹ درخواست ثبت شد؛ '+why+' · پاک‌سازی در تیک بعدی دوباره بررسی می‌شود');
+    }else{
+      const n=Number(c.count||0);
+      showToast('⏹ توقف همه انجام شد؛ '+toFa(n)+' ردیف فعالیت/صف و payload پاک شد. داده‌های محصولات و کاتالوگ حفظ شدند.');
+    }
+    if(!d.stop_signals&&!d.profile_stops&&!(w.cancelled||w.stop_requested))
+      showToast('ℹ️ درخواست رسید؛ کار فعالی برای سیگنال‌دادن گزارش نشد. وضعیت صف‌ها پاک شد.');
     tmPulse();
-  }).catch(()=>{tmBusy=false;showToast('✗ خطا شبکه',true);});
+  }).catch(e=>{
+    showToast('✗ توقف همه اجرا نشد: '+String(e&&e.message||e||'خطای شبکه'),true);
+  }).finally(()=>{tmStopAllRunning=false;});
 }
 
 function tmStop(key){
