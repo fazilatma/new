@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.495';
+const APP_VERSION = '10.496';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -36199,6 +36199,7 @@ if(isset($_GET['matrix_execution_status'])){
    cron request carry the exact queue checkpoint instead of launching another
    short-lived child. This happens before entering the cron route on purpose. */
 if(isset($_GET['cron_run'])||((string)($_POST['action']??'')==='cron_run')){
+    if(function_exists('tasksStopAllClearCheckpoints'))tasksStopAllClearCheckpoints();
     $_queueCronHandoff=queueCronHandoffPrepare();
     if(is_array($_queueCronHandoff)){
         if(function_exists('s4CronAutoResumeAllTasks')){
@@ -47675,6 +47676,9 @@ if (isset($_GET['selftest'])) {
     $add('10.495','ماتریس از کش مشترکِ کاملِ active فقط محصول قابل مشاهده را می‌گیرد',
         is_array($sharedMxRows)&&count($sharedMxRows)===1&&(int)($sharedMxRows[0]['id']??0)===11
         &&(int)($sharedMxRows[0]['price']??0)===125000);
+    $add('10.496','پاک‌سازیِ معوق با ورود کران هم دوباره بررسی می‌شود',
+        strpos($selfSrc,'function_exists(' . "'tasksStopAllClearCheckpoints'))tasksStopAllClearCheckpoints()")!==false
+        &&strpos($selfSrc,"{v:'10." . "496'")!==false&&version_compare(APP_VERSION,'10.' . '496','>='));
     $add('10.495','توقف همه، پاک‌سازی checkpoint امن و دکمهٔ مدیر وظیفه حاضرند',
         function_exists('tasksStopAllRequest')&&function_exists('tasksStopAllClearCheckpoints')
         &&strpos($selfSrc,'tasks_' . 'stop_all')!==false
@@ -98813,8 +98817,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.496', t:'🧹 تکمیل پاک‌سازیِ معوق پس از توقف سراسری', items:[
+    'اگر worker هنوز قفل دارد، پاک‌سازی checkpoint تا پایان امن عقب می‌افتد؛ تیک کران نیز آن را اجرا می‌کند تا پاک‌شدن وضعیت به بازبودن پنجرهٔ مدیر وظیفه وابسته نباشد.'
+  ]},
   {v:'10.495', t:'⏹ توقف همهٔ فعالیت‌ها و هم‌استفاده‌شدن کاتالوگ/ماتریس', items:[
-    'مدیر وظیفه یک دکمهٔ توقف سراسری دارد: به همهٔ موتورهای فعال سیگنال امن می‌دهد، کارهای صف را لغو می‌کند و پس از آزادشدن قفل‌ها checkpointها و وضعیت صف استخراج را پاک می‌کند؛ محصولات استخراج‌شده و داده‌های کاتالوگ محفوظ می‌مانند.',
+    'مدیر وظیفه یک دکمهٔ توقف سراسری دارد: به همهٔ موتورهای فعال سیگنال امن می‌دهد، کارهای صف را لغو می‌کند و پس از آزادشدن قفل‌ها checkpointها و وضعیت صف استخراج را پاک می‌کند؛ پاک‌سازیِ معوق هم با poll مدیر وظیفه یا تیک کران انجام می‌شود و محصولات استخراج‌شده/داده‌های کاتالوگ محفوظ می‌مانند.',
     'ساخت جدول مغایرت ابتدا از کش مشترک و تازهٔ هر غرفه می‌خواند. برداشت فعالِ کامل نیز همان کش را به‌روز می‌کند، بدون اینکه کاتالوگ کاملِ تازه به کش ناقص تبدیل شود؛ درخواست‌های تکراری باسلام کمتر و بازسازی جدول سریع‌تر می‌شود.'
   ]},
   {v:'10.494', t:'🛡 توقف قطعی اصلاح دوره‌ای هنگام انتخاب «فقط ساخت جدول»', items:[
