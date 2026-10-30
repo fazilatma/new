@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.519';
+const APP_VERSION = '10.520';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47418,6 +47418,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"['done','failed','cancelled']")!==false
         &&strpos($selfSrc,"'start_index'=>'0'")!==false
         &&strpos($selfSrc,"{v:'10." . "519'")!==false&&version_compare(APP_VERSION,'10.519','>='));
+    $add('10.520','اگر worker قدیمی lock را دیر آزاد کند بازیابی waiting می‌شود تا اولین cron بردارد',
+        strpos($selfSrc,"'retry_queued_at'")!==false
+        &&strpos($selfSrc,"'queued'=>true")!==false
+        &&strpos($selfSrc,"{v:'10." . "520'")!==false&&version_compare(APP_VERSION,'10.520','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78819,7 +78823,30 @@ header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: n
 $queueId=trim((string)($_GET['queue_id']??''));
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $retryFp=queueBackendLock('bsl');
-if(!is_resource($retryFp)){echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک پردازش صف در حال اجراست'],JSON_UNESCAPED_UNICODE);exit;}
+if(!is_resource($retryFp)){
+    /* v10.520: ممکن است worker نسل قبل پس از نوشتن done هنوز چند لحظه lock را
+       نگه داشته باشد. اگر هیچ ردیف running نداریم، بازیابی را waiting ثبت کن؛
+       اولین cron پس از آزاد شدن lock آن را برمی‌دارد، بدون ساخت worker دوم. */
+    $busyQ=bslReadQueue();$hasRunning=false;$busyIdx=-1;
+    foreach((array)($busyQ['entries']??[]) as $i=>$br){
+        if(!is_array($br))continue;
+        if((string)($br['status']??'')==='running')$hasRunning=true;
+        if((string)($br['id']??'')===$queueId)$busyIdx=$i;
+    }
+    if(!$hasRunning&&$busyIdx>=0){
+        $br=&$busyQ['entries'][$busyIdx];$bpf=(string)($br['products_file']??'');
+        $bprod=$bpf!==''&&is_file($bpf)?json_decode((string)@file_get_contents($bpf),true):null;
+        $btotal=is_array($bprod)?count($bprod):0;
+        if($btotal>0&&in_array((string)($br['status']??''),['done','failed','cancelled'],true)){
+            $br['status']='waiting';$br['total']=$btotal;$br['current']=0;$br['sent']=0;$br['updated']=0;$br['skipped']=0;$br['failed']=0;
+            $br['done_at']=0;$br['paused_at']=0;$br['retry_queued_at']=time();
+            unset($br['superseded_by'],$br['cancel_reason'],$br['fail_reason'],$br['error']);
+            bslWriteQueue($busyQ);
+            echo json_encode(['ok'=>true,'queued'=>true,'queue_id'=>$queueId,'total'=>$btotal,'message'=>'بازیابی ثبت شد و در اولین کران پس از آزاد شدن worker شروع می‌شود'],JSON_UNESCAPED_UNICODE);exit;
+        }
+    }
+    echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک پردازش صف در حال اجراست'],JSON_UNESCAPED_UNICODE);exit;
+}
 $queue=bslReadQueue();$idx=-1;
 foreach((array)($queue['entries']??[]) as $i=>$row){if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}}
 if($idx<0){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
@@ -98627,6 +98654,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.520', t:'⏱️ بازیابی صف در نخستین کران پس از worker قدیمی', items:[
+    'اگر process نسخهٔ قبل پس از ثبت done هنوز lock را نگه داشته باشد، درخواست بازیابی گم یا رد نمی‌شود و همان ردیف با current=0 در waiting ثبت می‌شود.',
+    'تا زمان آزاد شدن lock هیچ worker دوم ساخته نمی‌شود؛ اولین cron همان snapshot اصلاح‌شده را به‌طور خودکار آغاز می‌کند.'
+  ]},
   {v:'10.519', t:'♻️ بازیابی ارسالهای خطادار پس از نصب اصلاح', items:[
     'یک ردیف done/failed/cancelled را می‌توان از ابتدای همان snapshot ذخیره‌شده با شمارنده‌های پاک دوباره اجرا کرد.',
     'بازیابی فقط در نبود worker فعال و با قفل صف انجام می‌شود؛ upsert مقصد باعث می‌شود موفق‌های قبلی duplicate نشوند و فقط وضعیتشان تأیید یا به‌روز شود.',
