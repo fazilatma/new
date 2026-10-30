@@ -10,9 +10,9 @@
  *  • هیچ‌کدام از توابع اجرای دستور سیستمی، اجرای کد پویا، یا رمزگشایی
  *    و بازکردنِ کدِ فشرده در این فایل به کار نرفته است. (فهرست کامل در
  *    فایل HOST-SECURITY-FA.md کنار همین فایل آمده است.)
- *  • مسیرهای عادی هیچ کد اجرایی دانلود نمی‌کنند. updater داخلی فقط فایل
- *    کامل را از repo/branch ثابت و مورد اعتماد می‌گیرد، SHA و PHP syntax را
- *    بررسی و اتمیک نصب می‌کند؛ URL یا کد دلخواه از درخواست نمی‌پذیرد.
+ *  • مسیرهای عادی هیچ کد اجرایی دانلود نمی‌کنند. updater داخلی repo و path ثابت دارد
+ *    و branch صریح را فقط از فهرست مجاز تنظیمات می‌پذیرد؛ SHA و PHP syntax را
+ *    بررسی و اتمیک نصب می‌کند و URL یا کد دلخواه از درخواست نمی‌پذیرد.
  *  • درخواست‌های شبکه فقط با cURL و فقط به سرویس‌هایی می‌رود که
  *    کاربر در تنظیمات وارد کرده است (فروشگاه خودش، API باسلام).
  *  • نوشتن روی دیسک محدود به فایل‌های JSON کنار همین فایل، دفترِ محلیِ
@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.501';
+const APP_VERSION = '10.504';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -424,7 +424,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/07';
+const APP_VERSION_DATE = '1405/08/08';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -1003,7 +1003,8 @@ function extractWriteQueue(array $queue): void {
    استفاده کرده‌اند، یا پروفایل عمداً مرحلهٔ واکشی را رد کرده است. */
 function extractEnsureSyncQueueRow(string $profileKey, array $profile, string $trigger,
                                    string $phase, array $result, string $note = ''): string {
-    $trigger = $trigger === 'manual_sync' ? 'manual_sync' : 'periodic_sync';
+    $origin=extractNormalizeOriginTrigger($trigger);
+    $trigger=$origin==='manual'?'manual_sync':($origin==='periodic'?'periodic_sync':'background');
     $existingId = trim((string)($result['queue_id'] ?? ''));
     $queue = extractReadQueue();
     if ($existingId !== '' && empty($result['duplicate']) && empty($result['locked']) && empty($result['checkpoint_reused'])) {
@@ -1027,7 +1028,7 @@ function extractEnsureSyncQueueRow(string $profileKey, array $profile, string $t
         'total'=>(int)($result['total'] ?? 0), 'current'=>(int)($result['current'] ?? 0),
         'new'=>(int)($result['new'] ?? 0), 'price_changed'=>(int)($result['price_changed'] ?? 0),
         'removed'=>(int)($result['removed'] ?? 0), 'unchanged'=>(int)($result['unchanged'] ?? 0),
-        'trigger'=>$trigger, 'phase'=>in_array($phase,['list','detail'],true)?$phase:'list',
+        'trigger'=>$trigger,'origin_trigger'=>$origin,'phase'=>in_array($phase,['list','detail'],true)?$phase:'list',
         'sync_stage'=>true, 'sync_skipped'=>$skipped, 'error'=>$ok?'':$error,
         'note_title'=>$note !== '' ? $note : ($skipped?'مرحلهٔ استخراج از دادهٔ ذخیره‌شده استفاده کرد':'گزارش مرحلهٔ استخراج همگام‌سازی'),
     ];
@@ -1600,8 +1601,21 @@ function s4WorkerRequeueForRetry(string $jobId,string $reason='extract_lock_busy
     return true;
 }
 
-function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $preferredQueueId = '', bool $allowUserStoppedResume = false, string $detailMode = ''): array {
+function extractNormalizeOriginTrigger(string $origin,string $execution=''):string{
+    $manual=['manual','manual_sync','manual_resume','user','ui','button'];
+    $periodic=['periodic','periodic_sync','cron','cron_resume','auto','auto_resume','watchdog_resume','scheduled','scheduler'];
+    $origin=strtolower(trim($origin));
+    if(in_array($origin,$manual,true))return'manual';
+    if(in_array($origin,$periodic,true))return'periodic';
+    $execution=strtolower(trim($execution));
+    if(in_array($execution,$manual,true))return'manual';
+    if(in_array($execution,$periodic,true))return'periodic';
+    return'background';
+}
+
+function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $preferredQueueId = '', bool $allowUserStoppedResume = false, string $detailMode = '', string $originTrigger = 'manual'): array {
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
+    $originTrigger=extractNormalizeOriginTrigger($originTrigger);
     $detailModeNorm = $detailMode !== '' ? normalizeDetailExtractMode($detailMode) : '';
     /* -1 means “not supplied”; zero is a real setting: discover the end. */
     if($maxPages<0){$pr0=loadProfiles();$maxPages=max(0,(int)($pr0[$profileKey]['pages']??10));unset($pr0);}
@@ -1624,7 +1638,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
        different phase-based dedup key. */
     $enq = null;
     if ($resume) {
-        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId, $maxPages, $preferredQueueId, $detailModeNorm) {
+        $enq = s4WorkerQueueMutate(function (&$q) use ($profileKey, $phase, $forceAll, $plannedQueueId, $maxPages, $preferredQueueId, $detailModeNorm, $originTrigger) {
             $now=time();$revive=-1;
             foreach ($q['entries'] as $i=>&$e) {
                 if(!is_array($e)||(string)($e['type']??'')!=='backend_extract')continue;
@@ -1637,6 +1651,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
                     if($st==='pending'&&$preferredQueueId!=='')$e['payload']['extract_queue_id']=$plannedQueueId;
                     elseif(empty($e['payload']['extract_queue_id']))$e['payload']['extract_queue_id']=$plannedQueueId;
                     $e['payload']['max_pages']=$maxPages;
+                    if(empty($e['payload']['origin_trigger']))$e['payload']['origin_trigger']=$originTrigger;
                     $e['updated_at']=$now;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'duplicate'=>true,'job_id'=>$id,'status'=>$st];
                 }
                 if((in_array($st,['paused','failed'],true)||$deadRunning)&&$revive<0)$revive=$i;
@@ -1644,6 +1659,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
             if($revive>=0){$e=&$q['entries'][$revive];$e['status']='pending';$e['updated_at']=$now;$e['worker_pid']=0;$e['attempts']=0;$e['error']='';unset($e['done_at']);
                 $e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['profile_key']=$profileKey;$e['payload']['phase']=$phase;$e['payload']['force_all']=$forceAll;$e['payload']['resume']=true;$e['payload']['extract_queue_id']=$plannedQueueId;$e['payload']['max_pages']=$maxPages;
                 if($detailModeNorm!=='')$e['payload']['detail_mode']=$detailModeNorm;
+                $e['payload']['origin_trigger']=$originTrigger;
                 $e['recycles']=(int)($e['recycles']??0)+1;$id=(string)($e['id']??'');unset($e);return ['ok'=>true,'queued'=>true,'revived'=>true,'job_id'=>$id,'status'=>'pending'];}
             return ['ok'=>true,'missing'=>true];
         });
@@ -1655,7 +1671,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
     $_workerPayload = [
         'profile_key' => $profileKey, 'phase' => $phase, 'force_all' => $forceAll,
         'resume' => $resume, 'dedup_key' => $dedup, 'extract_queue_id'=>$plannedQueueId,
-        'max_pages'=>$maxPages,
+        'max_pages'=>$maxPages,'origin_trigger'=>$originTrigger,
     ];
     if ($detailModeNorm !== '') $_workerPayload['detail_mode'] = $detailModeNorm;
     if ($enq===null) $enq = s4WorkerEnqueue('backend_extract', $_workerPayload, 'استخراج بک‌اند');
@@ -1665,9 +1681,11 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
            exact id so start, execution and every resume remain one row. */
         $jobId=(string)($enq['job_id']??'');$visibleQueueId=$plannedQueueId;
         /* A deduplicated job may already have chosen its row in an earlier request. */
+        $_effectiveOrigin='background';
         foreach((array)(s4WorkerLoadQueue()['entries']??[])as $_wj0){
             if(!is_array($_wj0)||(string)($_wj0['id']??'')!==$jobId)continue;
-            $_boundId=trim((string)($_wj0['payload']['extract_queue_id']??''));if($_boundId!=='')$visibleQueueId=$_boundId;break;
+            $_boundId=trim((string)($_wj0['payload']['extract_queue_id']??''));if($_boundId!=='')$visibleQueueId=$_boundId;
+            $_effectiveOrigin=extractNormalizeOriginTrigger((string)($_wj0['payload']['origin_trigger']??''));break;
         }
         $xq=extractReadQueue();
         if($visibleQueueId==='')foreach((array)($xq['entries']??[])as $_xe){
@@ -1683,6 +1701,8 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
         $foundVisible=false;
         foreach($xq['entries'] as &$_xe){if((string)($_xe['id']??'')!==$visibleQueueId)continue;
             $_xe['status']='waiting';$_xe['worker_job_id']=$jobId;$_xe['phase']=$phase;$_xe['max_pages']=$maxPages;$_xe['page_mode']=$maxPages===0?'auto':'fixed';$_xe['total']=$pageTotal;$_xe['resumable']=true;
+            if($_effectiveOrigin==='background')$_effectiveOrigin=extractNormalizeOriginTrigger((string)($_xe['origin_trigger']??$_xe['trigger']??''));
+            $_xe['origin_trigger']=$_effectiveOrigin;
             $_xe['resume_needed']=$resume?1:0;$_xe['updated_at']=time();$_xe['error']='';unset($_xe['done_at'],$_xe['resuming'],$_xe['resume_requested_at']);$foundVisible=true;break;
         }unset($_xe);
         if(!$resume){
@@ -1700,7 +1720,7 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
             'profile_name'=>(string)($prNow['name']??$profileKey),'url'=>(string)($prNow['url']??''),
             'started_at'=>time(),'updated_at'=>time(),'products_count'=>count((array)($prNow['products']??[])),
             'total'=>$pageTotal,'max_pages'=>$maxPages,'page_mode'=>$maxPages===0?'auto':'fixed','current'=>0,'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,
-            'trigger'=>$resume?'auto_resume':'worker','phase'=>$phase,'worker_job_id'=>$jobId,'resumable'=>$resume,'resume_needed'=>$resume?1:0];
+            'trigger'=>$resume?'auto_resume':'worker','origin_trigger'=>$_effectiveOrigin,'phase'=>$phase,'worker_job_id'=>$jobId,'resumable'=>$resume,'resume_needed'=>$resume?1:0];
         extractWriteQueue($xq);
         if($jobId!=='')s4WorkerQueueMutate(function(&$wq)use($jobId,$visibleQueueId,$maxPages){foreach($wq['entries']as&$we){
             if(!is_array($we)||(string)($we['id']??'')!==$jobId)continue;$we['payload']=is_array($we['payload']??null)?$we['payload']:[];
@@ -1727,15 +1747,21 @@ function s4WorkerEnqueueBackendExtract(string $profileKey, string $phase, bool $
     return $enq;
 }
 
-function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
+function s4WorkerEnqueueManualSync(string $profileKey, bool $resume, string $originTrigger = 'manual'): array {
+    $originTrigger=extractNormalizeOriginTrigger($originTrigger);
     $dedup = 'manual_sync|' . $profileKey . '|' . ($resume ? 'resume' : 'fresh');
     $enq = s4WorkerEnqueue('manual_sync', [
-        'profile_key' => $profileKey, 'resume' => $resume, 'dedup_key' => $dedup,
-    ], 'همگام‌سازی دستی');
+        'profile_key' => $profileKey, 'resume' => $resume, 'dedup_key' => $dedup, 'origin_trigger'=>$originTrigger,
+    ], $originTrigger==='periodic'?'همگام‌سازی دوره‌ای':'همگام‌سازی دستی');
     if (!empty($enq['ok'])) {
+        foreach((array)(s4WorkerLoadQueue()['entries']??[])as$_msQueuedJob){
+            if(!is_array($_msQueuedJob)||(string)($_msQueuedJob['id']??'')!==(string)($enq['job_id']??''))continue;
+            $originTrigger=extractNormalizeOriginTrigger((string)(($_msQueuedJob['payload']??[])['origin_trigger']??''));break;
+        }
+        $originLabel=$originTrigger==='periodic'?'همگام‌سازی دوره‌ای':($originTrigger==='manual'?'همگام‌سازی دستی':'همگام‌سازی پس‌زمینه · منشأ نامشخص');
         $line = !empty($enq['duplicate'])
-            ? '🧵 همگام‌سازی دستی از قبل در صف worker دائمی است.'
-            : '🧵 همگام‌سازی دستی به worker دائمی سپرده شد — مرورگر فقط پیشرفت را می‌خواند.';
+            ? '🧵 '.$originLabel.' از قبل در صف worker دائمی است.'
+            : '🧵 '.$originLabel.' به worker دائمی سپرده شد — مرورگر فقط پیشرفت را می‌خواند.';
         /* v10.424: a recovery enqueue must never erase the completed extraction
            checkpoint. The child uses it to enter queue creation directly; losing
            it here caused a full re-extract and left stage=send ownerless. */
@@ -1750,7 +1776,7 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume): array {
             'started_at' => $cp?(int)($old['started_at']??$cp['started_at']??time()):time(), 'ts' => time(),
             'last_progress_ts' => time(), 'total' => 4,
             'current' => $cp?max(2,(int)($old['current']??$cp['current']??2)):0,
-            'profile_key' => $profileKey,
+            'profile_key' => $profileKey,'origin_trigger'=>$originTrigger,
             'profile_name' => $same?(string)($old['profile_name']??$profileKey):$profileKey,
             'checkpoint'=>$cp,
             'job_id' => (string)($enq['job_id'] ?? ''),
@@ -2124,13 +2150,14 @@ function s4ScheduleMatrixServerContinuation(array $opts): bool {
     return true;
 }
 
-function s4WorkerRunManualSyncChild(string $profileKey, bool $resume): array {
+function s4WorkerRunManualSyncChild(string $profileKey, bool $resume, string $originTrigger = 'manual'): array {
+    $originTrigger=extractNormalizeOriginTrigger($originTrigger);
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     $php = s4CliPhpBinary();
     $mem = (string)@ini_get('memory_limit'); if ($mem === '') $mem = '512M';
     $cmd = s4CliPhpCommand($php,$mem)
         . ' ' . escapeshellarg(__FILE__) . ' manual_sync ' . escapeshellarg($profileKey)
-        . ($resume ? ' --resume' : '') . ' 2>&1';
+        . ($resume ? ' --resume' : '') . ' --origin=' . escapeshellarg($originTrigger) . ' 2>&1';
     $out = []; $rc = 0;
     @exec($cmd, $out, $rc);
     $txt = trim(implode("\n", $out));
@@ -2399,12 +2426,13 @@ function s4SpawnPersistentWorker(): array {
     return ['ok'=>true,'started'=>true,'pid'=>$pid,'log'=>$log];
 }
 
-function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $detailMode = '', string $preferredQueueId = ''): array {
+function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $forceAll, bool $resume, int $maxPages = -1, string $detailMode = '', string $preferredQueueId = '', string $originTrigger = 'manual'): array {
     if (!function_exists('exec')) return ['ok' => false, 'error' => 'exec_disabled'];
     if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') return ['ok' => false, 'error' => 'windows_background_unsupported'];
     $phase = in_array($phase, ['all','list','detail'], true) ? $phase : 'list';
     $detailModeNorm = $detailMode !== '' ? normalizeDetailExtractMode($detailMode) : '';
     $preferredQueueId = trim($preferredQueueId);
+    $originTrigger=extractNormalizeOriginTrigger($originTrigger);
     if ($profileKey === '') return ['ok' => false, 'error' => 'profile_key_empty'];
     if (!is_dir(__DIR__ . '/logs')) @mkdir(__DIR__ . '/logs', 0755, true);
     $php = s4CliPhpBinary();
@@ -2420,6 +2448,7 @@ function s4SpawnBackendExtractChild(string $profileKey, string $phase, bool $for
         . ($resume ? ' --resume' : '')
         . ($maxPages>=0 ? ' --pages=' . escapeshellarg((string)$maxPages) : '')
         . ($detailModeNorm !== '' ? ' --detail-mode=' . escapeshellarg($detailModeNorm) : '')
+        . ' --origin=' . escapeshellarg($originTrigger)
         . ($preferredQueueId !== '' ? ' --queue-id=' . escapeshellarg($preferredQueueId) : '')
         . ' >> ' . escapeshellarg($log) . ' 2>&1 & echo $!';
     $out = []; $rc = 0;
@@ -2481,7 +2510,7 @@ function s4WorkerRunJob(array $job): array {
             if (s4WorkerJobIsCancelled($jobId)) return ['ok' => false, 'cancelled' => true, 'error' => 'job_cancelled'];
             $msSeg++;
             s4WorkerStateWrite(['phase' => 'manual_sync', 'job_type' => 'manual_sync', 'job_profile' => $pk, 'job_segment' => $msSeg, 'heartbeat' => time()]);
-            $msLast = s4WorkerRunManualSyncChild($pk, $msResume);
+            $msLast = s4WorkerRunManualSyncChild($pk, $msResume, $msOrigin);
             $msLast['worker_segments'] = $msSeg;
             if (!empty($msLast['retryable'])) { $msLast['retry_delay'] = 10; break; }
             if (empty($msLast['ok']) || empty($msLast['resume_needed'])) break;
@@ -2550,7 +2579,8 @@ function s4WorkerRunJob(array $job): array {
             if(empty($GLOBALS['_s4ParallelExtractChild']))s4WorkerStateWrite(['phase' => 'extract', 'job_type' => 'backend_extract',
                 'job_profile' => $pk, 'job_segment' => $segments, 'job_phase' => $runPhase, 'job_max_pages'=>$maxPagesOverride]);
             $GLOBALS['_s4WorkerJobId']=$jobId;
-            try{$res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride, $detailModeJob);}
+            $jobOrigin=extractNormalizeOriginTrigger((string)($payload['origin_trigger']??''));
+            try{$res = runBackendExtract($pk, 'worker', false, $runPhase, $forceAll, $reserved, $maxPagesOverride, $detailModeJob,$jobOrigin);}
             finally{unset($GLOBALS['_s4WorkerJobId']);}
             $res['worker_segments'] = $segments;
             if(!empty($res['retryable'])){$res['resume_needed']=true;$res['retry_reason']='extract_lock_busy';$res['retry_delay']=10;break;}
@@ -16332,8 +16362,6 @@ function s4NormalizeImageEditCfg($raw): array {
         'active'          => $active,
     ];
 }
-function s4NormalizeCropCfg($raw): array { return s4NormalizeImageTransformCfg($raw, true); }
-
 function listImageEditNormalizeCfg($raw): array {
     $c = s4NormalizeImageEditCfg($raw);
     return [
@@ -20773,8 +20801,8 @@ function vc_defaults(): array {
     return [
         'check_on_load'   => false,
         'repo'            => 'fazilatma/new',
-        'branch'          => 'arena/01a0ebf7-new',
-        'branches'        => ['arena/01a0ebf7-new'],
+        'branch'          => 'arena/e868e86a-new',
+        'branches'        => ['arena/e868e86a-new'],
         'pinned_branch'   => '',
         'pinned_at'       => 0,
         'pinned_max_unix' => 0,
@@ -20790,8 +20818,8 @@ function vc_defaults(): array {
 
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
-    $legacy='arena/e868e86a-new';
-    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
+    $legacy='arena/01a0ebf7-new';
+    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
     $branches=vc_normalize_branches((array)($c['branches']??[]));
     $pin=trim((string)($c['pinned_branch']??''));
     $legacyPresent=(string)($c['branch']??'')===$legacy||$pin===$legacy||in_array($legacy,$branches,true);
@@ -20825,7 +20853,7 @@ function vc_load(): array {
     $rawBranches=array_key_exists('branches',$j)&&is_array($j['branches'])
         ? $j['branches'] : [(string)($c['branch']??'')];
     $c['branches']=vc_normalize_branches($rawBranches);
-    if(!$c['branches'])$c['branches']=['arena/01a0ebf7-new'];
+    if(!$c['branches'])$c['branches']=['arena/e868e86a-new'];
     if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0];
     $pin=trim((string)($c['pinned_branch']??''));
     if($pin!==''&&!in_array($pin,$c['branches'],true)){
@@ -20880,9 +20908,22 @@ function vc_probe_branches(array $c):array{
 }
 
 function vc_save(array $c): bool {
-    $ok = @file_put_contents(VC_FILE, json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX) !== false;
-    if ($ok) @chmod(VC_FILE, 0600);
-    return $ok;
+    $lock=@fopen(VC_FILE.'.lock','c');
+    if(!$lock||!@flock($lock,LOCK_EX)){if($lock)@fclose($lock);return false;}
+    $tmp='';$ok=false;
+    try{
+        $json=json_encode($c,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+        if(!is_string($json))return false;
+        $tmp=VC_FILE.'.tmp.'.getmypid().'.'.bin2hex(random_bytes(4));
+        if(@file_put_contents($tmp,$json)!==strlen($json))return false;
+        @chmod($tmp,0600);
+        $ok=@rename($tmp,VC_FILE);
+        if($ok)$tmp='';
+        return $ok;
+    }finally{
+        if($tmp!==''&&is_file($tmp))@unlink($tmp);
+        @flock($lock,LOCK_UN);@fclose($lock);
+    }
 }
 
 /** شناسهٔ محتوا با همان الگوریتم گیت، برای مقایسه با پاسخ API */
@@ -20967,7 +21008,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
+const S4_CODE_UPDATE_BRANCH='arena/e868e86a-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -21463,30 +21504,21 @@ if (isset($_GET['vc_settings'])) {
         if (!empty($_POST['pin_only']) || !empty($_POST['unpin_only'])) {
             if (!empty($_POST['pin_only'])) {
                 $pinB = trim((string)($_POST['pin_branch'] ?? ''));
-                if ($pinB !== '' && in_array($pinB, $c['branches'], true)) {
-                    $maxUnix = time();
-                    if (!empty($c['repo']) && !empty($c['path'])) {
-                        $pr = vc_probe_branches($c);
-                        foreach ($pr['rows'] as $r0) { if ((int)($r0['unix'] ?? 0) > $maxUnix) $maxUnix = (int)$r0['unix']; }
-                    }
-                    $c['branch'] = $pinB;
-                    $c['pinned_branch'] = $pinB;
-                    $c['pinned_at'] = time();
-                    $c['pinned_max_unix'] = $maxUnix;
-                    vc_save($c);
+                if($pinB===''||!in_array($pinB,$c['branches'],true)){
+                    http_response_code(422);echo json_encode(['ok'=>false,'error'=>'branch_not_configured'],JSON_UNESCAPED_UNICODE);exit;
                 }
-                s4SyncAutoUpdateStateToDisk($pinB, true);
+                $c['branch']=$pinB;$c['pinned_branch']=$pinB;$c['pinned_at']=time();$c['pinned_max_unix']=time();
+                if(!vc_save($c)){http_response_code(500);echo json_encode(['ok'=>false,'error'=>'settings_save_failed'],JSON_UNESCAPED_UNICODE);exit;}
+                s4SyncAutoUpdateStateToDisk($pinB,true);
             } else {
-                $c['pinned_branch'] = '';
-                $c['pinned_at'] = 0;
-                $c['pinned_max_unix'] = 0;
-                vc_save($c);
-                s4SyncAutoUpdateStateToDisk('', true);
+                $c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;
+                if(!vc_save($c)){http_response_code(500);echo json_encode(['ok'=>false,'error'=>'settings_save_failed'],JSON_UNESCAPED_UNICODE);exit;}
+                s4SyncAutoUpdateStateToDisk('',true);
             }
-            echo json_encode(['ok' => true, 'pinned_branch' => $c['pinned_branch']], JSON_UNESCAPED_UNICODE);
+            echo json_encode(['ok'=>true,'pinned_branch'=>$c['pinned_branch']],JSON_UNESCAPED_UNICODE);
             exit;
         }
-        $c['check_on_load'] = !empty($_POST['check_on_load']);
+        if(isset($_POST['check_on_load']))$c['check_on_load']=!empty($_POST['check_on_load']);
         if (isset($_POST['repo']))        $c['repo']        = trim((string)$_POST['repo']);
         if (isset($_POST['branches'])) {
             $decoded=json_decode((string)$_POST['branches'],true);
@@ -21495,7 +21527,7 @@ if (isset($_GET['vc_settings'])) {
         }
         if (isset($_POST['branch']))      $c['branch']      = trim((string)$_POST['branch']);
         if(!$c['branches'])$c['branches']=vc_normalize_branches([(string)$c['branch']]);
-        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/01a0ebf7-new';
+        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/e868e86a-new';
         if (isset($_POST['path']))        $c['path']        = ltrim(trim((string)$_POST['path']), '/');
         if (isset($_POST['deploy_file'])) $c['deploy_file'] = basename(trim((string)$_POST['deploy_file']));
         foreach (['github_token', 'deploy_token'] as $k) {
@@ -28769,7 +28801,7 @@ if(!empty($p['running'])&&empty($p['done'])&&!$_pQueuedPending){
         unset($_qe);
         if($_qd)extractWriteQueue($_q);
         elseif(!$_hasProds&&$_pkSave!=='')
-            s4QueueRetryableExtraction($_pkSave,$_stalePhase,(int)($p['max_pages']??-1),(string)($p['detail_mode']??''));
+            s4QueueRetryableExtraction($_pkSave,$_stalePhase,(int)($p['max_pages']??-1),(string)($p['detail_mode']??''),'periodic');
         $_arPoll = s4AutoResumeInterruptedExtractions('poll_stall', false);
         clearstatcache(true,EXTRACT_PROGRESS_FILE);
         $p=readProgress(EXTRACT_PROGRESS_FILE);
@@ -29699,9 +29731,9 @@ function extractRememberRetryableCheckpoint(string $profileKey,string $phase,str
         return saveOneProfileAtomic($profileKey,$profile);
     }catch(Throwable $e){return false;}
 }
-function s4QueueRetryableExtraction(string $profileKey,string $phase,int $maxPages=-1,string $detailMode=''):array{
+function s4QueueRetryableExtraction(string $profileKey,string $phase,int $maxPages=-1,string $detailMode='',string $originTrigger='manual'):array{
     extractRememberRetryableCheckpoint($profileKey,$phase,'extract_lock_busy');
-    $enq=s4WorkerEnqueueBackendExtract($profileKey,$phase,false,true,$maxPages,'',true,$detailMode);
+    $enq=s4WorkerEnqueueBackendExtract($profileKey,$phase,false,true,$maxPages,'',true,$detailMode,$originTrigger);
     if(!empty($enq['ok'])&&!s4WorkerIsActive())s4SpawnPersistentWorker();
     return$enq;
 }
@@ -30130,7 +30162,7 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
             $dMode = normalizeDetailExtractMode($prFresh['detailExtractMode'] ?? 'two_stage');
             if ($workerActive || s4ParallelExtractSupported()) {
                 extractResumeMetaSaveAtomic($rk, ['sig' => $rSig, 'at' => $now, 'tries' => $rTries, 'ver' => APP_VERSION]);
-                $enq = s4WorkerEnqueueBackendExtract($rk, $runPhase, false, true, -1, $rqId, false, $dMode);
+                $enq = s4WorkerEnqueueBackendExtract($rk, $runPhase, false, true, -1, $rqId, false, $dMode, 'periodic');
                 if (!empty($enq['ok'])) {
                     $actualQid = (string)($enq['queue_id'] ?? $rqId);
                     if ($actualQid !== '') extractQueueSupersedeOlderPausedRows($rk, $actualQid);
@@ -30140,7 +30172,7 @@ function s4AutoResumeInterruptedExtractions(string $source = 'auto', bool $throt
             }
             if (function_exists('s4SpawnBackendExtractChild')) {
                 extractResumeMetaSaveAtomic($rk, ['sig' => $rSig, 'at' => $now, 'tries' => $rTries, 'ver' => APP_VERSION]);
-                $sp = s4SpawnBackendExtractChild($rk, $runPhase, false, true, -1, $dMode, $rqId);
+                $sp = s4SpawnBackendExtractChild($rk, $runPhase, false, true, -1, $dMode, $rqId, 'periodic');
                 if (!empty($sp['ok'])) {
                     if ($rqId !== '') extractQueueSupersedeOlderPausedRows($rk, $rqId);
                     $resumed[] = ['key' => $rk, 'queue_id' => $rqId, 'phase' => $runPhase, 'via' => 'cli_child', 'pid' => (int)($sp['pid'] ?? 0)];
@@ -30285,7 +30317,7 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
     return $out;
 }
 
-function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = '', int $maxPagesOverride = -1, string $detailModeOverride = ''): array {
+function runBackendExtract(string $profileKey, string $trigger = 'manual', bool $emitEarlyResponse = false, string $phase = 'all', bool $forceAll = false, string $reservedLockQueueId = '', int $maxPagesOverride = -1, string $detailModeOverride = '', string $originTrigger = ''): array {
 if (!in_array($phase, ['all', 'list', 'detail'], true)) $phase = 'all';
 @set_time_limit(0); @ignore_user_abort(true);
 /* v10.134: فایل‌های مشترکِ پیشرفت/توقف فقط بعد از گرفتنِ lock پاک می‌شوند؛
@@ -30454,8 +30486,9 @@ if($dup!==null){
     $_dupMax=max(120,(int)(loadConnections()['stall_after']??300));
     /* v10.79/v10.80: دستی = آستانهٔ کوتاه؛ خودکار هم waiting/paused و running مرده را برمی‌دارد
        (قبلاً waiting با started_at=0 تا ابد جلوی enqueue می‌ایستاد). */
-    $_dupIsManual = in_array((string)$trigger, ['manual', 'manual_sync', 'manual_resume', 'worker', 'worker_child'], true);
-    $_dupIsAuto   = in_array((string)$trigger, ['auto', 'cron', 'periodic_sync', 'watchdog_resume', 'auto_resume', 'cron_resume'], true);
+    $_dupOrigin=extractNormalizeOriginTrigger($originTrigger,$trigger);
+    $_dupIsManual = $_dupOrigin==='manual';
+    $_dupIsAuto   = $_dupOrigin==='periodic';
     $_dupSt = (string)($dup['status'] ?? '');
     $_dupQid = (string)($dup['id'] ?? '');
     if ($_dupSt === 'running' && $_dupQid !== '' && !extractLockHeldForQueue($_dupQid)) {
@@ -30507,9 +30540,14 @@ return ['__early_sent'=>$emitEarlyResponse,'ok'=>false,'error'=>$msg,
    انجام نشود؛ اکنون فقط workerِ صاحبِ lock فایلِ مشترک را آغاز می‌کند. */
 localTaskDbForget(EXTRACT_PROGRESS_FILE); @unlink(EXTRACT_PROGRESS_FILE);
 /* Stop signals are cleared only by an explicit resume for this queue_id. */
+$_rowOrigin=extractNormalizeOriginTrigger($originTrigger,$trigger);
+if($_rowOrigin==='background'&&$_resumeRowIndex>=0){
+    $_oldOriginRow=is_array($queue['entries'][$_resumeRowIndex]??null)?$queue['entries'][$_resumeRowIndex]:[];
+    $_rowOrigin=extractNormalizeOriginTrigger((string)($_oldOriginRow['origin_trigger']??''),(string)($_oldOriginRow['trigger']??''));
+}
 $_runRow=['id'=>$queueId,'status'=>'running','profile_key'=>$profileKey,'url'=>$url,
     'profile_name'=>$profile['name']??$profileKey,'products_count'=>0,'total'=>0,'current'=>0,
-    'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'trigger'=>$trigger,'phase'=>$phase,
+    'new'=>0,'price_changed'=>0,'removed'=>0,'unchanged'=>0,'trigger'=>$trigger,'origin_trigger'=>$_rowOrigin,'phase'=>$phase,
     'sync_stage'=>in_array((string)$trigger,['manual_sync','periodic_sync'],true),
     'updated_at'=>time(),'segment_started_at'=>time()];
 if($_reuseQueueRow){
@@ -32301,7 +32339,7 @@ if (empty($_GET['direct']) && empty($_POST['direct']) && $_wkReallyAlive) {
    بعد از چند صفحه کل استخراج را نکشد. direct=1 همچنان مسیر قدیمی/دیباگ است. */
 if (!isCliRun() && empty($_GET['direct']) && empty($_POST['direct'])) {
     if (function_exists('s4SpawnPersistentWorker')) @s4SpawnPersistentWorker();
-    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $detailModeIn, $resumeQueueId);
+    $spawn = s4SpawnBackendExtractChild($profileKey, $phaseIn, $forceAllIn, $resumeRequested, $requestedMaxPages, $detailModeIn, $resumeQueueId, 'manual');
     if (!empty($spawn['ok'])) {
         header('Content-Type: application/json; charset=UTF-8');
         echo json_encode(['ok'=>true,'started'=>true,'worker_child'=>true,'profile_key'=>$profileKey,
@@ -32318,7 +32356,7 @@ if ($resumeRequested) {
     $resumePrep = extractResumePrepare($profileKey, loadConnections(), $resumeQueueId, true);
     if (empty($resumePrep['ok'])) {
         if((string)($resumePrep['reason']??'')==='lock_held'){
-            $queued=s4QueueRetryableExtraction($profileKey,$phaseIn,$requestedMaxPages,$detailModeIn);
+            $queued=s4QueueRetryableExtraction($profileKey,$phaseIn,$requestedMaxPages,$detailModeIn,(string)($_GET['origin_trigger']??'manual'));
             header('Content-Type: application/json; charset=UTF-8');
             echo json_encode(['ok'=>!empty($queued['ok']),'queued'=>!empty($queued['ok']),'retryable'=>true,'locked'=>true,
                 'profile_key'=>$profileKey,'message'=>'استخراج در صف ادامه پس از آزادشدن قفل قرار گرفت','job'=>$queued],JSON_UNESCAPED_UNICODE);
@@ -32332,9 +32370,9 @@ if ($resumeRequested) {
     $phaseIn = (string)$resumePrep['phase'];
     $resumeLockQueueId = (string)($resumePrep['queue_id'] ?? '');
 }
-$res=runBackendExtract($profileKey,isCliRun()?'worker_child':'manual',!isCliRun(),$phaseIn,$forceAllIn,$resumeLockQueueId,$requestedMaxPages,$detailModeIn);
+$res=runBackendExtract($profileKey,isCliRun()?'worker_child':'manual',!isCliRun(),$phaseIn,$forceAllIn,$resumeLockQueueId,$requestedMaxPages,$detailModeIn,(string)($_GET['origin_trigger']??(isCliRun()?'':'manual')));
 if(!empty($res['retryable'])){
-    $queued=s4QueueRetryableExtraction($profileKey,$phaseIn,$requestedMaxPages,$detailModeIn);
+    $queued=s4QueueRetryableExtraction($profileKey,$phaseIn,$requestedMaxPages,$detailModeIn,(string)($_GET['origin_trigger']??'manual'));
     $res['queued']=!empty($queued['ok']);$res['retry_job_id']=(string)($queued['job_id']??'');
     if(!empty($queued['ok']))$res['ok']=true;
 }
@@ -33914,6 +33952,7 @@ function bslRecoverMissingQueueRowFromProgress(array $cn): array {
         }
         $profile=is_array($profiles[$profileKey]??null)?$profiles[$profileKey]:[];
         if(!$profile)return ['recovered'=>false,'reason'=>'profile_not_found','queue_id'=>$qid];
+        $recoveryOrigin=extractNormalizeOriginTrigger((string)($progress['origin_trigger']??$progress['trigger']??''));
         $vendorId=(int)($progress['phase_shop_vendor_id']??0);
         if($vendorId<=0&&preg_match('/_s(\d+)$/',$qid,$m))$vendorId=(int)$m[1];
         $shop=[];foreach((array)bslAllShops($cn)as$candidate)
@@ -33929,7 +33968,8 @@ function bslRecoverMissingQueueRowFromProgress(array $cn): array {
             'profile_key'=>$profileKey,'profile_name'=>(string)($profile['name']??$profileKey),
             'shop_vendor_id'=>$vendorId,'shop_name'=>(string)($shop['shop_name']??$progress['phase_shop_name']??''),
             'shop_is_default'=>!empty($shop['is_default']),'batch_id'=>$baseQid,
-            'trigger'=>strpos($qid,'manual')===0?'manual_sync':'cron','auto_sync'=>true,'only_changed'=>true,
+            'trigger'=>$recoveryOrigin==='manual'?'manual_sync':($recoveryOrigin==='periodic'?'cron':'background'),
+            'origin_trigger'=>$recoveryOrigin,'auto_sync'=>$recoveryOrigin==='periodic','only_changed'=>true,
             'config'=>['category_id'=>$catId,'auto_category'=>!empty($cn['basalam']['auto_category']),
                 'title_suffix'=>trim((string)($profile['titleSuffix']??''))?:trim((string)($cn['basalam']['title_suffix']??'')),
                 'delay_ms'=>max(0,(int)($cn['basalam']['delay_ms']??500)),
@@ -35356,6 +35396,7 @@ if (isCliRun()) {
         $_GET['force'] = '1';
         $_GET['direct'] = '1';                      // childِ worker دوباره enqueue نکند
         if (in_array('resume', $_cliArgs, true) || in_array('--resume', $_cliArgs, true)) $_GET['resume'] = '1';
+        foreach($_cliArgs as $_msArg)if(preg_match('~^--origin=(manual|periodic|background)$~',(string)$_msArg,$_originMatch)){$_GET['origin_trigger']=$_originMatch[1];break;}
     } elseif ($_cliCmd === 'matrix_build' || $_cliCmd === 'matrix') {
         $_GET['matrix_build_cli'] = '1';
         $_GET['matrix_payload'] = (string)($_cliArgs[1] ?? '');
@@ -35375,6 +35416,7 @@ if (isCliRun()) {
             elseif ($_a === '--resume' || $_a === 'resume') $_GET['resume'] = '1';
             elseif (preg_match('~^--pages=(\d+)$~', $_a, $_pm)) $_GET['pages'] = $_pm[1];
             elseif (preg_match('~^--detail-mode=(two_stage|inline)$~', $_a, $_dm)) $_GET['detail_mode'] = $_dm[1];
+            elseif (preg_match('~^--origin=(manual|periodic|background)$~', $_a, $_om)) $_GET['origin_trigger'] = $_om[1];
             elseif (preg_match('~^--queue-id=([A-Za-z0-9._-]+)$~', $_a, $_qm)) $_GET['queue_id'] = $_qm[1];
         }
         $_GET['direct'] = '1';
@@ -35449,7 +35491,7 @@ if (isset($_GET['backend_extract_cli'])) {
         $prepCli = extractResumePrepare($pk, loadConnections(), $preferredQidCli, true);
         if (empty($prepCli['ok'])) {
             if((string)($prepCli['reason']??'')==='lock_held'){
-                $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,-1,'');
+                $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,-1,'',(string)($_GET['origin_trigger']??'manual'));
                 echo json_encode(['ok'=>!empty($retryCli['ok']),'retryable'=>true,'queued'=>!empty($retryCli['ok']),
                     'resume_needed'=>true,'locked'=>true,'job_id'=>(string)($retryCli['job_id']??'')],JSON_UNESCAPED_UNICODE).PHP_EOL;
                 exit(!empty($retryCli['ok'])?0:2);
@@ -35463,9 +35505,9 @@ if (isset($_GET['backend_extract_cli'])) {
     }
     $pagesCli=array_key_exists('pages',$_GET)?max(0,(int)$_GET['pages']):-1;
     $detailModeCli=isset($_GET['detail_mode'])&&trim((string)$_GET['detail_mode'])!==''?normalizeDetailExtractMode($_GET['detail_mode']):'';
-    $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli, $detailModeCli);
+    $resCli = runBackendExtract($pk, 'worker_child', false, $phaseCli, $forceCli, $reservedCli, $pagesCli, $detailModeCli,(string)($_GET['origin_trigger']??''));
     if(!empty($resCli['retryable'])){
-        $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,$pagesCli,$detailModeCli);
+        $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,$pagesCli,$detailModeCli,(string)($_GET['origin_trigger']??'manual'));
         $resCli['queued']=!empty($retryCli['ok']);$resCli['retry_job_id']=(string)($retryCli['job_id']??'');
         if(!empty($retryCli['ok']))$resCli['ok']=true;
     }
@@ -35479,7 +35521,7 @@ if (isset($_GET['backend_extract_cli'])) {
         $prepNext = extractResumePrepare($pk, loadConnections(), (string)($resCli['queue_id'] ?? ''), false);
         if (empty($prepNext['ok'])) {
             if((string)($prepNext['reason']??'')==='lock_held'){
-                $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,$pagesCli,$detailModeCli);
+                $retryCli=s4QueueRetryableExtraction($pk,$phaseCli,$pagesCli,$detailModeCli,(string)($_GET['origin_trigger']??'manual'));
                 $resCli['retryable']=true;$resCli['resume_needed']=true;$resCli['queued']=!empty($retryCli['ok']);
                 $resCli['retry_job_id']=(string)($retryCli['job_id']??'');if(!empty($retryCli['ok']))$resCli['ok']=true;
             }
@@ -35487,7 +35529,7 @@ if (isset($_GET['backend_extract_cli'])) {
         }
         $nextPh = (string)($prepNext['phase'] ?? 'detail');
         if ($initialPhaseCli === 'all' && $nextPh === 'list') $nextPh = 'all';
-        $resCli = runBackendExtract($pk, 'worker_child', false, $nextPh, $forceCli, (string)($prepNext['queue_id'] ?? ''), $pagesCli, $detailModeCli);
+        $resCli = runBackendExtract($pk, 'worker_child', false, $nextPh, $forceCli, (string)($prepNext['queue_id'] ?? ''), $pagesCli, $detailModeCli,(string)($_GET['origin_trigger']??''));
         $cliSegs++;
     }
     echo json_encode($resCli, JSON_UNESCAPED_UNICODE) . PHP_EOL;
@@ -35755,7 +35797,7 @@ if (isset($_GET['manual_sync'])) {
         'phase' => $_msInitialPhase, 'started_at' => (int)($_msResumeCp['started_at'] ?? time()), 'ts' => time(),
         'last_progress_ts' => time(),
         'total' => 4, 'current' => $_msInitialCurrent,
-        'profile_key' => $_msKey, 'profile_name' => $_msName,
+        'profile_key' => $_msKey, 'profile_name' => $_msName,'origin_trigger'=>syncRunOriginTrigger(),
         /* v10.130: فیلدهای extract/enqueue/retire اجرای قبلی باید از همان
            اولین write هم بمانند؛ وگرنه resume=1 پیش از رسیدن به manualSyncProgress
            checkpoint ارکستراسیون را کوتاه می‌کرد. */
@@ -35763,13 +35805,13 @@ if (isset($_GET['manual_sync'])) {
             'phase' => $_msInitialPhase, 'current' => $_msInitialCurrent, 'total' => 4,
             'started_at' => (int)($_msResumeCp['started_at'] ?? time())]),
         'recent_log' => [
-            '▶ همگام‌سازی دستی — همان مسیر «استخراج بک‌اند»',
+            (syncRunOriginTrigger()==='manual'?'▶ همگام‌سازی دستی — همان مسیر «استخراج بک‌اند»':'↻ ادامهٔ خودکار همگام‌سازی — همان مسیر «استخراج بک‌اند»'),
             '🔑 ' . $_msKey,
             '⚡ شروع runBackendExtract (صف استخراج همین لحظه پر می‌شود)',
         ],
         'total_log_count' => 3,
     ]);
-    syncPipelineMark($_msKey,$_msName,'extract','manual',['message'=>'اجرای دقیق استخراج بک‌اند']);
+    syncPipelineMark($_msKey,$_msName,'extract',syncRunOriginTrigger(),['message'=>'اجرای دقیق استخراج بک‌اند']);
 
     /* پاسخ فوری + keep-conn (مثل backend_extract + msKeepConn) */
     if (function_exists('msKeepConnStart')) {
@@ -35803,12 +35845,12 @@ if (isset($_GET['manual_sync'])) {
             '⚡ استخراج بک‌اند: ' . $_msName);
         msAlive('extract');
         $_msReservedQid = '';
-        $_msExTrig = 'manual_sync';
-        if ($_msResumeRequested || extractListShouldResume((array)$_msProf, 'manual_resume')) {
+        $_msExTrig = syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync';
+        if ($_msResumeRequested || extractListShouldResume((array)$_msProf, syncRunOriginTrigger()==='manual'?'manual_resume':'auto_resume')) {
             $_msPrep = extractResumePrepare($_msKey, loadConnections(), '', true);
             if (!empty($_msPrep['ok'])) {
                 $_msReservedQid = (string)($_msPrep['queue_id'] ?? '');
-                $_msExTrig = 'manual_resume';
+                $_msExTrig = syncRunOriginTrigger()==='manual'?'manual_resume':'auto_resume';
             }
         }
         /* emitEarlyResponse=false چون خودمان پاسخ را فرستادیم */
@@ -35822,9 +35864,9 @@ if (isset($_GET['manual_sync'])) {
         $retryCheckpoint['extract']=$_msEx;$retryCheckpoint['current']=1;$retryCheckpoint['total']=4;
         manualSyncProgress(['running'=>false,'done'=>false,'queued'=>true,'resumable'=>true,'resume_needed'=>true,
             'stale'=>false,'phase'=>'در انتظار آزادشدن قفل استخراج','checkpoint'=>$retryCheckpoint], '⏳ '.$retryMsg);
-        syncPipelineMark($_msKey,$_msName,'queued','manual',['message'=>$retryMsg,'retryable_extract'=>true,
+        syncPipelineMark($_msKey,$_msName,'queued',syncRunOriginTrigger(),['message'=>$retryMsg,'retryable_extract'=>true,
             'retry_reason'=>(string)($_msEx['retry_reason']??'extract_lock_busy')]);
-        $manualRetryJob=s4WorkerEnqueueManualSync($_msKey,true);
+        $manualRetryJob=s4WorkerEnqueueManualSync($_msKey,true,syncRunOriginTrigger());
         if(!empty($manualRetryJob['ok'])&&!s4WorkerIsActive())s4SpawnPersistentWorker();
         if(PHP_SAPI==='cli')echo json_encode(['ok'=>true,'resume_needed'=>true,'retryable'=>true,'locked'=>true,
             'queued'=>!empty($manualRetryJob['ok']),'job_id'=>(string)($manualRetryJob['job_id']??''),
@@ -35838,7 +35880,7 @@ if (isset($_GET['manual_sync'])) {
             'phase' => 'ادامهٔ خودکار استخراج از صفحهٔ ' . $_msResPage,
             'checkpoint' => ['extract' => $_msEx, 'profile_key' => $_msKey, 'current' => 1, 'total' => 4],
         ], '⏸ سقف زمانی قطعهٔ استخراج — ادامهٔ خودکار از صفحهٔ ' . $_msResPage . ' تا رسیدن به پایان آخرین صفحه');
-        syncPipelineMark($_msKey, $_msName, 'extract', 'manual', [
+        syncPipelineMark($_msKey, $_msName, 'extract', syncRunOriginTrigger(), [
             'message' => 'در حال ادامهٔ خودکار استخراج (صفحهٔ ' . $_msResPage . ') تا پایان آخرین صفحه',
             'resume_page' => $_msResPage,
         ]);
@@ -35853,12 +35895,12 @@ if (isset($_GET['manual_sync'])) {
         }
         exit;
     }
-    $_msQueueId = extractEnsureSyncQueueRow($_msKey, (array)$_msProf, 'manual_sync', $_msPhase,
-        (array)$_msEx, !empty($_msEx['checkpoint_reused']) ? 'استخراج این همگام‌سازی از checkpoint کامل بازیابی شد' : 'مرحلهٔ استخراج همگام‌سازی دستی');
+    $_msQueueId = extractEnsureSyncQueueRow($_msKey, (array)$_msProf, syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync', $_msPhase,
+        (array)$_msEx, !empty($_msEx['checkpoint_reused']) ? 'استخراج این همگام‌سازی از checkpoint کامل بازیابی شد' : (syncRunOriginTrigger()==='manual'?'مرحلهٔ استخراج همگام‌سازی دستی':'مرحلهٔ استخراج همگام‌سازی دوره‌ای'));
     $_msEx['queue_id'] = $_msQueueId;
     manualSyncProgress(['checkpoint' => ['extract' => $_msEx]], '');
     $_msExtractDetail=syncExtractStageDetails((array)$_msEx);
-    syncPipelineMark($_msKey,$_msName,'extract','manual',[
+    syncPipelineMark($_msKey,$_msName,'extract',syncRunOriginTrigger(),[
         'stage_details'=>['extract'=>$_msExtractDetail],'message'=>'گزارش استخراج بک‌اند آماده شد']);
     $_msResults['extract'] = [
         'ok' => !empty($_msEx['ok']),
@@ -35891,7 +35933,7 @@ if (isset($_GET['manual_sync'])) {
         manualSyncProgress(['phase' => 'خطای استخراج'], '❌ ' . mb_substr($_msErr, 0, 280));
         /* استخراج fail نباید کل همگام را بکشد اگر محصول روی دیسک هست — ادامه برای ارسال */
         if (empty($_msProf['products'])) {
-            syncPipelineMark($_msKey, $_msName, 'error', 'manual', [
+            syncPipelineMark($_msKey, $_msName, 'error', syncRunOriginTrigger(), [
                 'failed_stage' => 'extract',
                 'error' => $_msErr,
                 'message' => $_msErr,
@@ -35921,7 +35963,7 @@ if (isset($_GET['manual_sync'])) {
     $_msPricing=syncPricingSnapshot((array)$_msProf,$_msCn);
     manualSyncProgress(['phase'=>'ذخیره و اعمال ضرایب','current'=>2,'pricing'=>$_msPricing],
         '💰 ضرایب ذخیره‌شده بارگذاری و برای '.(int)$_msPricing['products'].' محصول فعال شد');
-    syncPipelineMark($_msKey,$_msName,'pricing','manual',['pricing'=>$_msPricing,
+    syncPipelineMark($_msKey,$_msName,'pricing',syncRunOriginTrigger(),['pricing'=>$_msPricing,
         'stage_details'=>['pricing'=>['counts'=>['products'=>(int)$_msPricing['products']],
             'data'=>$_msPricing,'report'=>'تنظیمات قیمت پروفایل، مقصد و غرفه‌ها دوباره از دیسک خوانده و روی payload ارسال اعمال شد']],
         'message'=>'ضرایب ذخیره و اعمال شد']);
@@ -35943,7 +35985,7 @@ if (isset($_GET['manual_sync'])) {
     }
 
     /* ── ۳) صف‌سازی و ارسال (باسلام / ووکامرس) ── */
-    syncPipelineMark($_msKey,$_msName,'send','manual',['pricing'=>$_msPricing??[],'message'=>'صف‌سازی و ارسال']);
+    syncPipelineMark($_msKey,$_msName,'send',syncRunOriginTrigger(),['pricing'=>$_msPricing??[],'message'=>'صف‌سازی و ارسال']);
     if ($_msResumeQueueDone && (string)($_msResumeCp['profile_key'] ?? '') === $_msKey) {
         $_msTarget = (string)($_msResumeCp['target'] ?? ($_msSyncCfg['target'] ?? 'woo'));
         if (!in_array($_msTarget, ['woo', 'bsl', 'both', 'none'], true)) $_msTarget = 'woo';
@@ -36030,7 +36072,7 @@ if (isset($_GET['manual_sync'])) {
                 manualSyncProgress([], '📋 صف ارسال: ' . json_encode($_msEnq, JSON_UNESCAPED_UNICODE));
             } else {
                 /* Inline minimal enqueue mirroring cron bsl/woo blocks */
-                $_msEnq = manualSyncEnqueueSends($_msKey, $_msProf, $_msCn, is_array($_msEx) ? $_msEx : []);
+                $_msEnq = manualSyncEnqueueSends($_msKey, $_msProf, $_msCn, is_array($_msEx) ? $_msEx : [], ['trigger'=>syncRunOriginTrigger()==='manual'?'manual_sync':'cron']);
                 $_msResults['enqueue'] = $_msEnq;
                 if (!empty($_msEnq['log'])) {
                     foreach ((array)$_msEnq['log'] as $_ln) manualSyncProgress([], (string)$_ln);
@@ -36078,7 +36120,7 @@ if (isset($_GET['manual_sync'])) {
     }
     $_msSendDetail=syncSendStageDetails(array_merge((array)($_msResults['enqueue']??[]),(array)($_msResults['ms_server_send']??[])));
     $_msOwnedSendIds=array_values(array_filter(array_map('strval',(array)($_msResults['enqueue']['queue_ids']??[]))));
-    syncPipelineMark($_msKey,$_msName,'send','manual',[
+    syncPipelineMark($_msKey,$_msName,'send',syncRunOriginTrigger(),[
         'send_queue_ids'=>$_msOwnedSendIds,
         'stage_details'=>['send'=>$_msSendDetail],
         'message'=>!empty($_msSendDetail['report'])?$_msSendDetail['report']:'گزارش ارسال آماده شد']);
@@ -36109,7 +36151,7 @@ if (isset($_GET['manual_sync'])) {
         $_msPartialP['recent_log'][] = $_msPartialP['error'];
         $_msPartialP['recent_log'] = array_slice((array)$_msPartialP['recent_log'], -40);
         writeProgress(MANUAL_SYNC_PROGRESS_FILE, $_msPartialP);
-        syncPipelineMark($_msKey,$_msName,$_msSendStopped?'stopped':'error','manual',
+        syncPipelineMark($_msKey,$_msName,$_msSendStopped?'stopped':'error',syncRunOriginTrigger(),
             ['message'=>$_msPartialP['error'],'pricing'=>$_msPricing??[]]);
         @unlink(MANUAL_SYNC_STOP_FILE);
         if (PHP_SAPI === 'cli') {
@@ -36119,18 +36161,18 @@ if (isset($_GET['manual_sync'])) {
     }
     try { cronMarkRun($_msKey, 'manual_done'); } catch (Throwable $e) {}
     if (!empty($_msResults['ms_server_send']['delegated']) && !empty($_msOwnedSendIds)) {
-        syncPipelineMark($_msKey,$_msName,'send','manual',[
+        syncPipelineMark($_msKey,$_msName,'send',syncRunOriginTrigger(),[
             'send_queue_ids'=>$_msOwnedSendIds,
             'pricing'=>$_msPricing??[],
             'message'=>'صف ارسال فعال شد و پردازندهٔ پس‌زمینه در حال ارسال محصولات است',
         ]);
     } else {
-        syncPipelineMark($_msKey,$_msName,'done','manual',['message'=>'همگام‌سازی کامل شد','pricing'=>$_msPricing??[],
+        syncPipelineMark($_msKey,$_msName,'done',syncRunOriginTrigger(),['message'=>'همگام‌سازی کامل شد','pricing'=>$_msPricing??[],
             'stage_details'=>['done'=>['counts'=>['products'=>(int)($_msResults['extract']['extracted']??0)],
                 'data'=>$_msResults,'report'=>'استخراج، اعمال ضرایب و ارسال با موفقیت پایان یافت']]]);
     }
     s4WorkerCancelPendingManualSync($_msKey,'equivalent_manual_sync_completed');
-    manualSyncProgress(['phase' => 'تمام شد', 'current' => 4], '✅ همگام‌سازی دستی تمام شد');
+    manualSyncProgress(['phase' => 'تمام شد', 'current' => 4], syncRunOriginTrigger()==='manual'?'✅ همگام‌سازی دستی تمام شد':'✅ همگام‌سازی پس‌زمینه تمام شد');
     $_msDone = readProgress(MANUAL_SYNC_PROGRESS_FILE);
     $_msDone['running'] = false;
     $_msDone['done'] = true;
@@ -36669,7 +36711,7 @@ if($_resumeCandidates){
             $_rRunPhase=($_rPhase==='list'&&!empty($_prR['_extract_want_detail']))?'all':$_rPhase;
             $_rDetailMode=normalizeDetailExtractMode($_prR['detailExtractMode']??'two_stage');
             try{
-                $_rr=s4WorkerEnqueueBackendExtract($_rk,$_rRunPhase,false,true,-1,$_rQueueId,false,$_rDetailMode);
+                $_rr=s4WorkerEnqueueBackendExtract($_rk,$_rRunPhase,false,true,-1,$_rQueueId,false,$_rDetailMode,'periodic');
                 if(empty($_rr['ok'])){
                     $results['extract_resume_skipped'][]=['key'=>$_rk,'queue_id'=>$_rQueueId,
                         'reason'=>(string)($_rr['error']??'worker_enqueue_failed')];
@@ -36790,7 +36832,7 @@ cronMarkRun($key, 'running');
 if (!isset($syncState[$key]) || !is_array($syncState[$key])) $syncState[$key] = [];
 $syncState[$key]['lastRun'] = $now;
 $pResult['status'] = 'syncing'; $pResult['target'] = $target;
-syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract',manualSyncActive()?'manual':'periodic',
+syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract',syncRunOriginTrigger(),
     ['message'=>'اجرای دقیق استخراج بک‌اند']);
 manualSyncProgress(['phase' => 'استخراج', 'current' => 1,
     'last_title' => (string)($profile['name'] ?? $key)],
@@ -36854,7 +36896,7 @@ if ($noExtract) {
         }else{
             unset($profile['products'], $profile['productsOrder']);
             // فازِ detail: فقط صفحاتِ محصول باز می‌شوند، صفحهٔ فهرست هرگز
-            $exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, 'detail', $_neAll); /* v10.433 */
+            $exRes = runBackendExtract($key, (syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync'), false, 'detail', $_neAll); /* v10.433 */
         }
         if (!empty($exRes['ok'])) {
             $pResult['extracted']      = (int)($exRes['extracted'] ?? 0);
@@ -36905,7 +36947,7 @@ if ($noExtract) {
         unset($pResult['extract_error'],$pResult['add_update_hold']);
         syncPipelineMark((string)$key,(string)($profile['name']??$key),'queued','periodic',[
             'message'=>$retryMessage,'retryable_extract'=>true,'retry_reason'=>$pResult['retry_reason']]);
-        $retryJob=s4WorkerEnqueueManualSync((string)$key,true);
+        $retryJob=s4WorkerEnqueueManualSync((string)$key,true,'periodic');
         if(!empty($retryJob['ok'])&&!s4WorkerIsActive())s4SpawnPersistentWorker();
         if(!empty($retryJob['job_id']))$pResult['retry_job_id']=(string)$retryJob['job_id'];
         $results['profiles'][]=$pResult;$results['deferred_by_extract_retry']=true;
@@ -36982,7 +37024,7 @@ try {
         'reason' => 'پاک‌سازی پیش از extract خودکار',
     ]);
 } catch (Throwable $_preEx) {}
-$exRes = runBackendExtract($key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, $stepMode,
+$exRes = runBackendExtract($key, (syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync'), false, $stepMode,
     $stepMode==='detail'&&!empty($syncCfg['detailAllEachCycle'])); /* v10.433: resume exact policy scope */
 $pResult['step'] = $stepMode;
 
@@ -37021,7 +37063,7 @@ if ($stepMode === 'list' && empty($exRes['ran_out']) && empty($exRes['resume_nee
                 $_detailRes=['ok'=>false,'error'=>'ذخیرهٔ دامنهٔ جزئیات ناموفق بود'];
             }else{
                 unset($profile['products'], $profile['productsOrder']);
-                $_detailRes=runBackendExtract($key,manualSyncActive()?'manual_sync':'periodic_sync',false,'detail',$_detailAll);
+                $_detailRes=runBackendExtract($key,(syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync'),false,'detail',$_detailAll);
             }
             if(empty($_detailRes['ok']))$exRes=$_detailRes;
             else{
@@ -37045,7 +37087,7 @@ if(!empty($exRes['retryable'])&&!manualSyncActive()){
     unset($pResult['extract_error'],$pResult['add_update_hold']);
     syncPipelineMark((string)$key,(string)($profile['name']??$key),'queued','periodic',[
         'message'=>$retryMessage,'retryable_extract'=>true,'retry_reason'=>$pResult['retry_reason']]);
-    $retryJob=s4WorkerEnqueueManualSync((string)$key,true);
+    $retryJob=s4WorkerEnqueueManualSync((string)$key,true,'periodic');
     if(!empty($retryJob['ok'])&&!s4WorkerIsActive())s4SpawnPersistentWorker();
     if(!empty($retryJob['job_id']))$pResult['retry_job_id']=(string)$retryJob['job_id'];
     $results['profiles'][]=$pResult;$results['deferred_by_extract_retry']=true;
@@ -37154,7 +37196,7 @@ if (manualSyncActive()) {
 /* مرحلهٔ دوم مشترک: بعد از ذخیرهٔ خروجی استخراج، تنظیمات تازه دوباره خوانده
    و امضای ضرایب ثبت می‌شود. ساخت payload در پایین همان ضرایب را اعمال می‌کند. */
 $_onePostEx=loadProfiles();$profile=$_onePostEx[$key]??$profile;unset($_onePostEx);$cn=loadConnections();
-$_syncExtractTrigger = manualSyncActive() ? 'manual_sync' : 'periodic_sync';
+$_syncExtractTrigger = (syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync');
 $_syncExtractPhase = !empty($noExtract) ? 'detail' : (string)($stepMode ?? 'list');
 $_syncExtractQid = extractEnsureSyncQueueRow((string)$key, (array)$profile, $_syncExtractTrigger,
     $_syncExtractPhase, (array)($exRes ?? []), !empty($noExtract)
@@ -37162,12 +37204,12 @@ $_syncExtractQid = extractEnsureSyncQueueRow((string)$key, (array)$profile, $_sy
         : 'مرحلهٔ استخراج همگام‌سازی دوره‌ای');
 $exRes['queue_id'] = $_syncExtractQid;
 $_pipeExtractDetail=syncExtractStageDetails((array)($exRes??[]));
-syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract',manualSyncActive()?'manual':'periodic',
+syncPipelineMark((string)$key,(string)($profile['name']??$key),'extract',syncRunOriginTrigger(),
     ['stage_details'=>['extract'=>$_pipeExtractDetail],'message'=>'گزارش استخراج بک‌اند آماده شد']);
 $_pipeNow=null;foreach(syncPipelineRows() as $_pipeCandidate)if((string)($_pipeCandidate['profile_key']??'')===(string)$key){$_pipeNow=$_pipeCandidate;break;}
 if((string)($_pipeNow['stage']??'')==='stopped'){if(manualSyncActive())manualSyncProgress(['cancelled'=>true,'running'=>false,'done'=>true],'⏹ این پروفایل از کارت صف متوقف شد');continue;}
 $_pipePricing=syncPricingSnapshot((array)$profile,$cn);
-syncPipelineMark((string)$key,(string)($profile['name']??$key),'pricing',manualSyncActive()?'manual':'periodic',
+syncPipelineMark((string)$key,(string)($profile['name']??$key),'pricing',syncRunOriginTrigger(),
     ['pricing'=>$_pipePricing,'stage_details'=>['pricing'=>['counts'=>['products'=>(int)$_pipePricing['products']],
         'data'=>$_pipePricing,'report'=>'ضرایب پروفایل، مقصد و غرفه‌ها روی payload ارسال اعمال شد']],
      'message'=>'ضرایب ذخیره و برای ارسال اعمال شد']);
@@ -37330,7 +37372,7 @@ if ($changedKeys !== null) {
     $pResult['catalog_size'] = count($orderedProducts);
 }
 
-syncPipelineMark((string)$key,(string)($profile['name']??$key),'send',manualSyncActive()?'manual':'periodic',
+syncPipelineMark((string)$key,(string)($profile['name']??$key),'send',syncRunOriginTrigger(),
     ['pricing'=>$_pipePricing??[],'send_total'=>count($changedProducts),'message'=>'صف‌سازی و ارسال']);
 manualSyncProgress(['phase' => 'ارسال', 'current' => 3],
     '📤 آمادهٔ ارسال: ' . count($changedProducts) . ' از ' . count($orderedProducts));   // v10.35 (۴۷ه)
@@ -37385,7 +37427,7 @@ $wooStatus=$wooBusy?'waiting':'running';
 if($wooStatus==='running'){
 @file_put_contents(WOO_PRODUCTS_FILE,json_encode($wooSend,JSON_UNESCAPED_UNICODE),LOCK_EX);
 }
-$wooQueue['entries'][]=['id'=>$wooQueueId,'status'=>$wooStatus,'products_file'=>$wooQFile,'total'=>count($wooSend),'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$wooStatus==='running'?$now:0,'done_at'=>0,'profile_key'=>$key,'profile_name'=>($profile['name']??$key),'only_changed'=>$wooOnlyChanged,'trigger'=>(manualSyncActive()?'manual_sync':'cron'),/* v10.53 (۶۷) */'config'=>['title_suffix'=>$wooSuffix,'category_id'=>$wooCatId,'force_all'=>$wooForceAll]];
+$wooQueue['entries'][]=['id'=>$wooQueueId,'status'=>$wooStatus,'products_file'=>$wooQFile,'total'=>count($wooSend),'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$wooStatus==='running'?$now:0,'done_at'=>0,'profile_key'=>$key,'profile_name'=>($profile['name']??$key),'only_changed'=>$wooOnlyChanged,'trigger'=>((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')),'origin_trigger'=>syncRunOriginTrigger(),'auto_sync'=>syncRunOriginTrigger()==='periodic',/* v10.53 (۶۷) */'config'=>['title_suffix'=>$wooSuffix,'category_id'=>$wooCatId,'force_all'=>$wooForceAll]];
 wooWriteQueue($wooQueue);
 $pResult['woo']='queued';$pResult['woo_total']=count($wooSend);$pResult['woo_status']=$wooStatus;
 }
@@ -37452,16 +37494,16 @@ $_cronShopMode = bslEffectiveShopSendMode($cn);
 if (count($bslFanout) > 1 && $_cronShopMode === 'parallel') {
     $_cronParVids = array_values(array_map(static fn($x) => (int)$x['vendor_id'], $bslFanout));
     $_cronParNames = array_values(array_map(static fn($x) => (string)$x['shop_name'], $bslFanout));
-    $queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'created_at' => $now, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'shop_name' => '⚡ موازی (' . count($bslFanout) . ' غرفه)', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 0, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'parallel_shop_names' => $_cronParNames, 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'trigger' => (manualSyncActive() ? 'manual_sync' : 'cron'), 'auto_sync' => true];
+    $queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'created_at' => $now, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'shop_name' => '⚡ موازی (' . count($bslFanout) . ' غرفه)', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 0, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'parallel_shop_names' => $_cronParNames, 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
 } elseif (count($bslFanout) > 0) {
     $__bfFirst=true;
     foreach ($bslFanout as $__bfSh) {
         $__bfVid=(int)$__bfSh['vendor_id'];
-        $queue['entries'][] = ['id' => $__bfFirst ? $queueId : $queueId . '_s' . $__bfVid, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'serial', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 1, 'shop_send_mode' => 'serial', 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'shop_is_default' => !empty($__bfSh['is_default']), 'batch_id' => $queueId, 'trigger' => (manualSyncActive() ? 'manual_sync' : 'cron'), 'auto_sync' => true];
+        $queue['entries'][] = ['id' => $__bfFirst ? $queueId : $queueId . '_s' . $__bfVid, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'serial', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 1, 'shop_send_mode' => 'serial', 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'shop_is_default' => !empty($__bfSh['is_default']), 'batch_id' => $queueId, 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
         $__bfFirst=false;
     }
 } elseif(!is_array($cn['basalam']['send_shop_ids']??null)) {
-$queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, /* v10.21 (۳۴ب): سینکِ خودکار هم باید به همهٔ غرفه‌های فعال بفرستد. تا حالا این کلید فقط از مسیرِ دکمهٔ دستی وارد صف می‌شد، پس ارسالِ چندغرفه‌ای در کران هرگز اجرا نمی‌شد — تیک روشن بود ولی شب‌ها فقط غرفهٔ پیش‌فرض به‌روز می‌شد. v10.73 (87): وقتی چند غرفهٔ فعال است، fan-outِ بالا هرکدام را یک ردیف می‌کند و این شاخه برایِ غرفهٔ تکی می‌ماند. */ 'send_all_shops' => !empty($cn['basalam']['send_all_shops']), /* v10.34 (۴۸ج): تیکِ خاموش ⇒ ارسالِ کامل بدون مقایسه با غرفه */ 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, /* v10.53 (۶۷): منشأِ ردیف (دستی/خودکار) تا در تبِ ارسال هم دیده شود */ 'trigger' => (manualSyncActive() ? 'manual_sync' : 'cron'), 'auto_sync' => true];
+$queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, /* v10.21 (۳۴ب): سینکِ خودکار هم باید به همهٔ غرفه‌های فعال بفرستد. تا حالا این کلید فقط از مسیرِ دکمهٔ دستی وارد صف می‌شد، پس ارسالِ چندغرفه‌ای در کران هرگز اجرا نمی‌شد — تیک روشن بود ولی شب‌ها فقط غرفهٔ پیش‌فرض به‌روز می‌شد. v10.73 (87): وقتی چند غرفهٔ فعال است، fan-outِ بالا هرکدام را یک ردیف می‌کند و این شاخه برایِ غرفهٔ تکی می‌ماند. */ 'send_all_shops' => !empty($cn['basalam']['send_all_shops']), /* v10.34 (۴۸ج): تیکِ خاموش ⇒ ارسالِ کامل بدون مقایسه با غرفه */ 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, /* v10.53 (۶۷): منشأِ ردیف (دستی/خودکار) تا در تبِ ارسال هم دیده شود */ 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
 }
 if(is_array($cn['basalam']['send_shop_ids']??null)&&count($bslFanout)===0){
     @unlink($qFile);$pResult['bsl']='no_shop_selected';$pResult['bsl_total']=0;
@@ -37489,7 +37531,7 @@ $syncState[$key]['shop_sig'] = $shopSig;
    است. اگر بیرونِ حلقه می‌گذاشتیم، اجرایی که وسطِ پروفایلِ دوم کشته
    می‌شود هیچ گزارشی از پروفایلِ اول هم نمی‌داد. */
 try {
-    $_sr = syncReportBuild($pResult, manualSyncActive() ? 'manual' : 'cron', (int)$now);
+    $_sr = syncReportBuild($pResult, syncRunOriginTrigger(), (int)$now);
     $_srRes = syncReportEmit($cn, $_sr);
     $pResult['report'] = ['logged' => (int)($_srRes['logged'] ?? 0)]
         + (!empty($_srRes['skipped']) ? ['skipped' => $_srRes['skipped']] : []);
@@ -37503,7 +37545,7 @@ $_pipeFailed=!empty($pResult['extract_error'])||!empty($pResult['add_update_hold
 $_pipeSendRaw=['queued'=>(int)(($pResult['woo_total']??0)+($pResult['bsl_total']??0)),
     'failed'=>$_pipeFailed?1:0,'woo'=>$pResult['woo']??'','woo_total'=>(int)($pResult['woo_total']??0),
     'bsl'=>$pResult['bsl']??'','bsl_total'=>(int)($pResult['bsl_total']??0),'data'=>$pResult];
-syncPipelineMark((string)$key,(string)($profile['name']??$key),$_pipeFailed?'error':'done',manualSyncActive()?'manual':'periodic',
+syncPipelineMark((string)$key,(string)($profile['name']??$key),$_pipeFailed?'error':'done',syncRunOriginTrigger(),
     ['pricing'=>$_pipePricing??[],'stage_details'=>[
         'send'=>syncSendStageDetails($_pipeSendRaw),
         'done'=>['counts'=>['products'=>(int)($pResult['extracted']??0)],'data'=>$pResult,
@@ -40010,9 +40052,15 @@ function tasksBuildRow(string $key, array $def, int $now): array {
         }
         $profileName = trim((string)($_s4TaskProfileNames[$profileKey] ?? $profileKey));
     }
+    $taskTitle=(string)$def['title'];
+    if($key==='manual_sync'){
+        $taskOrigin=extractNormalizeOriginTrigger((string)($p['origin_trigger']??''));
+        if($taskOrigin==='periodic')$taskTitle='همگام‌سازی دوره‌ای/بازیابی خودکار';
+        elseif($taskOrigin==='background')$taskTitle='همگام‌سازی پس‌زمینه · منشأ نامشخص';
+    }
     return [
         'key'       => $key,
-        'title'     => (string)$def['title'],
+        'title'     => $taskTitle,
         'icon'      => (string)$def['icon'],
         'queue_id'  => $queueId,
         'profile_key' => $profileKey,
@@ -40404,11 +40452,13 @@ function tasksProfilePipelineRows(int $now): array {
         $logs = [];
         foreach ([(string)($pipe['message'] ?? ''), (string)($details['report'] ?? '')] as $line) if (trim($line) !== '') $logs[] = trim($line);
         $key = 'profile_sync_' . substr(hash('sha256', $pipeKey), 0, 20);
+        $pipeOrigin=extractNormalizeOriginTrigger((string)($pipe['origin_trigger']??''));
+        $pipeOriginLabel=$pipeOrigin==='periodic'?'دوره‌ای':($pipeOrigin==='manual'?'دستی':'سیستمی');
         $rows[] = [
             'key'=>$key,'title'=>'همگام‌سازی · '.$titleName,'icon'=>'🔄','queue_id'=>'','profile_key'=>$pk,
             'profile_name'=>$titleName,'shop_name'=>'','tab'=>'همگام‌سازی','pane'=>'start','smenu'=>'','ai'=>'','el'=>'','open'=>'',
             'resume'=>'','resumable'=>$state==='stale','bulk_resumable'=>$stage!=='stopped','state'=>$state,'percent'=>$pct,'total'=>$total,'current'=>$cur,
-            'phase'=>$displayStage.' · '.((string)($pipe['trigger']??'periodic')==='periodic'?'دوره‌ای':'دستی'),
+            'phase'=>$displayStage.' · '.$pipeOriginLabel,
             'last'=>(string)($pipe['message']??''),'started'=>(int)($pipe['started_at']??0),'ts'=>$updated,
             'age'=>$idle,'cancelled'=>false,'stoppable'=>$state==='running','stop'=>'sync_pipeline_control',
             'clearable'=>false,'stats'=>[],'log'=>array_slice($logs,-12),'profile_task'=>'sync_pipeline',
@@ -47751,8 +47801,8 @@ if (isset($_GET['selftest'])) {
     $stopUiStart=strrpos($selfSrc,'function tmStopAll(){');
     $stopUiEnd=$stopUiStart===false?false:strpos($selfSrc,'function tmStop(key)', $stopUiStart);
     $stopUi=$stopUiStart!==false&&$stopUiEnd!==false?substr($selfSrc,$stopUiStart,$stopUiEnd-$stopUiStart):'';
-    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/e868e86a-new',
-        'branches'=>['arena/e868e86a-new'],'pinned_branch'=>'arena/e868e86a-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new',
+        'branches'=>['arena/01a0ebf7-new'],'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
     $legacyBranchCfg=(array)($legacyBranchTest['config']??[]);
     $add('10.500','تنظیمِ قدیمیِ updater خودکار به برنچ همین گفتگو منتقل می‌شود',
         !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')===S4_CODE_UPDATE_BRANCH
@@ -47773,8 +47823,47 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"isset(\$_GET['tasks_stop_all_status'])")!==false
         &&strpos($selfSrc,"fetch('?tasks_stop_all_status=1&_v='")!==false
         &&strpos($selfSrc,"['auto_resume_all_cron']=false")!==false
-        &&S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'
+        &&S4_CODE_UPDATE_BRANCH==='arena/e868e86a-new'
         &&strpos($selfSrc,"{v:'10." . "501'")!==false&&version_compare(APP_VERSION,'10.501','>='));
+    $add('10.502','پاسخ غیر JSON نصب‌کننده با HTTP، نوع محتوا و پیش‌نمایش امن گزارش می‌شود',
+        strpos($selfSrc,'function vcParseInstallerReply(response, source)')!==false
+        &&strpos($selfSrc,"vcParseInstallerReply(r,'نصب‌کنندهٔ داخلی')")!==false
+        &&strpos($selfSrc,"vcParseInstallerReply(r,'نصب‌کننده')")!==false
+        &&strpos($selfSrc,'_installer_preview')!==false
+        &&substr_count($selfSrc,'function s4NormalizeCropCfg(')===1
+        &&strpos($selfSrc,'const useSelfUpdate = !!d.can_self_update && !!(d.token || d.nonce);')!==false
+        &&strpos($selfSrc,"{v:'10." . "502'")!==false&&version_compare(APP_VERSION,'10.' . '502','>='));
+    $pinStart=strpos($selfSrc,"if (!empty(\$_POST['pin_only']) || !empty(\$_POST['unpin_only']))");
+    $pinEnd=$pinStart===false?false:strpos($selfSrc,"echo json_encode(['ok'=>true,'pinned_branch'",$pinStart);
+    $pinHandler=$pinStart!==false&&$pinEnd!==false?substr($selfSrc,$pinStart,$pinEnd-$pinStart):'';
+    $add('10.503','ذخیرهٔ تنظیمات صف‌بندی و نصب مستقیم از برنچ انتخابی بدون probe طولانی انجام می‌شود',
+        strpos($selfSrc,'function vcStartSave(req)')!==false
+        &&strpos($selfSrc,'vcSaveQueued')!==false&&strpos($selfSrc,'vcSaveDirty')!==false
+        &&strpos($selfSrc,"if(isset(\$_POST['check_on_load']))")!==false
+        &&$pinHandler!==''&&strpos($pinHandler,'vc_probe_branches')===false
+        &&strpos($selfSrc,'$probeCfg[\'branches\']=$requested!==\'\'?[$requested]:$allowed')!==false
+        &&strpos($selfSrc,"ufd.append('branch', installBranch)")!==false
+        &&strpos($selfSrc,"fd.append('branch',    installBranch)")!==false
+        &&strpos($selfSrc,"if(\$requested!==''&&!in_array(\$requested,\$allowed,true))")!==false
+        &&strpos($selfSrc,"{v:'10." . "503'")!==false&&version_compare(APP_VERSION,'10.' . '503','>='));
+    $add('10.504','برچسب منشأ استخراج از trigger اجرای worker جدا و برای کارهای قدیمی نامشخص می‌ماند',
+        strpos($selfSrc,'function extractNormalizeOriginTrigger(')!==false
+        &&strpos($selfSrc,"'origin_trigger'=>\$_rowOrigin")!==false
+        &&strpos($selfSrc,'const exOrigin=e.origin_trigger||e.trigger;')!==false
+        &&strpos($selfSrc,"const exManual=['manual','manual_sync','manual_resume'].includes(exOrigin);")!==false
+        &&strpos($selfSrc,'کار پس‌زمینه · منشأ نامشخص')!==false
+        &&strpos($selfSrc,"extractNormalizeOriginTrigger((string)(\$pipe['origin_trigger']??''))")!==false
+        &&strpos($selfSrc,"\$trig=extractNormalizeOriginTrigger((string)(\$row['origin_trigger']??''));")!==false
+        &&strpos($selfSrc,"'origin_trigger'=>extractNormalizeOriginTrigger(\$trigger)")!==false
+        &&strpos($selfSrc,'function s4WorkerRunManualSyncChild(string $profileKey, bool $resume, string $originTrigger')!==false
+        &&strpos($selfSrc,"'origin_trigger'=>\$originTrigger")!==false
+        &&strpos($selfSrc,"'auto_sync'=>\$isPeriodicQueue")!==false
+        &&strpos($selfSrc,"'origin_trigger'=>$origin")!==false
+        &&strpos($selfSrc,"syncPipelineMark(\$profileKey,\$profileName,\$stage,\$trigger")!==false
+        &&extractNormalizeOriginTrigger('manual','worker')==='manual'
+        &&extractNormalizeOriginTrigger('periodic','worker_child')==='periodic'
+        &&extractNormalizeOriginTrigger('','worker')==='background'
+        &&strpos($selfSrc,"{v:'10." . "504'")!==false&&version_compare(APP_VERSION,'10.' . '504','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -52431,10 +52520,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
           && strpos($selfSrc, "if (\$hasMore && \$bslEntryRound + 1 < BSL_MAX_ENTRIES_PER_RUN) continue;") !== false
           && strpos($selfSrc, "'processed'=>\$bslEntriesDoneThisRun") !== false));
     $add('10.53', 'Manual sync is visible: extract + send queues labeled «هنگامِ همگام‌سازیِ دستی»',
-         (substr_count($selfSrc, "manualSyncActive() ? 'manual_sync' : 'auto'") >= 2
+         (substr_count($selfSrc, "syncRunOriginTrigger()==='manual'?'manual_sync':'cron'") >= 4
           && substr_count($selfSrc, "🤝 هنگامِ همگام‌سازیِ دستی") >= 3
-          && strpos($selfSrc, "'trigger' => (manualSyncActive() ? 'manual_sync' : 'cron')") !== false
-          && strpos($selfSrc, "'trigger'=>(manualSyncActive()?'manual_sync':'cron')") !== false));
+          && strpos($selfSrc, "'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron'))") !== false
+          && strpos($selfSrc, "'trigger'=>((syncRunOriginTrigger()==='manual'?'manual_sync':'cron'))") !== false));
     $add('10.53', 'Delete ladder: archive → disable (3790) → hide (stock=0, price=0)',
          (strpos($selfSrc, "(\$newStatus === 4184) ? ['simple', 'full', 'archive', 'disable', 'hide'] : ['simple', 'full']") !== false
           && strpos($selfSrc, "['status' => 3790], false, null, false, \$maxAttempts") !== false
@@ -57020,10 +57109,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "HTTP_X_S4_UPDATE_" . "TOKEN") !== false
       && strpos($selfSrc, "wp_verify_nonce(\$nonce,'s4_code_update')") !== false
       && strpos($selfSrc, "'POST required'") !== false);
-    $add('10.266', 'منبع updater ثابت و تزریق repo/branch از درخواست ناممکن است',
+    $add('10.266', 'repo و path updater ثابت‌اند و branch درخواست فقط از allowlist پذیرفته می‌شود',
          strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "01a0ebf7-new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false);
+      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "e868e86a-new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false
+      && strpos($selfSrc, "if(\$requested!==''&&!in_array(\$requested,\$allowed,true))") !== false);
     $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
          strpos($selfSrc, "'git_blob_sha_mismatch'") !== false
       && strpos($selfSrc, "'php_lint_failed'") !== false
@@ -57188,9 +57278,9 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     /* ---------- v10.277: shared sync pipeline + visual cards ---------- */
     $add('10.277', 'دستی و دوره‌ای هر دو چهار مرحلهٔ extract/pricing/send/done را ثبت می‌کنند',
          function_exists('syncPipelineMark') && function_exists('syncPricingSnapshot')
-      && substr_count($selfSrc, "'pricing',manualSyncActive()?'manual':'periodic'") >= 1
-      && substr_count($selfSrc, "'send',manualSyncActive()?'manual':'periodic'") >= 1
-      && strpos($selfSrc, "syncPipelineMark(\$_msKey,\$_msName,'extract','manual'") !== false);
+      && substr_count($selfSrc, "'pricing',syncRunOriginTrigger()") >= 1
+      && substr_count($selfSrc, "'send',syncRunOriginTrigger()") >= 1
+      && strpos($selfSrc, "syncPipelineMark(\$_msKey,\$_msName,'extract',syncRunOriginTrigger()") !== false);
     $add('10.277', 'مرحلهٔ ضرایب پس از reload پروفایل و قبل از صف/ارسال اجرا می‌شود',
          strpos($selfSrc, "\$_msPricing=syncPricingSnapshot((array)\$_msProf,\$_msCn)") !== false
       && strpos($selfSrc, "'profile_signature'=>profilePriceSignature(\$profile)") !== false
@@ -57207,10 +57297,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
     /* ---------- v10.278: exact fast backend extraction + responsive timeline ---------- */
     $add('10.278', 'همگام‌سازی دستی دقیقاً فاز سریع list و force_all=false را اجرا می‌کند',
          strpos($selfSrc, "\$_msPhase = 'list';") !== false
-      && strpos($selfSrc, "runBackendExtract(\$_msKey, 'manual_sync', false, \$_msPhase, false)") !== false);
+      && strpos($selfSrc, "\$_msExTrig = syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync';") !== false
+      && strpos($selfSrc, "runBackendExtract(\$_msKey, \$_msExTrig, false, \$_msPhase, false)") !== false);
     $add('10.278', 'همگام‌سازی دوره‌ای نیز با فاز list بک‌اند آغاز می‌شود',
          strpos($selfSrc, "\$stepMode = 'list';") !== false
-      && strpos($selfSrc, "runBackendExtract(\$key, manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, \$stepMode)") !== false);
+      && strpos($selfSrc, "runBackendExtract(\$key, (syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync'), false, \$stepMode)") !== false);
     $add('10.278', 'تایم‌لاین عمودی واکنش‌گرا و بدون اسکرول افقی جای طرح قبلی را گرفته است',
          strpos($selfSrc, '.sync-pipe-track:before') !== false
       && strpos($selfSrc, '@media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr') !== false
@@ -57291,7 +57382,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'checkpoint_reused'") !== false);
     $add('10.282', 'استخراج واقعی دستی و دوره‌ای با هویت همگام‌سازی وارد صف می‌شود',
          strpos($selfSrc, "['manual_sync','periodic_sync']") !== false
-      && substr_count($selfSrc, "'periodic_sync', false") >= 2
+      && strpos($selfSrc, "(syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync')") !== false
       && strpos($selfSrc, "'ok'=>true,'queue_id'=>\$queueId,'extracted'=>count(\$allProducts)") !== false);
     $add('10.282', 'نتیجهٔ صف استخراج به گزارش مرحلهٔ همان همگام‌سازی متصل می‌شود',
          strpos($selfSrc, '$_msEx[' . "'queue_id'] = \$_msQueueId") !== false
@@ -57307,12 +57398,12 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          strpos($selfSrc, "{v:'10." . "282'") !== false
       && version_compare(APP_VERSION, '10.' . '282', '>='));
     $add('10.283', 'آزمون مسیر سریع دوره‌ای با برچسب صف periodic_sync هم‌راستا است',
-         strpos($selfSrc, "manualSyncActive() ? 'manual_sync' : 'periodic_sync', false, \$stepMode") !== false
+         strpos($selfSrc, "(syncRunOriginTrigger()==='manual'?'manual_sync':'periodic_sync'), false, \$stepMode") !== false
       && strpos($selfSrc, "{v:'10." . "283'") !== false
       && version_compare(APP_VERSION, '10.' . '283', '>='));
-    $add('10.284', 'همهٔ triggerهای worker و resume به دستی یا دوره‌ای نگاشت می‌شوند',
-         strpos($selfSrc, "['manual','manual_sync','manual_resume','worker','worker_child']") !== false
-      && strpos($selfSrc, "['periodic_sync','auto','cron','watchdog_resume','auto_resume']") !== false);
+    $add('10.284', 'منشأ استخراج دستی یا دوره‌ای از triggerهای صف تشخیص داده می‌شود',
+         strpos($selfSrc, "['manual','manual_sync','manual_resume']") !== false
+      && strpos($selfSrc, "['periodic','periodic_sync','auto','cron','cron_resume','watchdog_resume','auto_resume']") !== false);
     $add('10.284', 'کارت ارسال شمارندهٔ برجستهٔ حذف و بایگانی دارد',
          strpos($selfSrc, 'sendq-metric-retired') !== false
       && strpos($selfSrc, "metric(retired,opt.retireLabel||'حذف/بایگانی'") !== false);
@@ -57976,7 +58067,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "\$we['payload']['max_pages']=\$maxPages") !== false);
     $add('10.385', 'runner مقدار snapshot را بدون سقف ۱۰۰ مصرف می‌کند',
          strpos($selfSrc, "\$pageSetting=\$maxPagesOverride>=0?max(0,\$maxPagesOverride):\$savedMaxPages;") !== false
-      && strpos($selfSrc, "runBackendExtract(\$pk, 'worker', false, \$runPhase, \$forceAll, \$reserved, \$maxPagesOverride)") !== false);
+      && strpos($selfSrc, "runBackendExtract(\$pk, 'worker', false, \$runPhase, \$forceAll, \$reserved, \$maxPagesOverride, \$detailModeJob,\$jobOrigin)") !== false);
     $add('10.385', 'هدف صفحه در صف دیداری و progress قابل مشاهده است',
          strpos($selfSrc, "\$_xe['max_pages']=\$maxPages;\$_xe['page_mode']=\$maxPages===0?'auto':'fixed';\$_xe['total']=\$pageTotal;") !== false
       && strpos($selfSrc, "'worker_waiting'=>true,'phase'=>\$phase,'max_pages'=>\$maxPages,'page_mode'=>\$maxPages===0?'auto':'fixed','total'=>\$pageTotal") !== false);
@@ -64455,9 +64546,10 @@ function syncPipelineMark(string $profileKey,string $profileName,string $stage,s
            محصولات extraction را پاک کند و send نیز pricing را حفظ می‌کند. */
         if(is_array($extra['stage_details']??null))$extra['stage_details']=array_replace(
             is_array($old['stage_details']??null)?$old['stage_details']:[],$extra['stage_details']);
+        $origin=extractNormalizeOriginTrigger($trigger);
         $all[$storageKey]=array_merge($old,$extra,[
             'pipeline_key'=>$storageKey,'profile_key'=>$profileKey,'profile_name'=>$profileName?:$profileKey,
-            'stage'=>$stage,'trigger'=>$trigger==='periodic'?'periodic':'manual',
+            'stage'=>$stage,'trigger'=>$origin,'origin_trigger'=>$origin,
             'started_at'=>$started,'updated_at'=>time(),
             'done'=>in_array($stage,['done','error','stopped'],true),
         ]);
@@ -64488,7 +64580,7 @@ function syncPipelineControlExecute(string $pipelineKey,string $action,string $p
     if(!$row)return ['ok'=>false,'error'=>'pipeline_not_found'];
     if((string)($row['operation']??'')==='cell_equalize')return ['ok'=>false,'error'=>'pipeline_control_unsupported'];
     $pk=trim((string)($row['profile_key']??''));if($pk==='')return ['ok'=>false,'error'=>'invalid_profile'];
-    $pName=(string)($row['profile_name']??$pk);$trigger=(string)($row['trigger']??'manual');
+    $pName=(string)($row['profile_name']??$pk);$trigger=(string)($row['trigger']??'background');
     if($action==='stop'){
         /* MANUAL_SYNC_STOP_FILE is a legacy singleton signal. Only write it
            when its current owner is this profile; queue/extraction controls
@@ -64550,7 +64642,7 @@ function syncPipelineReconcileActiveRows(bool $dispatch=true):array{
         $pk=trim((string)($row['profile_key']??''));
         if($pk==='')continue;
         $stage=(string)($row['stage']??'');
-        $trig=(string)($row['trigger']??'manual');
+        $trig=extractNormalizeOriginTrigger((string)($row['origin_trigger']??''));
         $pName=(string)($row['profile_name']??$pk);
         $startedAt=(int)($row['started_at']??0);
         $updatedAt=(int)($row['updated_at']??$startedAt);
@@ -64632,7 +64724,7 @@ function syncPipelineReconcileActiveRows(bool $dispatch=true):array{
         }
         $recAge=$now-(int)($row['active_recovery_queued_at']??0);
         if($idle<45||$recAge<90||!$dispatch)continue;
-        $enqAct=s4WorkerEnqueueManualSync($pk,true);
+        $enqAct=s4WorkerEnqueueManualSync($pk,true,$trig);
         if(!empty($enqAct['ok'])){
             syncPipelineMark($pk,$pName,'queued',$trig,[
                 'active_recovery_queued_at'=>$now,
@@ -64670,6 +64762,7 @@ function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
             if((string)($row['stage']??'')!=='send')continue;
             $out['checked']++;
             if($pk===''||(string)($row['trigger']??'')!=='manual'){$out['skipped']++;continue;}
+            $rowOrigin=extractNormalizeOriginTrigger((string)($row['origin_trigger']??''));
             $hasOwner=false;
             foreach(array_merge((array)($bq['entries']??[]),(array)($wq['entries']??[])) as $qe){
                 if(is_array($qe)&&(string)($qe['profile_key']??'')===$pk
@@ -64687,9 +64780,9 @@ function syncPipelineReconcileMissingSendQueues(bool $dispatch=true):array{
             if(!$dispatch){$out['rows'][]=['profile_key'=>$pk,'recoverable'=>true];continue;}
             /* The durable worker queue is the claim. Its dedup key prevents a
                concurrent status poll and cron pulse from creating two senders. */
-            $enq=s4WorkerEnqueueManualSync($pk,true);
+            $enq=s4WorkerEnqueueManualSync($pk,true,$rowOrigin);
             if(!empty($enq['ok'])){
-                syncPipelineMark($pk,(string)($row['profile_name']??$pk),'send','manual',[
+                syncPipelineMark($pk,(string)($row['profile_name']??$pk),'send',$rowOrigin,[
                     'send_recovery_queued_at'=>$now,'send_recovery_job_id'=>(string)($enq['job_id']??''),
                     'message'=>'صف مقصد گم شده بود؛ بازیابی مستقیم از checkpoint استخراج در صف worker قرار گرفت']);
                 $out['recovered']++;$out['rows'][]=['profile_key'=>$pk,'job_id'=>(string)($enq['job_id']??''),'duplicate'=>!empty($enq['duplicate'])];
@@ -64755,6 +64848,11 @@ function syncSendStageDetails(array $r):array{
 /** آیا این اجرا یک همگام‌سازیِ دستی است؟ */
 function manualSyncActive(): bool {
     return !empty($_GET['manual_sync']);
+}
+function syncRunOriginTrigger():string{
+    $explicit=trim((string)($_GET['origin_trigger']??''));
+    if($explicit!=='')return extractNormalizeOriginTrigger($explicit);
+    return manualSyncActive()?'manual':'periodic';
 }
 
 /** سیگنالِ توقف — فقط وقتی تازه باشد معتبر است */
@@ -65908,7 +66006,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         $out['log'][] = '⏭ مقصد none';
         return $out;
     }
-    $now = time();$queueTrigger=(string)($enqueueOpts['trigger']??'manual_sync');$replaceWaiting=!array_key_exists('replace_waiting',$enqueueOpts)||!empty($enqueueOpts['replace_waiting']);$allowParallel=!empty($enqueueOpts['allow_parallel']);
+    $now = time();$queueTrigger=(string)($enqueueOpts['trigger']??'manual_sync');$queueOrigin=extractNormalizeOriginTrigger($queueTrigger);$isPeriodicQueue=$queueOrigin==='periodic';$replaceWaiting=!array_key_exists('replace_waiting',$enqueueOpts)||!empty($enqueueOpts['replace_waiting']);$allowParallel=!empty($enqueueOpts['allow_parallel']);
     if($target==='bsl'&&isset($enqueueOpts['bsl_vendor_id']))$cn['basalam']['send_shop_ids']=[(int)$enqueueOpts['bsl_vendor_id']];
     /* Build product list from profile disk */
     $products = [];
@@ -65983,7 +66081,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0,
                 'started_at' => 0, 'done_at' => 0,
                 'profile_key' => $key, 'profile_name' => (string)($profile['name'] ?? $key),
-                'only_changed' => $wooOnlyChanged, 'trigger' => $queueTrigger, 'origin'=>'cell_equalize'===$queueTrigger?'cell_equalize':'manual',
+                'only_changed' => $wooOnlyChanged, 'trigger' => $queueTrigger, 'origin'=>'cell_equalize'===$queueTrigger?'cell_equalize':($isPeriodicQueue?'periodic':'manual'),'origin_trigger'=>$queueTrigger==='cell_equalize'?'manual':$queueOrigin,'auto_sync'=>$isPeriodicQueue,
                 'config' => ['title_suffix' => $wooSuffix, 'category_id' => $wooCatId, 'force_all' => true],
             ];
             wooWriteQueue($wooQueue);
@@ -66034,7 +66132,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                     'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'created_at'=>$now,'done_at'=>0,'paused_at'=>0,
                     'only_changed'=>false,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),
                     'shop_send_mode'=>'parallel','parallel_shop_vids'=>$_manParVids,'shop_name'=>'⚡ موازی ('.count($manualShops).' غرفه)',
-                    'explicit_shop_target'=>0,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':'manual','auto_sync'=>true,
+                    'explicit_shop_target'=>0,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':($isPeriodicQueue?'periodic':'manual'),'origin_trigger'=>$queueTrigger==='cell_equalize'?'manual':$queueOrigin,'auto_sync'=>$isPeriodicQueue,
                     'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,
                         'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,'send_all_shops'=>0,'fanout'=>0,
                         'shop_send_mode'=>'parallel','parallel_shop_vids'=>$_manParVids,'parallel_shop_names'=>$_manParNames,'force_all'=>true],
@@ -66048,7 +66146,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                         'only_changed'=>false,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),
                         'shop_vendor_id'=>$_mvid,'shop_name'=>(string)($_msh['shop_name']??''),'shop_is_default'=>!empty($_msh['is_default']),
                         'shop_send_mode'=>'serial','explicit_shop_target'=>$_explicitShopTarget,
-                        'batch_id'=>$queueId,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':'manual','auto_sync'=>true,
+                        'batch_id'=>$queueId,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':($isPeriodicQueue?'periodic':'manual'),'origin_trigger'=>$queueTrigger==='cell_equalize'?'manual':$queueOrigin,'auto_sync'=>$isPeriodicQueue,
                         'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,
                             'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial',
                             'shop_vendor_id'=>$_mvid,'shop_name'=>(string)($_msh['shop_name']??''),'force_all'=>true],
@@ -66062,7 +66160,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                     'only_changed'=>false,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,
                         'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,
                         'send_all_shops'=>!empty($cn['basalam']['send_all_shops']),'force_all'=>true],
-                    'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':'manual','auto_sync'=>true,
+                    'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':($isPeriodicQueue?'periodic':'manual'),'origin_trigger'=>$queueTrigger==='cell_equalize'?'manual':$queueOrigin,'auto_sync'=>$isPeriodicQueue,
                 ];
             }
             bslWriteQueue($queue);
@@ -71085,6 +71183,7 @@ function syncReportBuild(array $p, string $trigger = 'cron', int $startedAt = 0)
     $rep = [
         'at'       => time(),
         'trigger'  => $trigger,
+        'origin_trigger'=>extractNormalizeOriginTrigger($trigger),
         'profile'  => (string)($p['name'] ?? ($p['key'] ?? '')),
         'key'      => (string)($p['key'] ?? ''),
         'target'   => (string)($p['target'] ?? ''),
@@ -71115,7 +71214,8 @@ function syncReportBuild(array $p, string $trigger = 'cron', int $startedAt = 0)
 
 /** همان گزارش، به شکلِ متنِ خوانا برای پیام‌رسان و برای مدیر وظیفه */
 function syncReportText(array $r): string {
-    $trig = ['cron' => 'خودکار', 'manual' => 'دستی', 'manual_sync' => 'دستی'][(string)($r['trigger'] ?? '')] ?? (string)($r['trigger'] ?? '');
+    $origin=extractNormalizeOriginTrigger((string)($r['origin_trigger']??''));
+    $trig=['periodic'=>'دوره‌ای','manual'=>'دستی','background'=>'پس‌زمینه · منشأ نامشخص'][$origin]??'پس‌زمینه · منشأ نامشخص';
     $L = ['🔄 گزارشِ همگام‌سازی — ' . (string)($r['profile'] ?? '?')
           . ($trig !== '' ? ' (' . $trig . ')' : '')];
     $L[] = '🕐 ' . date('Y/m/d H:i', (int)($r['at'] ?? time()))
@@ -88294,7 +88394,7 @@ endpoint فقط با POST و deploy_token (یا مدیر وردپرس + nonce) �
   <label>مسیر فایل:</label>
   <div style="flex:1;position:relative;min-width:150px">
     <input id="vcPath" placeholder="ابتدا برنچ را انتخاب کنید" dir="ltr" autocomplete="off"
-           oninput="vcFilterFile()" onfocus="vcFilterFile()">
+           oninput="vcFilterFile();vcDirty()" onfocus="vcFilterFile()">
     <div class="vc-drop" id="vcPathDrop"></div>
   </div>
 </div>
@@ -97563,7 +97663,7 @@ function srLoad(){
       h+='<details style="border-top:1px solid #1e293b;padding:4px 0">'
         +'<summary style="cursor:pointer;color:#cbd5e1;font-size:11px">'
         +esc(r.at_h||'—')+' — '+esc(r.profile||'?')
-        +(r.trigger==='manual'||r.trigger==='manual_sync'?' <span style="color:#34d399">دستی</span>':'') /* v10.53 (۶۷) */
+        +(r.origin_trigger==='manual'?' <span style="color:#34d399">دستی</span>':(r.origin_trigger==='periodic'?' <span style="color:#22d3ee">دوره‌ای</span>':' <span style="color:#cbd5e1">پس‌زمینه · منشأ نامشخص</span>')) /* v10.504 */
         +'</summary>'
         +'<div style="white-space:pre-wrap;color:#94a3b8;font-size:10.5px;line-height:1.9;padding:4px 8px 2px">'
         +esc(r.text||'')+'</div></details>';
@@ -97851,17 +97951,18 @@ function renderExtractQueue(entries, progress){
         const statusLabel=e.stop_requested?'⏳ در حال توقف':statusLabels[st];
         const statusColor=e.stop_requested?'#fb923c':statusColors[st];
         html+='<span style="color:'+statusColor+';font-weight:700;font-size:12px">'+statusLabel+'</span>';
-        // v10.284: منشأ همهٔ ردیف‌ها، از جمله worker و resume، صریحاً دستی یا دوره‌ای باشد
-        const exManual=['manual','manual_sync','manual_resume','worker','worker_child'].includes(e.trigger);
-        const exPeriodic=['periodic_sync','auto','cron','watchdog_resume','auto_resume'].includes(e.trigger);
+        // v10.504: origin_trigger is the initiator; worker/worker_child only describe execution.
+        const exOrigin=e.origin_trigger||e.trigger;
+        const exManual=['manual','manual_sync','manual_resume'].includes(exOrigin);
+        const exPeriodic=['periodic','periodic_sync','auto','cron','cron_resume','watchdog_resume','auto_resume'].includes(exOrigin);
         if(exManual){
-            const isSync=e.trigger==='manual_sync';
+            const isSync=!!e.sync_stage||e.trigger==='manual_sync';
             html+='<span style="color:#34d399;font-size:10px;background:#064e3b40;padding:1px 6px;border-radius:4px">'+(isSync?'🤝 استخراج همگام‌سازی · دستی':'👤 استخراج دستی')+'</span>';
         }else if(exPeriodic){
-            const isSync=e.trigger==='periodic_sync';
+            const isSync=!!e.sync_stage||e.trigger==='periodic_sync';
             html+='<span style="color:#22d3ee;font-size:10px;background:#0e749020;padding:1px 6px;border-radius:4px">'+(isSync?'🔄 استخراج همگام‌سازی · دوره‌ای':'⏱ استخراج دوره‌ای')+'</span>';
         }else{
-            html+='<span style="color:#cbd5e1;font-size:10px;background:#334155;padding:1px 6px;border-radius:4px">👤 استخراج دستی</span>';
+            html+='<span style="color:#cbd5e1;font-size:10px;background:#334155;padding:1px 6px;border-radius:4px">⚙️ کار پس‌زمینه · منشأ نامشخص</span>';
         }
         /* v9.04: کدام مرحله؟ بدون این، ردیف «فهرست» با شمارندهٔ صفرِ
            جزئیات شبیه یک اجرای ناموفق به نظر می‌رسید. */
@@ -98969,7 +99070,7 @@ renderDetailFieldsList();
  *  بررسی نسخه و نصب از طریق deploy.php یا code_update احراز‌شده.
  *  بررسی نسخه فقط خواندنی است؛ نصب فقط با تأیید مدیر و مسیر امن انجام می‌شود.
  * ================================================================== */
-let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false, VC_PENDING_BRANCH = '';
+let VC = null, vcSaveTimer = null, vcSaveInFlight = false, vcSaveQueued = null, vcSaveDirty = false, vcSaveRevision = 0, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false, VC_PENDING_BRANCH = '';
 /* v10.268: اگر deploy.php یا code_update فایل را بیرون از همین tab عوض کرد،
    tab قدیمی نسخهٔ تازه را می‌بیند و بدون وابستگی به پاسخ updater رفرش می‌شود. */
 const S4_LOADED_VERSION='<?=APP_VERSION?>';
@@ -99018,6 +99119,21 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.504', t:'🏷️ اصلاح برچسب دستی/خودکار استخراج و همگام‌سازی', items:[
+    'برچسب منشأ از trigger واقعیِ کاربر یا زمان‌بندی جدا شد؛ worker و worker_child دیگر به‌اشتباه «دستی» محسوب نمی‌شوند.',
+    'درخواست‌های زمان‌بندی‌شده و بازیابی خودکار منشأ periodic را در صف و child حفظ می‌کنند؛ رکوردهای قدیمی extraction/pipeline/report که منشأ قابل‌اعتماد ندارند «پس‌زمینه · منشأ نامشخص» می‌مانند، نه برچسب دستی.',
+    'برچسب pipeline هم cron/auto را دوره‌ای و trigger ناشناخته را سیستمی نشان می‌دهد.'
+  ]},
+  {v:'10.503', t:'⚙️ ذخیرهٔ مطمئن تنظیمات و نصب سریع از چند برنچ', items:[
+    'ذخیره‌های خودکار پشت‌سرهم صف‌بندی می‌شوند تا پاسخِ قدیمی تنظیم تازه‌تر را بازنویسی نکند؛ خطا نیز به‌جای ناپدیدشدن گزارش می‌شود و قبل از نصب، تنظیماتِ در انتظار ذخیره flush می‌شوند.',
+    'انتخاب مسیر فایل هم خودکار ذخیره می‌شود و ذخیرهٔ تنظیمات جزئی دیگر گزینهٔ بررسی خودکار را ناخواسته خاموش نمی‌کند.',
+    'نصب از برنچ انتخابی دیگر همهٔ برنچ‌ها را پیشاپیش و با چند درخواست شبکه‌ای probe نمی‌کند؛ مقصد باید در فهرست مجاز باشد و updater همان برنچ را بررسی و نصب می‌کند.'
+  ]},
+  {v:'10.502', t:'🛠 رفع خطای lint نصب و گزارش دقیق پاسخ نصب‌کننده', items:[
+    'تعریف تکراری s4NormalizeCropCfg حذف شد؛ همین redeclaration باعث می‌شد PHP نصب را با exit code 255 رد کند.',
+    'وقتی مجوز موجود است، نصب‌کنندهٔ داخلیِ اتمیک به deploy.php ترجیح داده می‌شود. پاسخ غیر JSON نیز با HTTP status، نوع محتوا و پیش‌نمایش کوتاهِ پالایش‌شده نمایش داده می‌شود تا خطا پشت پیام عمومی پنهان نماند.',
+    'updater دوباره برنچ همین نشست arena/e868e86a-new را مرجع می‌گیرد تا auto-update بتواند نسخهٔ رفع‌شده را دریافت کند.'
+  ]},
   {v:'10.501', t:'⏹️ توقف و پاک‌سازی قطعی همهٔ فعالیت‌ها + آمادگی endpointمحور پس از رفرش', items:[
     'دکمهٔ «توقف همه» اکنون با endpoint وضعیت اختصاصی تا آزادشدن کارهای فعال و حذف کامل صف‌های worker، استخراج، همگام‌سازی، ووکامرس، باسلام، بازیابی تکراری، دسته‌بندی AI، payloadها، checkpointها، فایل‌های staging و گزارش‌های عملیاتی پیگیری می‌شود.',
     'قفل worker دائمیِ بیکار دیگر پاک‌سازی را برای همیشه pending نگه نمی‌دارد؛ زنده‌بودن job واقعی جداگانه بررسی می‌شود و فقط مالک فعال مانع حذف امن است.',
@@ -108935,8 +109051,9 @@ function vcBadge(t, cls) {
     if (b) { b.textContent = t; b.className = 'cst ' + (cls || 'off'); }
 }
 function vcDirty() {
+    vcSaveDirty=true;vcSaveRevision++;
     clearTimeout(vcSaveTimer);
-    vcSaveTimer = setTimeout(() => vcSave(), 900);
+    vcSaveTimer=setTimeout(()=>vcSave(false),350);
 }
 function vcFmtSize(b) {
     if (!b) return '';
@@ -108980,27 +109097,58 @@ function vcRenderBranches(){
 function vcAddBranch(){const el=$('vcBranch'),b=el?el.value.trim():'';if(!b)return showToast('نام برنچ را وارد کنید',1);if(!VC)VC={branches:[]};if(!Array.isArray(VC.branches))VC.branches=[];if(!VC.branches.includes(b))VC.branches.push(b);VC.branch=b;if(el)el.value='';vcRenderBranches();vcSave(true);}
 function vcRemoveBranch(b){if(!VC||!Array.isArray(VC.branches))return;if(!confirm('برنچ «'+b+'» حذف شود؟'))return;VC.branches=VC.branches.filter(x=>x!==b);if(VC.branch===b)VC.branch=VC.branches[0]||'';vcRenderBranches();vcSave(true);}
 
-function vcSave(showMsg) {
-    const fd = new FormData();
-    fd.append('check_on_load', $('vcOnLoad').checked ? '1' : '');
-    fd.append('repo',        $('vcRepo').value.trim());
+function vcBuildSaveRequest(showMsg) {
+    const fd=new FormData();
+    fd.append('check_on_load',$('vcOnLoad').checked?'1':'');
+    fd.append('repo',$('vcRepo').value.trim());
     const configured=VC&&Array.isArray(VC.branches)?VC.branches:[];
     fd.append('branches',JSON.stringify(configured));
     fd.append('branch',(VC&&VC.branch)||configured[0]||'');
-    fd.append('path',        $('vcPath').value.trim());
-    fd.append('deploy_file', $('vcDeployFile').value.trim() || 'deploy.php');
-    if ($('vcGhToken').value)  fd.append('github_token', $('vcGhToken').value);
-    if ($('vcDepToken').value) fd.append('deploy_token', $('vcDepToken').value);
-
-    fetch('?vc_settings=1', { method: 'POST', body: fd }).then(r => r.json()).then(d => {
-        if (!d.ok) { showToast(d.error || 'ذخیره ناموفق', true); return; }
-        VC = d.settings;
-        $('vcGhToken').value = ''; $('vcDepToken').value = '';
-        if ($('vcGhState'))  $('vcGhState').textContent  = VC.has_gh_token ? 'تنظیم شده' : 'تنظیم نشده';
-        if ($('vcDepState')) $('vcDepState').textContent = VC.has_dep_token ? 'تنظیم شده' : 'تنظیم نشده';
-        vcBadge(VC.check_on_load ? 'خودکار' : 'دستی', VC.check_on_load ? 'on' : 'off');
-        if (showMsg) showToast('✓ ذخیره شد');
-    }).catch(() => showToast('خطا در ذخیره', true));
+    fd.append('path',$('vcPath').value.trim());
+    fd.append('deploy_file',$('vcDeployFile').value.trim()||'deploy.php');
+    const ghToken=$('vcGhToken').value,depToken=$('vcDepToken').value;
+    if(ghToken)fd.append('github_token',ghToken);
+    if(depToken)fd.append('deploy_token',depToken);
+    return {fd,ghToken,depToken,showMsg:!!showMsg,revision:++vcSaveRevision,waiters:[]};
+}
+function vcStartSave(req) {
+    vcSaveInFlight=true;
+    vcStat('ذخیرهٔ تنظیمات...', '#93c5fd');
+    fetch('?vc_settings=1',{method:'POST',body:req.fd,cache:'no-store'})
+      .then(r=>r.json().then(d=>{if(!r.ok||!d.ok)throw new Error((d&&d.error)||('HTTP '+r.status));return d;}))
+      .then(d=>{
+        const latest=vcSaveRevision===req.revision&&!vcSaveQueued;
+        const settings=d.settings||{};
+        if(req.ghToken&&$('vcGhToken').value===req.ghToken)$('vcGhToken').value='';
+        if(req.depToken&&$('vcDepToken').value===req.depToken)$('vcDepToken').value='';
+        if(latest){VC=settings;vcRenderBranches();vcSaveDirty=false;}
+        else if(VC){VC.has_gh_token=!!settings.has_gh_token;VC.has_dep_token=!!settings.has_dep_token;}
+        if($('vcGhState'))$('vcGhState').textContent=settings.has_gh_token?'تنظیم شده':'تنظیم نشده';
+        if($('vcDepState'))$('vcDepState').textContent=settings.has_dep_token?'تنظیم شده':'تنظیم نشده';
+        if(latest){vcBadge(settings.check_on_load?'خودکار':'دستی',settings.check_on_load?'on':'off');vcStat('✓ تنظیمات ذخیره شد','#4ade80');if(req.showMsg)showToast('✓ ذخیره شد');}
+        req.waiters.forEach(done=>done(true));
+      })
+      .catch(e=>{
+        if(!vcSaveQueued){vcSaveDirty=true;const msg='ذخیره ناموفق'+(e&&e.message?': '+String(e.message).slice(0,140):'');vcStat('✗ '+esc(msg),'#f87171');showToast(msg,true);}
+        req.waiters.forEach(done=>done(false));
+      })
+      .finally(()=>{
+        vcSaveInFlight=false;
+        if(vcSaveQueued){const next=vcSaveQueued;vcSaveQueued=null;vcStartSave(next);}
+      });
+}
+function vcSave(showMsg) {
+    clearTimeout(vcSaveTimer);vcSaveTimer=null;vcSaveDirty=true;
+    const req=vcBuildSaveRequest(showMsg);
+    return new Promise(resolve=>{
+        req.waiters.push(resolve);
+        if(vcSaveInFlight){
+            if(vcSaveQueued){vcSaveQueued.fd=req.fd;vcSaveQueued.ghToken=req.ghToken;vcSaveQueued.depToken=req.depToken;vcSaveQueued.revision=req.revision;vcSaveQueued.showMsg=vcSaveQueued.showMsg||req.showMsg;vcSaveQueued.waiters.push(resolve);}
+            else vcSaveQueued=req;
+            return;
+        }
+        vcStartSave(req);
+    });
 }
 
 /**
@@ -109121,6 +109269,31 @@ function vcCloseBar() {
     document.body.style.paddingTop = '';
 }
 
+function vcParseInstallerReply(response, source) {
+    return response.text().then(raw => {
+        let payload=null;
+        try { payload=JSON.parse(raw); } catch(e) {}
+        if(payload&&typeof payload==='object'&&!Array.isArray(payload)) {
+            payload._installer_http=Number(response.status)||0;
+            payload._installer_type=response.headers.get('content-type')||'';
+            return payload;
+        }
+        const preview=String(raw||'')
+            .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,' ')
+            .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,' ')
+            .replace(/<[^>]*>/g,' ')
+            .replace(/("(?:token|nonce|password|authorization|api_key)"\s*:\s*")[^"]*"/gi,'$1[redacted]"')
+            .replace(/\b(token|nonce|password|authorization|api[_-]?key)\b\s*[:=]\s*([^\s,;<>]+)/gi,'$1=[redacted]')
+            .replace(/\s+/g,' ').trim().slice(0,220);
+        const result={ok:false,error:'پاسخ نامعتبر از '+String(source||'نصب‌کننده'),
+            _installer_http:Number(response.status)||0,
+            _installer_type:response.headers.get('content-type')||'',
+            _installer_preview:preview||'(پاسخ خالی)'};
+        console.error('Installer returned non-JSON response',result);
+        return result;
+    });
+}
+
 /**
  * نصب: این تابع خودش چیزی نمی‌نویسد. یک فرم به deploy.php ارسال می‌کند
  * که فایلی مستقل است و کار نصب را با همان زنجیرهٔ ایمنی انجام می‌دهد.
@@ -109140,8 +109313,10 @@ function vcUpdate(skipConfirm, requestedBranch) {
     const lock = () => { window._vcInstalling = true; if (btn) { btn.disabled = true; btn.textContent = '⏳ در حال نصب...'; } };
     const unlock = () => { window._vcInstalling = false; if (btn) { btn.disabled = false; btn.textContent = '⬇ نصب نسخهٔ جدید'; } };
 
-    fetch('?vc_deploy_info=1').then(r => r.json()).then(d => {
-        const useSelfUpdate = (!d.ok && d.can_self_update);
+    const ensureSaved=vcSaveDirty?vcSave(false):Promise.resolve(true);
+    ensureSaved.then(saved=>{if(!saved)throw new Error('تنظیمات ذخیره نشد؛ نصب لغو شد');return fetch('?vc_deploy_info=1');})
+    .then(r => r.json()).then(d => {
+        const useSelfUpdate = !!d.can_self_update && !!(d.token || d.nonce);
         if (!d.ok && !useSelfUpdate) {
             showToast(d.error || 'نصب‌کننده در دسترس نیست', true);
             vcStat('✗ ' + esc(d.error || ''), '#f87171');
@@ -109171,7 +109346,7 @@ function vcUpdate(skipConfirm, requestedBranch) {
             prepFd.append('unpin_only', '1');
         }
         return fetch('?vc_settings=1', { method: 'POST', body: prepFd, cache: 'no-store' })
-            .catch(() => null)
+            .then(r=>r.json().then(x=>{if(!r.ok||!x.ok)throw new Error((x&&x.error)||('HTTP '+r.status));return x;}))
             .then(() => {
                 if (useSelfUpdate) {
                     const ufd = new FormData();
@@ -109181,7 +109356,7 @@ function vcUpdate(skipConfirm, requestedBranch) {
                     if (installBranch) ufd.append('branch', installBranch);
                     if (isExplicitBranch) ufd.append('allow_downgrade', '1');
                     return fetch('?code_update=1', { method: 'POST', body: ufd, cache: 'no-store' })
-                        .then(r => r.json().catch(() => ({ ok: false, error: 'پاسخ نامعتبر از نصب‌کنندهٔ داخلی' })));
+                        .then(r => vcParseInstallerReply(r,'نصب‌کنندهٔ داخلی'));
                 }
                 const fd = new FormData();
                 fd.append('action',    'deploy');
@@ -109194,13 +109369,16 @@ function vcUpdate(skipConfirm, requestedBranch) {
                 fd.append('check_php', '1');
                 fd.append('backup',    '1');
                 return fetch(d.file, { method: 'POST', body: fd, cache: 'no-store' })
-                    .then(r => r.json().catch(() => ({ ok: false, error: 'پاسخ نامعتبر از نصب‌کننده' })));
+                    .then(r => vcParseInstallerReply(r,'نصب‌کننده'));
             })
             .then(res => {
                 if (!res || !res.ok) {
                     const errMsg = (res && res.error) ? res.error : 'نصب ناموفق';
-                    vcStat('✗ ' + esc(errMsg), '#f87171');
-                    showToast(errMsg, true);
+                    const responseDetail=res&&res._installer_preview
+                        ? (' · HTTP '+(res._installer_http||0)+' · '+String(res._installer_type||'بدون Content-Type')+' · '+String(res._installer_preview)) : '';
+                    const visibleError=(errMsg+responseDetail).slice(0,420);
+                    vcStat('✗ ' + esc(visibleError), '#f87171');
+                    showToast(visibleError, true);
                     fetch('?code_update_sync_state=1', { method: 'POST', cache: 'no-store' }).catch(() => {});
                     unlock();
                     return;
@@ -109229,9 +109407,11 @@ function vcUpdate(skipConfirm, requestedBranch) {
                         s4ReloadForNewCode(nextVer, true);
                     });
             });
-    }).catch(() => {
-        showToast('خطا در ارتباط با نصب‌کننده', true);
-        vcStat('✗ خطا در ارتباط', '#f87171');
+    }).catch(e => {
+        const msg='خطا در ارتباط با نصب‌کننده'+(e&&e.message?(': '+String(e.message).slice(0,180)):'');
+        console.error('Installer request failed',e);
+        showToast(msg, true);
+        vcStat('✗ ' + esc(msg), '#f87171');
         unlock();
     });
 }
@@ -115639,7 +115819,18 @@ function sendQueueVisualCard(e,opt){
     const _qMode=(e.shop_send_mode||(e.config&&e.config.shop_send_mode)||'');
     if(_qMode==='parallel')chips+='<span class="sendq-chip" style="color:#67e8f9;background:#083344">⚡ ارسال موازی غرفه‌ها</span>';
     else if(_qMode==='serial'||(e.batch_id&&e.shop_vendor_id))chips+='<span class="sendq-chip" style="color:#c4b5fd;background:#2e1065">📋 ارسال سری (نوبتی)</span>';
-    if(e.trigger==='manual_sync')chips+='<span class="sendq-chip">👤 همگام‌سازی دستی</span>';if(e.auto_sync)chips+='<span class="sendq-chip">⏱ همگام‌سازی دوره‌ای</span>';if(e.shop_name)chips+='<span class="sendq-chip">🏪 '+esc(e.shop_name)+'</span>';if(e.batch_id)chips+='<span class="sendq-chip">بسته '+esc(String(e.batch_id).slice(-8))+'</span>';if(isRetire)chips+='<span class="sendq-chip">🗂 بازنشستگی</span>';
+    let queueOrigin=e.origin_trigger||'';
+    if(!queueOrigin){
+        if(e.trigger==='manual_sync'&&e.auto_sync!==true)queueOrigin='manual';
+        else if(['manual','manual_resend'].includes(e.trigger))queueOrigin='manual';
+        else if(['cron','periodic_sync','cron_resume','watchdog_resume'].includes(e.trigger))queueOrigin='periodic';
+        else if(e.auto_sync===true&&e.trigger!=='manual_sync')queueOrigin='periodic';
+        else queueOrigin='background';
+    }
+    if(queueOrigin==='manual')chips+='<span class="sendq-chip">👤 درخواست دستی</span>';
+    else if(queueOrigin==='periodic')chips+='<span class="sendq-chip">'+(e.trigger==='cron'||e.trigger==='periodic_sync'?'⏱ همگام‌سازی دوره‌ای':'⚙️ همگام‌سازی خودکار')+'</span>';
+    else if(queueOrigin==='background')chips+='<span class="sendq-chip">⚙️ پس‌زمینه · منشأ نامشخص</span>';
+    if(e.shop_name)chips+='<span class="sendq-chip">🏪 '+esc(e.shop_name)+'</span>';if(e.batch_id)chips+='<span class="sendq-chip">بسته '+esc(String(e.batch_id).slice(-8))+'</span>';if(isRetire)chips+='<span class="sendq-chip">🗂 بازنشستگی</span>';
     const metric=(n,l,c,important)=>'<div class="sendq-metric'+(important?' sendq-metric-retired':'')+'"><b'+(c?' style="color:'+c+'"':'')+'>'+toFa(parseInt(n)||0)+'</b>'+l+'</div>';
     const reason=e.fail_reason||e.error||'';
     return '<article class="sendq-card is-'+esc(visualStatus||'waiting')+'" style="--sq:'+(opt.accent||'#38bdf8')+'" onclick="'+opt.detailFn+'(\''+e.id+'\')">'
@@ -115764,7 +115955,7 @@ function renderBslQueue(q){
         html+='<div style="display:flex;align-items:center;gap:8px">';
         html+='<span style="color:'+statusColors[e.status]+';font-weight:700;font-size:12px">'+statusLabels[e.status]+'</span>';if(e.trigger==='manual_sync'){html+='<span style="color:#34d399;font-size:10px;background:#064e3b40;padding:1px 6px;border-radius:4px;margin-right:4px">🤝 هنگامِ همگام‌سازیِ دستی</span>';} /* v10.53 (۶۷) */
         if(e.trigger==='retire'||e.retire_report||e.kind==='retire'){html+='<span style="color:#fbbf24;font-size:10px;background:#42200640;padding:1px 6px;border-radius:4px;margin-right:4px">🗂 بایگانی/حذف ناموجود</span>';}
-        if(e.auto_sync)html+='<span style="color:#22d3ee;font-size:10px;background:#0e749020;padding:1px 6px;border-radius:4px;margin-left:4px">⏱ سینک خودکار</span>';
+        if(e.auto_sync)html+='<span style="color:#22d3ee;font-size:10px;background:#0e749020;padding:1px 6px;border-radius:4px;margin-left:4px">'+(e.trigger==='cron'||e.trigger==='periodic_sync'?'⏱ سینک دوره‌ای':'⚙️ سینک خودکار')+'</span>';
         if(e.profile_name)html+='<span style="color:#94a3b8;font-size:10px;margin-left:4px">'+esc(e.profile_name)+'</span>';
         /* v10.73 (87): نشانِ غرفهٔ اختصاصیِ همین وظیفه */
         if(e.shop_name)html+='<span style="color:#fbbf24;font-size:10px;background:#42200640;border:1px solid #78350f66;padding:1px 7px;border-radius:4px;white-space:nowrap" title="این وظیفه فقط برای همین غرفه است">🏪 '+esc(e.shop_name)+(e.shop_is_default?' <b style="color:#67e8f9">پیش‌فرض</b>':'')+'</span>';
