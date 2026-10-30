@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.525';
+const APP_VERSION = '10.526';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47503,6 +47503,11 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,'$genericForbidden[(int)$vid]=true')!==false
         &&strpos($selfSrc,'$genericUpdateCode === 403 ||')!==false
         &&strpos($selfSrc,"{v:'10." . "525'")!==false&&version_compare(APP_VERSION,'10.525','>='));
+    $add('10.526','جزئیات کارت‌ها سقف دارد و delay مردهٔ 100ms ارسال موازی حذف شده است',
+        strpos($selfSrc,'array_slice($bslSentList,-400)')!==false
+        &&strpos($selfSrc,'array_slice($bslFailedList,-2000)')!==false
+        &&strpos($selfSrc,'usleep(max(0,$bslDelayMs-100)*1000)')!==false
+        &&strpos($selfSrc,"{v:'10." . "526'")!==false&&version_compare(APP_VERSION,'10.526','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79207,7 +79212,14 @@ $__rc=$GLOBALS['_bslResumeCounters'];
 $__sW=(int)($__rc['sent']??0);$__uW=(int)($__rc['updated']??0);
 $__skW=(int)($__rc['skipped']??0);$__fW=(int)($__rc['failed']??0);
 }
-$d=['running'=>true,'sent'=>$__sW,'updated'=>$__uW,'skipped'=>$__skW,'failed'=>$__fW,'total'=>$t,'last_title'=>$lt,'current'=>$cWrite,'done'=>false,'started_at'=>$GLOBALS['startedAt'],'last_progress_ts'=>time(),'recent_log'=>$recentSlice,'total_log_count'=>$totalLog,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList,
+/* v10.526: نوشتن کل تاریخچهٔ چند هزار کارتی بعد از هر محصول O(n²) بود و روی
+   هاست اشتراکی بیشتر از خود API زمان می‌گرفت. شمارنده‌ها کامل می‌مانند؛ برای
+   UI/عیب‌یابی فقط کارت‌های اخیر نگه داشته می‌شوند (خطاها سقف بزرگ‌تری دارند). */
+$__sentPersist=is_array($bslSentList)?array_slice($bslSentList,-400):[];
+$__updatedPersist=is_array($bslUpdatedList)?array_slice($bslUpdatedList,-400):[];
+$__skippedPersist=is_array($bslSkippedList)?array_slice($bslSkippedList,-400):[];
+$__failedPersist=is_array($bslFailedList)?array_slice($bslFailedList,-2000):[];
+$d=['running'=>true,'sent'=>$__sW,'updated'=>$__uW,'skipped'=>$__skW,'failed'=>$__fW,'total'=>$t,'last_title'=>$lt,'current'=>$cWrite,'done'=>false,'started_at'=>$GLOBALS['startedAt'],'last_progress_ts'=>time(),'recent_log'=>$recentSlice,'total_log_count'=>$totalLog,'sent_details'=>$__sentPersist,'updated_details'=>$__updatedPersist,'skipped_details'=>$__skippedPersist,'failed_details'=>$__failedPersist,
    'checkpoint'=>['queue_id'=>(string)($bslQueueId??''),'current'=>(int)$cWrite,'total'=>(int)$t,'sent'=>(int)$__sW,'updated'=>(int)$__uW,'skipped'=>(int)$__skW,'failed'=>(int)$__fW,'started_at'=>(int)$GLOBALS['startedAt']]];
 if($bslQueueId!='')$d['queue_id']=$bslQueueId;
 /* v10.23 (۳۶ه): شمارنده‌های هر غرفه در هر ضربانِ پیشرفت هم می‌روند تا صف
@@ -79247,10 +79259,8 @@ $__bootZero=((int)$s+(int)$u+(int)$sk+(int)$f)===0 && $__floor>0;
 if(!$__bootZero){
 $__e['sent']=$s;$__e['updated']=$u;$__e['skipped']=$sk;$__e['failed']=$f;
 }
-if(is_array($bslSentList)){$__e['sent_details']=$bslSentList;$__chg=true;}
-if(is_array($bslUpdatedList)){$__e['updated_details']=$bslUpdatedList;$__chg=true;}
-if(is_array($bslSkippedList)){$__e['skipped_details']=$bslSkippedList;$__chg=true;}
-if(is_array($bslFailedList)){$__e['failed_details']=$bslFailedList;$__chg=true;}
+$__e['sent_details']=$__sentPersist;$__e['updated_details']=$__updatedPersist;
+$__e['skipped_details']=$__skippedPersist;$__e['failed_details']=$__failedPersist;$__chg=true;
 if(is_array($d['shop_stats']??null)){$__e['shop_stats']=$d['shop_stats'];$__chg=true;}
 /* Keep Send-tab queue cards synchronized with non-product phases too. */
 foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$d)){$__e[$__pk]=$d[$__pk];$__chg=true;}}
@@ -80484,7 +80494,9 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__
     '⚡ [موازی '.count($__activeParShops).' غرفه] '.$__parDone.'/'.$total.' محصول — '.$sent.'✅ '.$updated.'⚡ '.$skipped.'⏭ '.$fail.'❌',
     ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__activeParShops).' غرفه','phase_current'=>$__parDone,
      'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
-usleep($bslDelayMs*1000);
+/* درخواست‌های سه غرفه خودشان rate pacing شبکه را دارند؛ فاصلهٔ 100ms صف
+   موازی فقط زمان مرده بود. مقادیر بالاتر از 100ms همچنان محترم می‌مانند. */
+usleep(max(0,$bslDelayMs-100)*1000);
 }
 if($__parStop){
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,'',['⏹ ارسال موازی غرفه‌ها با سیگنال توقف متوقف شد'],
@@ -98747,6 +98759,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.526', t:'🚀 کاهش سربار دیسک و فاصلهٔ مردهٔ ارسال باسلام', items:[
+    'شمارنده‌ها کامل می‌مانند اما به‌جای بازنویسی هزاران کارت بعد از هر محصول، فقط ۴۰۰ کارت اخیر هر نتیجه و ۲۰۰۰ خطای اخیر در checkpoint نگه‌داری می‌شود.',
+    'پیچیدگی نوشتن progress/queue از رشد درجه‌دو خارج شد؛ این بخش روی هاست اشتراکی یکی از گلوگاه‌های اصلی صف‌های چند‌هزارمحصولی بود.',
+    'در حالت چندغرفه‌ای، فاصلهٔ مصنوعی ۱۰۰ میلی‌ثانیه حذف شد؛ delayهای تنظیم‌شدهٔ بالاتر از ۱۰۰ میلی‌ثانیه همچنان رعایت می‌شوند.'
+  ]},
   {v:'10.525', t:'⚡ حذف مسیر کندِ 404 کاذب در ارسال غرفهٔ پیش‌فرض', items:[
     'اگر PATCH عمومی 403 و مسیر vendor-scoped سپس 404 بدهد، 404 دیگر به‌اشتباه شناسهٔ حذف‌شده تلقی نمی‌شود و fallback رسمی batch-updates حتماً اجرا می‌شود.',
     'این تغییر از جستجوی چندمرحله‌ای و ساخت دوبارهٔ غیرضروری جلوگیری می‌کند و مسیر رایج محصول موجود را به آپدیت مستقیم و سریع برمی‌گرداند.',
