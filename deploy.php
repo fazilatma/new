@@ -20,6 +20,8 @@
  *     را می‌بندند، lint کم‌حافظه برای فایل‌های بزرگ، و خطای شبکهٔ قابل فهم.
  *   • v3.3: عبور امن درخواست‌های POST از ModSecurity/LiteSpeed با پاکت
  *     Base64URL JSON و text/plain به‌جای multipart/form-data مسدودشده با 406.
+ *   • v3.4: آپدیتر داخلی با endpoint امن GET؛ دانلود، syntax/hash، بکاپ و
+ *     جایگزینی اتمیک خود deploy.php برای اصلاح زندهٔ نسخه‌های بعدی.
  *
  * نصب: فایل را روی هاست بگذارید و یک‌بار باز کنید (راه‌اندازیِ اولیه).
  */
@@ -27,7 +29,7 @@
 @set_time_limit(300);
 @ini_set('memory_limit', '768M');
 
-const DEPLOY_VERSION = '3.3';
+const DEPLOY_VERSION = '3.4';
 const DEPLOY_BUILD   = '1405-08-09';
 const CONFIG_FILE    = __DIR__ . '/.deploy-config.json';
 const BACKUP_DIR     = __DIR__ . '/_backups';
@@ -35,6 +37,9 @@ const LOG_FILE       = __DIR__ . '/.deploy-log.json';
 const MIN_BYTES      = 64;
 const KEEP_BACKUPS   = 20;
 const KEEP_LOGS      = 100;
+const DEPLOY_SELF_REPO   = 'fazilatma/new';
+const DEPLOY_SELF_BRANCH = 'arena/01a0ebf7-new';
+const DEPLOY_SELF_PATH   = 'deploy.php';
 
 // ==================================================================
 //  زیرساخت
@@ -717,6 +722,43 @@ function do_deploy(array $job, array $cfg, bool $dryRun = false): array {
             'steps' => $steps, 'message' => 'با موفقیت نصب شد'];
 }
 
+/** v3.4: update this deploy panel from the fixed source branch. */
+function deploy_self_update(array $cfg, bool $force = false): array {
+    $res = gh_download_file(DEPLOY_SELF_REPO, DEPLOY_SELF_BRANCH, DEPLOY_SELF_PATH,
+        (string)($cfg['github_token'] ?? ''));
+    if (empty($res['ok'])) return ['ok'=>false,'error'=>'دانلود آپدیتر ناموفق: '.(string)($res['error']??'unknown'),
+        'attempts'=>$res['attempts']??[]];
+    $code=(string)($res['body']??'');$size=strlen($code);
+    if($size<100000||strncmp(ltrim($code),'<?php',5)!==0)
+        return ['ok'=>false,'error'=>'فایل آپدیتر ناقص یا غیر PHP است','size'=>$size];
+    if(!preg_match("~const\\s+DEPLOY_VERSION\\s*=\\s*'([^']+)'~",$code,$m))
+        return ['ok'=>false,'error'=>'نسخهٔ deploy.php در فایل دریافتی پیدا نشد'];
+    $remoteVersion=(string)$m[1];
+    if(strpos($code,'function deploy_self_update(')===false||strpos($code,'deploy_unpack_post_envelope')===false)
+        return ['ok'=>false,'error'=>'فایل دریافتی آپدیتر کامل و WAF-safe نیست','remote_version'=>$remoteVersion];
+    if(!php_syntax_check($code,$syntaxError))
+        return ['ok'=>false,'error'=>'خطای syntax در آپدیتر: '.(string)$syntaxError,'remote_version'=>$remoteVersion];
+    $newHash=hash('sha256',$code);$oldHash=(string)@hash_file('sha256',__FILE__);
+    if($newHash===$oldHash)return ['ok'=>true,'updated'=>false,'same'=>true,'version'=>DEPLOY_VERSION,
+        'remote_version'=>$remoteVersion,'message'=>'deploy.php از قبل به‌روز است'];
+    if(!$force&&version_compare($remoteVersion,DEPLOY_VERSION,'<'))
+        return ['ok'=>false,'error'=>'نسخهٔ منبع قدیمی‌تر است؛ برای downgrade از force=1 استفاده کنید',
+            'version'=>DEPLOY_VERSION,'remote_version'=>$remoteVersion];
+    ensure_backup_dir();
+    $backup=BACKUP_DIR.'/deploy.php.self-update-'.date('Ymd-His').'.bak';
+    if(!@copy(__FILE__,$backup))return ['ok'=>false,'error'=>'بکاپ deploy.php ناموفق بود'];
+    $tmp=__FILE__.'.self-update-'.bin2hex(random_bytes(6));
+    if(@file_put_contents($tmp,$code,LOCK_EX)!==$size){@unlink($tmp);return ['ok'=>false,'error'=>'نوشتن فایل موقت آپدیتر ناموفق بود'];}
+    if((string)@hash_file('sha256',$tmp)!==$newHash){@unlink($tmp);return ['ok'=>false,'error'=>'هش فایل موقت آپدیتر مطابقت ندارد'];}
+    $perms=@fileperms(__FILE__);@chmod($tmp,$perms===false?0644:($perms&0777));
+    if(!@rename($tmp,__FILE__)){@unlink($tmp);return ['ok'=>false,'error'=>'جایگزینی اتمیک deploy.php ناموفق بود'];}
+    clearstatcache(true,__FILE__);if(function_exists('opcache_invalidate'))@opcache_invalidate(__FILE__,true);
+    prune_backups('deploy.php');
+    return ['ok'=>true,'updated'=>true,'version'=>DEPLOY_VERSION,'remote_version'=>$remoteVersion,
+        'size'=>$size,'sha'=>$newHash,'backup'=>basename($backup),'via'=>$res['via']??'',
+        'message'=>'deploy.php با موفقیت به‌روزرسانی شد؛ صفحه را تازه کنید'];
+}
+
 // ==================================================================
 //  انتقال POST مقاوم در برابر WAF — v3.3
 // ==================================================================
@@ -810,14 +852,29 @@ if ($isApi) {
         jout(['ok' => true]);
     }
 
-    /* v3.3 focused self-test: no configuration or destination is mutated. */
+    /* v3.4 built-in updater uses GET, so ModSecurity cannot block it as a POST. */
+    if ($action === 'self_update_status') {
+        jout(['ok'=>true,'version'=>DEPLOY_VERSION,'build'=>DEPLOY_BUILD,
+            'source'=>DEPLOY_SELF_REPO.'@'.DEPLOY_SELF_BRANCH.':'.DEPLOY_SELF_PATH,
+            'endpoint'=>'?action=self_update&api_token=…','method'=>'GET']);
+    }
+    if ($action === 'self_update') {
+        if(!api_token_ok($cfg))jout(['ok'=>false,'error'=>'api_token نامعتبر یا ارسال نشده است'],403);
+        $result=deploy_self_update($cfg,!empty($_GET['force']));
+        log_add(['type'=>'deploy_self_update','ok'=>!empty($result['ok']),
+            'changed'=>!empty($result['updated']),'dest'=>'deploy.php',
+            'msg'=>(string)($result['message']??$result['error']??'')]);
+        if(empty($result['ok']))jout($result,500);jout($result);
+    }
+
+    /* v3.4 focused self-test: no configuration or destination is mutated. */
     if ($action === 'selftest') {
         $badErr = null;
         $smallGood = php_syntax_check("<?php echo 'ok';", $smallErr);
         $smallBad = !php_syntax_check("<?php function broken( {", $badErr);
         $self = (string)@file_get_contents(__FILE__);
         $checks = [
-            'version_3_3' => version_compare(DEPLOY_VERSION, '3.3', '>='),
+            'version_3_4' => version_compare(DEPLOY_VERSION, '3.4', '>='),
             'github_api_first' => strpos($self, "'https://api.github.com/repos/'") !== false
                 && strpos($self, "'github_api_raw'") !== false,
             'large_file_cli_lint' => strpos($self, "strlen(\$code) > 1048576") !== false
@@ -827,6 +884,9 @@ if ($isApi) {
             'waf_safe_post_envelope' => function_exists('deploy_unpack_post_envelope')
                 && strpos($self,"return 'S4DP1.'+btoa(binary)") !== false
                 && strpos($self,"opt.headers['Content-Type']='text/plain;charset=UTF-8'") !== false,
+            'built_in_self_updater' => function_exists('deploy_self_update')
+                && strpos($self,"if (\$action === 'self_update')") !== false
+                && strpos($self,"'method'=>'GET'") !== false,
             'client_network_error_visible' => strpos($self, 'سرور deploy پاسخ کامل نداد') !== false,
         ];
         jout(['ok' => !in_array(false, $checks, true), 'version' => DEPLOY_VERSION,
@@ -1731,6 +1791,15 @@ document.getElementById('repo').addEventListener('keydown',e=>{if(e.key==='Enter
   </div>
 
   <div class="card">
+    <h2>⬆️ به‌روزرسانی خود deploy.php</h2>
+    <p class="hint" style="margin-bottom:10px">
+      آخرین نسخه از برنچ ثابت برنامه دریافت، syntax و hash آن بررسی، نسخهٔ فعلی بکاپ و فایل به‌صورت اتمیک جایگزین می‌شود. این مسیر GET است و به خطای WAF 406 مبتلا نمی‌شود.
+    </p>
+    <div id="su_msg" class="msg"></div>
+    <button class="btn b-green" onclick="selfUpdateDeploy()">⬆️ بررسی و نصب آخرین deploy.php</button>
+  </div>
+
+  <div class="card">
     <h2>🤖 اجرای خودکار</h2>
     <p class="hint" style="margin-bottom:10px">
       برای فراخوانی بدون ورود (cron یا وب‌هوک) از توکن API استفاده کنید.
@@ -2108,6 +2177,15 @@ async function saveSettings(){
   $('s_gh').value='';
   msg('s_msg','✓ ذخیره شد','m-ok');
   loadSettings();
+}
+async function selfUpdateDeploy(){
+  if(!SETTINGS.api_token)return msg('su_msg','✗ ابتدا توکن API را در همین صفحه تولید کنید','m-err');
+  if(!confirm('آخرین deploy.php از برنچ ثابت دریافت و پس از بکاپ نصب شود؟'))return;
+  msg('su_msg','<span class="spin"></span> در حال دانلود، اعتبارسنجی و نصب...','m-info');
+  const r=await api('self_update',{api_token:SETTINGS.api_token});
+  if(!r.ok)return msg('su_msg','✗ '+esc(r.error||'خطای آپدیت'),'m-err');
+  msg('su_msg','✓ '+esc(r.message||'به‌روزرسانی شد')+' · نسخهٔ منبع '+esc(r.remote_version||r.version||''),'m-ok');
+  if(r.updated)setTimeout(()=>location.reload(),1200);
 }
 async function regenApi(){
   if(!confirm('توکن API از نو ساخته شود؟ آدرس‌های قبلی از کار می‌افتند.')) return;

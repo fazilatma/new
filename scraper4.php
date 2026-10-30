@@ -402,7 +402,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.510';
+const APP_VERSION = '10.511';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -47974,6 +47974,8 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"{v:'10." . "509'")!==false&&version_compare(APP_VERSION,'10.509','>='));
     $add('10.510','deploy.php v3.3 درخواست POST را بدون multipart و مقاوم در برابر خطای WAF 406 می‌فرستد',
         strpos($selfSrc,"{v:'10." . "510'")!==false&&version_compare(APP_VERSION,'10.510','>='));
+    $add('10.511','deploy.php v3.4 آپدیتر داخلی GET با بکاپ، syntax، hash و جایگزینی اتمیک دارد',
+        strpos($selfSrc,"{v:'10." . "511'")!==false&&version_compare(APP_VERSION,'10.511','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99254,6 +99256,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.511', t:'⬆️ آپدیتر داخلی و endpoint زنده برای deploy.php', items:[
+    'deploy.php v3.4 از تب تنظیمات با یک دکمه آخرین نسخه را از برنچ ثابت می‌گیرد؛ این endpoint با GET اجرا می‌شود و درگیر WAF 406 مربوط به POST نیست.',
+    'پیش از جایگزینی، نسخه و ساختار WAF-safe، syntax و SHA-256 بررسی می‌شود؛ سپس بکاپ گرفته و فایل موقت به‌صورت اتمیک rename می‌شود.',
+    'endpoint وضعیت و endpoint نصب توکن‌دار افزوده شد تا اصلاح‌های بعدی deploy.php بدون دانلود و کپی دستی روی هاست نصب شوند.'
+  ]},
   {v:'10.510', t:'🛡 عبور درخواست‌های deploy.php از خطای 406 هاست', items:[
     'علت واقعی پاسخ HTML با HTTP 406، رد شدن multipart/form-data توسط ModSecurity/LiteSpeed پیش از اجرای PHP بود.',
     'deploy.php v3.3 همهٔ عملیات‌های POST را در پاکت Base64URL JSON با Content-Type متنی می‌فرستد و سمت سرور با سقف اندازه و کلیدهای محدود باز می‌کند.',
