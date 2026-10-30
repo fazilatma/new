@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.506';
+const APP_VERSION = '10.507';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -20822,6 +20822,16 @@ function vc_canonicalize_branch_alias(string $branch):string{
     if($branch==='arena/01a0ebf7-new')return defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
     return $branch;
 }
+/** The fixed updater branch and its legacy alias remain valid even in stale settings. */
+function vc_is_allowed_update_branch(string $branch,array $configured):bool{
+    $target=vc_canonicalize_branch_alias($branch);
+    $fixed=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
+    if($target===$fixed)return true;
+    foreach(vc_normalize_branches($configured) as $saved){
+        if(vc_canonicalize_branch_alias($saved)===$target)return true;
+    }
+    return false;
+}
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
     $legacy='arena/01a0ebf7-new';
@@ -21124,8 +21134,9 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
     try{
         $ghToken=trim((string)($cfg['github_token']??''));
         $allowed=vc_normalize_branches((array)($cfg['branches']??[]));
-        $requested=vc_canonicalize_branch_alias((string)($_POST['branch']??''));
-        if($requested!==''&&!in_array($requested,$allowed,true))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
+        $requestedInput=trim((string)($_POST['branch']??''));
+        $requested=vc_canonicalize_branch_alias($requestedInput);
+        if($requested!==''&&!vc_is_allowed_update_branch($requested,$allowed))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
         $probeCfg=$cfg;$probeCfg['repo']=S4_CODE_UPDATE_REPO;$probeCfg['path']=S4_CODE_UPDATE_PATH;$probeCfg['branches']=$requested!==''?[$requested]:$allowed;
         $probe=vc_probe_branches($probeCfg);
         $picked=($requested!=='')?($probe['rows'][0]??null):vc_pick_target_branch($cfg,$probe['rows']);
@@ -21517,11 +21528,20 @@ if (isset($_GET['vc_settings'])) {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         if (!empty($_POST['pin_only']) || !empty($_POST['unpin_only'])) {
             if (!empty($_POST['pin_only'])) {
-                $pinB = vc_canonicalize_branch_alias((string)($_POST['pin_branch'] ?? ''));
-                if($pinB===''||!in_array($pinB,$c['branches'],true)){
+                $pinInput=trim((string)($_POST['pin_branch'] ?? ''));
+                $pinB = vc_canonicalize_branch_alias($pinInput);
+                if($pinB===''||!vc_is_allowed_update_branch($pinB,$c['branches'])){
                     http_response_code(422);echo json_encode(['ok'=>false,'error'=>'branch_not_configured'],JSON_UNESCAPED_UNICODE);exit;
                 }
-                $c['branch']=$pinB;$c['pinned_branch']=$pinB;$c['pinned_at']=time();$c['pinned_max_unix']=time();
+                $pinBranches=vc_normalize_branches((array)$c['branches']);
+                foreach(array_unique(array_filter([$pinInput==='arena/01a0ebf7-new'?$pinInput:'',$pinB])) as $pinBranch){
+                    if(!in_array($pinBranch,$pinBranches,true)){
+                        if(count($pinBranches)>=20)array_pop($pinBranches);
+                        $pinBranches[]=$pinBranch;
+                    }
+                }
+                $c['branches']=$pinBranches;
+                $c['branch']=$pinInput==='arena/01a0ebf7-new'?$pinInput:$pinB;$c['pinned_branch']=$pinB;$c['pinned_at']=time();$c['pinned_max_unix']=time();
                 if(!vc_save($c)){http_response_code(500);echo json_encode(['ok'=>false,'error'=>'settings_save_failed'],JSON_UNESCAPED_UNICODE);exit;}
                 s4SyncAutoUpdateStateToDisk($pinB,true);
             } else {
@@ -47859,7 +47879,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$probeCfg[\'branches\']=$requested!==\'\'?[$requested]:$allowed')!==false
         &&strpos($selfSrc,"ufd.append('branch', installBranch)")!==false
         &&strpos($selfSrc,"fd.append('branch',    installBranch)")!==false
-        &&strpos($selfSrc,"if(\$requested!==''&&!in_array(\$requested,\$allowed,true))")!==false
+        &&strpos($selfSrc,"if(\$requested!==''&&!vc_is_allowed_update_branch(\$requested,\$allowed))")!==false
         &&strpos($selfSrc,"{v:'10." . "503'")!==false&&version_compare(APP_VERSION,'10.' . '503','>='));
     $add('10.504','برچسب منشأ استخراج از trigger اجرای worker جدا و برای کارهای قدیمی نامشخص می‌ماند',
         strpos($selfSrc,'function extractNormalizeOriginTrigger(')!==false
@@ -47881,8 +47901,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"{v:'10." . "504'")!==false&&version_compare(APP_VERSION,'10.' . '504','>='));
     $add('10.505','درخواست‌های قدیمیِ arena/01a0ebf7-new به برنچ همین نشست هدایت می‌شوند، نه اینکه branch_not_configured بدهند',
         vc_canonicalize_branch_alias('arena/01a0ebf7-new')===S4_CODE_UPDATE_BRANCH
-        &&strpos($selfSrc,"\$requested=vc_canonicalize_branch_alias((string)(\$_POST['branch']??''));")!==false
-        &&strpos($selfSrc,"\$pinB = vc_canonicalize_branch_alias((string)(\$_POST['pin_branch'] ?? ''));")!==false
+        &&strpos($selfSrc,"\$requestedInput=trim((string)(\$_POST['branch']??''));")!==false
+        &&strpos($selfSrc,'$requested=vc_canonicalize_branch_alias($requestedInput);')!==false
+        &&strpos($selfSrc,"\$pinInput=trim((string)(\$_POST['pin_branch'] ?? ''));")!==false
+        &&strpos($selfSrc,'$pinB = vc_canonicalize_branch_alias($pinInput);')!==false
         &&strpos($selfSrc,'function vcCanonicalUpdateBranch(branch)')!==false
         &&strpos($selfSrc,"{v:'10." . "505'")!==false&&version_compare(APP_VERSION,'10.' . '505','>='));
     $_keptLegacyBranch=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new','branches'=>['arena/01a0ebf7-new'],
@@ -47896,6 +47918,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$sourceBranch=vc_canonicalize_branch_alias($branch);')!==false
         &&strpos($selfSrc,"\$c['branches']=vc_normalize_branches((array)\$decoded);")!==false
         &&strpos($selfSrc,"{v:'10." . "506'")!==false&&version_compare(APP_VERSION,'10.' . '506','>='));
+    $add('10.507','نام قدیمی و برنچ ثابت updater حتی با تنظیمات قدیمیِ ناقص به‌عنوان مقصد مجاز پذیرفته می‌شوند',
+        vc_is_allowed_update_branch('arena/01a0ebf7-new',[])
+        &&vc_is_allowed_update_branch(S4_CODE_UPDATE_BRANCH,[])
+        &&!vc_is_allowed_update_branch('arena/not-configured',[])
+        &&strpos($selfSrc,'!vc_is_allowed_update_branch($requested,$allowed)')!==false
+        &&strpos($selfSrc,'function vc_is_allowed_update_branch(string $branch,array $configured):bool')!==false
+        &&strpos($selfSrc,"{v:'10." . "507'")!==false&&version_compare(APP_VERSION,'10.' . '507','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99151,6 +99180,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.507', t:'🛠️ پایداری آپدیت از alias قدیمی', items:[
+    'در تنظیمات قدیمی یا ناقص هم arena/01a0ebf7-new به مقصد ثابت همین نشست resolve می‌شود و دیگر با branch_not_configured متوقف نمی‌شود.',
+    'pin کردن مقصد ثابت در تنظیمات قدیمی، شاخهٔ canonical لازم را به فهرست مجاز اضافه می‌کند.'
+  ]},
   {v:'10.506', t:'📌 حفظ alias قدیمی در فهرست برنچ‌ها', items:[
     'برنچ arena/01a0ebf7-new پس از افزودن در تنظیمات حذف یا بازنویسی نمی‌شود و در فهرست باقی می‌ماند.',
     'برای probe و نصب، alias قدیمی به برنچ فعلی همین نشست resolve می‌شود؛ بنابراین نام قابل‌انتخاب می‌ماند بدون اینکه کد قدیمی نصب شود.'
