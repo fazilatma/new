@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.527';
+const APP_VERSION = '10.528';
 
 
 if (!function_exists('str_starts_with')) {
@@ -32148,6 +32148,12 @@ function bslAllShops(array $cn): array {
             $vid = (int)($v['vendor_id'] ?? 0);
             $tok = trim((string)($v['token'] ?? ''));
             if ($vid <= 0 || $tok === '') continue;
+            /* v10.528: The default vendor must win if a stale/duplicate copy is
+               also present in basalam.vendors. Otherwise later normalization
+               keys shops by vendor_id and the duplicate row can overwrite the
+               default token, causing every PATCH to report “ID does not belong
+               to your vendor” and adding several slow fallback requests. */
+            if ($defVid > 0 && $vid === $defVid) continue;
             $name = trim((string)($v['shop_name'] ?? ($v['name'] ?? '')));
             if ($name === '') $name = 'غرفهٔ ' . $vid;
             $vMode = (string)($v['price_mode'] ?? 'none');
@@ -47514,6 +47520,21 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"skipped:'⏭ بدون تغییر'")!==false
         &&strpos($selfSrc,"id=\"bK\"")!==false
         &&strpos($selfSrc,"{v:'10." . "527'")!==false&&version_compare(APP_VERSION,'10.527','>='));
+    $__shops528=bslAllShops(['basalam'=>[
+        'vendor_id'=>735703,'token'=>'default-token','shop_name'=>'default',
+        'vendors'=>[
+            ['vendor_id'=>735703,'token'=>'stale-wrong-token','shop_name'=>'duplicate default'],
+            ['vendor_id'=>710223,'token'=>'extra-token','shop_name'=>'extra'],
+        ],
+    ]]);
+    $add('10.528','شناسهٔ تکراری غرفهٔ پیش‌فرض در vendors هرگز توکن اصلی را بازنویسی نمی‌کند',
+        count($__shops528)===2
+        &&(int)($__shops528[0]['vendor_id']??0)===735703
+        &&(string)($__shops528[0]['token']??'')==='default-token'
+        &&!empty($__shops528[0]['is_default'])
+        &&(int)($__shops528[1]['vendor_id']??0)===710223
+        &&strpos($selfSrc,'if ($defVid > 0 && $vid === $defVid) continue;')!==false
+        &&strpos($selfSrc,"{v:'10." . "528'")!==false&&version_compare(APP_VERSION,'10.528','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98765,6 +98786,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.528', t:'🔐 تثبیت هویت و سرعت غرفهٔ پیش‌فرض باسلام', items:[
+    'اگر شناسهٔ غرفهٔ پیش‌فرض به‌صورت قدیمی یا تکراری در فهرست غرفه‌های اضافی هم ذخیره شده باشد، نسخهٔ اضافی دیگر نمی‌تواند توکن اصلی غرفه را بازنویسی کند.',
+    'ارسال موازی همیشه توکن و پرچم is_default تنظیمات اصلی را برای همان vendor_id نگه می‌دارد؛ بنابراین خطای «آیدی به غرفه تعلق ندارد» برای همهٔ محصولات غرفهٔ پیش‌فرض ایجاد نمی‌شود.',
+    'با حذف PATCHها و fallbackهای ناموفق تکراری، افت سرعت ناشی از این خطای مالکیت نیز برطرف می‌شود.'
+  ]},
   {v:'10.527', t:'🏷️ اصلاح معنای شمارندهٔ بدون تغییر باسلام', items:[
     'شمارندهٔ skipped باسلام دیگر «تکراری» نامیده نمی‌شود؛ این نتیجه یعنی محصول همان غرفه از قبل موجود و از نظر قیمت، موجودی و محتوای بررسی‌شده همگام بوده است.',
     'عنوان «بدون تغییر» در کارت اصلی، آمار هر غرفه، صف، پنجرهٔ جزئیات، گزارش محصولی، پیام پایان و اعلان‌ها یکسان شد.',
