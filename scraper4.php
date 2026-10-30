@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.523';
+const APP_VERSION = '10.524';
 
 
 if (!function_exists('str_starts_with')) {
@@ -15578,7 +15578,7 @@ function bslFindExistingQuick(string $tk, int $vid, string $title): ?array {
     $how='';return findRemoteByTitle($rows,$title,'','title',$how);
 }
 
-function bslFindExisting(string $tk, int $vid, string $title, string $productKey = '', bool $deepScan = true, bool $trustMatrixMiss = true, int $maxPages = 20): ?array {
+function bslFindExisting(string $tk, int $vid, string $title, string $productKey = '', bool $deepScan = true, bool $trustMatrixMiss = true, int $maxPages = 20, bool $skipMatrix = false): ?array {
     /* Keep the legacy flag for callers; an active-only matrix miss is always
        unknown and can never suppress a targeted lookup. */
     $maxPages=max(1,min(RECON_FETCH_MAX_PAGES,$maxPages));
@@ -15624,10 +15624,12 @@ function bslFindExisting(string $tk, int $vid, string $title, string $productKey
     /* Consult the latest reconciliation matrix before any search requests.
        A positive active-row hit is reusable; a miss is unknown and falls
        through to the existing targeted Basalam lookup. */
-    $__matrixRow = bslMatrixLookupRow($tk, $vid, $title, true);
-    if (($__matrixRow['state'] ?? '') === 'hit' && is_array($__matrixRow['row'] ?? null)) {
-        bslMatrixSaved(1);
-        return $__matrixRow['row'];
+    if (!$skipMatrix) {
+        $__matrixRow = bslMatrixLookupRow($tk, $vid, $title, true);
+        if (($__matrixRow['state'] ?? '') === 'hit' && is_array($__matrixRow['row'] ?? null)) {
+            bslMatrixSaved(1);
+            return $__matrixRow['row'];
+        }
     }
 
     /* v8.79: پارامتر درست «title» است نه «search». باسلام پارامتر ناشناخته
@@ -32987,8 +32989,10 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     // v10.20 (۳۳الف): دفترچهٔ نگاشتِ همین غرفه، نه شناسهٔ غرفهٔ پیش‌فرض
     $__mk = bslShopMapKey((string)($p['key'] ?? ''), $shop);
     $doDeep = !array_key_exists('find_deep_scan', $opts) || !empty($opts['find_deep_scan']);
-    $existing = !empty($opts['skip_find_existing']) ? null : bslFindExisting($tk, $vid, $title, $__mk, $doDeep);
-    if (!$existing && $rawTitle !== $title && empty($opts['skip_find_existing'])) {
+    $existing = is_array($opts['existing_override'] ?? null)
+        ? $opts['existing_override']
+        : (!empty($opts['skip_find_existing']) ? null : bslFindExisting($tk, $vid, $title, $__mk, $doDeep));
+    if (!$existing && $rawTitle !== $title && empty($opts['skip_find_existing']) && !array_key_exists('existing_override',$opts)) {
         $existing = bslFindExisting($tk, $vid, $rawTitle, $__mk, $doDeep);
     }
     $exId = is_array($existing) ? (int)($existing['id'] ?? 0) : 0;
@@ -33023,6 +33027,20 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
         if (!empty($r['ok']) && !empty($r['body']['id'])) {
             bslShopMapRecord($p, $shop, $exId, $title, $priceRial, $stock);   // v10.20 (۳۳الف) · v10.33 (۴۶)
             return ['ok' => true, 'id' => $exId, 'action' => 'updated', 'update_reason' => 'آپدیت قیمت/موجودی/محتوا', 'changes_detail' => 'PATCH محصول موجود'];
+        }
+        /* v10.524: 404 از هر دو مسیر یعنی ID دفترچه/ماتریس واقعاً قدیمی است.
+           آن را از shard همان غرفه حذف کن، بدون matrix و بدون ledger یک جستجوی
+           واقعی انجام بده، سپس فقط یک بار با ID تازه update یا در نبودش create کن. */
+        if ((int)($r['code'] ?? 0) === 404 && empty($opts['stale_id_recovered'])) {
+            if ($__mk !== '') remoteMapForget('bsl', $__mk);
+            $fresh = bslFindExisting($tk, $vid, $title, '', false, false, 2, true);
+            if (!$fresh && $rawTitle !== $title) $fresh = bslFindExisting($tk, $vid, $rawTitle, '', false, false, 2, true);
+            $retryOpts=$opts;$retryOpts['stale_id_recovered']=1;
+            if (is_array($fresh) && (int)($fresh['id']??0)>0) $retryOpts['existing_override']=$fresh;
+            else {$retryOpts['skip_find_existing']=1;unset($retryOpts['existing_override']);}
+            $recovered=bslUpsertToShop($p,$shop,$retryOpts);
+            if(!empty($recovered['ok']))$recovered['stale_id_recovered']=$exId;
+            return $recovered;
         }
         return array_merge(['ok' => false], bslSendErrorInfo($r, 'shop_update', 'products/' . $exId),
             ['error' => 'آپدیت در این غرفه ناموفق: ' . bslErrText($r)]);
@@ -47471,6 +47489,11 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"_bslHardForbiddenVendors")!==false
         &&strpos($selfSrc,"'action'=>'skipped_shop_forbidden'")!==false
         &&strpos($selfSrc,"{v:'10." . "523'")!==false&&version_compare(APP_VERSION,'10.523','>='));
+    $add('10.524','404 شناسهٔ قدیمی map را حذف و بدون matrix همان غرفه را دوباره resolve می‌کند',
+        function_exists('remoteMapForget')
+        &&strpos($selfSrc,"\$retryOpts['stale_id_recovered']=1")!==false
+        &&strpos($selfSrc,"int \$maxPages = 20, bool \$skipMatrix = false")!==false
+        &&strpos($selfSrc,"{v:'10." . "524'")!==false&&version_compare(APP_VERSION,'10.524','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -67218,6 +67241,17 @@ function remoteMapLoad(): array {
  * shardهایی که در ورودی ردیفی ندارند صریحاً خالی نوشته (یا حذف) می‌شوند،
  * وگرنه «پاک‌کردنِ دفترچه» فقط فایلِ اصلی را پاک می‌کرد.
  */
+function remoteMapForget(string $target, string $key): bool {
+    if (!in_array($target, ['woo','bsl'], true) || trim($key) === '') return false;
+    $sh = remoteMapShardOf($key);
+    $m = remoteMapReadShard($sh);
+    if (!isset($m[$target][$key])) { remoteMapCacheClear(); return true; }
+    unset($m[$target][$key]);
+    $ok = remoteMapWriteShard($sh, $m);
+    remoteMapCacheClear();
+    return $ok;
+}
+
 function remoteMapSave(array $m): bool {
     $byShard = [];
     foreach (remoteMapShards() as $sh) $byShard[$sh] = ['woo' => [], 'bsl' => []];
@@ -98704,6 +98738,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.524', t:'🔎 بازیابی واقعی شناسه‌های 404 غرفهٔ پیش‌فرض', items:[
+    '404 از PATCH عمومی و vendor-scoped اکنون به‌عنوان شناسهٔ قدیمی تشخیص داده می‌شود و فقط نگاشت همان محصول/غرفه از shard حذف می‌شود.',
+    'بازیابی، matrix قدیمی را دور می‌زند و همان غرفه را با درخواست واقعی عنوان جستجو می‌کند؛ محصول موجود با ID تازه update و محصول واقعاً حذف‌شده دوباره create می‌شود.',
+    'حلقهٔ بازیابی فقط یک بار اجرا می‌شود و هرگز ID یک غرفه را برای غرفهٔ دیگر استفاده نمی‌کند.'
+  ]},
   {v:'10.523', t:'🛑 توقف تکرار خطای دسترسی دائمی هر غرفه', items:[
     'اگر مسیر عمومی، vendor-scoped و batch-updates همگی برای یک غرفه 403 قطعی بدهند، اولین خطای کامل حفظ می‌شود و همان غرفه تا پایان worker circuit-break می‌شود.',
     'محصولات بعدی آن غرفه با دلیل روشن skipped_shop_forbidden رد می‌شوند؛ غرفه‌های سالم ادامه می‌یابند و هزاران خطای تکراری تولید نمی‌شود.',
