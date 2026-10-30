@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.521';
+const APP_VERSION = '10.522';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47451,6 +47451,9 @@ if (isset($_GET['selftest'])) {
         !isset($__batchSku['data'][0]['sku'])
         &&strpos($selfSrc,"'ep'=>'vendors/'.\$vid.'/products/batch-updates'")!==false
         &&strpos($selfSrc,"{v:'10." . "521'")!==false&&version_compare(APP_VERSION,'10.521','>='));
+    $add('10.522','retry علاوه بر شمارندهٔ صف progress و local task قدیمی را پاک می‌کند',
+        substr_count($selfSrc,'localTaskDbForget(BSL_PROGRESS_FILE);@unlink(BSL_PROGRESS_FILE)')>=2
+        &&strpos($selfSrc,"{v:'10." . "522'")!==false&&version_compare(APP_VERSION,'10.522','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78870,6 +78873,7 @@ if(!is_resource($retryFp)){
             $br['status']='waiting';$br['total']=$btotal;$br['current']=0;$br['sent']=0;$br['updated']=0;$br['skipped']=0;$br['failed']=0;
             $br['done_at']=0;$br['paused_at']=0;$br['retry_queued_at']=time();
             unset($br['superseded_by'],$br['cancel_reason'],$br['fail_reason'],$br['error']);
+            localTaskDbForget(BSL_PROGRESS_FILE);@unlink(BSL_PROGRESS_FILE);
             bslWriteQueue($busyQ);
             echo json_encode(['ok'=>true,'queued'=>true,'queue_id'=>$queueId,'total'=>$btotal,'message'=>'بازیابی ثبت شد و در اولین کران پس از آزاد شدن worker شروع می‌شود'],JSON_UNESCAPED_UNICODE);exit;
         }
@@ -78885,7 +78889,7 @@ $pf=(string)($row['products_file']??'');
 if($pf===''||!is_file($pf)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 $products=json_decode((string)@file_get_contents($pf),true);$actual=is_array($products)?count($products):0;
 if($actual<=0){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'snapshot محصولات خالی است'],JSON_UNESCAPED_UNICODE);exit;}
-@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
+localTaskDbForget(BSL_PROGRESS_FILE);@unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
 if(!@copy($pf,BSL_PRODUCTS_FILE)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'کپی snapshot ناموفق بود'],JSON_UNESCAPED_UNICODE);exit;}
 $now=time();$row['status']='running';$row['total']=$actual;$row['current']=0;$row['sent']=0;$row['updated']=0;$row['skipped']=0;$row['failed']=0;
 $row['started_at']=$now;$row['updated_at']=$now;$row['done_at']=0;$row['paused_at']=0;$row['retry_of_terminal_at']=$now;
@@ -98683,6 +98687,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.522', t:'🧹 شروع واقعی retry از ردیف نخست', items:[
+    'بازیابی terminal علاوه بر current و شمارنده‌های صف، progress file و local task قدیمی را نیز پاک می‌کند.',
+    'worker جدید دیگر checkpoint پایان‌یافتهٔ اجرای قبل را نمی‌خواند و واقعاً از index صفر همان snapshot آغاز می‌شود.'
+  ]},
   {v:'10.521', t:'🔐 fallback رسمی برای PATCHهای 403 باسلام', items:[
     'اگر مسیر عمومی و vendor-scoped هر دو برای محصول موجود 403 بدهند، آپدیت فقط برای همان ID و همان vendor از endpoint رسمی batch-updates تکرار می‌شود.',
     'پاسخ موفق batch به شناسهٔ همان محصول متصل می‌شود تا remote-map درست ثبت شود و هیچ هویت بین غرفه‌ای جابه‌جا نشود.',
