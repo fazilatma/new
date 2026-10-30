@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.505';
+const APP_VERSION = '10.506';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -20830,14 +20830,21 @@ function vc_migrate_legacy_branch_config(array $c): array {
     $pin=trim((string)($c['pinned_branch']??''));
     $legacyPresent=(string)($c['branch']??'')===$legacy||$pin===$legacy||in_array($legacy,$branches,true);
     if(!$legacyPresent)return ['config'=>$c,'changed'=>false];
-    $next=[];foreach($branches as $branch){$branch=$branch===$legacy?$canonical:$branch;if(!in_array($branch,$next,true))$next[]=$branch;}
-    if(!in_array($canonical,$next,true)){
+    $before=$c;$next=$branches;
+    $addBranch=static function(string $branch)use(&$next):void{
+        if($branch===''||in_array($branch,$next,true))return;
         if(count($next)>=20)array_pop($next);
-        $next[]=$canonical;
-    }
-    $c['branches']=$next;$c['branch']=$canonical;
-    if($pin===$legacy){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
-    return ['config'=>$c,'changed'=>true];
+        $next[]=$branch;
+    };
+    /* Keep the user's legacy entry visible, but ensure the actual session
+       branch is also available as its canonical install target. */
+    if((string)($c['branch']??'')===$legacy||$pin===$legacy)$addBranch($legacy);
+    $addBranch($canonical);
+    $c['branches']=$next;
+    $branch=trim((string)($c['branch']??''));
+    $c['branch']=in_array($branch,$next,true)?$branch:$canonical;
+    if($pin!==''&&!in_array($pin,$next,true)){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
+    return ['config'=>$c,'changed'=>$c!==$before];
 }
 
 function vc_load(): array {
@@ -20900,9 +20907,10 @@ function vc_normalize_branches(array $branches):array{
 function vc_probe_branches(array $c):array{
     $rows=[];$errors=[];$repo=(string)$c['repo'];$path=(string)$c['path'];$token=(string)$c['github_token'];
     foreach(vc_normalize_branches((array)($c['branches']??[])) as $branch){
-        $commitUrl='https://api.github.com/repos/'.$repo.'/commits?sha='.rawurlencode($branch).'&path='.rawurlencode($path).'&per_page=1';
+        $sourceBranch=vc_canonicalize_branch_alias($branch);
+        $commitUrl='https://api.github.com/repos/'.$repo.'/commits?sha='.rawurlencode($sourceBranch).'&path='.rawurlencode($path).'&per_page=1';
         $cr=vc_get_json_auto($commitUrl,$token,25);
-        $metaUrl='https://api.github.com/repos/'.$repo.'/contents/'.implode('/',array_map('rawurlencode',explode('/',$path))).'?ref='.rawurlencode($branch);
+        $metaUrl='https://api.github.com/repos/'.$repo.'/contents/'.implode('/',array_map('rawurlencode',explode('/',$path))).'?ref='.rawurlencode($sourceBranch);
         $mr=vc_get_json_auto($metaUrl,$token,25);
         if(empty($cr['ok'])||empty($cr['data'][0])||empty($mr['ok'])||empty($mr['data']['sha'])){$errors[$branch]=(string)($mr['error']??$cr['error']??'probe_failed');continue;}
         $commit=$cr['data'][0];$date=(string)($commit['commit']['committer']['date']??$commit['commit']['author']['date']??'');
@@ -21529,10 +21537,9 @@ if (isset($_GET['vc_settings'])) {
         if (isset($_POST['branches'])) {
             $decoded=json_decode((string)$_POST['branches'],true);
             if(!is_array($decoded)){$decoded=preg_split('~[\r\n,]+~',(string)$_POST['branches']);}
-            $decoded=vc_normalize_branches((array)$decoded);
-            $c['branches']=vc_normalize_branches(array_map('vc_canonicalize_branch_alias',$decoded));
+            $c['branches']=vc_normalize_branches((array)$decoded);
         }
-        if (isset($_POST['branch']))      $c['branch']      = vc_canonicalize_branch_alias((string)$_POST['branch']);
+        if (isset($_POST['branch']))      $c['branch']      = trim((string)$_POST['branch']);
         if(!$c['branches'])$c['branches']=vc_normalize_branches([(string)$c['branch']]);
         if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/e868e86a-new';
         if (isset($_POST['path']))        $c['path']        = ltrim(trim((string)$_POST['path']), '/');
@@ -47811,10 +47818,11 @@ if (isset($_GET['selftest'])) {
     $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new',
         'branches'=>['arena/01a0ebf7-new'],'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
     $legacyBranchCfg=(array)($legacyBranchTest['config']??[]);
-    $add('10.500','تنظیمِ قدیمیِ updater خودکار به برنچ همین گفتگو منتقل می‌شود',
-        !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')===S4_CODE_UPDATE_BRANCH
-        &&(array)($legacyBranchCfg['branches']??[])===[S4_CODE_UPDATE_BRANCH]
-        &&(string)($legacyBranchCfg['pinned_branch']??'')==''
+    $add('10.500','تنظیمِ قدیمیِ updater شاخهٔ قدیمی را نگه می‌دارد و مقصد فعلی را هم می‌افزاید',
+        !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')==='arena/01a0ebf7-new'
+        &&in_array('arena/01a0ebf7-new',(array)($legacyBranchCfg['branches']??[]),true)
+        &&in_array(S4_CODE_UPDATE_BRANCH,(array)($legacyBranchCfg['branches']??[]),true)
+        &&(string)($legacyBranchCfg['pinned_branch']??'')==='arena/01a0ebf7-new'
         &&strpos($selfSrc,"{v:'10." . "500'")!==false&&version_compare(APP_VERSION,'10.' . '500','>='));
     $_stopLocksStart501=strpos($selfSrc,'function tasksStopAllLocksBusy(): array {');
     $_stopLocksEnd501=strpos($selfSrc,'function tasksStripWorkerCheckpointFields(',($_stopLocksStart501===false?0:$_stopLocksStart501));
@@ -47877,6 +47885,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$pinB = vc_canonicalize_branch_alias((string)(\$_POST['pin_branch'] ?? ''));")!==false
         &&strpos($selfSrc,'function vcCanonicalUpdateBranch(branch)')!==false
         &&strpos($selfSrc,"{v:'10." . "505'")!==false&&version_compare(APP_VERSION,'10.' . '505','>='));
+    $_keptLegacyBranch=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new','branches'=>['arena/01a0ebf7-new'],
+        'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $_keptLegacyCfg=(array)($_keptLegacyBranch['config']??[]);
+    $add('10.506','افزودن alias قدیمی در فهرست برنچ‌ها حفظ می‌شود و برای GitHub به شاخهٔ canonical می‌خواند',
+        in_array('arena/01a0ebf7-new',(array)($_keptLegacyCfg['branches']??[]),true)
+        &&in_array(S4_CODE_UPDATE_BRANCH,(array)($_keptLegacyCfg['branches']??[]),true)
+        &&($_keptLegacyCfg['branch']??'')==='arena/01a0ebf7-new'
+        &&($_keptLegacyCfg['pinned_branch']??'')==='arena/01a0ebf7-new'
+        &&strpos($selfSrc,'$sourceBranch=vc_canonicalize_branch_alias($branch);')!==false
+        &&strpos($selfSrc,"\$c['branches']=vc_normalize_branches((array)\$decoded);")!==false
+        &&strpos($selfSrc,"{v:'10." . "506'")!==false&&version_compare(APP_VERSION,'10.' . '506','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99132,6 +99151,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.506', t:'📌 حفظ alias قدیمی در فهرست برنچ‌ها', items:[
+    'برنچ arena/01a0ebf7-new پس از افزودن در تنظیمات حذف یا بازنویسی نمی‌شود و در فهرست باقی می‌ماند.',
+    'برای probe و نصب، alias قدیمی به برنچ فعلی همین نشست resolve می‌شود؛ بنابراین نام قابل‌انتخاب می‌ماند بدون اینکه کد قدیمی نصب شود.'
+  ]},
   {v:'10.505', t:'🔀 هدایت برنچ قدیمی نشست به برنچ فعلی', items:[
     'نام قدیمی arena/01a0ebf7-new به برنچ ثابت همین نشست arena/e868e86a-new هدایت می‌شود؛ آپدیت و pin دیگر برای این نام branch_not_configured نمی‌دهند.',
     'تنظیمات قدیمی و انتخاب‌های ذخیره‌شدهٔ برنچ هم هنگام ثبت به نام فعلی تبدیل می‌شوند.'
