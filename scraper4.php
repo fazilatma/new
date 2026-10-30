@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.531';
+const APP_VERSION = '10.532';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47581,6 +47581,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'ep'=>'vendors/'.\$vid.'/products/batch-updates'")!==false
         &&substr_count($selfSrc,'if (!empty($directDefaultBatch[(int)$vid])) continue;')>=3
         &&strpos($selfSrc,"{v:'10." . "531'")!==false&&version_compare(APP_VERSION,'10.531','>='));
+    $add('10.532','ترمیم checkpoint فقط روی صف paused انجام می‌شود و با worker مسابقه ندارد',
+        strpos($selfSrc,"isset(\$_GET['bsl_queue_set_checkpoint'])")!==false
+        &&strpos($selfSrc,"'queue_must_be_paused'")!==false
+        &&strpos($selfSrc,"'checkpoint_repaired_version'=\>APP_VERSION")===false
+        &&strpos($selfSrc,"\$e['checkpoint_repaired_version']=APP_VERSION")!==false
+        &&strpos($selfSrc,"{v:'10." . "532'")!==false&&version_compare(APP_VERSION,'10.532','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78809,6 +78815,30 @@ echo json_encode(['ok'=>true],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
+/* v10.532: maintenance-safe checkpoint repair. Unlike the legacy live
+   progress endpoint, this only accepts a paused row, so no worker can race
+   and overwrite the restored cursor before resume. */
+if(isset($_GET['bsl_queue_set_checkpoint'])){
+header('Content-Type: application/json; charset=UTF-8');
+$queueId=trim((string)($_GET['queue_id']??''));
+$queue=bslReadQueue();$found=false;$result=[];
+foreach($queue['entries'] as &$e){
+if((string)($e['id']??'')!==$queueId)continue;
+$found=true;
+if((string)($e['status']??'')!=='paused'){$result=['ok'=>false,'error'=>'queue_must_be_paused','status'=>(string)($e['status']??'')];break;}
+$total=max(0,(int)($e['total']??0));$current=max(0,min($total,(int)($_GET['current']??$e['current']??0)));
+$e['current']=$current;$e['phase_current']=$current;$e['phase_total']=$total;
+$e['phase_pct']=$total>0?(int)floor($current*100/$total):0;
+foreach(['sent','updated','skipped','failed'] as $f)if(isset($_GET[$f]))$e[$f]=max(0,(int)$_GET[$f]);
+$e['checkpoint_repaired_at']=time();$e['checkpoint_repaired_version']=APP_VERSION;
+$result=['ok'=>true,'queue_id'=>$queueId,'current'=>$current,'total'=>$total];break;
+}
+unset($e);
+if(!$found)$result=['ok'=>false,'error'=>'queue_not_found'];
+if(!empty($result['ok']))bslWriteQueue($queue);
+echo json_encode($result,JSON_UNESCAPED_UNICODE);exit;
+}
+
 if(isset($_GET['bsl_queue_mark_done'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_GET['queue_id']??'');
@@ -98832,6 +98862,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.532', t:'🧷 ترمیم امن checkpoint صف متوقف', items:[
+    'ابزار نگه‌داری checkpoint فقط ردیف paused را می‌پذیرد تا worker همزمان نتواند cursor ترمیم‌شده را بازنویسی کند.',
+    'cursor، درصد مرحله و شمارنده‌های موفق قبلی به‌صورت اتمیک حفظ می‌شوند و سپس همان صف قابل ادامه است.',
+    'این ابزار برای بازگرداندن صف جاری به آخرین checkpoint معتبر پیش از راه‌اندازی ناخواسته از صفر اضافه شد.'
+  ]},
   {v:'10.531', t:'🚀 حذف دو درخواست شکست‌خوردهٔ همیشگی غرفهٔ پیش‌فرض', items:[
     'در ارسال موازی، آپدیت غرفهٔ پیش‌فرض مستقیماً از endpoint رسمی batch-updates همان vendor آغاز می‌شود و دیگر ابتدا PATCH عمومی و vendor-scoped ناموفق اجرا نمی‌شوند.',
     'تنوع‌های مبدأ بدون ID مقصد وارد batch آپدیت نمی‌شوند؛ در صورت رد batch امن، مسیر کامل قبلی همچنان fallback می‌شود و خطا پنهان نمی‌ماند.',
