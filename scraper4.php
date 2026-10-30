@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.505';
+const APP_VERSION = '10.507';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -20816,6 +20816,12 @@ function vc_defaults(): array {
     ];
 }
 
+/** The old session branch is an alias for this chat's fixed updater branch. */
+function vc_canonicalize_branch_alias(string $branch):string{
+    $branch=trim($branch);
+    if($branch==='arena/e868e86a-new')return defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
+    return $branch;
+}
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
     $legacy='arena/e868e86a-new';
@@ -20824,14 +20830,21 @@ function vc_migrate_legacy_branch_config(array $c): array {
     $pin=trim((string)($c['pinned_branch']??''));
     $legacyPresent=(string)($c['branch']??'')===$legacy||$pin===$legacy||in_array($legacy,$branches,true);
     if(!$legacyPresent)return ['config'=>$c,'changed'=>false];
-    $next=[];foreach($branches as $branch){$branch=$branch===$legacy?$canonical:$branch;if(!in_array($branch,$next,true))$next[]=$branch;}
-    if(!in_array($canonical,$next,true)){
+    $before=$c;$next=$branches;
+    $addBranch=static function(string $branch)use(&$next):void{
+        if($branch===''||in_array($branch,$next,true))return;
         if(count($next)>=20)array_pop($next);
-        $next[]=$canonical;
-    }
-    $c['branches']=$next;$c['branch']=$canonical;
-    if($pin===$legacy){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
-    return ['config'=>$c,'changed'=>true];
+        $next[]=$branch;
+    };
+    /* Keep the user's legacy entry visible, but ensure the actual session
+       branch is also available as its canonical install target. */
+    if((string)($c['branch']??'')===$legacy||$pin===$legacy)$addBranch($legacy);
+    $addBranch($canonical);
+    $c['branches']=$next;
+    $branch=trim((string)($c['branch']??''));
+    $c['branch']=in_array($branch,$next,true)?$branch:$canonical;
+    if($pin!==''&&!in_array($pin,$next,true)){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
+    return ['config'=>$c,'changed'=>$c!==$before];
 }
 
 function vc_load(): array {
@@ -20894,9 +20907,10 @@ function vc_normalize_branches(array $branches):array{
 function vc_probe_branches(array $c):array{
     $rows=[];$errors=[];$repo=(string)$c['repo'];$path=(string)$c['path'];$token=(string)$c['github_token'];
     foreach(vc_normalize_branches((array)($c['branches']??[])) as $branch){
-        $commitUrl='https://api.github.com/repos/'.$repo.'/commits?sha='.rawurlencode($branch).'&path='.rawurlencode($path).'&per_page=1';
+        $sourceBranch=vc_canonicalize_branch_alias($branch);
+        $commitUrl='https://api.github.com/repos/'.$repo.'/commits?sha='.rawurlencode($sourceBranch).'&path='.rawurlencode($path).'&per_page=1';
         $cr=vc_get_json_auto($commitUrl,$token,25);
-        $metaUrl='https://api.github.com/repos/'.$repo.'/contents/'.implode('/',array_map('rawurlencode',explode('/',$path))).'?ref='.rawurlencode($branch);
+        $metaUrl='https://api.github.com/repos/'.$repo.'/contents/'.implode('/',array_map('rawurlencode',explode('/',$path))).'?ref='.rawurlencode($sourceBranch);
         $mr=vc_get_json_auto($metaUrl,$token,25);
         if(empty($cr['ok'])||empty($cr['data'][0])||empty($mr['ok'])||empty($mr['data']['sha'])){$errors[$branch]=(string)($mr['error']??$cr['error']??'probe_failed');continue;}
         $commit=$cr['data'][0];$date=(string)($commit['commit']['committer']['date']??$commit['commit']['author']['date']??'');
@@ -21110,7 +21124,7 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
     try{
         $ghToken=trim((string)($cfg['github_token']??''));
         $allowed=vc_normalize_branches((array)($cfg['branches']??[]));
-        $requested=trim((string)($_POST['branch']??''));
+        $requested=vc_canonicalize_branch_alias((string)($_POST['branch']??''));
         if($requested!==''&&!in_array($requested,$allowed,true))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
         $probeCfg=$cfg;$probeCfg['repo']=S4_CODE_UPDATE_REPO;$probeCfg['path']=S4_CODE_UPDATE_PATH;$probeCfg['branches']=$requested!==''?[$requested]:$allowed;
         $probe=vc_probe_branches($probeCfg);
@@ -21503,7 +21517,7 @@ if (isset($_GET['vc_settings'])) {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         if (!empty($_POST['pin_only']) || !empty($_POST['unpin_only'])) {
             if (!empty($_POST['pin_only'])) {
-                $pinB = trim((string)($_POST['pin_branch'] ?? ''));
+                $pinB = vc_canonicalize_branch_alias((string)($_POST['pin_branch'] ?? ''));
                 if($pinB===''||!in_array($pinB,$c['branches'],true)){
                     http_response_code(422);echo json_encode(['ok'=>false,'error'=>'branch_not_configured'],JSON_UNESCAPED_UNICODE);exit;
                 }
@@ -33001,7 +33015,13 @@ function bslShopsFindExistingMulti(string $title, string $productKey, array $sho
                destination product still exists. A fresh complete snapshot can
                disprove that and safely route the item through create/search. */
             $present = bslShopKnownIdPresence((string)$sh['token'], $vid, $known);
-            if ($present === true || $present === null) { $ids[$vid] = $known; continue; }
+            /* v10.507: unknown is not proof of existence. This was the exact
+               production failure for an emptied shop: stale remote-map rows
+               were accepted when its all-status catalog could not be verified,
+               then bslSkipUnchanged skipped every product without POSTing any.
+               Force a real shop-scoped title lookup instead. */
+            if ($present === true) { $ids[$vid] = $known; continue; }
+            if ($present === null) { $need[$vid] = $sh; continue; }
             $hit = bslCatalogLookup((string)$sh['token'], $vid, $title, false);
             if ($hit > 0) { $ids[$vid] = $hit; bslCatalogSaved(1); continue; }
             if ($hit === 0) { bslCatalogSaved(1); continue; }
@@ -47821,10 +47841,11 @@ if (isset($_GET['selftest'])) {
     $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/e868e86a-new',
         'branches'=>['arena/e868e86a-new'],'pinned_branch'=>'arena/e868e86a-new','pinned_at'=>123,'pinned_max_unix'=>456]);
     $legacyBranchCfg=(array)($legacyBranchTest['config']??[]);
-    $add('10.500','تنظیمِ قدیمیِ updater خودکار به برنچ همین گفتگو منتقل می‌شود',
-        !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')===S4_CODE_UPDATE_BRANCH
-        &&(array)($legacyBranchCfg['branches']??[])===[S4_CODE_UPDATE_BRANCH]
-        &&(string)($legacyBranchCfg['pinned_branch']??'')==''
+    $add('10.500','تنظیمِ قدیمیِ updater شاخهٔ منبع را نگه می‌دارد و مقصد فعلی را هم می‌افزاید',
+        !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')==='arena/e868e86a-new'
+        &&in_array('arena/e868e86a-new',(array)($legacyBranchCfg['branches']??[]),true)
+        &&in_array(S4_CODE_UPDATE_BRANCH,(array)($legacyBranchCfg['branches']??[]),true)
+        &&(string)($legacyBranchCfg['pinned_branch']??'')==='arena/e868e86a-new'
         &&strpos($selfSrc,"{v:'10." . "500'")!==false&&version_compare(APP_VERSION,'10.' . '500','>='));
     $_stopLocksStart501=strpos($selfSrc,'function tasksStopAllLocksBusy(): array {');
     $_stopLocksEnd501=strpos($selfSrc,'function tasksStripWorkerCheckpointFields(',($_stopLocksStart501===false?0:$_stopLocksStart501));
@@ -47896,6 +47917,21 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'profileProductsNeedSave(forceProducts,hasActiveKey)')!==false
         &&strpos($selfSrc,"fetch('?matrix_reprice=1&reason='+encodeURIComponent(reason)+'&_v='")!==false
         &&strpos($selfSrc,"{v:'10." . "505'")!==false&&version_compare(APP_VERSION,'10.505','>='));
+    $_keptLegacyBranch=vc_migrate_legacy_branch_config(['branch'=>'arena/e868e86a-new','branches'=>['arena/e868e86a-new'],
+        'pinned_branch'=>'arena/e868e86a-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $_keptLegacyCfg=(array)($_keptLegacyBranch['config']??[]);
+    $add('10.506','alias برنچ منبع حفظ و برای نصب به برنچ همین نشست resolve می‌شود',
+        in_array('arena/e868e86a-new',(array)($_keptLegacyCfg['branches']??[]),true)
+        &&in_array(S4_CODE_UPDATE_BRANCH,(array)($_keptLegacyCfg['branches']??[]),true)
+        &&($_keptLegacyCfg['branch']??'')==='arena/e868e86a-new'
+        &&($_keptLegacyCfg['pinned_branch']??'')==='arena/e868e86a-new'
+        &&vc_canonicalize_branch_alias('arena/e868e86a-new')===S4_CODE_UPDATE_BRANCH
+        &&strpos($selfSrc,'$sourceBranch=vc_canonicalize_branch_alias($branch);')!==false
+        &&strpos($selfSrc,"{v:'10." . "506'")!==false&&version_compare(APP_VERSION,'10.506','>='));
+    $add('10.507','شناسهٔ تاییدنشدهٔ remote-map در غرفهٔ خالی باعث skip نمی‌شود',
+        strpos($selfSrc,'if ($present === true) { $ids[$vid] = $known; continue; }')!==false
+        &&strpos($selfSrc,'if ($present === null) { $need[$vid] = $sh; continue; }')!==false
+        &&strpos($selfSrc,"{v:'10." . "507'")!==false&&version_compare(APP_VERSION,'10.507','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99176,10 +99212,18 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.507', t:'🛍 رفع پرش اشتباه محصولات در غرفهٔ خالی باسلام', items:[
+    'شناسهٔ قدیمی remote-map فقط وقتی بدون درخواست پذیرفته می‌شود که کاتالوگ کامل همان غرفه حضور آن را تایید کند.',
+    'اگر اعتبارسنجی کاتالوگ نامشخص باشد، محصول دیگر «بدون تغییر» شمرده نمی‌شود؛ جست‌وجوی واقعی همان غرفه انجام و در صورت نبودن محصول ساخته می‌شود.',
+    'مشاهدهٔ تولید نشان داد بهترین های بازار در صف فعال بود اما ۴۹۸ از ۴۹۸ محصول را به‌اشتباه skipped کرده بود.'
+  ]},
+  {v:'10.506', t:'📌 حفظ alias برنچ منبع در فهرست updater', items:[
+    'نام arena/e868e86a-new در تنظیمات قدیمی حفظ می‌شود و برای probe و نصب به برنچ ثابت همین نشست resolve می‌گردد.'
+  ]},
   {v:'10.505', t:'⚡ ذخیرهٔ سریع تنظیمات پروفایل و بازقیمت‌گذاری غیرمسدودکننده', items:[
     'ذخیرهٔ معمولی تنظیمات دیگر هزاران محصولِ بدون تغییر را در مرورگر stringify و دوباره آپلود نمی‌کند؛ محصولات فقط هنگام استخراج، درون‌ریزی، ویرایش یا حذف واقعی ارسال می‌شوند.',
     'بازقیمت‌گذاری سنگین جدول مغایرت از پاسخ ذخیرهٔ پروفایل و تنظیمات عمومی جدا شد: ذخیره فوراً تأیید می‌شود و endpoint اختصاصی matrix_reprice در پس‌زمینه جدول را تازه می‌کند.',
-    'آخرین کد v10.504 برنچ arena/e868e86a-new با توقف همهٔ endpointمحور v10.501 ادغام و حفظ شد.'
+    'آخرین کد برنچ arena/e868e86a-new با توقف همهٔ endpointمحور ادغام و حفظ شد.'
   ]},
   {v:'10.504', t:'🏷️ اصلاح برچسب دستی/خودکار استخراج و همگام‌سازی', items:[
     'برچسب منشأ از trigger واقعیِ کاربر یا زمان‌بندی جدا شد؛ worker و worker_child دیگر به‌اشتباه «دستی» محسوب نمی‌شوند.',
@@ -109356,14 +109400,20 @@ function vcParseInstallerReply(response, source) {
     });
 }
 
+/** Keep a stale link to the transferred session branch working by redirecting it to this checkout. */
+const VC_SESSION_UPDATE_BRANCH=<?=json_encode(S4_CODE_UPDATE_BRANCH)?>;
+function vcCanonicalUpdateBranch(branch){
+    const b=String(branch||'').trim();
+    return b==='arena/e868e86a-new'?VC_SESSION_UPDATE_BRANCH:b;
+}
 /**
  * نصب: این تابع خودش چیزی نمی‌نویسد. یک فرم به deploy.php ارسال می‌کند
  * که فایلی مستقل است و کار نصب را با همان زنجیرهٔ ایمنی انجام می‌دهد.
  */
 function vcUpdate(skipConfirm, requestedBranch) {
     const isExplicitBranch = !!(requestedBranch && String(requestedBranch).trim());
-    const installBranch = (isExplicitBranch ? String(requestedBranch).trim() : '')
-        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || '');
+    const installBranch = vcCanonicalUpdateBranch((isExplicitBranch ? String(requestedBranch).trim() : '')
+        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || ''));
     const busy = vcBusy();
     if (busy && !skipConfirm) {
         if (!confirm('«' + busy + '» در جریان است.\n\n'
