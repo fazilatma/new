@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.526';
+const APP_VERSION = '10.527';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47508,6 +47508,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'array_slice($bslFailedList,-2000)')!==false
         &&strpos($selfSrc,'usleep(max(0,$bslDelayMs-100)*1000)')!==false
         &&strpos($selfSrc,"{v:'10." . "526'")!==false&&version_compare(APP_VERSION,'10.526','>='));
+    $add('10.527','نتیجهٔ skipped باسلام در رابط، کارت‌ها و گزارش‌ها «بدون تغییر» است نه «تکراری»',
+        strpos($selfSrc,"skipLabel:'بدون تغییر'")!==false
+        &&strpos($selfSrc,"result_label:'⏭ بدون تغییر'")!==false
+        &&strpos($selfSrc,"skipped:'⏭ بدون تغییر'")!==false
+        &&strpos($selfSrc,"id=\"bK\"")!==false
+        &&strpos($selfSrc,"{v:'10." . "527'")!==false&&version_compare(APP_VERSION,'10.527','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79962,7 +79968,7 @@ if(!empty($_wSingleUpd['overridden'])){
 }
 if($bslContentDiff){$needUpdate=true;foreach($bslContentDiff as $_cd)$updateChanges[]=$_cd;}
 
-if(!$needUpdate){$skipped++;bslShopStatBumpDefault('s');$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,'reason'=>'تکرار (قیمت+موجودی+محتوا یکسان)'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ تکرار (یکسان)");continue;}
+if(!$needUpdate){$skipped++;bslShopStatBumpDefault('s');$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,'reason'=>'بدون تغییر (قیمت+موجودی+محتوا یکسان)'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ بدون تغییر (همگام است)");continue;}
 
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ آپدیت: ".implode(',',$updateChanges));
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
@@ -80712,7 +80718,7 @@ elseif(!$__skipImageRetry)bslBackendProgress($sent,$updated,$skipped,$fail,$tota
      'phase_total'=>count($imgFailedEntries),'phase_pct'=>(int)floor(($__imgDone??0)*100/max(1,count($imgFailedEntries))),
      'phase_shop_vendor_id'=>$vid]);
 
-$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped تکراری, $fail خطا | Phase3: $imgRetryFixed تصویر اصلاح";
+$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped بدون تغییر, $fail خطا | Phase3: $imgRetryFixed تصویر اصلاح";
 $bslLog[]=$finalLog;
 @unlink(BSL_PRODUCTS_FILE);
 remoteMapRecord('bsl',array_merge($bslSentList,$bslUpdatedList),(string)($nextEntry['profile_key']??''));
@@ -80976,7 +80982,7 @@ $changes[]='بازفعال‌سازی از '.($statusLabels[$exStatusVal]??$exSt
 }
 
 if(!$needUpdate){
-echo json_encode(['ok'=>true,'action'=>'skip','key'=>$pKey,'title'=>$pTitle,'remote_id'=>$exId,'reason'=>'تکرار: نام+قیمت+موجودی یکسان','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
+echo json_encode(['ok'=>true,'action'=>'skip','key'=>$pKey,'title'=>$pTitle,'remote_id'=>$exId,'reason'=>'بدون تغییر: نام+قیمت+موجودی یکسان','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
 }
 
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>max(1,(int)($bs['preparation_days']??3)),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
@@ -81393,7 +81399,7 @@ if(!empty($_wCliChk['overridden'])){
     if($_knownCliW!==(int)$_wCliChk['weight']){$needUpdate=true;$updateLog.=' وزن '.(int)$_wCliChk['weight'].'g';}
 }
 if(!$needUpdate){
-$skipped++;$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'reason'=>'تکرار: نام+قیمت+موجودی یکسان','remote_id'=>$exId??0],$card);bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ تکرار: نام+قیمت+موجودی");
+$skipped++;$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'reason'=>'بدون تغییر: نام+قیمت+موجودی یکسان','remote_id'=>$exId??0],$card);bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ بدون تغییر: نام+قیمت+موجودی");
 usleep(100000);continue;
 }
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ آپدیت ID#$exId".$updateLog);
@@ -81822,7 +81828,7 @@ bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$total,'','Phase 2: '.$ca
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$total,'','Phase 2: هیچ محصول رد‌شده دسته‌بندی یافت نشد');
 }
 
-$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped تکراری, $fail خطا | Phase2: $catFixed دسته اصلاح, $catRetryFailed خطا";
+$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped بدون تغییر, $fail خطا | Phase2: $catFixed دسته اصلاح, $catRetryFailed خطا";
 $bslLog[]=$finalLog;
 
 if($fromFile)@unlink(BSL_PRODUCTS_FILE);
@@ -81967,7 +81973,7 @@ $statusLabels=[3790=>'غیرفعال',3568=>'در انتظار',4184=>'بایگ�
 $updateLog.=' بازفعال‌سازی از '.($statusLabels[$exStatusVal]??$exStatusVal);
 }
 
-if(!$needUpdate){$skipped++;send_sse('send_skip',['key'=>$pKey,'title'=>$pTitle,'reason'=>'تکرار','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink]);continue;}
+if(!$needUpdate){$skipped++;send_sse('send_skip',['key'=>$pKey,'title'=>$pTitle,'reason'=>'بدون تغییر','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink]);continue;}
 
 send_sse('send_info',['msg'=>'['.$n.'] آپدیت ID#'.$exId.$updateLog]);
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>max(1,(int)($bs['preparation_days']??3)),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
@@ -91602,7 +91608,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div class="cact"><button class="btn btn-cyan" id="bSB" onclick="sendBsl()" style="flex:1">🚀 ارسال باسلام</button><button class="btn btn-green" id="bSBlegacy" onclick="sendBslClient()" style="flex:1">🚀 ارسال فرات</button><button class="btn btn-orange hidden" id="bRB" onclick="sendBsl()" style="flex:1">🔄 تلاش مجدد</button><button class="btn btn-teal" onclick="showBslProductsModal()" style="flex-shrink:0;font-size:12px;padding:6px 10px">🏪 مدیریت جامع محصولات باسلام</button><button class="btn btn-red hidden" id="bST" onclick="stopBslProcess()">⏹ توقف</button></div>
 <div class="progress hidden" id="bP"><div class="progress-bar" id="bPB" style="background:linear-gradient(90deg,#0891b2,#22d3ee)"></div></div>
 <div class="status" id="bSS" style="color:#67e8f9"></div>
-<div class="ssum hidden" id="bSM" style="grid-template-columns:repeat(6,1fr)"><div class="si" style="cursor:pointer" onclick="showBslReport('sent')"><b id="bO" style="color:#4ade80">۰</b><span>جدید</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('updated')"><b id="bU" style="color:#facc15">۰</b><span>آپدیت</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('skipped')"><b id="bK" style="color:#fb923c">۰</b><span>تکراری</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('failed')"><b id="bF" style="color:#f87171">۰</b><span>خطا</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('retired')"><b id="bX" style="color:#fbbf24">۰</b><span>🗂 بایگانی/حذف</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('all')"><b id="bT" style="color:#60a5fa">۰</b><span>کل</span></div></div>
+<div class="ssum hidden" id="bSM" style="grid-template-columns:repeat(6,1fr)"><div class="si" style="cursor:pointer" onclick="showBslReport('sent')"><b id="bO" style="color:#4ade80">۰</b><span>جدید</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('updated')"><b id="bU" style="color:#facc15">۰</b><span>آپدیت</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('skipped')"><b id="bK" style="color:#94a3b8">۰</b><span>بدون تغییر</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('failed')"><b id="bF" style="color:#f87171">۰</b><span>خطا</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('retired')"><b id="bX" style="color:#fbbf24">۰</b><span>🗂 بایگانی/حذف</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('all')"><b id="bT" style="color:#60a5fa">۰</b><span>کل</span></div></div>
 <!-- v10.36 (۴۹ب): تفکیکِ زندهٔ غرفه‌ها حینِ ارسال — تا حالا فقط در کارتِ صف بود -->
 <div id="bslLiveShops" style="margin-top:6px"></div>
 <div class="sres hidden" id="bR"></div>
@@ -98759,6 +98765,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.527', t:'🏷️ اصلاح معنای شمارندهٔ بدون تغییر باسلام', items:[
+    'شمارندهٔ skipped باسلام دیگر «تکراری» نامیده نمی‌شود؛ این نتیجه یعنی محصول همان غرفه از قبل موجود و از نظر قیمت، موجودی و محتوای بررسی‌شده همگام بوده است.',
+    'عنوان «بدون تغییر» در کارت اصلی، آمار هر غرفه، صف، پنجرهٔ جزئیات، گزارش محصولی، پیام پایان و اعلان‌ها یکسان شد.',
+    'شمارنده‌های ایجاد و آپدیت دستکاری نشده‌اند: محصول واقعاً جدید همچنان «جدید»، محصول تغییرکرده «آپدیت» و خطای واقعی همچنان «خطا» می‌ماند.'
+  ]},
   {v:'10.526', t:'🚀 کاهش سربار دیسک و فاصلهٔ مردهٔ ارسال باسلام', items:[
     'شمارنده‌ها کامل می‌مانند اما به‌جای بازنویسی هزاران کارت بعد از هر محصول، فقط ۴۰۰ کارت اخیر هر نتیجه و ۲۰۰۰ خطای اخیر در checkpoint نگه‌داری می‌شود.',
     'پیچیدگی نوشتن progress/queue از رشد درجه‌دو خارج شد؛ این بخش روی هاست اشتراکی یکی از گلوگاه‌های اصلی صف‌های چند‌هزارمحصولی بود.',
@@ -114058,7 +114069,7 @@ function pollBslProgress() {
             const allItems=[];
             bslReportData.sent.forEach(x=>{allItems.push(Object.assign({result:'ok'},x));});
             bslReportData.updated.forEach(x=>{allItems.push(Object.assign({result:'update'},x));});
-            bslReportData.skipped.forEach(x=>{allItems.push(Object.assign({result:'skip'},x));});
+            bslReportData.skipped.forEach(x=>{allItems.push(Object.assign({result:'skip',result_label:'⏭ بدون تغییر'},x));});
             bslReportData.failed.forEach(x=>{allItems.push(Object.assign({result:'fail'},x));});
             (bslReportData.retired||[]).forEach(x=>{allItems.push(Object.assign({result:'retired'},x));});
             const needFull = bslLastCardCount===0 || logDiv.querySelectorAll('.scard').length===0 || totalCards<bslLastCardCount;
@@ -114183,14 +114194,14 @@ function pollBslProgress() {
                 return;
             }
             $('bPB').style.width='100%';
-            let finalText='✓ '+toFa(sent)+' جدید | '+toFa(updated)+' آپدیت | '+toFa(skipped)+' تکراری | '+toFa(failed)+' خطا';
+            let finalText='✓ '+toFa(sent)+' جدید | '+toFa(updated)+' آپدیت | '+toFa(skipped)+' بدون تغییر | '+toFa(failed)+' خطا';
             if(elapsedStr) finalText+=' | '+elapsedStr;
             $('bSS').textContent=finalText;
             // Persist completion-toast dedupe across polls and page reloads.
             const thisQueueId=d.queue_id||'';
             if(thisQueueId){window._bslCompletedQueueIds=window._bslCompletedQueueIds||{};window._bslCompletedQueueIds[thisQueueId]=true;}
             bslLastDoneQueueId=thisQueueId;
-            if(rememberBslCompletionToast(d))showToast('✓ '+sent+' جدید, '+updated+' آپدیت, '+skipped+' تکراری, '+failed+' خطا');
+            if(rememberBslCompletionToast(d))showToast('✓ '+sent+' جدید, '+updated+' آپدیت, '+skipped+' بدون تغییر, '+failed+' خطا');
             // v7.38: Auto-run Phase 2 — check for category-rejected products
             setTimeout(bslPhase2Check,2000);
             // v7.48: After process done, check queue and auto-start next entry
@@ -115107,7 +115118,7 @@ function stopBslProcess(){
         bslQueueRunner=null;
     }
 }
-function finB(s,u,k,f,t){$('bSS').textContent='✓ '+toFa(s)+' جدید | '+toFa(u)+' آپدیت | '+toFa(k)+' تکراری | '+toFa(f)+' خطا';showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' تکراری, '+f+' خطا');}
+function finB(s,u,k,f,t){$('bSS').textContent='✓ '+toFa(s)+' جدید | '+toFa(u)+' آپدیت | '+toFa(k)+' بدون تغییر | '+toFa(f)+' خطا';showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' بدون تغییر, '+f+' خطا');}
 
 // v7.48: Client-side BaSalam send — one product at a time, no server timeout
 let bslClientRunning=false;
@@ -115170,7 +115181,7 @@ function sendBslClient(){
                 bslReportData.updated.push({title:d.title,remote_id:d.remote_id,key:d.key,changes:d.changes,update_reason:d.update_reason||d.changes,image:d.image||p.image,price:d.price,category:d.category});
             }else if(d.action==='skip'){
                 k++;$('bK').textContent=toFa(k);
-                $('bR').insertAdjacentHTML('beforeend',renderSendCard({title:d.title||p.title,image:d.image||p.image,price:d.price,category:d.category,category_id:d.category_id,price_unit:d.price_unit,link:d.link,result:'skip',remote_id:d.remote_id,error:d.reason}));
+                $('bR').insertAdjacentHTML('beforeend',renderSendCard({title:d.title||p.title,image:d.image||p.image,price:d.price,category:d.category,category_id:d.category_id,price_unit:d.price_unit,link:d.link,result:'skip',result_label:'⏭ بدون تغییر',remote_id:d.remote_id,error:d.reason}));
                 bslReportData.skipped.push({title:d.title,remote_id:d.remote_id,key:d.key,reason:d.reason,image:d.image||p.image,price:d.price,category:d.category});
             }else if(d.action==='fail'||!d.ok){
                 f++;$('bF').textContent=toFa(f);
@@ -115197,9 +115208,9 @@ function finishBslClient(s,u,k,f,t){
     bslClientRunning=false;bSend=false;
     $('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');$('bST').classList.add('hidden');
     $('bO').textContent=toFa(s);$('bU').textContent=toFa(u);$('bK').textContent=toFa(k);$('bF').textContent=toFa(f);$('bT').textContent=toFa(t);
-    $('bSS').textContent='✓ '+toFa(s)+' جدید | '+toFa(u)+' آپدیت | '+toFa(k)+' تکراری | '+toFa(f)+' خطا';
+    $('bSS').textContent='✓ '+toFa(s)+' جدید | '+toFa(u)+' آپدیت | '+toFa(k)+' بدون تغییر | '+toFa(f)+' خطا';
     $('bPB').style.width='100%';
-    showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' تکراری, '+f+' خطا');
+    showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' بدون تغییر, '+f+' خطا');
 }
 
 let s4AppReadyRetry=null;
@@ -115440,7 +115451,7 @@ function bslShopStatsHtml(rows,compact){
           +'<span style="display:flex;gap:9px;font-size:10px">'
           + cell(s.sent,'#4ade80','✅','جدید')
           + cell(s.updated,'#facc15','⚡','آپدیت')
-          + cell(s.skipped,'#94a3b8','⏭','تکراری')
+          + cell(s.skipped,'#94a3b8','⏭','بدون تغییر')
           + cell(s.failed,'#f87171','❌','خطا')
           +'</span></div></div>';
     });
@@ -115560,7 +115571,7 @@ function sendQueueVisualCard(e,opt){
     return '<article class="sendq-card is-'+esc(visualStatus||'waiting')+'" style="--sq:'+(opt.accent||'#38bdf8')+'" onclick="'+opt.detailFn+'(\''+e.id+'\')">'
       +'<div class="sendq-head"><div class="sendq-logo">'+(opt.icon||'📦')+'</div><div><div class="sendq-name" title="'+esc(profileKey||profileLabel)+'">👤 پروفایل ارسال: '+esc(profileLabel)+'</div><div class="sendq-context">'+chips+'<span class="sendq-chip">'+toFa(total)+' محصول</span></div></div><span class="sendq-status" style="color:'+colors[visualStatus]+';background:'+colors[visualStatus]+'18;border:1px solid '+colors[visualStatus]+'55">'+status+'</span></div>'
       +'<div class="sendq-progress-head"><b>'+(hasPhase?esc(e.phase_label):toFa(pct)+'٪ انجام شده')+'</b><span>'+(hasPhase?(toFa(phCur)+' از '+toFa(phTotal)+' · '+toFa(pct)+'٪'):(toFa(processed)+' از '+toFa(total)+' · '+toFa(remain)+' باقی‌مانده'))+'</span></div><div class="sendq-track"><div class="sendq-fill" style="width:'+pct+'%"></div></div>'
-      +'<div class="sendq-metrics">'+metric(newSent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(retired,opt.retireLabel||'حذف/بایگانی','#f472b6',true)+metric(e.skipped,isRetire?'یافت‌نشد':'ردشده','#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
+      +'<div class="sendq-metrics">'+metric(newSent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(retired,opt.retireLabel||'حذف/بایگانی','#f472b6',true)+metric(e.skipped,isRetire?'یافت‌نشد':(opt.skipLabel||'ردشده'),'#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
       +(reason?'<div class="sendq-reason">⚠ '+esc(reason)+'</div>':'')+(opt.extra||'')
       +'<div class="sendq-foot"><span class="sendq-hint">مشاهدهٔ گزارش و محصولات ›</span><span class="sendq-actions" onclick="event.stopPropagation()">'+(opt.actions||'')+'</span></div></article>';
 }
@@ -115654,7 +115665,7 @@ function renderBslQueue(q){
             __acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه'+(__current>0?' از '+toFa(__current+1):'')+'</button>'
               +'<button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         }else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
-        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
+        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',skipLabel:'بدون تغییر',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
         return;
         let progText='';
         let progPercent=0;
@@ -115667,7 +115678,7 @@ function renderBslQueue(q){
             progPercent=Math.round(e.current/e.total*100);
             progText+=' | '+toFa(e.sent)+'✅ '+toFa(e.updated)+'⚡ '+toFa(e.skipped)+'⏭ '+toFa(e.failed)+'❌';
         }else if(e.status==='done'){
-            progText=(e.retire_report||e.kind==='retire'||e.trigger==='retire')?('🗂 '+toFa(e.sent)+' بایگانی/حذف | '+toFa(e.skipped)+' یافت‌نشده | '+toFa(e.failed)+' خطا'):('✓ '+toFa(e.sent)+' جدید | '+toFa(e.updated)+' آپدیت | '+toFa(e.skipped)+' تکراری | '+toFa(e.failed)+' خطا');
+            progText=(e.retire_report||e.kind==='retire'||e.trigger==='retire')?('🗂 '+toFa(e.sent)+' بایگانی/حذف | '+toFa(e.skipped)+' یافت‌نشده | '+toFa(e.failed)+' خطا'):('✓ '+toFa(e.sent)+' جدید | '+toFa(e.updated)+' آپدیت | '+toFa(e.skipped)+' بدون تغییر | '+toFa(e.failed)+' خطا');
             progPercent=100;
         }else if(e.status==='waiting'){
             progText=toFa(e.total)+' محصول — منتظر شروع';
@@ -116088,7 +116099,7 @@ function showBslQueueDetail(qid){
             const _sc=[];
             (e.sent_details||[]).forEach(x=>_sc.push(Object.assign({result:'ok'},x)));
             (e.updated_details||[]).forEach(x=>_sc.push(Object.assign({result:'update'},x)));
-            (e.skipped_details||[]).forEach(x=>_sc.push(Object.assign({result:'skip'},x)));
+            (e.skipped_details||[]).forEach(x=>_sc.push(Object.assign({result:'skip',result_label:'⏭ بدون تغییر'},x)));
             (e.failed_details||[]).forEach(x=>_sc.push(Object.assign({result:'fail'},x)));
             if(_sc.length && typeof renderSendCard==='function'){
                 detailHtml+='<div style="margin-bottom:12px;max-height:340px;overflow-y:auto;padding:6px;background:#0f172a;border:1px solid #334155;border-radius:8px">';
@@ -116124,7 +116135,7 @@ if(e.shop_name)detailHtml+='<div style="color:#94a3b8">غرفهٔ هدف: <b sty
         detailHtml+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;padding:10px;background:#0f172a;border-radius:8px">';
         detailHtml+='<div style="text-align:center"><b style="color:#4ade80;font-size:16px">'+toFa(e.sent||0)+'</b><div style="color:#64748b;font-size:10px">✅ جدید</div></div>';
         detailHtml+='<div style="text-align:center"><b style="color:#facc15;font-size:16px">'+toFa(e.updated||0)+'</b><div style="color:#64748b;font-size:10px">⚡ آپدیت</div></div>';
-        detailHtml+='<div style="text-align:center"><b style="color:#94a3b8;font-size:16px">'+toFa(e.skipped||0)+'</b><div style="color:#64748b;font-size:10px">⏭ تکراری</div></div>';
+        detailHtml+='<div style="text-align:center"><b style="color:#94a3b8;font-size:16px">'+toFa(e.skipped||0)+'</b><div style="color:#64748b;font-size:10px">⏭ بدون تغییر</div></div>';
         detailHtml+='<div style="text-align:center"><b style="color:#f87171;font-size:16px">'+toFa(e.failed||0)+'</b><div style="color:#64748b;font-size:10px">❌ خطا</div></div>';
         detailHtml+='</div>';
         /* v10.23 (۳۶ه): همان شمارنده‌های تفکیکیِ غرفه، اینجا با ابعادِ بزرگ‌تر */
@@ -116378,9 +116389,9 @@ function finishQueueEntry(){
         const sec=Math.floor((Date.now()-q.startedAt)/1000);
         elapsed=sec>=60?(Math.floor(sec/60)+' دقیقه '+sec%60+' ثانیه'):(sec+' ثانیه');
     }
-    $('bSS').textContent='✓ '+toFa(q.sent)+' جدید | '+toFa(q.updated)+' آپدیت | '+toFa(q.skipped)+' تکراری | '+toFa(q.failed)+' خطا';
+    $('bSS').textContent='✓ '+toFa(q.sent)+' جدید | '+toFa(q.updated)+' آپدیت | '+toFa(q.skipped)+' بدون تغییر | '+toFa(q.failed)+' خطا';
     if(elapsed)$('bSS').textContent+=' | '+elapsed;
-    showToast('✓ '+q.sent+' جدید, '+q.updated+' آپدیت, '+q.skipped+' تکراری, '+q.failed+' خطا');
+    showToast('✓ '+q.sent+' جدید, '+q.updated+' آپدیت, '+q.skipped+' بدون تغییر, '+q.failed+' خطا');
     markQueueEntryDone(q.id,q);
     bslQueueRunner=null;
     // Auto-start next waiting queue entry after 3 seconds
@@ -119980,8 +119991,8 @@ function bslReportDetailHtml(item,type){
 function showBslReport(type){
     // v8.19: 'all' type shows all categories combined
     if(type==='all'){
-        const allList=[...(bslReportData.sent||[]).map(x=>({...x,_cat:'✅ ایجاد'})),...(bslReportData.updated||[]).map(x=>({...x,_cat:'⚡ آپدیت'})),...(bslReportData.skipped||[]).map(x=>({...x,_cat:'⏭ تکراری'})),...(bslReportData.failed||[]).map(x=>({...x,_cat:'❌ خطا'})),...(bslReportData.retired||[]).map(x=>({...x,_cat:'🗂 بایگانی/حذف'}))];
-        const catColors={'✅ ایجاد':'#4ade80','⚡ آپدیت':'#facc15','⏭ تکراری':'#fb923c','❌ خطا':'#f87171','🗂 بایگانی/حذف':'#fbbf24'};
+        const allList=[...(bslReportData.sent||[]).map(x=>({...x,_cat:'✅ ایجاد'})),...(bslReportData.updated||[]).map(x=>({...x,_cat:'⚡ آپدیت'})),...(bslReportData.skipped||[]).map(x=>({...x,_cat:'⏭ بدون تغییر'})),...(bslReportData.failed||[]).map(x=>({...x,_cat:'❌ خطا'})),...(bslReportData.retired||[]).map(x=>({...x,_cat:'🗂 بایگانی/حذف'}))];
+        const catColors={'✅ ایجاد':'#4ade80','⚡ آپدیت':'#facc15','⏭ بدون تغییر':'#fb923c','❌ خطا':'#f87171','🗂 بایگانی/حذف':'#fbbf24'};
         let html='<div class="bsl-modal-overlay" onclick="if(event.target===this)closeReportModal()">';
         html+='<div class="bsl-modal" style="max-width:700px">';
         html+='<div class="bsl-modal-head"><h2 style="color:#60a5fa">📊 گزارش کل باسلام ('+toFa(allList.length)+' محصول)</h2><button class="btn btn-gray" onclick="closeReportModal()">✕</button></div>';
@@ -120004,7 +120015,7 @@ function showBslReport(type){
         document.body.appendChild(div);return;
     }
     const list=bslReportData[type]||[];
-    const labels={sent:'✅ ایجاد شده',updated:'⚡ آپدیت شده',skipped:'⏭ تکراری',failed:'❌ خطا',retired:'🗂 بایگانی/حذف شده'};
+    const labels={sent:'✅ ایجاد شده',updated:'⚡ آپدیت شده',skipped:'⏭ بدون تغییر',failed:'❌ خطا',retired:'🗂 بایگانی/حذف شده'};
     const colors={sent:'#22c55e',updated:'#facc15',skipped:'#94a3b8',failed:'#f87171',retired:'#fbbf24'};
     const title=labels[type]||type;
     let html='<div class="bsl-modal-overlay" onclick="if(event.target===this)closeReportModal()">';
@@ -120106,7 +120117,7 @@ function renderSendCard(d){
     const rc={ok:'scard-ok',update:'scard-up',skip:'scard-skip',fail:'scard-fail',retired:'scard-retired'};
     const ri={ok:'✅ ایجاد شد',update:'⚡ آپدیت شد',skip:'⏭ تکراری',fail:'❌ خطا',retired:'🗂 بایگانی/حذف'};
     const rc2=rc[d.result]||'scard-fail';
-    const ri2=ri[d.result]||d.result;
+    const ri2=d.result_label||(ri[d.result]||d.result);
     let priceStr=d.price?toFa(Number(d.price).toLocaleString('en-US'))+(d.price_unit==='rial'?' ریال':' تومان'):'—';
     let catStr=d.category||'—';
     let errStr=d.error?'<div class="scard-err">⚠️ '+esc(d.error)+'</div>':'';
