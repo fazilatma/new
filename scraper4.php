@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.517';
+const APP_VERSION = '10.518';
 
 
 if (!function_exists('str_starts_with')) {
@@ -14920,7 +14920,24 @@ function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): 
         return $payload;
     }
     $isCreateEndpoint = (bool)preg_match('~^vendors/\d+/products(?:\?|$)~', $epClean);
+    $isSingleUpdateEndpoint = (bool)preg_match('~(?:^|/)products/\d+(?:\?|$)~', $epClean);
     $hasBarcode = !empty($payload['barcode']) && strlen((string)$payload['barcode']) >= 8;
+
+    /* v10.518: SKUهای مبدأ الزاماً در یک پروفایل یکتا نیستند. باسلام اما SKU
+       را در سطح هر غرفه یکتا می‌خواهد. در ساخت، پسوند پایدارِ عنوان باعث می‌شود
+       SKU تکراریِ مبدأ بدون ساختِ تصادفی/ناپایدار قابل ثبت باشد. در PATCH اصلاً
+       SKU را نمی‌فرستیم: شناسهٔ محصول مقصد قطعی است و بازنویسی SKU نه برای
+       همگام‌سازی لازم است و نه باید آپدیت قیمت را با 422 متوقف کند. */
+    if ($isSingleUpdateEndpoint) {
+        unset($payload['sku']);
+    } elseif ($isCreateEndpoint && isset($payload['sku']) && trim((string)$payload['sku']) !== '') {
+        $rawSku = trim((string)$payload['sku']);
+        $skuSeed = (string)($payload['name'] ?? ($payload['title'] ?? ''));
+        $skuHash = substr(hash('sha256', bslNormalizeTitle($skuSeed) . '|' . $rawSku), 0, 10);
+        $skuBase = trim((string)(preg_replace('~[^\p{L}\p{N}._-]+~u', '-', $rawSku) ?? $rawSku), '-');
+        if ($skuBase === '') $skuBase = 'src';
+        $payload['sku'] = mb_substr($skuBase, 0, 47, 'UTF-8') . '-' . $skuHash;
+    }
 
     if (isset($payload['name']) && is_string($payload['name']) && trim($payload['name']) !== '') {
         $payload['name'] = bslSanitizeModerationTitle($payload['name'], $hasBarcode);
@@ -15144,7 +15161,7 @@ function bslForceUpdateOnDuplicate(string $tk, int $vid, string $title,
 
     if (!empty($p)) bslApplyContent($fields, $p);
     $r = bslReq($tk, 'PATCH', 'products/' . $id, $fields);
-    if ((int)($r['code'] ?? 0) === 404 && $vid > 0) {
+    if (in_array((int)($r['code'] ?? 0), [403, 404], true) && $vid > 0) {
         $r = bslReq($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $id, $fields);
     }
     if (!empty($r['ok'])) {
@@ -32750,10 +32767,11 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
                            'ep' => 'products/' . $exId, 'd' => $bu];
         }
         $rs = bslReqMulti($jobs, $conc);
-        // موجِ دوم: هرکدام ۴۰۴ گرفت، با مسیرِ غرفه‌ای دوباره امتحان می‌شود
+        // موجِ دوم: 404 یا 403 در مسیر عمومی، یک‌بار با مسیرِ مالکِ غرفه امتحان می‌شود.
+        // بعضی توکن‌های معتبر فقط vendors/{vendor_id}/products/{id} را مجاز می‌دانند.
         $again = [];
         foreach ($rs as $vid => $r) {
-            if ((int)($r['code'] ?? 0) === 404) {
+            if (in_array((int)($r['code'] ?? 0), [403, 404], true)) {
                 $again[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
                                 'ep' => 'vendors/' . $vid . '/products/' . $ids[$vid], 'd' => $jobs[$vid]['d']];
             }
@@ -32962,7 +32980,9 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
         $_bslShopVarsUpd = bslBuildVariantsPayload($p, $priceRial, $stock);
         if ($_bslShopVarsUpd) $bu['variants'] = $_bslShopVarsUpd;
         $r = bslReqWithVariantsFallback($tk, 'PATCH', 'products/' . $exId, $bu);
-        if ($r['code'] === 404) $r = bslReqWithVariantsFallback($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
+        if (in_array((int)($r['code'] ?? 0), [403, 404], true)) {
+            $r = bslReqWithVariantsFallback($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
+        }
         if (!empty($r['ok']) && !empty($r['body']['id'])) {
             bslShopMapRecord($p, $shop, $exId, $title, $priceRial, $stock);   // v10.20 (۳۳الف) · v10.33 (۴۶)
             return ['ok' => true, 'id' => $exId, 'action' => 'updated', 'update_reason' => 'آپدیت قیمت/موجودی/محتوا', 'changes_detail' => 'PATCH محصول موجود'];
@@ -47383,6 +47403,16 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"reconFetchResumable('bsl', [], \$tok, \$vid, \$shopMeta, true, 'matrix')")!==false
         &&strpos($selfSrc,'if (reconFetchStopRequested($stopScope))')!==false
         &&strpos($selfSrc,"{v:'10." . "517'")!==false&&version_compare(APP_VERSION,'10.517','>='));
+    $__skuCreateA=bslSanitizeProductWritePayload(['name'=>'محصول الف','sku'=>'DUP-1'],'vendors/710223/products');
+    $__skuCreateB=bslSanitizeProductWritePayload(['name'=>'محصول ب','sku'=>'DUP-1'],'vendors/710223/products');
+    $__skuPatch=bslSanitizeProductWritePayload(['sku'=>'DUP-1','stock'=>2],'products/123');
+    $add('10.518','SKU تکراری مبدأ برای ساخت پایدار و محصول‌ویژه می‌شود و در PATCH حذف می‌شود',
+        !empty($__skuCreateA['sku'])&&!empty($__skuCreateB['sku'])
+        &&$__skuCreateA['sku']!==$__skuCreateB['sku']&&!isset($__skuPatch['sku']));
+    $add('10.518','PATCH عمومی 403 یک‌بار از مسیر vendor-scoped تکرار و صف فعال پروفایل یکتا می‌شود',
+        strpos($selfSrc,"[403, 404], true")!==false
+        &&strpos($selfSrc,"'cancel_reason'=>'duplicate_active_profile'")!==false
+        &&strpos($selfSrc,"{v:'10." . "518'")!==false&&version_compare(APP_VERSION,'10.518','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -77795,6 +77825,41 @@ if(!file_exists(BSL_QUEUE_FILE)) return ['entries'=>[]];
 $d=@json_decode(@file_get_contents(BSL_QUEUE_FILE)?:'',true);
 if(!is_array($d)||!isset($d['entries'])||!is_array($d['entries'])) return ['entries'=>[]];
 $fixed=false;
+
+/* v10.518: چند کلیک/dispatch همزمان نباید چند اجرای فعال برای یک پروفایل
+   بسازد. ردیف running مالک است؛ در نبود آن، جدیدترین waiting نگه داشته می‌شود
+   (snapshot تازه‌تر) و بقیه به‌طور شفاف superseded می‌شوند. done/failed/paused
+   دست‌نخورده می‌مانند تا تاریخچه و ادامهٔ دستی از بین نرود. */
+$activeByProfile=[];
+foreach($d['entries'] as $idx=>$row){
+    if(!is_array($row))continue;
+    $st=(string)($row['status']??'');
+    if(!in_array($st,['running','waiting'],true))continue;
+    $pk=trim((string)($row['profile_key']??''));
+    if($pk==='')continue;
+    $activeByProfile[$pk][]=$idx;
+}
+foreach($activeByProfile as $pk=>$idxs){
+    if(count($idxs)<2)continue;
+    $keeper=null;
+    foreach($idxs as $idx){if((string)($d['entries'][$idx]['status']??'')==='running'){$keeper=$idx;break;}}
+    if($keeper===null){
+        usort($idxs,static function($a,$b)use($d){
+            $ta=(int)($d['entries'][$a]['created_at']??0);$tb=(int)($d['entries'][$b]['created_at']??0);
+            return $tb<=>$ta;
+        });
+        $keeper=$idxs[0];
+    }
+    $keepId=(string)($d['entries'][$keeper]['id']??'');
+    foreach($idxs as $idx){
+        if($idx===$keeper)continue;
+        $d['entries'][$idx]['status']='cancelled';
+        $d['entries'][$idx]['done_at']=time();
+        $d['entries'][$idx]['superseded_by']=$keepId;
+        $d['entries'][$idx]['cancel_reason']='duplicate_active_profile';
+        $fixed=true;
+    }
+}
 foreach($d['entries'] as &$re){
 if(!is_array($re))continue;
 if((int)($re['total']??0)<=0&&in_array((string)($re['status']??''),['running','waiting','paused'],true)){
@@ -98527,6 +98592,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.518', t:'🛠️ رفع خطاهای جاری ارسال چندغرفه‌ای باسلام', items:[
+    'PATCH محصول موجود اگر در مسیر عمومی 403 یا 404 بگیرد، فقط یک‌بار با مسیر vendor-scoped همان غرفه تکرار می‌شود؛ هویت محصول بین غرفه‌ها جابه‌جا نمی‌شود.',
+    'SKU تکراری مبدأ در ساخت به SKU پایدار و ویژهٔ همان عنوان تبدیل می‌شود و در PATCH ارسال نمی‌شود تا به‌روزرسانی قیمت/موجودی با 422 یکتایی SKU متوقف نشود.',
+    'برای هر profile_key فقط یک ردیف running/waiting فعال می‌ماند و ردیف‌های تکراری با دلیل duplicate_active_profile به‌صورت شفاف superseded می‌شوند.',
+    'خودآزمون‌های متمرکز برای SKU، fallback امن 403 و یکتاسازی صف افزوده شد.'
+  ]},
   {v:'10.517', t:'🔁 رفع حلقهٔ شروع ساخت جدول مغایرت', items:[
     'فایل توقف قدیمیِ مغایرت‌گیری legacy دیگر واکشی مقصدهای matrix را پیش از نخستین درخواست متوقف نمی‌کند؛ ساخت جدول فقط از stop اختصاصی خودش پیروی می‌کند.',
     'حلقهٔ چندثانیه‌ایِ ادامهٔ worker روی همان صفحهٔ اول باسلام برطرف شد و checkpoint موجود بدون شروع دوباره به صفحات بعد ادامه می‌دهد.',
