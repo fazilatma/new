@@ -398,10 +398,11 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 const ORDERS_MGR_NOTES_FILE = __DIR__ . '/orders_mgr_notes.json';
 const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10.495: deferred safe checkpoint cleanup
+const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.508: durable stale-row tombstone
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.507';
+const APP_VERSION = '10.508';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -40417,10 +40418,30 @@ function autoResumeBookSet(string $key, string $sig, int $tries): void {
  */
 function tasksRowsOrdered(int $now): array {
     $reg  = tasksRegistry();
-    $rows = [];
+    $rows = [];$stopAt=0;
+    if(is_file(TASKS_STOP_ALL_LAST_FILE)){
+        $stopMeta=json_decode((string)@file_get_contents(TASKS_STOP_ALL_LAST_FILE),true);
+        if(is_array($stopMeta))$stopAt=max(0,(int)($stopMeta['at']??0));
+    }
     foreach (tasksOrder($reg) as $rank => $key) {
         $row = tasksBuildRow($key, $reg[$key], $now);
-        $row['rank'] = $rank + 1;        // نمایشِ ۱-پایه
+        $stateFile=(string)($reg[$key]['file']??'');
+        /* v10.508: cron could rewrite an old run after the first cleanup.
+           Its heartbeat is new but its original start is not; sweep it again.
+           A genuinely new run has started_at newer than the tombstone. */
+        $rowStarted=(int)($row['started']??0);$rowTs=(int)($row['ts']??0);
+        $predatesStop=$stopAt>0&&(($rowStarted>0&&$rowStarted<=$stopAt)
+            ||($rowStarted<=0&&$rowTs>0&&$rowTs<=$stopAt));
+        if($predatesStop&&$stateFile!==''){
+            if(function_exists('localTaskDbForget'))localTaskDbForget($stateFile);
+            if(is_file($stateFile))@unlink($stateFile);
+            continue;
+        }
+        /* A registry definition is not an activity row. After Stop All removes
+           backing state, idle definitions must not remain as phantom cards. */
+        if((string)($row['state']??'idle')==='idle'
+            &&($stateFile===''||!localTaskStateExists($stateFile)))continue;
+        $row['rank'] = count($rows) + 1;  // نمایشِ ۱-پایه و بدون شکاف
         $rows[] = $row;
     }
     return $rows;
@@ -40732,7 +40753,13 @@ function tasksStopAllClearOperationalQueues(): array {
         foreach([BSL_CATALOG_PROGRESS_FILE,SYNC_MATRIX_CHECKPOINT_FILE,SYNC_MATRIX_FETCH_CURSOR_FILE,
             SYNC_MATRIX_LIVE_FILE,__DIR__.'/recon_fetch_cache.ndjson',DEDUP_FETCH_CURSOR_FILE,
             CATFIX_FETCH_CURSOR_FILE] as $f)$taskFiles[(string)$f]=true;
-        $progressFiles=0;foreach(array_keys($taskFiles) as $f){
+        $progressFiles=0;$taskDbRows=0;foreach(array_keys($taskFiles) as $f){
+            /* writeJsonFile mirrors progress into SQLite. Unlinking only the
+               JSON made readProgress resurrect the deleted row immediately. */
+            if(function_exists('localTaskDbRead')&&localTaskDbRead($f)!==null)$taskDbRows++;
+            if(function_exists('localTaskDbForget'))localTaskDbForget($f);
+            if(function_exists('localTaskDbRead')&&localTaskDbRead($f)!==null)
+                return ['ok'=>false,'pending'=>true,'error'=>'task_state_db_delete_failed','count'=>0];
             if(is_file($f)){if(!@unlink($f))return ['ok'=>false,'pending'=>true,'error'=>'task_state_unlink_failed','count'=>0];$progressFiles++;}
         }
         $matrixTemps=0;foreach((array)glob(SYNC_MATRIX_CHECKPOINT_FILE.'.tmp.*') as $f){
@@ -40742,9 +40769,9 @@ function tasksStopAllClearOperationalQueues(): array {
             'extract_rows'=>$extractRows,'sync_rows'=>$syncRows,'queue_files'=>$queueFiles,
             'duplicate_rows'=>$dupRows,'ai_category_rows'=>$aiRows,'payload_files'=>$removed,
             'activity_state_files'=>$stateFiles,'staging_files'=>$stagingFiles,
-            'progress_files'=>$progressFiles,'matrix_temps'=>$matrixTemps,'scheduled_jobs'=>$scheduledJobs,
+            'progress_files'=>$progressFiles,'task_db_rows'=>$taskDbRows,'matrix_temps'=>$matrixTemps,'scheduled_jobs'=>$scheduledJobs,
             'count'=>$sendRows+$extractRows+$syncRows+$queueFiles+$dupRows+$aiRows+$workerRows+$scheduledJobs+
-                $removed+$stateFiles+$stagingFiles+$progressFiles+$matrixTemps];
+                $removed+$stateFiles+$stagingFiles+$progressFiles+$taskDbRows+$matrixTemps];
     }finally{
         foreach(array_reverse($held) as $h){if($h['backend'])queueBackendUnlock($h['fp']);else{@flock($h['fp'],LOCK_UN);@fclose($h['fp']);}}
     }
@@ -40760,9 +40787,13 @@ function tasksStopAllClearCheckpoints(): array {
         'error'=>(string)($activityCleanup['error']??'activity_queue_busy'),
         'busy'=>(string)($activityCleanup['busy']??''),'count'=>0];
 
+    $marker=(array)json_decode((string)@file_get_contents(TASKS_STOP_ALL_CLEAR_FILE),true);
+    $stopAt=max(1,(int)($marker['at']??time()));
+    if(@file_put_contents(TASKS_STOP_ALL_LAST_FILE,json_encode(['at'=>$stopAt,'completed_at'=>time()],JSON_UNESCAPED_UNICODE),LOCK_EX)===false)
+        return ['cleared'=>false,'pending'=>true,'error'=>'cleanup_tombstone_write_failed','count'=>0];
     if(is_file(TASKS_STOP_ALL_CLEAR_FILE)&&!@unlink(TASKS_STOP_ALL_CLEAR_FILE))
         return ['cleared'=>false,'pending'=>true,'error'=>'cleanup_marker_unlink_failed','count'=>0];
-    return ['cleared'=>true,'pending'=>false,'count'=>(int)($activityCleanup['count']??0),
+    return ['cleared'=>true,'pending'=>false,'stop_at'=>$stopAt,'count'=>(int)($activityCleanup['count']??0),
         'activity_queues'=>$activityCleanup,'profiles_cleared'=>true];
 }
 
@@ -47932,6 +47963,13 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,'if ($present === true) { $ids[$vid] = $known; continue; }')!==false
         &&strpos($selfSrc,'if ($present === null) { $need[$vid] = $sh; continue; }')!==false
         &&strpos($selfSrc,"{v:'10." . "507'")!==false&&version_compare(APP_VERSION,'10.507','>='));
+    $add('10.508','توقف همه JSON و نسخهٔ SQLite را پاک و ردیف قدیمی بازسازی‌شده را دوباره جمع می‌کند',
+        defined('TASKS_STOP_ALL_LAST_FILE')
+        &&strpos($_stopClearBody501,'localTaskDbForget($f)')!==false
+        &&strpos($_stopClearBody501,"'task_db_rows'=>\$taskDbRows")!==false
+        &&strpos($selfSrc,'$predatesStop=$stopAt>0')!==false
+        &&strpos($selfSrc,"(string)(\$row['state']??'idle')==='idle'")!==false
+        &&strpos($selfSrc,"{v:'10." . "508'")!==false&&version_compare(APP_VERSION,'10.508','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99212,6 +99250,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.508', t:'🧹 پاک‌سازی واقعی و پایدار مدیر وظیفه با «توقف همه»', items:[
+    'توقف همه اکنون رکورد پشتیبان SQLite هر فایل پیشرفت را همراه JSON حذف می‌کند تا readProgress نتواند ردیف حذف‌شده را زنده کند.',
+    'زمان موفق توقف به‌صورت پایدار ثبت می‌شود؛ اگر کران بعداً پیشرفت اجرای قدیمی را بازنویسی کند، مدیر وظیفه آن را دوباره حذف می‌کند ولی اجرای واقعاً جدید را نشان می‌دهد.',
+    'تعریف‌های بدون فعالیت رجیستری دیگر کارت بیکار خیالی نمی‌سازند، بنابراین پس از پاک‌سازی موفق فهرست واقعاً خالی است.'
+  ]},
   {v:'10.507', t:'🛍 رفع پرش اشتباه محصولات در غرفهٔ خالی باسلام', items:[
     'شناسهٔ قدیمی remote-map فقط وقتی بدون درخواست پذیرفته می‌شود که کاتالوگ کامل همان غرفه حضور آن را تایید کند.',
     'اگر اعتبارسنجی کاتالوگ نامشخص باشد، محصول دیگر «بدون تغییر» شمرده نمی‌شود؛ جست‌وجوی واقعی همان غرفه انجام و در صورت نبودن محصول ساخته می‌شود.',
