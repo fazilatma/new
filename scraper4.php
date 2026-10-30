@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.508';
+const APP_VERSION = '10.509';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -15460,10 +15460,10 @@ function bslCatalogRead(int $vid): array {
     return $d;
 }
 
-/** آیا کشِ این غرفه تازه است؟ */
+/** Old all-status snapshots are stale under the active-only catalog contract. */
 function bslCatalogFresh(int $vid, ?array $c = null): bool {
     if ($c === null) $c = bslCatalogRead($vid);
-    if (!$c) return false;
+    if (!$c || (string)($c['status_scope'] ?? '') !== 'active_2976') return false;
     $at = (int)($c['at'] ?? 0);
     return $at > 0 && (time() - $at) <= bslCatalogTtl();
 }
@@ -15538,51 +15538,8 @@ function bslCatalogWriteFromRows(int $vid, array $rows, array $meta = []): array
     if ($vid <= 0) return ['ok' => false, 'error' => 'غرفهٔ نامعتبر'];
     $scope = (string)($meta['status_scope'] ?? ($meta['scope'] ?? 'all'));
     $partial = array_key_exists('partial', $meta) ? !empty($meta['partial']) : ($scope !== 'all');
-    /* An active-only matrix refresh is a delta for a fresh, complete catalog:
-       update matching active rows, but retain non-active rows until the normal
-       full-catalog TTL expires. This prevents the matrix from downgrading the
-       vendor catalog to an incomplete active-only cache. */
-    if ($scope === 'active_2976' && $partial) {
-        $old = bslCatalogRead($vid);
-        if (bslCatalogFresh($vid, $old) && empty($old['partial'])
-            && (string)($old['status_scope'] ?? '') === 'all'
-            && is_array($old['rows'] ?? null)) {
-            $byId=[];
-            foreach ($old['rows'] as $oldRow) {
-                if (!is_array($oldRow)) continue;
-                $oldId=(int)($oldRow['id']??0);if($oldId>0)$byId[$oldId]=$oldRow;
-            }
-            foreach ($rows as $freshRow) {
-                if (!is_array($freshRow)) continue;
-                $fresh=bslCatalogRowFromAny($freshRow);$freshId=(int)($fresh['id']??0);
-                if($freshId>0)$byId[$freshId]=$fresh;
-            }
-            $freshActiveIds=[];
-            foreach($rows as $freshRow){
-                if(!is_array($freshRow))continue;
-                $freshNorm=bslCatalogRowFromAny($freshRow);$freshId=(int)($freshNorm['id']??0);
-                $freshStatus=(int)($freshNorm['status']??0);
-                if($freshId>0&&($freshStatus===0||$freshStatus===2976))$freshActiveIds[]=$freshId;
-            }
-            $rows=array_values($byId);
-            $freshMatrixAt=(int)($meta['at']??0);
-            $mergeMeta=['status_scope'=>'all','scope'=>'all','partial'=>false,
-                'at'=>(int)($old['at']??time()),'pages'=>(int)($old['pages']??0),
-                'total_count'=>(int)($old['total_count']??count($byId)),
-                'source'=>'shared_catalog_matrix_delta',
-                'matrix_generated_at'=>$freshMatrixAt>0?$freshMatrixAt:(int)($old['matrix_generated_at']??0),
-                'detail'=>'کاتالوگ کامل حفظ شد؛ ردیف‌های فعال از ماتریس تازه شدند'];
-            if(!empty($meta['scope_complete'])){
-                $mergeMeta['active_ids']=array_values(array_unique($freshActiveIds));
-                $mergeMeta['active_scope_at']=$freshMatrixAt>0?$freshMatrixAt:time();
-            }else{
-                if(is_array($old['active_ids']??null))$mergeMeta['active_ids']=$old['active_ids'];
-                if((int)($old['active_scope_at']??0)>0)$mergeMeta['active_scope_at']=(int)$old['active_scope_at'];
-            }
-            $meta=array_merge($meta,$mergeMeta);
-            $scope='all';$partial=false;
-        }
-    }
+    /* Never merge an active-only matrix delta with a prior all-status cache:
+       doing so would retain inactive rows in this newly constructed cache. */
     $scopeComplete = array_key_exists('scope_complete',$meta)
         ? !empty($meta['scope_complete']) : !$partial;
     $items = []; $rowsFull = []; $seenId = [];
@@ -15737,8 +15694,8 @@ function bslCatalogGetForSend(string $tk, int $vid): array {
 }
 
 /**
- * کلِ فهرستِ محصولاتِ یک غرفه را می‌گیرد و به شکلِ «عنوانِ نرمال ⇒ شناسه»
- * روی دیسک می‌نشاند.
+ * فهرستِ محصولاتِ فعالِ یک غرفه (status=2976) را می‌گیرد و به شکلِ
+ * «عنوانِ نرمال ⇒ شناسه» روی دیسک می‌نشاند.
  * خروجی: ['ok','count','pages','partial','from'=>'cache|network']
  */
 function bslCatalogBuild(string $tk, int $vid, bool $force = false): array {
@@ -15775,7 +15732,8 @@ function bslCatalogBuildUnlocked(string $tk, int $vid, bool $force = false): arr
         }
     }
 
-    $statuses = bslStatusQuery();
+    /* Catalog rebuilds intentionally request only active seller products. */
+    $statuses = bslActiveStatusQuery();
     $items = []; $pages = 0; $partial = false; $rowsFull = []; $seenId = [];
     $totalCount = 0; $maxPages = (int)BSL_CATALOG_MAX_PAGES; $perPage = 100;
     $cnPar = loadConnections();
@@ -15800,7 +15758,7 @@ function bslCatalogBuildUnlocked(string $tk, int $vid, bool $force = false): arr
         'vendor_id' => $vid, 'pct' => 1, 'page' => 0, 'pages' => 0, 'rows' => 0,
         'concurrency' => $conc, 'source' => 'network', 'log' => [],
         'log_add' => ['🏗 شروع برداشت کاتالوگ غرفه #' . $vid . ' — endpoint vendors/' . $vid
-            . '/products — همزمانی: ' . $conc]]);
+            . '/products (فقط فعال 2976) — همزمانی: ' . $conc]]);
 
     if(bslCatalogStopRequested()){
         bslCatalogProgress(['running'=>false,'done'=>true,'stopped'=>true,'phase'=>'stopped','pct'=>100,
@@ -15871,7 +15829,7 @@ function bslCatalogBuildUnlocked(string $tk, int $vid, bool $force = false): arr
              'count' => count($items), 'partial' => $partial, 'items' => $items,
              'rows' => $rowsFull, 'rows_count' => count($rowsFull),
              'products' => count($seenId), 'total_count' => $totalCount,
-             'source' => 'network_parallel', 'status_scope' => 'all', 'scope_complete' => !$partial,
+             'source' => 'network_parallel', 'status_scope' => 'active_2976', 'scope_complete' => !$partial,
              'concurrency' => $conc, 'took' => round(microtime(true) - $started, 2)];
     @file_put_contents(bslCatalogFile($vid), json_encode($data, JSON_UNESCAPED_UNICODE), LOCK_EX);
     $GLOBALS['_bslCatalog'][$vid] = $data;
@@ -15899,8 +15857,8 @@ function bslCatalogGet(string $tk, int $vid, bool $build = true): array {
 /**
  * پاسخِ کش به «این عنوان در این غرفه هست؟»
  *   > 0  ⇒ شناسهٔ محصول
- *   0    ⇒ کش می‌گوید نیست و *قابل اعتماد* است (کش کامل و تازه)
- *   -1   ⇒ کش نمی‌داند (نبود، کهنه بود، یا ناقص بود) ⇒ آبشار را اجرا کن
+ *   0    ⇒ کشِ کامل و تازهٔ all-status می‌گوید نیست
+ *   -1   ⇒ کش نمی‌داند (نبود، کهنه، ناقص، یا فقط active) ⇒ آبشار را اجرا کن
  */
 function bslCatalogLookup(string $tk, int $vid, string $title, bool $build = true, bool $sendCacheOnly = false): int {
     if ($vid <= 0 || trim($title) === '') return -1;
@@ -15909,7 +15867,7 @@ function bslCatalogLookup(string $tk, int $vid, string $title, bool $build = tru
     foreach ([reconNormTitle($title), reconNormTitle(stripProductCode($title))] as $n) {
         if ($n !== '' && isset($c['items'][$n])) return (int)$c['items'][$n];
     }
-    return !empty($c['partial']) ? -1 : 0;
+    return (string)($c['status_scope'] ?? '')==='all'&&!empty($c['scope_complete'])&&empty($c['partial']) ? 0 : -1;
 }
 
 /** شکلِ کامل‌ترِ ردیف کش برای مصرفِ ارسال: شبیه پاسخ باسلام، بدون درخواست شبکه. */
@@ -15964,13 +15922,15 @@ function bslCatalogLookupRow(string $tk, int $vid, string $title, bool $build = 
         return ['state' => 'hit', 'row' => bslCatalogRemoteRow(['id' => $id, 'name' => $title], $title),
             'source' => (string)($c['source'] ?? 'catalog_min')];
     }
-    return !empty($c['partial']) ? ['state' => 'unknown'] : ['state' => 'miss'];
+    return (string)($c['status_scope'] ?? '')==='all'&&!empty($c['scope_complete'])&&empty($c['partial'])
+        ? ['state' => 'miss'] : ['state' => 'unknown'];
 }
 
 /** v10.493: A remote-map ID is authoritative only against a fresh, complete,
  * all-status catalog snapshot. Active-only/recon snapshots cannot prove absence. */
 function bslCatalogSnapshotIdIndex(array $catalog): ?array {
-    if (!empty($catalog['partial']) || (string)($catalog['status_scope'] ?? '') !== 'all'
+    if (!empty($catalog['partial']) || empty($catalog['scope_complete'])
+        || (string)($catalog['status_scope'] ?? '') !== 'all'
         || !is_array($catalog['rows'] ?? null)) return null;
     $vid = (int)($catalog['vendor_id'] ?? 0);
     $sig = $vid . ':' . (int)($catalog['at'] ?? 0) . ':' . count($catalog['rows'])
@@ -15996,27 +15956,32 @@ function bslCatalogSnapshotHasId(array $catalog, int $id): ?bool {
     return isset($index[$id]);
 }
 
-/** Resolve a remembered ID using cached data first; build one full catalog only when safe. */
+/** Active-only snapshots can confirm a hit, but absence may mean inactive—not deleted. */
+function bslCatalogActiveSnapshotHasId(array $catalog,int $id):?bool{
+    if($id<=0||(string)($catalog['status_scope']??'')!=='active_2976'||!is_array($catalog['rows']??null))return null;
+    foreach($catalog['rows'] as $row){
+        if(is_array($row)&&(int)($row['id']??$row['product_id']??0)===$id)return true;
+    }
+    return null;
+}
+
+/** Resolve a remembered ID using cached data first; catalog rebuilds fetch active products only. */
 function bslShopKnownIdPresence(string $tk, int $vid, int $id): ?bool {
     if ($tk === '' || $vid <= 0 || $id <= 0) return null;
     $catalog = bslCatalogGet($tk, $vid, false);
-    if (!is_array($catalog) || bslCatalogSnapshotIdIndex($catalog) === null) {
-        $progress = bslCatalogProgressRead();
-        if (!empty($progress['running'])) return null; // don't collide with another catalog job
-        /* bslCatalogBuild may prefer a partial active-only matrix. Force the
-           all-status network path here so a missing ID is actually conclusive. */
-        $hadNetwork = array_key_exists('network', $_GET);
-        $oldNetwork = $_GET['network'] ?? null;
-        $_GET['network'] = '1';
-        try { $built = bslCatalogBuild($tk, $vid, true); }
-        finally {
-            if ($hadNetwork) $_GET['network'] = $oldNetwork;
-            else unset($_GET['network']);
-        }
-        if (empty($built['ok'])) return null;
-        $catalog = $GLOBALS['_bslCatalog'][$vid] ?? bslCatalogRead($vid);
+    if (is_array($catalog)) {
+        $allStatus=bslCatalogSnapshotHasId($catalog,$id);
+        if($allStatus!==null)return $allStatus;
+        if(bslCatalogFresh($vid,$catalog))return bslCatalogActiveSnapshotHasId($catalog,$id);
     }
-    return is_array($catalog) ? bslCatalogSnapshotHasId($catalog, $id) : null;
+    $progress = bslCatalogProgressRead();
+    if (!empty($progress['running'])) return null; // don't collide with another catalog job
+    $built = bslCatalogBuild($tk, $vid, true); // matrix/network path is active-only
+    if (empty($built['ok'])) return null;
+    $catalog = $GLOBALS['_bslCatalog'][$vid] ?? bslCatalogRead($vid);
+    if (!is_array($catalog)) return null;
+    $allStatus=bslCatalogSnapshotHasId($catalog,$id);
+    return $allStatus!==null?$allStatus:bslCatalogActiveSnapshotHasId($catalog,$id);
 }
 
 /** محصولِ تازه‌ساخته/تازه‌پیداشده را همان لحظه وارد کش می‌کند */
@@ -47968,6 +47933,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$autoEqualVersion=$trustedAuto&&$versionOrder===0;')!==false
         &&strpos($selfSrc,"const rawInstallBranch=(isExplicitBranch ? String(requestedBranch).trim() : '')")!==false
         &&strpos($selfSrc,"{v:'10." . "508'")!==false&&version_compare(APP_VERSION,'10.' . '508','>='));
+    $__activeCatalog509=['vendor_id'=>987655,'status_scope'=>'active_2976','partial'=>false,'scope_complete'=>true,
+        'at'=>time(),'rows'=>[['id'=>245,'status'=>2976]]];
+    $add('10.509','بازسازی کاتالوگ فقط status فعال 2976 را می‌گیرد و از کش فعال نبودن محصول را نتیجه‌گیری نمی‌کند',
+        bslActiveStatusQuery()==='&statuses=2976'
+        &&bslCatalogActiveSnapshotHasId($__activeCatalog509,245)===true
+        &&bslCatalogActiveSnapshotHasId($__activeCatalog509,999)===null
+        &&bslCatalogFresh(987655,$__activeCatalog509)
+        &&!bslCatalogFresh(987655,array_merge($__activeCatalog509,['status_scope'=>'all']))
+        &&strpos($selfSrc,'$statuses = bslActiveStatusQuery();')!==false
+        &&strpos($selfSrc,"'source' => 'network_parallel', 'status_scope' => 'active_2976', 'scope_complete' => !\$partial")!==false
+        &&strpos($selfSrc,"{v:'10." . "509'")!==false&&version_compare(APP_VERSION,'10.' . '509','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -59225,7 +59201,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc,'s4SettingsPriorityRequestBegin();')!==false
       && strpos($selfSrc,"'skipped'=>'foreground_settings_priority'")!==false
       && version_compare(APP_VERSION,'10.492','>='));
-    $__catFull493=['vendor_id'=>987654,'at'=>time(),'status_scope'=>'all','partial'=>false,
+    $__catFull493=['vendor_id'=>987654,'at'=>time(),'status_scope'=>'all','scope_complete'=>true,'partial'=>false,
         'rows'=>[['id'=>12345],['id'=>67890]]];
     $__catPartial493=$__catFull493;$__catPartial493['partial']=true;
     $__catActive493=$__catFull493;$__catActive493['status_scope']='active_2976';
@@ -99223,6 +99199,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.509', t:'🟢 ساخت کش غرفه فقط از محصولات فعال', items:[
+    'بازسازی شبکه‌ای کاتالوگ فقط status=2976 را می‌خواند؛ کش‌های قدیمی all-status تازه شمرده نمی‌شوند و merge ماتریس دیگر ردیف غیرفعال را حفظ نمی‌کند.',
+    'کاتالوگ فعال به‌تنهایی نبودن محصول را قطعی اعلام نمی‌کند؛ شناسهٔ غیرفعال اشتباهاً stale یا حذف‌شده محسوب نمی‌شود.'
+  ]},
   {v:'10.508', t:'🔀 نصب دستی مستقیم از شاخهٔ قدیمی', items:[
     'کلیک دستی روی arena/01a0ebf7-new حالا همان شاخه را probe و دانلود می‌کند؛ خودآپدیت همچنان از arena/e868e86a-new می‌خواند.',
     'کد شاخهٔ قدیمی پیش از نصب با تنظیم کانال خودآپدیت canonical سازگار می‌شود و فقط پس از تأیید SHA منبع تغییر می‌کند.',
