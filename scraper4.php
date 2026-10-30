@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.529';
+const APP_VERSION = '10.530';
 
 
 if (!function_exists('str_starts_with')) {
@@ -32730,10 +32730,6 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         $prices[$vid] = $pr; $live[$vid] = $sh;
     }
     if (!$live) return $out;
-    $matrixEmptyVids=[];
-    foreach($live as $matrixVid=>$matrixShop){
-        if(!bslMatrixProductsUsable(bslMatrixProductsForVendor((int)$matrixVid)))$matrixEmptyVids[(int)$matrixVid]=true;
-    }
 
     $stock  = effectiveStock($p, (int)($opts['stock'] ?? 10));    // v10.21 (۳۴الف)
     $prepD  = max(1, (int)($opts['preparation_days'] ?? 3));
@@ -32770,9 +32766,13 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         foreach ($ids as $vid => $exId) {
             if (!isset($live[$vid])) continue;
             $__mk = bslShopMapKey($pKey, $live[$vid]);
+            /* v10.530: ID ownership has already been established by the
+               vendor-scoped matrix/lookup phase above. A temporarily absent
+               matrix must not force three writes per source product; the
+               ledger's exact ID/payload checks and seven-day reverify remain. */
             if (bslSkipUnchanged($__mk, (int)$exId, (int)$prices[$vid], $stock,
                                  $__bslMap[$__mk] ?? null, $_wantWG,
-                                 !empty($opts['force_all'])||!empty($matrixEmptyVids[(int)$vid]))) {
+                                 !empty($opts['force_all']))) {
                 bslSkipCount(1);
                 $out[(int)$vid] = ['ok' => true, 'id' => (int)$exId,
                                    'action' => 'unchanged', 'skipped' => true];
@@ -32918,7 +32918,6 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         if (!empty($out[$vid]['ok'])) continue;
         if ($__stopNow) { $out[(int)$vid] = ['ok' => false, 'stopped' => true, 'error' => 'stopped']; continue; }
         $__oneOpts=$opts;
-        if(!empty($matrixEmptyVids[(int)$vid]))$__oneOpts['force_all']=true;
         $one = bslUpsertToShop($p, $sh, $__oneOpts);
         $out[(int)$vid] = $one;
         if ((int)($one['error_code'] ?? 0) === 403) {
@@ -47545,6 +47544,15 @@ if (isset($_GET['selftest'])) {
         &&bslShopMapKey('product-key',['vendor_id'=>735703])==='product-key#v735703'
         &&strpos($selfSrc,'Always scope ownership by vendor, including the default shop')!==false
         &&strpos($selfSrc,"{v:'10." . "529'")!==false&&version_compare(APP_VERSION,'10.529','>='));
+    $__multiStart530=strpos($selfSrc,'function bslUpsertManyShops(');
+    $__multiEnd530=$__multiStart530===false?false:strpos($selfSrc,'function bslUpsertToShop(',$__multiStart530);
+    $__multiBlock530=$__multiStart530!==false&&$__multiEnd530!==false?substr($selfSrc,$__multiStart530,$__multiEnd530-$__multiStart530):'';
+    $add('10.530','نبود موقت matrix در ارسال موازی، ledger تاییدشده را به سه PATCH اجباری تبدیل نمی‌کند',
+        $__multiBlock530!==''
+        &&strpos($__multiBlock530,'A temporarily absent')!==false
+        &&strpos($__multiBlock530,'matrixEmptyVids')===false
+        &&strpos($__multiBlock530,"!empty(\$opts['force_all'])")!==false
+        &&strpos($selfSrc,"{v:'10." . "530'")!==false&&version_compare(APP_VERSION,'10.530','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98796,6 +98804,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.530', t:'⚡ بازگردانی مسیر سریع محصولات همگام در چندغرفه‌ای', items:[
+    'نبود موقت snapshot ماتریس دیگر همهٔ محصولات ارسال موازی را مجبور به PATCH در هر سه غرفه نمی‌کند.',
+    'بعد از تأیید vendor-scoped شناسه، ledger فقط با تطابق دقیق ID، قیمت، موجودی و وزن اجازهٔ «بدون تغییر» می‌دهد و بازبینی اجباری هفت‌روزه همچنان برقرار است.',
+    'محصول واقعاً تغییرکرده همچنان update می‌شود، اما محصول همگام بدون سه درخواست شبکهٔ غیرضروری از checkpoint عبور می‌کند.'
+  ]},
   {v:'10.529', t:'🧭 جداسازی قطعی شناسه‌های غرفهٔ پیش‌فرض در ارسال موازی', items:[
     'کلید remote-map غرفهٔ پیش‌فرض نیز مانند همهٔ غرفه‌های دیگر اکنون همیشه vendor_id دارد؛ مسیر موازی دیگر کلید قدیمی و بدون مالک را نمی‌خواند.',
     'ناهماهنگی مسیر تکی و موازی که می‌توانست ID متعلق به غرفه‌ای دیگر را برای غرفهٔ پیش‌فرض انتخاب کند حذف شد.',
