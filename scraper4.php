@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.532';
+const APP_VERSION = '10.533';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47584,9 +47584,10 @@ if (isset($_GET['selftest'])) {
     $add('10.532','ترمیم checkpoint فقط روی صف paused انجام می‌شود و با worker مسابقه ندارد',
         strpos($selfSrc,"isset(\$_GET['bsl_queue_set_checkpoint'])")!==false
         &&strpos($selfSrc,"'queue_must_be_paused'")!==false
-        &&strpos($selfSrc,"'checkpoint_repaired_version'=\>APP_VERSION")===false
         &&strpos($selfSrc,"\$e['checkpoint_repaired_version']=APP_VERSION")!==false
         &&strpos($selfSrc,"{v:'10." . "532'")!==false&&version_compare(APP_VERSION,'10.532','>='));
+    $add('10.533','آزمون checkpoint بدون needle خودارجاع اجرا می‌شود',
+        strpos($selfSrc,"{v:'10." . "533'")!==false&&version_compare(APP_VERSION,'10.533','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98862,6 +98863,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.533', t:'✅ اصلاح آزمون ترمیم checkpoint', items:[
+    'بررسی ایستای v10.532 از needle خودارجاع پاک شد تا خود متن آزمون باعث شکست کاذب همان آزمون نشود.',
+    'منطق اجرایی checkpoint تغییری نکرده و checkpoint تولیدی روی production با موفقیت ثبت و ادامه داده شد.'
+  ]},
   {v:'10.532', t:'🧷 ترمیم امن checkpoint صف متوقف', items:[
     'ابزار نگه‌داری checkpoint فقط ردیف paused را می‌پذیرد تا worker همزمان نتواند cursor ترمیم‌شده را بازنویسی کند.',
     'cursor، درصد مرحله و شمارنده‌های موفق قبلی به‌صورت اتمیک حفظ می‌شوند و سپس همان صف قابل ادامه است.',
