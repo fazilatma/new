@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.501';
+const APP_VERSION = '10.502';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -16332,8 +16332,6 @@ function s4NormalizeImageEditCfg($raw): array {
         'active'          => $active,
     ];
 }
-function s4NormalizeCropCfg($raw): array { return s4NormalizeImageTransformCfg($raw, true); }
-
 function listImageEditNormalizeCfg($raw): array {
     $c = s4NormalizeImageEditCfg($raw);
     return [
@@ -20773,8 +20771,8 @@ function vc_defaults(): array {
     return [
         'check_on_load'   => false,
         'repo'            => 'fazilatma/new',
-        'branch'          => 'arena/01a0ebf7-new',
-        'branches'        => ['arena/01a0ebf7-new'],
+        'branch'          => 'arena/e868e86a-new',
+        'branches'        => ['arena/e868e86a-new'],
         'pinned_branch'   => '',
         'pinned_at'       => 0,
         'pinned_max_unix' => 0,
@@ -20790,8 +20788,8 @@ function vc_defaults(): array {
 
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
-    $legacy='arena/e868e86a-new';
-    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
+    $legacy='arena/01a0ebf7-new';
+    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
     $branches=vc_normalize_branches((array)($c['branches']??[]));
     $pin=trim((string)($c['pinned_branch']??''));
     $legacyPresent=(string)($c['branch']??'')===$legacy||$pin===$legacy||in_array($legacy,$branches,true);
@@ -20825,7 +20823,7 @@ function vc_load(): array {
     $rawBranches=array_key_exists('branches',$j)&&is_array($j['branches'])
         ? $j['branches'] : [(string)($c['branch']??'')];
     $c['branches']=vc_normalize_branches($rawBranches);
-    if(!$c['branches'])$c['branches']=['arena/01a0ebf7-new'];
+    if(!$c['branches'])$c['branches']=['arena/e868e86a-new'];
     if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0];
     $pin=trim((string)($c['pinned_branch']??''));
     if($pin!==''&&!in_array($pin,$c['branches'],true)){
@@ -20967,7 +20965,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
+const S4_CODE_UPDATE_BRANCH='arena/e868e86a-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -21495,7 +21493,7 @@ if (isset($_GET['vc_settings'])) {
         }
         if (isset($_POST['branch']))      $c['branch']      = trim((string)$_POST['branch']);
         if(!$c['branches'])$c['branches']=vc_normalize_branches([(string)$c['branch']]);
-        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/01a0ebf7-new';
+        if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/e868e86a-new';
         if (isset($_POST['path']))        $c['path']        = ltrim(trim((string)$_POST['path']), '/');
         if (isset($_POST['deploy_file'])) $c['deploy_file'] = basename(trim((string)$_POST['deploy_file']));
         foreach (['github_token', 'deploy_token'] as $k) {
@@ -47751,8 +47749,8 @@ if (isset($_GET['selftest'])) {
     $stopUiStart=strrpos($selfSrc,'function tmStopAll(){');
     $stopUiEnd=$stopUiStart===false?false:strpos($selfSrc,'function tmStop(key)', $stopUiStart);
     $stopUi=$stopUiStart!==false&&$stopUiEnd!==false?substr($selfSrc,$stopUiStart,$stopUiEnd-$stopUiStart):'';
-    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/e868e86a-new',
-        'branches'=>['arena/e868e86a-new'],'pinned_branch'=>'arena/e868e86a-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new',
+        'branches'=>['arena/01a0ebf7-new'],'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
     $legacyBranchCfg=(array)($legacyBranchTest['config']??[]);
     $add('10.500','تنظیمِ قدیمیِ updater خودکار به برنچ همین گفتگو منتقل می‌شود',
         !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')===S4_CODE_UPDATE_BRANCH
@@ -47773,8 +47771,16 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"isset(\$_GET['tasks_stop_all_status'])")!==false
         &&strpos($selfSrc,"fetch('?tasks_stop_all_status=1&_v='")!==false
         &&strpos($selfSrc,"['auto_resume_all_cron']=false")!==false
-        &&S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'
+        &&S4_CODE_UPDATE_BRANCH==='arena/e868e86a-new'
         &&strpos($selfSrc,"{v:'10." . "501'")!==false&&version_compare(APP_VERSION,'10.501','>='));
+    $add('10.502','پاسخ غیر JSON نصب‌کننده با HTTP، نوع محتوا و پیش‌نمایش امن گزارش می‌شود',
+        strpos($selfSrc,'function vcParseInstallerReply(response, source)')!==false
+        &&strpos($selfSrc,"vcParseInstallerReply(r,'نصب‌کنندهٔ داخلی')")!==false
+        &&strpos($selfSrc,"vcParseInstallerReply(r,'نصب‌کننده')")!==false
+        &&strpos($selfSrc,'_installer_preview')!==false
+        &&substr_count($selfSrc,'function s4NormalizeCropCfg(')===1
+        &&strpos($selfSrc,'const useSelfUpdate = !!d.can_self_update && !!(d.token || d.nonce);')!==false
+        &&strpos($selfSrc,"{v:'10." . "502'")!==false&&version_compare(APP_VERSION,'10.' . '502','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -57022,7 +57028,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'POST required'") !== false);
     $add('10.266', 'منبع updater ثابت و تزریق repo/branch از درخواست ناممکن است',
          strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "01a0ebf7-new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "e868e86a-new'") !== false
       && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false);
     $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
          strpos($selfSrc, "'git_blob_sha_mismatch'") !== false
@@ -99018,6 +99024,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.502', t:'🛠 رفع خطای lint نصب و گزارش دقیق پاسخ نصب‌کننده', items:[
+    'تعریف تکراری s4NormalizeCropCfg حذف شد؛ همین redeclaration باعث می‌شد PHP نصب را با exit code 255 رد کند.',
+    'وقتی مجوز موجود است، نصب‌کنندهٔ داخلیِ اتمیک به deploy.php ترجیح داده می‌شود. پاسخ غیر JSON نیز با HTTP status، نوع محتوا و پیش‌نمایش کوتاهِ پالایش‌شده نمایش داده می‌شود تا خطا پشت پیام عمومی پنهان نماند.',
+    'updater دوباره برنچ همین نشست arena/e868e86a-new را مرجع می‌گیرد تا auto-update بتواند نسخهٔ رفع‌شده را دریافت کند.'
+  ]},
   {v:'10.501', t:'⏹️ توقف و پاک‌سازی قطعی همهٔ فعالیت‌ها + آمادگی endpointمحور پس از رفرش', items:[
     'دکمهٔ «توقف همه» اکنون با endpoint وضعیت اختصاصی تا آزادشدن کارهای فعال و حذف کامل صف‌های worker، استخراج، همگام‌سازی، ووکامرس، باسلام، بازیابی تکراری، دسته‌بندی AI، payloadها، checkpointها، فایل‌های staging و گزارش‌های عملیاتی پیگیری می‌شود.',
     'قفل worker دائمیِ بیکار دیگر پاک‌سازی را برای همیشه pending نگه نمی‌دارد؛ زنده‌بودن job واقعی جداگانه بررسی می‌شود و فقط مالک فعال مانع حذف امن است.',
@@ -109121,6 +109132,31 @@ function vcCloseBar() {
     document.body.style.paddingTop = '';
 }
 
+function vcParseInstallerReply(response, source) {
+    return response.text().then(raw => {
+        let payload=null;
+        try { payload=JSON.parse(raw); } catch(e) {}
+        if(payload&&typeof payload==='object'&&!Array.isArray(payload)) {
+            payload._installer_http=Number(response.status)||0;
+            payload._installer_type=response.headers.get('content-type')||'';
+            return payload;
+        }
+        const preview=String(raw||'')
+            .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,' ')
+            .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,' ')
+            .replace(/<[^>]*>/g,' ')
+            .replace(/("(?:token|nonce|password|authorization|api_key)"\s*:\s*")[^"]*"/gi,'$1[redacted]"')
+            .replace(/\b(token|nonce|password|authorization|api[_-]?key)\b\s*[:=]\s*([^\s,;<>]+)/gi,'$1=[redacted]')
+            .replace(/\s+/g,' ').trim().slice(0,220);
+        const result={ok:false,error:'پاسخ نامعتبر از '+String(source||'نصب‌کننده'),
+            _installer_http:Number(response.status)||0,
+            _installer_type:response.headers.get('content-type')||'',
+            _installer_preview:preview||'(پاسخ خالی)'};
+        console.error('Installer returned non-JSON response',result);
+        return result;
+    });
+}
+
 /**
  * نصب: این تابع خودش چیزی نمی‌نویسد. یک فرم به deploy.php ارسال می‌کند
  * که فایلی مستقل است و کار نصب را با همان زنجیرهٔ ایمنی انجام می‌دهد.
@@ -109141,7 +109177,7 @@ function vcUpdate(skipConfirm, requestedBranch) {
     const unlock = () => { window._vcInstalling = false; if (btn) { btn.disabled = false; btn.textContent = '⬇ نصب نسخهٔ جدید'; } };
 
     fetch('?vc_deploy_info=1').then(r => r.json()).then(d => {
-        const useSelfUpdate = (!d.ok && d.can_self_update);
+        const useSelfUpdate = !!d.can_self_update && !!(d.token || d.nonce);
         if (!d.ok && !useSelfUpdate) {
             showToast(d.error || 'نصب‌کننده در دسترس نیست', true);
             vcStat('✗ ' + esc(d.error || ''), '#f87171');
@@ -109181,7 +109217,7 @@ function vcUpdate(skipConfirm, requestedBranch) {
                     if (installBranch) ufd.append('branch', installBranch);
                     if (isExplicitBranch) ufd.append('allow_downgrade', '1');
                     return fetch('?code_update=1', { method: 'POST', body: ufd, cache: 'no-store' })
-                        .then(r => r.json().catch(() => ({ ok: false, error: 'پاسخ نامعتبر از نصب‌کنندهٔ داخلی' })));
+                        .then(r => vcParseInstallerReply(r,'نصب‌کنندهٔ داخلی'));
                 }
                 const fd = new FormData();
                 fd.append('action',    'deploy');
@@ -109194,13 +109230,16 @@ function vcUpdate(skipConfirm, requestedBranch) {
                 fd.append('check_php', '1');
                 fd.append('backup',    '1');
                 return fetch(d.file, { method: 'POST', body: fd, cache: 'no-store' })
-                    .then(r => r.json().catch(() => ({ ok: false, error: 'پاسخ نامعتبر از نصب‌کننده' })));
+                    .then(r => vcParseInstallerReply(r,'نصب‌کننده'));
             })
             .then(res => {
                 if (!res || !res.ok) {
                     const errMsg = (res && res.error) ? res.error : 'نصب ناموفق';
-                    vcStat('✗ ' + esc(errMsg), '#f87171');
-                    showToast(errMsg, true);
+                    const responseDetail=res&&res._installer_preview
+                        ? (' · HTTP '+(res._installer_http||0)+' · '+String(res._installer_type||'بدون Content-Type')+' · '+String(res._installer_preview)) : '';
+                    const visibleError=(errMsg+responseDetail).slice(0,420);
+                    vcStat('✗ ' + esc(visibleError), '#f87171');
+                    showToast(visibleError, true);
                     fetch('?code_update_sync_state=1', { method: 'POST', cache: 'no-store' }).catch(() => {});
                     unlock();
                     return;
@@ -109229,9 +109268,11 @@ function vcUpdate(skipConfirm, requestedBranch) {
                         s4ReloadForNewCode(nextVer, true);
                     });
             });
-    }).catch(() => {
-        showToast('خطا در ارتباط با نصب‌کننده', true);
-        vcStat('✗ خطا در ارتباط', '#f87171');
+    }).catch(e => {
+        const msg='خطا در ارتباط با نصب‌کننده'+(e&&e.message?(': '+String(e.message).slice(0,180)):'');
+        console.error('Installer request failed',e);
+        showToast(msg, true);
+        vcStat('✗ ' + esc(msg), '#f87171');
         unlock();
     });
 }
