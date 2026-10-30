@@ -402,7 +402,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.508';
+const APP_VERSION = '10.509';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -47970,6 +47970,8 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$predatesStop=$stopAt>0')!==false
         &&strpos($selfSrc,"(string)(\$row['state']??'idle')==='idle'")!==false
         &&strpos($selfSrc,"{v:'10." . "508'")!==false&&version_compare(APP_VERSION,'10.508','>='));
+    $add('10.509','نسخهٔ برنامه با deploy.php v3.2 دانلود API-first و lint کم‌حافظه هماهنگ است',
+        strpos($selfSrc,"{v:'10." . "509'")!==false&&version_compare(APP_VERSION,'10.509','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99250,6 +99252,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.509', t:'🚀 رفع قطع پاسخ deploy.php هنگام نصب فایل بزرگ', items:[
+    'deploy.php واقعی v3.1 از ریپوی code بازیابی و به v3.2 ارتقا یافت؛ دانلود ابتدا از api.github.com با raw media انجام می‌شود و raw.githubusercontent.com فقط مسیر جایگزین است.',
+    'بررسی نحوی فایل‌های بزرگ مانند scraper4.php با php -l در پردازهٔ کم‌حافظه انجام می‌شود تا token_get_all باعث OOM و پاسخ خالی سرور نشود.',
+    'خطاهای timeout، پاسخ HTML/خالی و قطع fetch اکنون با HTTP و پیش‌نمایش امن گزارش می‌شوند؛ endpoint خودآزمون deploy نیز افزوده شد.'
+  ]},
   {v:'10.508', t:'🧹 پاک‌سازی واقعی و پایدار مدیر وظیفه با «توقف همه»', items:[
     'توقف همه اکنون رکورد پشتیبان SQLite هر فایل پیشرفت را همراه JSON حذف می‌کند تا readProgress نتواند ردیف حذف‌شده را زنده کند.',
     'زمان موفق توقف به‌صورت پایدار ثبت می‌شود؛ اگر کران بعداً پیشرفت اجرای قدیمی را بازنویسی کند، مدیر وظیفه آن را دوباره حذف می‌کند ولی اجرای واقعاً جدید را نشان می‌دهد.',
