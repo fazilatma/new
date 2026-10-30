@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.504';
+const APP_VERSION = '10.505';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -20801,8 +20801,8 @@ function vc_defaults(): array {
     return [
         'check_on_load'   => false,
         'repo'            => 'fazilatma/new',
-        'branch'          => 'arena/e868e86a-new',
-        'branches'        => ['arena/e868e86a-new'],
+        'branch'          => 'arena/01a0ebf7-new',
+        'branches'        => ['arena/01a0ebf7-new'],
         'pinned_branch'   => '',
         'pinned_at'       => 0,
         'pinned_max_unix' => 0,
@@ -20818,8 +20818,8 @@ function vc_defaults(): array {
 
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
-    $legacy='arena/01a0ebf7-new';
-    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
+    $legacy='arena/e868e86a-new';
+    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
     $branches=vc_normalize_branches((array)($c['branches']??[]));
     $pin=trim((string)($c['pinned_branch']??''));
     $legacyPresent=(string)($c['branch']??'')===$legacy||$pin===$legacy||in_array($legacy,$branches,true);
@@ -21008,7 +21008,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/e868e86a-new';
+const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -22004,6 +22004,18 @@ echo json_encode(['ok' => false, 'error' => 'Not found', 'key' => $key], JSON_UN
 exit;
 }
 
+/* v10.505: profile settings must acknowledge quickly. Expensive matrix
+ * repricing runs through its own endpoint after the profile write has
+ * completed, so saving a coefficient never keeps the Save button waiting. */
+if (isset($_GET['matrix_reprice'])) {
+    s4SettingsPriorityRequestBegin();
+    header('Content-Type: application/json; charset=UTF-8');
+    $reason = preg_replace('/[^a-z0-9_.:-]+/i', '_', (string)($_GET['reason'] ?? 'profile_price_change'));
+    $result = matrixRefreshExpectedPrices($reason ?: 'profile_price_change');
+    echo json_encode(['ok'=>!empty($result['ok']), 'result'=>$result, 'version'=>APP_VERSION], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
+}
+
 if (($_POST['action'] ?? '') === 'save_profile') {
 s4SettingsPriorityRequestBegin();
 header('Content-Type: application/json; charset=UTF-8');
@@ -22249,9 +22261,12 @@ $_saved = writeJsonFile(PROFILES_FILE, $profiles);
 if ($lfSave) { @flock($lfSave, LOCK_UN); @fclose($lfSave); }
 if ($_saved['ok']) {
 $newProfilePriceSig=json_encode([(string)($profiles[$key]['priceMode']??'none'),(string)($profiles[$key]['priceVal']??0),(string)($profiles[$key]['roundPrice']??0)]);
-$mxRefresh=$oldProfilePriceSig!==$newProfilePriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
+$priceChanged=$oldProfilePriceSig!==$newProfilePriceSig;
+/* Repricing can scan and rewrite thousands of discrepancy rows. The browser
+   starts it through matrix_reprice only after this fast save response. */
+$mxRefresh=['ok'=>true,'changed'=>false,'deferred'=>$priceChanged,'rows'=>0];
 $savedProdCount = is_array($profiles[$key]['products'] ?? null) ? count($profiles[$key]['products']) : 0;
-echo json_encode(['ok' => true, 'key' => $key, 'url' => (string)($profiles[$key]['url'] ?? $url), 'name' => (string)($profiles[$key]['name'] ?? ''), 'product_count' => $savedProdCount, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'pages'=>(int)($profiles[$key]['pages']??10), 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+echo json_encode(['ok' => true, 'key' => $key, 'url' => (string)($profiles[$key]['url'] ?? $url), 'name' => (string)($profiles[$key]['name'] ?? ''), 'product_count' => $savedProdCount, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'pages'=>(int)($profiles[$key]['pages']??10), 'matrix_repriced'=>$mxRefresh, 'matrix_refresh_pending'=>$priceChanged, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } else {
 // v9.24: علت واقعی را به کاربر بدهیم (ترموکس/استوریج معمولاً قفل یا مجوز است)
 echo json_encode(['ok' => false, 'error' => 'خطا در نوشتن فایل: ' . ($_saved['error'] ?? 'نامشخص')]);
@@ -27835,7 +27850,9 @@ if ($_savedC['ok']) {
        future queue. Apply them now; a live backend rechecks before next item. */
     $bslShopSelectionApply=isset($_POST['basalam'])?bslReconcileDisabledShopsNow($conn):null;
     $newMxShopSig=function_exists('shopPricingSignature')?shopPricingSignature($conn):'';
-    $mxRefresh=$oldMxShopSig!==$newMxShopSig?matrixRefreshExpectedPrices('destination_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
+    $destinationPriceChanged=$oldMxShopSig!==$newMxShopSig;
+    /* v10.505: acknowledge the settings write before a potentially large matrix scan. */
+    $mxRefresh=['ok'=>true,'changed'=>false,'deferred'=>$destinationPriceChanged,'rows'=>0];
     $modeTransition=null;
     if(isset($_POST['recon_auto'])){
         $newExecMode=(string)($conn['recon_auto']['execution_mode']??'cron_first');
@@ -27870,7 +27887,7 @@ if ($_savedC['ok']) {
             });
         }
     }
-    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh,'matrix_execution'=>$modeTransition,
+    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh,'matrix_refresh_pending'=>$destinationPriceChanged,'matrix_execution'=>$modeTransition,
         'bsl_shop_selection'=>$bslShopSelectionApply], JSON_UNESCAPED_UNICODE);
 } else echo json_encode(['ok'=>false,'error'=>'خطا در ذخیره: '.($_savedC['error']??'نامشخص')], JSON_UNESCAPED_UNICODE);
 exit;
@@ -47801,8 +47818,8 @@ if (isset($_GET['selftest'])) {
     $stopUiStart=strrpos($selfSrc,'function tmStopAll(){');
     $stopUiEnd=$stopUiStart===false?false:strpos($selfSrc,'function tmStop(key)', $stopUiStart);
     $stopUi=$stopUiStart!==false&&$stopUiEnd!==false?substr($selfSrc,$stopUiStart,$stopUiEnd-$stopUiStart):'';
-    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new',
-        'branches'=>['arena/01a0ebf7-new'],'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/e868e86a-new',
+        'branches'=>['arena/e868e86a-new'],'pinned_branch'=>'arena/e868e86a-new','pinned_at'=>123,'pinned_max_unix'=>456]);
     $legacyBranchCfg=(array)($legacyBranchTest['config']??[]);
     $add('10.500','تنظیمِ قدیمیِ updater خودکار به برنچ همین گفتگو منتقل می‌شود',
         !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')===S4_CODE_UPDATE_BRANCH
@@ -47823,7 +47840,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"isset(\$_GET['tasks_stop_all_status'])")!==false
         &&strpos($selfSrc,"fetch('?tasks_stop_all_status=1&_v='")!==false
         &&strpos($selfSrc,"['auto_resume_all_cron']=false")!==false
-        &&S4_CODE_UPDATE_BRANCH==='arena/e868e86a-new'
+        &&S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'
         &&strpos($selfSrc,"{v:'10." . "501'")!==false&&version_compare(APP_VERSION,'10.501','>='));
     $add('10.502','پاسخ غیر JSON نصب‌کننده با HTTP، نوع محتوا و پیش‌نمایش امن گزارش می‌شود',
         strpos($selfSrc,'function vcParseInstallerReply(response, source)')!==false
@@ -47864,6 +47881,21 @@ if (isset($_GET['selftest'])) {
         &&extractNormalizeOriginTrigger('periodic','worker_child')==='periodic'
         &&extractNormalizeOriginTrigger('','worker')==='background'
         &&strpos($selfSrc,"{v:'10." . "504'")!==false&&version_compare(APP_VERSION,'10.' . '504','>='));
+    $saveProfile505Start=strpos($selfSrc,"if ((\$_POST['action'] ?? '') === 'save_profile')");
+    $saveProfile505End=$saveProfile505Start===false?false:strpos($selfSrc,"if ((\$_POST['action'] ?? '') === 'duplicate_profile')",$saveProfile505Start);
+    $saveProfile505Body=$saveProfile505Start!==false&&$saveProfile505End!==false?substr($selfSrc,$saveProfile505Start,$saveProfile505End-$saveProfile505Start):'';
+    $add('10.505','ذخیرهٔ تنظیمات بدون آپلود محصولات ثابت پاسخ می‌دهد و بازقیمت‌گذاری endpoint جدا دارد',
+        $saveProfile505Body!==''
+        &&strpos($saveProfile505Body,"matrixRefreshExpectedPrices('profile_price_change')")===false
+        &&strpos($saveProfile505Body,"'matrix_refresh_pending'=>\$priceChanged")!==false
+        &&strpos($selfSrc,"'matrix_refresh_pending'=>\$destinationPriceChanged")!==false
+        &&strpos($selfSrc,"d.ok&&d.matrix_refresh_pending)requestProfileMatrixRefresh()")!==false
+        &&strpos($selfSrc,"isset(\$_GET['matrix_reprice'])")!==false
+        &&strpos($selfSrc,'function collectProfileData(includeProducts)')!==false
+        &&strpos($selfSrc,'if(includeProducts){data.products=prodsArr;data.productsOrder=[...order];}')!==false
+        &&strpos($selfSrc,'profileProductsNeedSave(forceProducts,hasActiveKey)')!==false
+        &&strpos($selfSrc,"fetch('?matrix_reprice=1&reason='+encodeURIComponent(reason)+'&_v='")!==false
+        &&strpos($selfSrc,"{v:'10." . "505'")!==false&&version_compare(APP_VERSION,'10.505','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -57111,7 +57143,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'POST required'") !== false);
     $add('10.266', 'repo و path updater ثابت‌اند و branch درخواست فقط از allowlist پذیرفته می‌شود',
          strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "e868e86a-new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "01a0ebf7-new'") !== false
       && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false
       && strpos($selfSrc, "if(\$requested!==''&&!in_array(\$requested,\$allowed,true))") !== false);
     $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
@@ -94296,6 +94328,8 @@ function newBlankProfile(silentToast) {
     profileFormReady = false;
     isDirty = false;
     window._userClearedProducts = false;
+    window._userPrunedProducts = false;
+    window._profileProductsDirty = false;
     currentProfileKey = null;
     currentProfileUrl = '';
     currentProfileUpdatedAt = 0;
@@ -94612,12 +94646,16 @@ function applyProfile(p, keepTab) {
            سازگاریِ امضای تابع می‌ماند. */
         void keepTab;
         window._userClearedProducts = false;
+        window._userPrunedProducts = false;
+        window._profileProductsDirty = false;
         showToast('✓ پروفایل "' + (p.name || '') + '" بارگذاری شد (' + toFa(products.size) + ' محصول)');
     } else {
         resetResultFilter();
         products.clear();
         order = [];
         window._userClearedProducts = false;
+        window._userPrunedProducts = false;
+        window._profileProductsDirty = false;
         refreshViews();
         try { update(); } catch (e) {}
         showToast('✓ پروفایل "' + (p.name || '') + '" بارگذاری شد');
@@ -94748,11 +94786,14 @@ function syncBackendExtractDetailUi(skipPrefWrite){
 }
 setTimeout(()=>{syncDetailExtractModeUi(true);syncBackendExtractDetailUi(true);},50);
 
-function collectProfileData() {
-    // Serialize current products Map and order array
+function collectProfileData(includeProducts) {
+    /* v10.505: ordinary settings saves must not stringify/upload thousands of
+       unchanged products. Product payloads are opt-in and absent keys are
+       already preserved by the server endpoint. */
+    includeProducts = includeProducts !== false;
     const prodsArr = [];
-    products.forEach((v, k) => prodsArr.push([k, v]));
-    return {
+    if(includeProducts) products.forEach((v, k) => prodsArr.push([k, v]));
+    const data = {
         url: $('url').value.trim(),
         name: $('profileName').value.trim(),
         pages: Math.max(0,parseInt($('pages').value)||0),
@@ -94775,8 +94816,6 @@ function collectProfileData() {
         customColName: $('customColName').value,
         customColVal: $('customColVal').value,
         iframeHeight: parseInt($('iframeSizeSlider').value) || 600,
-        products: prodsArr,
-        productsOrder: [...order],
         // v8.06: Per-profile BaSalam category
         // v8.43: اگر متغیرها هنوز مقدار نگرفته‌اند، از فیلد مخفی بخوان تا
         // ذخیرهٔ خودکار انتخاب قبلی را با صفر جایگزین نکند.
@@ -94796,11 +94835,29 @@ function collectProfileData() {
         net_indirect: (($('profileNetIndirect') && $('profileNetIndirect').checked) ? '1' : '0'),
         productSource: getProductSourceConfig()
     };
+    if(includeProducts){data.products=prodsArr;data.productsOrder=[...order];}
+    return data;
 }
 
-function saveProfileSilent() {
-    const data = collectProfileData();
+let profileMatrixRefreshPromise=null, profileMatrixRefreshQueued=false;
+function requestProfileMatrixRefresh(reason){
+    reason=reason||'profile_price_change';
+    if(profileMatrixRefreshPromise){profileMatrixRefreshQueued=true;return profileMatrixRefreshPromise;}
+    profileMatrixRefreshPromise=fetch('?matrix_reprice=1&reason='+encodeURIComponent(reason)+'&_v='+Date.now(),{cache:'no-store',credentials:'same-origin'})
+      .then(r=>r.json().then(d=>{if(!r.ok||!d.ok)throw new Error((d&&d.error)||('HTTP '+r.status));return d;}))
+      .then(d=>{if(d.result&&d.result.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}return d;})
+      .catch(()=>null)
+      .finally(()=>{profileMatrixRefreshPromise=null;if(profileMatrixRefreshQueued){profileMatrixRefreshQueued=false;requestProfileMatrixRefresh('queued_settings_change');}});
+    return profileMatrixRefreshPromise;
+}
+function profileProductsNeedSave(forceProducts,hasActiveKey){
+    return forceProducts===true || !hasActiveKey || !!window._profileProductsDirty || !!window._userClearedProducts || !!window._userPrunedProducts;
+}
+
+function saveProfileSilent(forceProducts) {
     const hasActiveKey = !!(currentProfileKey && Array.isArray(profiles) && profiles.some(p => p && p.key === currentProfileKey));
+    const sendsProducts=profileProductsNeedSave(forceProducts,hasActiveKey);
+    const data = collectProfileData(sendsProducts);
     const validHttpUrl = /^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(String(data.url || '').trim());
     /* فرمِ بین دو profile، پاسخ دیررس، یا snapshot بی‌نسخه هرگز autosave نشود. */
     if (!data.url || !validHttpUrl || !profileFormReady || (!hasActiveKey && data.url!==currentProfileUrl) || currentProfileUpdatedAt<=0)
@@ -94827,12 +94884,11 @@ function saveProfileSilent() {
         .then(d => {
             if (d.ok) {
                 markClean(d.key);
-                window._userClearedProducts = false;
-                window._userPrunedProducts = false;
+                if(sendsProducts){window._userClearedProducts=false;window._userPrunedProducts=false;window._profileProductsDirty=false;}
                 currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
                 currentProfileUrl=data.url;profileFormReady=true;
                 rememberProfile(data.url, d.key);
-                if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+                if(d.matrix_refresh_pending)requestProfileMatrixRefresh();else if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p && (p.key === d.key || (!hasActiveKey && p.url === data.url)));
                 const oldEntry=existingIdx>=0?profiles[existingIdx]:{};
                 const pCount = (typeof d.product_count === 'number') ? d.product_count : (oldEntry.productCount || products.size || 0);
@@ -94860,14 +94916,14 @@ function parseUrlHost(url) {
 }
 
 function saveProfile() {
-    const data = collectProfileData();
+    const activeEntry = (currentProfileKey && Array.isArray(profiles)) ? profiles.find(p => p && p.key === currentProfileKey) : null;
+    const hasActiveKey = !!activeEntry;
+    const sendsProducts=profileProductsNeedSave(false,hasActiveKey);
+    const data = collectProfileData(sendsProducts);
     if (!data.url) {
         showToast('URL وارد کنید', true);
         return;
     }
-
-    const activeEntry = (currentProfileKey && Array.isArray(profiles)) ? profiles.find(p => p && p.key === currentProfileKey) : null;
-    const hasActiveKey = !!activeEntry;
 
     if (!data.name) {
         data.name = (activeEntry && activeEntry.name) ? activeEntry.name : parseUrlHost(data.url);
@@ -94903,13 +94959,12 @@ function saveProfile() {
             if (d.ok) {
                 const wasPartialOnly = hasActiveKey && !profileFormReady;
                 markClean(d.key);
-                window._userClearedProducts = false;
-                window._userPrunedProducts = false;
+                if(sendsProducts){window._userClearedProducts=false;window._userPrunedProducts=false;window._profileProductsDirty=false;}
                 currentProfileUrl=data.url;
                 currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
                 if (!wasPartialOnly) profileFormReady=true;
                 rememberProfile(data.url,d.key);
-                if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+                if(d.matrix_refresh_pending)requestProfileMatrixRefresh();else if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p && (p.key === d.key || (!hasActiveKey && p.url === data.url)));
                 const oldP = existingIdx >= 0 ? profiles[existingIdx] : {};
                 const pCount = (typeof d.product_count === 'number') ? d.product_count : (oldP.productCount || products.size || 0);
@@ -95850,6 +95905,7 @@ function selagAdoptSeeded(d) {
         added++;
     });
     if (!added) return 0;
+    window._profileProductsDirty=true;
     /* سلکتورهای فهرستی که ایجنت در همین زنجیره کشف کرده هم حیف است */
     const ls = sd.list_selectors || {};
     if (ls.container && !sel.container && typeof setSel === 'function') {
@@ -98634,7 +98690,7 @@ function loadBackendExtractResults(key, opts){
             showToast('💾 مرحلهٔ ۱ تمام شد: '+toFa(products.size)+' محصول در تب نتایج ذخیره شد — شروع مرحلهٔ ۲ (استخراج جزئیات)...');
         }
         // Only save back from client if explicitly needed (never overwrite an active Stage 2 worker!)
-        if(!opts.skipSaveBack && $('url').value.trim()&&products.size>0)saveProfileSilent();
+        if(!opts.skipSaveBack && $('url').value.trim()&&products.size>0)saveProfileSilent(true);
     }).catch(()=>{});
 }
 // Helper: profileKey from URL — mirrors PHP profileKey()
@@ -98757,7 +98813,7 @@ function start(useSel=false){
       switchMainTab('results');
       fxPulse(document.querySelector('.main-tab[data-tab="results"]'));   // v10.06
       // Auto-save profile with products after scrape completes
-      if($('url').value.trim() && products.size > 0) saveProfileSilent();
+      if($('url').value.trim() && products.size > 0) saveProfileSilent(true);
   });
   es.addEventListener('error',e=>{
       if(e.data){
@@ -98932,6 +98988,7 @@ function parseSSEEvent(ev) {
                     added++;
                 }
                 products.set(d.key, p);
+                if(added>0)window._profileProductsDirty=true;
                 if (added > 0) {
                     renderCard(p, d.key);
                     renderRow(p, order.indexOf(d.key) + 1, d.key);
@@ -99119,6 +99176,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.505', t:'⚡ ذخیرهٔ سریع تنظیمات پروفایل و بازقیمت‌گذاری غیرمسدودکننده', items:[
+    'ذخیرهٔ معمولی تنظیمات دیگر هزاران محصولِ بدون تغییر را در مرورگر stringify و دوباره آپلود نمی‌کند؛ محصولات فقط هنگام استخراج، درون‌ریزی، ویرایش یا حذف واقعی ارسال می‌شوند.',
+    'بازقیمت‌گذاری سنگین جدول مغایرت از پاسخ ذخیرهٔ پروفایل و تنظیمات عمومی جدا شد: ذخیره فوراً تأیید می‌شود و endpoint اختصاصی matrix_reprice در پس‌زمینه جدول را تازه می‌کند.',
+    'آخرین کد v10.504 برنچ arena/e868e86a-new با توقف همهٔ endpointمحور v10.501 ادغام و حفظ شد.'
+  ]},
   {v:'10.504', t:'🏷️ اصلاح برچسب دستی/خودکار استخراج و همگام‌سازی', items:[
     'برچسب منشأ از trigger واقعیِ کاربر یا زمان‌بندی جدا شد؛ worker و worker_child دیگر به‌اشتباه «دستی» محسوب نمی‌شوند.',
     'درخواست‌های زمان‌بندی‌شده و بازیابی خودکار منشأ periodic را در صف و child حفظ می‌کنند؛ رکوردهای قدیمی extraction/pipeline/report که منشأ قابل‌اعتماد ندارند «پس‌زمینه · منشأ نامشخص» می‌مانند، نه برچسب دستی.',
@@ -110327,7 +110389,7 @@ return fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
    cursor. Live pricing already updated cn; manual Save still reloads the
    normalized server copy: if(d.ok){loadConn();try{rvDirty.table=true;if(resultsVisible())rvBuildTable();} */
 if(d.ok){if(!window._connSaveNoToast)loadConn();try{rvMarkDirty();if(resultsVisible())rvEnsure(rvCurView);}catch(e){}}
-if(d.ok&&d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+if(d.ok&&d.matrix_refresh_pending)requestProfileMatrixRefresh('destination_price_change');else if(d.ok&&d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
 if(!window._connSaveNoToast)showToast(d.ok?(d.matrix_repriced&&d.matrix_repriced.changed?'✓ ذخیره شد؛ جدول مغایرت فوراً به‌روز شد':'✓ ذخیره شد'):'خطا',!d.ok);
 window._connSaveNoToast=false;_connSaveIndicator(d.ok?'ok':'err');
 return d;
@@ -116755,7 +116817,7 @@ function finFM(done,found,failed,total){
     $('detailStatus').textContent=msg;
     log('✅ دریافت تصاویر تکمیل: '+found+'/'+total+' ('+cached+' کش‌شده)','ok');
     showToast(msg);
-    if(found>0&&$('url').value.trim())saveProfileSilent();
+    if(found>0&&$('url').value.trim())saveProfileSilent(true);
 }
 
 // ========== Lazy Image Loading with Rate Limit ==========
@@ -118184,6 +118246,7 @@ function importRefreshDetailBox(){
  */
 function importSyncToProducts(){
     let added = 0;
+    if(importProducts.length)window._profileProductsDirty=true;
     importProducts.forEach(p => {
         const key = p.key;
         if(!key) return;
