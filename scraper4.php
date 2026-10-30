@@ -10,9 +10,9 @@
  *  • هیچ‌کدام از توابع اجرای دستور سیستمی، اجرای کد پویا، یا رمزگشایی
  *    و بازکردنِ کدِ فشرده در این فایل به کار نرفته است. (فهرست کامل در
  *    فایل HOST-SECURITY-FA.md کنار همین فایل آمده است.)
- *  • مسیرهای عادی هیچ کد اجرایی دانلود نمی‌کنند. updater داخلی فقط فایل
- *    کامل را از repo/branch ثابت و مورد اعتماد می‌گیرد، SHA و PHP syntax را
- *    بررسی و اتمیک نصب می‌کند؛ URL یا کد دلخواه از درخواست نمی‌پذیرد.
+ *  • مسیرهای عادی هیچ کد اجرایی دانلود نمی‌کنند. updater داخلی repo و path ثابت دارد
+ *    و branch صریح را فقط از فهرست مجاز تنظیمات می‌پذیرد؛ SHA و PHP syntax را
+ *    بررسی و اتمیک نصب می‌کند و URL یا کد دلخواه از درخواست نمی‌پذیرد.
  *  • درخواست‌های شبکه فقط با cURL و فقط به سرویس‌هایی می‌رود که
  *    کاربر در تنظیمات وارد کرده است (فروشگاه خودش، API باسلام).
  *  • نوشتن روی دیسک محدود به فایل‌های JSON کنار همین فایل، دفترِ محلیِ
@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.502';
+const APP_VERSION = '10.503';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -424,7 +424,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/07';
+const APP_VERSION_DATE = '1405/08/08';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -20878,9 +20878,22 @@ function vc_probe_branches(array $c):array{
 }
 
 function vc_save(array $c): bool {
-    $ok = @file_put_contents(VC_FILE, json_encode($c, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX) !== false;
-    if ($ok) @chmod(VC_FILE, 0600);
-    return $ok;
+    $lock=@fopen(VC_FILE.'.lock','c');
+    if(!$lock||!@flock($lock,LOCK_EX)){if($lock)@fclose($lock);return false;}
+    $tmp='';$ok=false;
+    try{
+        $json=json_encode($c,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+        if(!is_string($json))return false;
+        $tmp=VC_FILE.'.tmp.'.getmypid().'.'.bin2hex(random_bytes(4));
+        if(@file_put_contents($tmp,$json)!==strlen($json))return false;
+        @chmod($tmp,0600);
+        $ok=@rename($tmp,VC_FILE);
+        if($ok)$tmp='';
+        return $ok;
+    }finally{
+        if($tmp!==''&&is_file($tmp))@unlink($tmp);
+        @flock($lock,LOCK_UN);@fclose($lock);
+    }
 }
 
 /** شناسهٔ محتوا با همان الگوریتم گیت، برای مقایسه با پاسخ API */
@@ -21461,30 +21474,21 @@ if (isset($_GET['vc_settings'])) {
         if (!empty($_POST['pin_only']) || !empty($_POST['unpin_only'])) {
             if (!empty($_POST['pin_only'])) {
                 $pinB = trim((string)($_POST['pin_branch'] ?? ''));
-                if ($pinB !== '' && in_array($pinB, $c['branches'], true)) {
-                    $maxUnix = time();
-                    if (!empty($c['repo']) && !empty($c['path'])) {
-                        $pr = vc_probe_branches($c);
-                        foreach ($pr['rows'] as $r0) { if ((int)($r0['unix'] ?? 0) > $maxUnix) $maxUnix = (int)$r0['unix']; }
-                    }
-                    $c['branch'] = $pinB;
-                    $c['pinned_branch'] = $pinB;
-                    $c['pinned_at'] = time();
-                    $c['pinned_max_unix'] = $maxUnix;
-                    vc_save($c);
+                if($pinB===''||!in_array($pinB,$c['branches'],true)){
+                    http_response_code(422);echo json_encode(['ok'=>false,'error'=>'branch_not_configured'],JSON_UNESCAPED_UNICODE);exit;
                 }
-                s4SyncAutoUpdateStateToDisk($pinB, true);
+                $c['branch']=$pinB;$c['pinned_branch']=$pinB;$c['pinned_at']=time();$c['pinned_max_unix']=time();
+                if(!vc_save($c)){http_response_code(500);echo json_encode(['ok'=>false,'error'=>'settings_save_failed'],JSON_UNESCAPED_UNICODE);exit;}
+                s4SyncAutoUpdateStateToDisk($pinB,true);
             } else {
-                $c['pinned_branch'] = '';
-                $c['pinned_at'] = 0;
-                $c['pinned_max_unix'] = 0;
-                vc_save($c);
-                s4SyncAutoUpdateStateToDisk('', true);
+                $c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;
+                if(!vc_save($c)){http_response_code(500);echo json_encode(['ok'=>false,'error'=>'settings_save_failed'],JSON_UNESCAPED_UNICODE);exit;}
+                s4SyncAutoUpdateStateToDisk('',true);
             }
-            echo json_encode(['ok' => true, 'pinned_branch' => $c['pinned_branch']], JSON_UNESCAPED_UNICODE);
+            echo json_encode(['ok'=>true,'pinned_branch'=>$c['pinned_branch']],JSON_UNESCAPED_UNICODE);
             exit;
         }
-        $c['check_on_load'] = !empty($_POST['check_on_load']);
+        if(isset($_POST['check_on_load']))$c['check_on_load']=!empty($_POST['check_on_load']);
         if (isset($_POST['repo']))        $c['repo']        = trim((string)$_POST['repo']);
         if (isset($_POST['branches'])) {
             $decoded=json_decode((string)$_POST['branches'],true);
@@ -47781,6 +47785,19 @@ if (isset($_GET['selftest'])) {
         &&substr_count($selfSrc,'function s4NormalizeCropCfg(')===1
         &&strpos($selfSrc,'const useSelfUpdate = !!d.can_self_update && !!(d.token || d.nonce);')!==false
         &&strpos($selfSrc,"{v:'10." . "502'")!==false&&version_compare(APP_VERSION,'10.' . '502','>='));
+    $pinStart=strpos($selfSrc,"if (!empty(\$_POST['pin_only']) || !empty(\$_POST['unpin_only']))");
+    $pinEnd=$pinStart===false?false:strpos($selfSrc,"echo json_encode(['ok'=>true,'pinned_branch'",$pinStart);
+    $pinHandler=$pinStart!==false&&$pinEnd!==false?substr($selfSrc,$pinStart,$pinEnd-$pinStart):'';
+    $add('10.503','ذخیرهٔ تنظیمات صف‌بندی و نصب مستقیم از برنچ انتخابی بدون probe طولانی انجام می‌شود',
+        strpos($selfSrc,'function vcStartSave(req)')!==false
+        &&strpos($selfSrc,'vcSaveQueued')!==false&&strpos($selfSrc,'vcSaveDirty')!==false
+        &&strpos($selfSrc,"if(isset(\$_POST['check_on_load']))")!==false
+        &&$pinHandler!==''&&strpos($pinHandler,'vc_probe_branches')===false
+        &&strpos($selfSrc,'$probeCfg[\'branches\']=$requested!==\'\'?[$requested]:$allowed')!==false
+        &&strpos($selfSrc,"ufd.append('branch', installBranch)")!==false
+        &&strpos($selfSrc,"fd.append('branch',    installBranch)")!==false
+        &&strpos($selfSrc,"if(\$requested!==''&&!in_array(\$requested,\$allowed,true))")!==false
+        &&strpos($selfSrc,"{v:'10." . "503'")!==false&&version_compare(APP_VERSION,'10.' . '503','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -57026,10 +57043,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "HTTP_X_S4_UPDATE_" . "TOKEN") !== false
       && strpos($selfSrc, "wp_verify_nonce(\$nonce,'s4_code_update')") !== false
       && strpos($selfSrc, "'POST required'") !== false);
-    $add('10.266', 'منبع updater ثابت و تزریق repo/branch از درخواست ناممکن است',
+    $add('10.266', 'repo و path updater ثابت‌اند و branch درخواست فقط از allowlist پذیرفته می‌شود',
          strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
       && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "e868e86a-new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false);
+      && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false
+      && strpos($selfSrc, "if(\$requested!==''&&!in_array(\$requested,\$allowed,true))") !== false);
     $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
          strpos($selfSrc, "'git_blob_sha_mismatch'") !== false
       && strpos($selfSrc, "'php_lint_failed'") !== false
@@ -88300,7 +88318,7 @@ endpoint فقط با POST و deploy_token (یا مدیر وردپرس + nonce) �
   <label>مسیر فایل:</label>
   <div style="flex:1;position:relative;min-width:150px">
     <input id="vcPath" placeholder="ابتدا برنچ را انتخاب کنید" dir="ltr" autocomplete="off"
-           oninput="vcFilterFile()" onfocus="vcFilterFile()">
+           oninput="vcFilterFile();vcDirty()" onfocus="vcFilterFile()">
     <div class="vc-drop" id="vcPathDrop"></div>
   </div>
 </div>
@@ -98975,7 +98993,7 @@ renderDetailFieldsList();
  *  بررسی نسخه و نصب از طریق deploy.php یا code_update احراز‌شده.
  *  بررسی نسخه فقط خواندنی است؛ نصب فقط با تأیید مدیر و مسیر امن انجام می‌شود.
  * ================================================================== */
-let VC = null, vcSaveTimer = null, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false, VC_PENDING_BRANCH = '';
+let VC = null, vcSaveTimer = null, vcSaveInFlight = false, vcSaveQueued = null, vcSaveDirty = false, vcSaveRevision = 0, VC_BRANCHES = [], VC_FILES = [], VC_PENDING = false, VC_PENDING_BRANCH = '';
 /* v10.268: اگر deploy.php یا code_update فایل را بیرون از همین tab عوض کرد،
    tab قدیمی نسخهٔ تازه را می‌بیند و بدون وابستگی به پاسخ updater رفرش می‌شود. */
 const S4_LOADED_VERSION='<?=APP_VERSION?>';
@@ -99024,6 +99042,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.503', t:'⚙️ ذخیرهٔ مطمئن تنظیمات و نصب سریع از چند برنچ', items:[
+    'ذخیره‌های خودکار پشت‌سرهم صف‌بندی می‌شوند تا پاسخِ قدیمی تنظیم تازه‌تر را بازنویسی نکند؛ خطا نیز به‌جای ناپدیدشدن گزارش می‌شود و قبل از نصب، تنظیماتِ در انتظار ذخیره flush می‌شوند.',
+    'انتخاب مسیر فایل هم خودکار ذخیره می‌شود و ذخیرهٔ تنظیمات جزئی دیگر گزینهٔ بررسی خودکار را ناخواسته خاموش نمی‌کند.',
+    'نصب از برنچ انتخابی دیگر همهٔ برنچ‌ها را پیشاپیش و با چند درخواست شبکه‌ای probe نمی‌کند؛ مقصد باید در فهرست مجاز باشد و updater همان برنچ را بررسی و نصب می‌کند.'
+  ]},
   {v:'10.502', t:'🛠 رفع خطای lint نصب و گزارش دقیق پاسخ نصب‌کننده', items:[
     'تعریف تکراری s4NormalizeCropCfg حذف شد؛ همین redeclaration باعث می‌شد PHP نصب را با exit code 255 رد کند.',
     'وقتی مجوز موجود است، نصب‌کنندهٔ داخلیِ اتمیک به deploy.php ترجیح داده می‌شود. پاسخ غیر JSON نیز با HTTP status، نوع محتوا و پیش‌نمایش کوتاهِ پالایش‌شده نمایش داده می‌شود تا خطا پشت پیام عمومی پنهان نماند.',
@@ -108946,8 +108969,9 @@ function vcBadge(t, cls) {
     if (b) { b.textContent = t; b.className = 'cst ' + (cls || 'off'); }
 }
 function vcDirty() {
+    vcSaveDirty=true;vcSaveRevision++;
     clearTimeout(vcSaveTimer);
-    vcSaveTimer = setTimeout(() => vcSave(), 900);
+    vcSaveTimer=setTimeout(()=>vcSave(false),350);
 }
 function vcFmtSize(b) {
     if (!b) return '';
@@ -108991,27 +109015,58 @@ function vcRenderBranches(){
 function vcAddBranch(){const el=$('vcBranch'),b=el?el.value.trim():'';if(!b)return showToast('نام برنچ را وارد کنید',1);if(!VC)VC={branches:[]};if(!Array.isArray(VC.branches))VC.branches=[];if(!VC.branches.includes(b))VC.branches.push(b);VC.branch=b;if(el)el.value='';vcRenderBranches();vcSave(true);}
 function vcRemoveBranch(b){if(!VC||!Array.isArray(VC.branches))return;if(!confirm('برنچ «'+b+'» حذف شود؟'))return;VC.branches=VC.branches.filter(x=>x!==b);if(VC.branch===b)VC.branch=VC.branches[0]||'';vcRenderBranches();vcSave(true);}
 
-function vcSave(showMsg) {
-    const fd = new FormData();
-    fd.append('check_on_load', $('vcOnLoad').checked ? '1' : '');
-    fd.append('repo',        $('vcRepo').value.trim());
+function vcBuildSaveRequest(showMsg) {
+    const fd=new FormData();
+    fd.append('check_on_load',$('vcOnLoad').checked?'1':'');
+    fd.append('repo',$('vcRepo').value.trim());
     const configured=VC&&Array.isArray(VC.branches)?VC.branches:[];
     fd.append('branches',JSON.stringify(configured));
     fd.append('branch',(VC&&VC.branch)||configured[0]||'');
-    fd.append('path',        $('vcPath').value.trim());
-    fd.append('deploy_file', $('vcDeployFile').value.trim() || 'deploy.php');
-    if ($('vcGhToken').value)  fd.append('github_token', $('vcGhToken').value);
-    if ($('vcDepToken').value) fd.append('deploy_token', $('vcDepToken').value);
-
-    fetch('?vc_settings=1', { method: 'POST', body: fd }).then(r => r.json()).then(d => {
-        if (!d.ok) { showToast(d.error || 'ذخیره ناموفق', true); return; }
-        VC = d.settings;
-        $('vcGhToken').value = ''; $('vcDepToken').value = '';
-        if ($('vcGhState'))  $('vcGhState').textContent  = VC.has_gh_token ? 'تنظیم شده' : 'تنظیم نشده';
-        if ($('vcDepState')) $('vcDepState').textContent = VC.has_dep_token ? 'تنظیم شده' : 'تنظیم نشده';
-        vcBadge(VC.check_on_load ? 'خودکار' : 'دستی', VC.check_on_load ? 'on' : 'off');
-        if (showMsg) showToast('✓ ذخیره شد');
-    }).catch(() => showToast('خطا در ذخیره', true));
+    fd.append('path',$('vcPath').value.trim());
+    fd.append('deploy_file',$('vcDeployFile').value.trim()||'deploy.php');
+    const ghToken=$('vcGhToken').value,depToken=$('vcDepToken').value;
+    if(ghToken)fd.append('github_token',ghToken);
+    if(depToken)fd.append('deploy_token',depToken);
+    return {fd,ghToken,depToken,showMsg:!!showMsg,revision:++vcSaveRevision,waiters:[]};
+}
+function vcStartSave(req) {
+    vcSaveInFlight=true;
+    vcStat('ذخیرهٔ تنظیمات...', '#93c5fd');
+    fetch('?vc_settings=1',{method:'POST',body:req.fd,cache:'no-store'})
+      .then(r=>r.json().then(d=>{if(!r.ok||!d.ok)throw new Error((d&&d.error)||('HTTP '+r.status));return d;}))
+      .then(d=>{
+        const latest=vcSaveRevision===req.revision&&!vcSaveQueued;
+        const settings=d.settings||{};
+        if(req.ghToken&&$('vcGhToken').value===req.ghToken)$('vcGhToken').value='';
+        if(req.depToken&&$('vcDepToken').value===req.depToken)$('vcDepToken').value='';
+        if(latest){VC=settings;vcRenderBranches();vcSaveDirty=false;}
+        else if(VC){VC.has_gh_token=!!settings.has_gh_token;VC.has_dep_token=!!settings.has_dep_token;}
+        if($('vcGhState'))$('vcGhState').textContent=settings.has_gh_token?'تنظیم شده':'تنظیم نشده';
+        if($('vcDepState'))$('vcDepState').textContent=settings.has_dep_token?'تنظیم شده':'تنظیم نشده';
+        if(latest){vcBadge(settings.check_on_load?'خودکار':'دستی',settings.check_on_load?'on':'off');vcStat('✓ تنظیمات ذخیره شد','#4ade80');if(req.showMsg)showToast('✓ ذخیره شد');}
+        req.waiters.forEach(done=>done(true));
+      })
+      .catch(e=>{
+        if(!vcSaveQueued){vcSaveDirty=true;const msg='ذخیره ناموفق'+(e&&e.message?': '+String(e.message).slice(0,140):'');vcStat('✗ '+esc(msg),'#f87171');showToast(msg,true);}
+        req.waiters.forEach(done=>done(false));
+      })
+      .finally(()=>{
+        vcSaveInFlight=false;
+        if(vcSaveQueued){const next=vcSaveQueued;vcSaveQueued=null;vcStartSave(next);}
+      });
+}
+function vcSave(showMsg) {
+    clearTimeout(vcSaveTimer);vcSaveTimer=null;vcSaveDirty=true;
+    const req=vcBuildSaveRequest(showMsg);
+    return new Promise(resolve=>{
+        req.waiters.push(resolve);
+        if(vcSaveInFlight){
+            if(vcSaveQueued){vcSaveQueued.fd=req.fd;vcSaveQueued.ghToken=req.ghToken;vcSaveQueued.depToken=req.depToken;vcSaveQueued.revision=req.revision;vcSaveQueued.showMsg=vcSaveQueued.showMsg||req.showMsg;vcSaveQueued.waiters.push(resolve);}
+            else vcSaveQueued=req;
+            return;
+        }
+        vcStartSave(req);
+    });
 }
 
 /**
@@ -109176,7 +109231,9 @@ function vcUpdate(skipConfirm, requestedBranch) {
     const lock = () => { window._vcInstalling = true; if (btn) { btn.disabled = true; btn.textContent = '⏳ در حال نصب...'; } };
     const unlock = () => { window._vcInstalling = false; if (btn) { btn.disabled = false; btn.textContent = '⬇ نصب نسخهٔ جدید'; } };
 
-    fetch('?vc_deploy_info=1').then(r => r.json()).then(d => {
+    const ensureSaved=vcSaveDirty?vcSave(false):Promise.resolve(true);
+    ensureSaved.then(saved=>{if(!saved)throw new Error('تنظیمات ذخیره نشد؛ نصب لغو شد');return fetch('?vc_deploy_info=1');})
+    .then(r => r.json()).then(d => {
         const useSelfUpdate = !!d.can_self_update && !!(d.token || d.nonce);
         if (!d.ok && !useSelfUpdate) {
             showToast(d.error || 'نصب‌کننده در دسترس نیست', true);
@@ -109207,7 +109264,7 @@ function vcUpdate(skipConfirm, requestedBranch) {
             prepFd.append('unpin_only', '1');
         }
         return fetch('?vc_settings=1', { method: 'POST', body: prepFd, cache: 'no-store' })
-            .catch(() => null)
+            .then(r=>r.json().then(x=>{if(!r.ok||!x.ok)throw new Error((x&&x.error)||('HTTP '+r.status));return x;}))
             .then(() => {
                 if (useSelfUpdate) {
                     const ufd = new FormData();
