@@ -393,7 +393,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.511';
+const APP_VERSION = '10.512';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -15544,21 +15544,6 @@ function bslMatrixRows(string $tk,int $vid,bool $build=true): array {
     $stale=$usable&&!bslMatrixProductsFresh($vid,$c);
     return ['rows'=>$usable?(array)($c['rows']??[]):[],'from'=>$usable?'matrix':'none',
         'partial'=>!$usable||!empty($c['partial'])||$stale,'stale'=>$stale,'at'=>(int)($c['at']??0)];
-}
-
-function bslSendParallelCount(?array $cn = null, int $items = 0, int $shops = 1): int {
-    if ($cn === null) $cn = loadConnections();
-    $b = is_array($cn['basalam'] ?? null) ? $cn['basalam'] : [];
-    $manual = max(1, min(8, (int)($b['send_parallel_n'] ?? 4)));
-    $auto = !array_key_exists('send_parallel_auto', $b) || !empty($b['send_parallel_auto']);
-    if (!$auto) return $manual;
-    $n = 1;
-    if ($items >= 10 || $shops > 1) $n = 2;
-    if ($items >= 50 || $shops >= 3) $n = 3;
-    if ($items >= 150) $n = 4;
-    if ($items >= 500) $n = 6;
-    if ($items >= 1500) $n = 8;
-    return max(1, min($manual, $n));
 }
 
 
@@ -47362,6 +47347,10 @@ if (isset($_GET['selftest'])) {
     $__sendMxStart511=strrpos($selfSrc,'/* v10.511: read the last saved matrix only');
     $__sendMxEnd511=$__sendMxStart511===false?false:strpos($selfSrc,'$pd=$verifyProducts;',$__sendMxStart511);
     $__sendMxBlock511=$__sendMxStart511!==false&&$__sendMxEnd511!==false?substr($selfSrc,$__sendMxStart511,$__sendMxEnd511-$__sendMxStart511):'';
+    $add('10.512','تابع همزمانی باسلام فقط یک بار تعریف شده و نسخه از اصلاح lint عبور کرده است',
+        substr_count($selfSrc,'function bslSendParallel'.'Count(')===1
+        &&strpos($selfSrc,"{v:'10." . "512'")!==false
+        &&version_compare(APP_VERSION,'10.' . '512','>='));
     $add('10.511','ارسال جدول مغایرت را rebuild نمی‌کند و snapshot خالی باعث ارسال کامل صف می‌شود',
         !bslMatrixProductsUsable($__matrixEmpty511)
         &&(!$__normalSkipExpected511||$__normalSkip511===true)
@@ -98434,6 +98423,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.512', t:'🩹 رفع خطای lint هنگام نصب به‌روزرسانی', items:[
+    'تعریف تکراری تابع تعیین همزمانی باسلام حذف شد؛ اکنون فایل scraper4.php از بررسی PHP syntax عبور می‌کند.'
+  ]},
   {v:'10.511', t:'🚀 ارسال کامل وقتی snapshot جدول مغایرت خالی است', items:[
     'فرایند ارسال فقط آخرین snapshot ساخته‌شده را می‌خواند و هرگز ساخت جدول مغایرت را آغاز نمی‌کند؛ snapshot حتی اگر بیش از شش ساعت عمر داشته باشد همان آخرین نسخهٔ موجود است.',
     'اگر غرفه در snapshot هیچ ردیفی نداشته باشد، تمام محصولات صف به مسیر کامل ارسال/به‌روزرسانی می‌روند و از روی دفترچهٔ تغییرات به‌عنوان «بدون تغییر» رد نمی‌شوند.'
