@@ -22,6 +22,8 @@
  *     Base64URL JSON و text/plain به‌جای multipart/form-data مسدودشده با 406.
  *   • v3.4: آپدیتر داخلی با endpoint امن GET؛ دانلود، syntax/hash، بکاپ و
  *     جایگزینی اتمیک خود deploy.php برای اصلاح زندهٔ نسخه‌های بعدی.
+ *   • v3.5: حذف کامل POST روی هاستِ 406؛ عملیات تغییردهنده با پاکت رمز‌شدهٔ
+ *     AES-256-GCM در GET حمل می‌شوند تا اسرار نیز وارد URL/log نشوند.
  *
  * نصب: فایل را روی هاست بگذارید و یک‌بار باز کنید (راه‌اندازیِ اولیه).
  */
@@ -29,7 +31,7 @@
 @set_time_limit(300);
 @ini_set('memory_limit', '768M');
 
-const DEPLOY_VERSION = '3.4';
+const DEPLOY_VERSION = '3.5';
 const DEPLOY_BUILD   = '1405-08-09';
 const CONFIG_FILE    = __DIR__ . '/.deploy-config.json';
 const BACKUP_DIR     = __DIR__ . '/_backups';
@@ -734,7 +736,7 @@ function deploy_self_update(array $cfg, bool $force = false): array {
     if(!preg_match("~const\\s+DEPLOY_VERSION\\s*=\\s*'([^']+)'~",$code,$m))
         return ['ok'=>false,'error'=>'نسخهٔ deploy.php در فایل دریافتی پیدا نشد'];
     $remoteVersion=(string)$m[1];
-    if(strpos($code,'function deploy_self_update(')===false||strpos($code,'deploy_unpack_post_envelope')===false)
+    if(strpos($code,'function deploy_self_update(')===false||strpos($code,'deploy_unpack_encrypted_get')===false)
         return ['ok'=>false,'error'=>'فایل دریافتی آپدیتر کامل و WAF-safe نیست','remote_version'=>$remoteVersion];
     if(!php_syntax_check($code,$syntaxError))
         return ['ok'=>false,'error'=>'خطای syntax در آپدیتر: '.(string)$syntaxError,'remote_version'=>$remoteVersion];
@@ -795,6 +797,46 @@ deploy_unpack_post_envelope();
 // ==================================================================
 
 $cfg     = cfg_load();
+
+/** Initial setup has no token yet; its payload contains only the public repo. */
+function deploy_unpack_setup_get(array $cfg): void {
+    $encoded=(string)($_GET['_p']??'');
+    if($encoded===''||!empty($cfg['api_token'])||(string)($_GET['action']??'')!=='setup')return;
+    if(strlen($encoded)>4096||!preg_match('~^[A-Za-z0-9_-]+$~D',$encoded))jout(['ok'=>false,'error'=>'پاکت setup نامعتبر است'],400);
+    $encoded.=str_repeat('=',(4-strlen($encoded)%4)%4);
+    $json=base64_decode(strtr($encoded,'-_','+/'),true);$data=is_string($json)?json_decode($json,true):null;
+    if(!is_array($data)||array_is_list($data))jout(['ok'=>false,'error'=>'JSON setup نامعتبر است'],400);
+    if(isset($data['repo'])&&is_scalar($data['repo']))$_POST['repo']=(string)$data['repo'];
+}
+deploy_unpack_setup_get($cfg);
+
+/**
+ * v3.5: this provider rejects every POST with an HTML 406 before PHP runs.
+ * Mutations therefore arrive as AES-256-GCM encrypted GET envelopes. The key
+ * is SHA-256(api_token); URL/proxy logs see only random ciphertext.
+ */
+function deploy_unpack_encrypted_get(array $cfg): void {
+    $encoded=(string)($_GET['_e']??'');
+    if($encoded==='')return;
+    if(strlen($encoded)>24000||!preg_match('~^[A-Za-z0-9_-]+$~D',$encoded))
+        jout(['ok'=>false,'error'=>'پاکت رمز‌شده نامعتبر است'],400);
+    $encoded.=str_repeat('=',(4-strlen($encoded)%4)%4);
+    $raw=base64_decode(strtr($encoded,'-_','+/'),true);
+    $token=(string)($cfg['api_token']??'');
+    if(!is_string($raw)||strlen($raw)<29||$token===''||!function_exists('openssl_decrypt'))
+        jout(['ok'=>false,'error'=>'پاکت رمز‌شده قابل بازکردن نیست'],400);
+    $iv=substr($raw,0,12);$tag=substr($raw,12,16);$cipher=substr($raw,28);
+    $json=openssl_decrypt($cipher,'aes-256-gcm',hash('sha256',$token,true),OPENSSL_RAW_DATA,$iv,$tag,'S4DP2');
+    $data=is_string($json)?json_decode($json,true):null;
+    if(!is_array($data)||array_is_list($data))jout(['ok'=>false,'error'=>'رمز یا JSON پاکت نامعتبر است'],403);
+    foreach($data as $key=>$value){
+        if(!is_string($key)||!preg_match('~^[A-Za-z0-9_]{1,64}$~D',$key))continue;
+        if(is_scalar($value)||$value===null)$_POST[$key]=$value===null?'':(string)$value;
+    }
+    $_SERVER['S4_DEPLOY_ENVELOPE']='encrypted_get';
+}
+deploy_unpack_encrypted_get($cfg);
+
 /* v3.1: رمز و نشست دیگر وجود ندارند — راه‌اندازی فقط تا ساختِ api_token لازم است. */
 $isSetup = empty($cfg['api_token']);
 
@@ -867,23 +909,24 @@ if ($isApi) {
         if(empty($result['ok']))jout($result,500);jout($result);
     }
 
-    /* v3.4 focused self-test: no configuration or destination is mutated. */
+    /* v3.5 focused self-test: no configuration or destination is mutated. */
     if ($action === 'selftest') {
         $badErr = null;
         $smallGood = php_syntax_check("<?php echo 'ok';", $smallErr);
         $smallBad = !php_syntax_check("<?php function broken( {", $badErr);
         $self = (string)@file_get_contents(__FILE__);
         $checks = [
-            'version_3_4' => version_compare(DEPLOY_VERSION, '3.4', '>='),
+            'version_3_5' => version_compare(DEPLOY_VERSION, '3.5', '>='),
             'github_api_first' => strpos($self, "'https://api.github.com/repos/'") !== false
                 && strpos($self, "'github_api_raw'") !== false,
             'large_file_cli_lint' => strpos($self, "strlen(\$code) > 1048576") !== false
                 && function_exists('php_lint_binary'),
             'valid_php_accepted' => $smallGood,
             'invalid_php_rejected' => $smallBad && is_string($badErr) && $badErr !== '',
-            'waf_safe_post_envelope' => function_exists('deploy_unpack_post_envelope')
-                && strpos($self,"return 'S4DP1.'+btoa(binary)") !== false
-                && strpos($self,"opt.headers['Content-Type']='text/plain;charset=UTF-8'") !== false,
+            'waf_safe_encrypted_get' => function_exists('deploy_unpack_encrypted_get')
+                && strpos($self,"crypto.subtle.encrypt({name:'AES-GCM'") !== false
+                && strpos($self,"url+='&_e='+encodeURIComponent") !== false
+                && strpos($self,"const opt={method:'GET'") !== false,
             'built_in_self_updater' => function_exists('deploy_self_update')
                 && strpos($self,"if (\$action === 'self_update')") !== false
                 && strpos($self,"'method'=>'GET'") !== false,
@@ -1515,9 +1558,10 @@ code{background:#0f172a;padding:2px 7px;border-radius:5px;font-size:11.5px;
 async function doSetup(){
   const m=document.getElementById('msg');
   const show=(t,c)=>{m.textContent=t;m.className='msg on '+c;};
-  const fd=new FormData();
-  fd.append('repo',document.getElementById('repo').value);
-  const r=await fetch('?action=setup',{method:'POST',body:fd}).then(r=>r.json());
+  const bytes=new TextEncoder().encode(JSON.stringify({repo:document.getElementById('repo').value}));
+  let binary='';for(let i=0;i<bytes.length;i++)binary+=String.fromCharCode(bytes[i]);
+  const payload=btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  const r=await fetch('?action=setup&_p='+encodeURIComponent(payload)+'&_v='+Date.now(),{cache:'no-store'}).then(r=>r.json());
   if(r.ok) location.reload(); else show(r.error||'خطا','m-err');
 }
 document.getElementById('repo').addEventListener('keydown',e=>{if(e.key==='Enter')doSetup()});
@@ -1877,27 +1921,39 @@ function msg(el,text,cls){
 function hide(el){ $(el).className='msg'; }
 const esc=s=>{const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;};
 
-function deployPayloadEnvelope(data){
-  const normalized={};
-  for(const k in (data||{})) normalized[k]=data[k]===true?'1':(data[k]===false?'':data[k]);
-  const bytes=new TextEncoder().encode(JSON.stringify(normalized));
+function deployB64Url(bytes){
   let binary='';
-  for(let i=0;i<bytes.length;i+=0x8000) binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
-  return 'S4DP1.'+btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
+  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function deployNormalizedData(data){
+  const normalized={};
+  for(const k in (data||{}))normalized[k]=data[k]===true?'1':(data[k]===false?'':data[k]);
+  return normalized;
+}
+async function deployEncryptedEnvelope(data){
+  if(!SETTINGS.api_token)throw new Error('توکن API برای انتقال رمز‌شده آماده نیست');
+  if(!window.crypto||!crypto.subtle)throw new Error('WebCrypto در این مرورگر در دسترس نیست');
+  const enc=new TextEncoder(), keyBytes=await crypto.subtle.digest('SHA-256',enc.encode(SETTINGS.api_token));
+  const key=await crypto.subtle.importKey('raw',keyBytes,{name:'AES-GCM'},false,['encrypt']);
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const sealed=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:enc.encode('S4DP2'),tagLength:128},key,
+    enc.encode(JSON.stringify(deployNormalizedData(data)))));
+  const cipher=sealed.subarray(0,sealed.length-16),tag=sealed.subarray(sealed.length-16),out=new Uint8Array(28+cipher.length);
+  out.set(iv,0);out.set(tag,12);out.set(cipher,28);return deployB64Url(out);
 }
 async function api(action, data, method){
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),240000);
-  const opt={method:method||'GET',signal:ctl.signal,cache:'no-store',headers:{'Accept':'application/json'}};
+  const opt={method:'GET',signal:ctl.signal,cache:'no-store',headers:{'Accept':'application/json'}};
   let url='?action='+encodeURIComponent(action)+'&_v='+Date.now();
-  if(data && opt.method==='POST'){
-    /* v3.3: multipart values such as arena/... triggered hosting ModSecurity
-       and returned an HTML 406 before PHP ran. A single text envelope avoids it. */
-    opt.headers['Content-Type']='text/plain;charset=UTF-8';
-    opt.body=deployPayloadEnvelope(data);
-  } else if(data){
-    for(const k in data) url+='&'+k+'='+encodeURIComponent(data[k]);
-  }
   try{
+    if(data && (method||'GET')==='POST'){
+      /* v3.5: this host rejects the POST method itself. Carry mutations in an
+         authenticated encrypted GET envelope; secrets never appear in URL logs. */
+      url+='&_e='+encodeURIComponent(await deployEncryptedEnvelope(data));
+    } else if(data){
+      for(const k in data)url+='&'+k+'='+encodeURIComponent(data[k]);
+    }
     const r=await fetch(url,opt), text=await r.text();
     let j=null;
     try{j=JSON.parse(text);}catch(e){
@@ -2182,7 +2238,7 @@ async function selfUpdateDeploy(){
   if(!SETTINGS.api_token)return msg('su_msg','✗ ابتدا توکن API را در همین صفحه تولید کنید','m-err');
   if(!confirm('آخرین deploy.php از برنچ ثابت دریافت و پس از بکاپ نصب شود؟'))return;
   msg('su_msg','<span class="spin"></span> در حال دانلود، اعتبارسنجی و نصب...','m-info');
-  const r=await api('self_update',{api_token:SETTINGS.api_token});
+  const r=await api('self_update',{api_token:SETTINGS.api_token},'POST');
   if(!r.ok)return msg('su_msg','✗ '+esc(r.error||'خطای آپدیت'),'m-err');
   msg('su_msg','✓ '+esc(r.message||'به‌روزرسانی شد')+' · نسخهٔ منبع '+esc(r.remote_version||r.version||''),'m-ok');
   if(r.updated)setTimeout(()=>location.reload(),1200);

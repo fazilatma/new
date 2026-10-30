@@ -402,7 +402,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.511';
+const APP_VERSION = '10.512';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -47976,6 +47976,8 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"{v:'10." . "510'")!==false&&version_compare(APP_VERSION,'10.510','>='));
     $add('10.511','deploy.php v3.4 آپدیتر داخلی GET با بکاپ، syntax، hash و جایگزینی اتمیک دارد',
         strpos($selfSrc,"{v:'10." . "511'")!==false&&version_compare(APP_VERSION,'10.511','>='));
+    $add('10.512','deploy.php v3.5 همهٔ تغییرات را با GET رمز‌شده حمل می‌کند و HTTP POST را کاملاً حذف کرده است',
+        strpos($selfSrc,"{v:'10." . "512'")!==false&&version_compare(APP_VERSION,'10.512','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99256,6 +99258,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.512', t:'🔐 حذف کامل POST از deploy.php و انتقال رمز‌شده روی GET', items:[
+    'آزمایش تولید ثابت کرد WAF هاست خود متد POST را حتی با text/plain پیش از PHP با HTTP 406 رد می‌کند؛ بنابراین تغییر Content-Type به‌تنهایی کافی نبود.',
+    'deploy.php v3.5 تمام عملیات تغییردهنده را با AES-256-GCM و کلید مشتق‌شده از API token داخل GET حمل می‌کند؛ URL و لاگ پروکسی فقط ciphertext تصادفی می‌بینند.',
+    'راه‌اندازی اولیه نیز بدون POST انجام می‌شود و decoder قدیمی فقط برای سازگاری باقی مانده است.'
+  ]},
   {v:'10.511', t:'⬆️ آپدیتر داخلی و endpoint زنده برای deploy.php', items:[
     'deploy.php v3.4 از تب تنظیمات با یک دکمه آخرین نسخه را از برنچ ثابت می‌گیرد؛ این endpoint با GET اجرا می‌شود و درگیر WAF 406 مربوط به POST نیست.',
     'پیش از جایگزینی، نسخه و ساختار WAF-safe، syntax و SHA-256 بررسی می‌شود؛ سپس بکاپ گرفته و فایل موقت به‌صورت اتمیک rename می‌شود.',
