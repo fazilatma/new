@@ -24,14 +24,20 @@
  *     جایگزینی اتمیک خود deploy.php برای اصلاح زندهٔ نسخه‌های بعدی.
  *   • v3.5: حذف کامل POST روی هاستِ 406؛ عملیات تغییردهنده با پاکت رمز‌شدهٔ
  *     AES-256-GCM در GET حمل می‌شوند تا اسرار نیز وارد URL/log نشوند.
+ *   • v3.6: منع cache شدن HTML/JS پنل تا تب قدیمی دوباره POST مسدودشده نفرستد.
  *
  * نصب: فایل را روی هاست بگذارید و یک‌بار باز کنید (راه‌اندازیِ اولیه).
  */
 
 @set_time_limit(300);
 @ini_set('memory_limit', '768M');
+if(PHP_SAPI!=='cli'&&!headers_sent()){
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    header('Expires: 0');
+}
 
-const DEPLOY_VERSION = '3.5';
+const DEPLOY_VERSION = '3.6';
 const DEPLOY_BUILD   = '1405-08-09';
 const CONFIG_FILE    = __DIR__ . '/.deploy-config.json';
 const BACKUP_DIR     = __DIR__ . '/_backups';
@@ -909,14 +915,14 @@ if ($isApi) {
         if(empty($result['ok']))jout($result,500);jout($result);
     }
 
-    /* v3.5 focused self-test: no configuration or destination is mutated. */
+    /* v3.6 focused self-test: no configuration or destination is mutated. */
     if ($action === 'selftest') {
         $badErr = null;
         $smallGood = php_syntax_check("<?php echo 'ok';", $smallErr);
         $smallBad = !php_syntax_check("<?php function broken( {", $badErr);
         $self = (string)@file_get_contents(__FILE__);
         $checks = [
-            'version_3_5' => version_compare(DEPLOY_VERSION, '3.5', '>='),
+            'version_3_6' => version_compare(DEPLOY_VERSION, '3.6', '>='),
             'github_api_first' => strpos($self, "'https://api.github.com/repos/'") !== false
                 && strpos($self, "'github_api_raw'") !== false,
             'large_file_cli_lint' => strpos($self, "strlen(\$code) > 1048576") !== false
@@ -927,6 +933,7 @@ if ($isApi) {
                 && strpos($self,"crypto.subtle.encrypt({name:'AES-GCM'") !== false
                 && strpos($self,"url+='&_e='+encodeURIComponent") !== false
                 && strpos($self,"const opt={method:'GET'") !== false,
+            'panel_cache_disabled' => strpos($self,"header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0')") !== false,
             'built_in_self_updater' => function_exists('deploy_self_update')
                 && strpos($self,"if (\$action === 'self_update')") !== false
                 && strpos($self,"'method'=>'GET'") !== false,
