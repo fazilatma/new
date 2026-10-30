@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.522';
+const APP_VERSION = '10.523';
 
 
 if (!function_exists('str_starts_with')) {
@@ -32686,6 +32686,15 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     foreach ($shops as $sh) {
         $vid = (int)($sh['vendor_id'] ?? 0); $tk = trim((string)($sh['token'] ?? ''));
         if ($vid <= 0 || $tk === '') continue;
+        /* v10.523: پس از اینکه هر سه endpoint رسمیِ update برای یک غرفه 403
+           قطعی دادند، همان worker هزاران بار همان خطای دائمی را تکرار نمی‌کند.
+           اولین خطا با جزئیات حفظ می‌شود؛ محصولات بعدی آن غرفه شفاف skip می‌شوند
+           و غرفه‌های سالم بدون وقفه ادامه می‌یابند. */
+        if (!empty($GLOBALS['_bslHardForbiddenVendors'][$vid])) {
+            $out[$vid]=['ok'=>true,'skipped'=>true,'action'=>'skipped_shop_forbidden',
+                'reason_kind'=>'auth','note'=>'غرفه پس از 403 قطعی این اجرا متوقف شد؛ توکن/دسترسی vendor_id بازبینی شود'];
+            continue;
+        }
         $vStat = bslCheckVendorActiveStatus($tk, $vid);
         if (empty($vStat['active'])) {
             $out[$vid] = ['ok' => false, 'skipped_inactive_vendor' => true, 'reason_kind' => 'vendor_inactive', 'error' => (string)$vStat['reason']];
@@ -32896,6 +32905,10 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         if(!empty($matrixEmptyVids[(int)$vid]))$__oneOpts['force_all']=true;
         $one = bslUpsertToShop($p, $sh, $__oneOpts);
         $out[(int)$vid] = $one;
+        if ((int)($one['error_code'] ?? 0) === 403) {
+            if (!isset($GLOBALS['_bslHardForbiddenVendors']) || !is_array($GLOBALS['_bslHardForbiddenVendors'])) $GLOBALS['_bslHardForbiddenVendors']=[];
+            $GLOBALS['_bslHardForbiddenVendors'][(int)$vid]=['at'=>time(),'shop'=>(string)($sh['shop_name']??$vid)];
+        }
         if (!empty($one['ok']) && (int)($one['id'] ?? 0) > 0) $ledger[(int)$vid] = (int)$one['id'];
     }
 
@@ -47454,6 +47467,10 @@ if (isset($_GET['selftest'])) {
     $add('10.522','retry علاوه بر شمارندهٔ صف progress و local task قدیمی را پاک می‌کند',
         substr_count($selfSrc,'localTaskDbForget(BSL_PROGRESS_FILE);@unlink(BSL_PROGRESS_FILE)')>=2
         &&strpos($selfSrc,"{v:'10." . "522'")!==false&&version_compare(APP_VERSION,'10.522','>='));
+    $add('10.523','403 قطعی هر vendor در همان worker فقط یک خطای actionable می‌سازد و سپس skip می‌شود',
+        strpos($selfSrc,"_bslHardForbiddenVendors")!==false
+        &&strpos($selfSrc,"'action'=>'skipped_shop_forbidden'")!==false
+        &&strpos($selfSrc,"{v:'10." . "523'")!==false&&version_compare(APP_VERSION,'10.523','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98687,6 +98704,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.523', t:'🛑 توقف تکرار خطای دسترسی دائمی هر غرفه', items:[
+    'اگر مسیر عمومی، vendor-scoped و batch-updates همگی برای یک غرفه 403 قطعی بدهند، اولین خطای کامل حفظ می‌شود و همان غرفه تا پایان worker circuit-break می‌شود.',
+    'محصولات بعدی آن غرفه با دلیل روشن skipped_shop_forbidden رد می‌شوند؛ غرفه‌های سالم ادامه می‌یابند و هزاران خطای تکراری تولید نمی‌شود.',
+    'این توقف فقط برای همان vendor_id و همان اجرای ارسال است و دسترسی هیچ غرفهٔ دیگری را تغییر نمی‌دهد.'
+  ]},
   {v:'10.522', t:'🧹 شروع واقعی retry از ردیف نخست', items:[
     'بازیابی terminal علاوه بر current و شمارنده‌های صف، progress file و local task قدیمی را نیز پاک می‌کند.',
     'worker جدید دیگر checkpoint پایان‌یافتهٔ اجرای قبل را نمی‌خواند و واقعاً از index صفر همان snapshot آغاز می‌شود.'
