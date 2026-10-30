@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.507';
+const APP_VERSION = '10.508';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -424,7 +424,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/08';
+const APP_VERSION_DATE = '1405/08/09';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -20914,10 +20914,10 @@ function vc_normalize_branches(array $branches):array{
     }return $out;
 }
 /** Probe configured branches and order them by their newest path commit time. */
-function vc_probe_branches(array $c):array{
+function vc_probe_branches(array $c,bool $resolveLegacyAlias=true):array{
     $rows=[];$errors=[];$repo=(string)$c['repo'];$path=(string)$c['path'];$token=(string)$c['github_token'];
     foreach(vc_normalize_branches((array)($c['branches']??[])) as $branch){
-        $sourceBranch=vc_canonicalize_branch_alias($branch);
+        $sourceBranch=$resolveLegacyAlias?vc_canonicalize_branch_alias($branch):$branch;
         $commitUrl='https://api.github.com/repos/'.$repo.'/commits?sha='.rawurlencode($sourceBranch).'&path='.rawurlencode($path).'&per_page=1';
         $cr=vc_get_json_auto($commitUrl,$token,25);
         $metaUrl='https://api.github.com/repos/'.$repo.'/contents/'.implode('/',array_map('rawurlencode',explode('/',$path))).'?ref='.rawurlencode($sourceBranch);
@@ -21121,6 +21121,33 @@ function s4CodeUpdateDownloadVerified(array $picked,string $ghToken=''):array{
     }
     return $lastErr;
 }
+/** Adapt the legacy branch payload so manual installs can use its code while its automatic channel stays canonical. */
+function s4CodeUpdateAdaptManualLegacyPayload(string $code):array{
+    $replacements=[
+        ["const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';","const S4_CODE_UPDATE_BRANCH='arena/e868e86a-new';"],
+        ["if(\$branch==='arena/e868e86a-new')return defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';",
+         "if(\$branch==='arena/01a0ebf7-new')return defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';"],
+        ["function vc_probe_branches(array \$c):array{","function vc_probe_branches(array \$c,bool \$resolveLegacyAlias=true):array{"],
+        ["        \$sourceBranch=vc_canonicalize_branch_alias(\$branch);\n","        \$sourceBranch=\$resolveLegacyAlias?vc_canonicalize_branch_alias(\$branch):\$branch;\n"],
+        ["\$requested=vc_canonicalize_branch_alias((string)(\$_POST['branch']??''));",
+         "\$requestedInput=trim((string)(\$_POST['branch']??''));\n        \$manualLegacyBranch=\$requestedInput==='arena/01a0ebf7-new';\n        \$requested=\$manualLegacyBranch?\$requestedInput:vc_canonicalize_branch_alias(\$requestedInput);"],
+        ["if(\$requested!==''&&!in_array(\$requested,\$allowed,true))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];",
+         "if(\$requested!==''&&!in_array(\$requested,\$allowed,true)&&!\$manualLegacyBranch)return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];"],
+        ["\$probe=vc_probe_branches(\$probeCfg);","\$probe=vc_probe_branches(\$probeCfg,!\$manualLegacyBranch);"],
+        ["\$allowDowngrade=!empty(\$_POST['allow_downgrade'])||(!\$trustedAuto&&\$requested!=='');\n        if(\$remoteVersion!=='unknown'&&version_compare(\$remoteVersion,\$diskVersion,'<')&&!\$allowDowngrade){",
+         "\$allowDowngrade=!empty(\$_POST['allow_downgrade'])||(!\$trustedAuto&&\$requested!=='');\n        \$versionOrder=\$remoteVersion!=='unknown'?version_compare(\$remoteVersion,\$diskVersion):1;\n        \$autoEqualVersion=\$trustedAuto&&\$versionOrder===0;\n        if(\$remoteVersion!=='unknown'&&(\$versionOrder<0||\$autoEqualVersion)&&!\$allowDowngrade){"],
+        ["'downgrade_skipped'=>true,'current'=>\$diskVersion","'downgrade_skipped'=>true,'same_version_different_sha'=>\$autoEqualVersion,'current'=>\$diskVersion"],
+        ["return b==='arena/e868e86a-new'?VC_SESSION_UPDATE_BRANCH:b;","return b==='arena/01a0ebf7-new'?VC_SESSION_UPDATE_BRANCH:b;"],
+        ["const installBranch = vcCanonicalUpdateBranch((isExplicitBranch ? String(requestedBranch).trim() : '')\n        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || ''));",
+         "const rawInstallBranch=(isExplicitBranch ? String(requestedBranch).trim() : '')\n        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || '');\n    const installBranch=isExplicitBranch&&rawInstallBranch==='arena/01a0ebf7-new'\n        ?rawInstallBranch:vcCanonicalUpdateBranch(rawInstallBranch);"],
+        ["S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'","S4_CODE_UPDATE_BRANCH==='arena/e868e86a-new'"]
+    ];
+    foreach($replacements as [$from,$to]){
+        if(substr_count($code,$from)!==1)return ['ok'=>false,'error'=>'legacy_branch_payload_compat_failed','detail'=>'expected one updater marker'];
+        $code=str_replace($from,$to,$code);
+    }
+    return ['ok'=>true,'body'=>$code];
+}
 function s4CodeUpdateRun(bool $trustedAuto=false):array{
     $cfg=vc_load();
     if(!$trustedAuto){
@@ -21135,10 +21162,11 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         $ghToken=trim((string)($cfg['github_token']??''));
         $allowed=vc_normalize_branches((array)($cfg['branches']??[]));
         $requestedInput=trim((string)($_POST['branch']??''));
-        $requested=vc_canonicalize_branch_alias($requestedInput);
+        $manualLegacyBranch=$requestedInput==='arena/01a0ebf7-new';
+        $requested=$manualLegacyBranch?$requestedInput:vc_canonicalize_branch_alias($requestedInput);
         if($requested!==''&&!vc_is_allowed_update_branch($requested,$allowed))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
         $probeCfg=$cfg;$probeCfg['repo']=S4_CODE_UPDATE_REPO;$probeCfg['path']=S4_CODE_UPDATE_PATH;$probeCfg['branches']=$requested!==''?[$requested]:$allowed;
-        $probe=vc_probe_branches($probeCfg);
+        $probe=vc_probe_branches($probeCfg,!$manualLegacyBranch);
         $picked=($requested!=='')?($probe['rows'][0]??null):vc_pick_target_branch($cfg,$probe['rows']);
         if(!$picked)return ['ok'=>false,'http'=>502,'error'=>'github_metadata_failed','detail'=>json_encode($probe['errors'],JSON_UNESCAPED_UNICODE)];
         $sourceBranch=(string)$picked['branch'];$remoteSha=(string)$picked['sha'];
@@ -21158,12 +21186,19 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         if($size<1000000||strncmp($code,"<?php",5)!==0||strpos($code,'const APP_VERSION')===false||strpos($code,'function matrixBuild')===false)
             return ['ok'=>false,'http'=>422,'error'=>'download_validation_failed','size'=>$size];
         if($remoteSha!==''&&vc_content_id($code)!==$remoteSha)return ['ok'=>false,'http'=>422,'error'=>'git_blob_sha_mismatch'];
+        if($manualLegacyBranch){
+            $adapted=s4CodeUpdateAdaptManualLegacyPayload($code);
+            if(empty($adapted['ok']))return ['ok'=>false,'http'=>422,'error'=>(string)($adapted['error']??'legacy_branch_payload_compat_failed'),'detail'=>(string)($adapted['detail']??'')];
+            $code=(string)$adapted['body'];$size=strlen($code);
+        }
         preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$code,$vm);$remoteVersion=(string)($vm[1]??'unknown');
         $allowDowngrade=!empty($_POST['allow_downgrade'])||(!$trustedAuto&&$requested!=='');
-        if($remoteVersion!=='unknown'&&version_compare($remoteVersion,$diskVersion,'<')&&!$allowDowngrade){
+        $versionOrder=$remoteVersion!=='unknown'?version_compare($remoteVersion,$diskVersion):1;
+        $autoEqualVersion=$trustedAuto&&$versionOrder===0;
+        if($remoteVersion!=='unknown'&&($versionOrder<0||$autoEqualVersion)&&!$allowDowngrade){
             if($trustedAuto){
                 s4SyncAutoUpdateStateToDisk($sourceBranch,false);
-                return ['ok'=>true,'updated'=>false,'same'=>true,'downgrade_skipped'=>true,'current'=>$diskVersion,'remote'=>$remoteVersion,'version'=>$diskVersion,'branch'=>$sourceBranch,'restart_required'=>$diskVersion!==APP_VERSION];
+                return ['ok'=>true,'updated'=>false,'same'=>true,'downgrade_skipped'=>true,'same_version_different_sha'=>$autoEqualVersion,'current'=>$diskVersion,'remote'=>$remoteVersion,'version'=>$diskVersion,'branch'=>$sourceBranch,'restart_required'=>$diskVersion!==APP_VERSION];
             }
             return ['ok'=>false,'http'=>409,'error'=>'downgrade_refused','current'=>$diskVersion,'remote'=>$remoteVersion,'version'=>$diskVersion];
         }
@@ -21192,7 +21227,7 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         s4SyncAutoUpdateStateToDisk($sourceBranch,false);
         $recycledExtractPids=function_exists('s4RecycleOutdatedExtractSlotProcesses')?s4RecycleOutdatedExtractSlotProcesses($remoteVersion):[];
         $worker=['safe_restart'=>'worker پس از پایان job اختلاف نسخه RAM را تشخیص می‌دهد','recycled_extract_pids'=>$recycledExtractPids];
-        return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'disk_version'=>$remoteVersion,'disk_sha'=>substr($remoteSha,0,12),'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
+        return ['ok'=>true,'updated'=>true,'from_version'=>APP_VERSION,'to_version'=>$remoteVersion,'disk_version'=>$remoteVersion,'disk_sha'=>substr(vc_content_id($code),0,12),'bytes'=>$size,'sha'=>substr($remoteSha,0,12),
             'source'=>S4_CODE_UPDATE_REPO.'@'.$sourceBranch.':'.S4_CODE_UPDATE_PATH,'branch'=>$sourceBranch,'backup'=>basename($backup),'worker'=>$worker,
             'next'=>'نسخهٔ تازه نصب شد؛ ops_feedback=1&repair=1 را روی همین مسیر فراخوانی کنید'];
     }finally{if($tmp!==''&&is_file($tmp))@unlink($tmp);@flock($lock,LOCK_UN);@fclose($lock);}
@@ -47915,7 +47950,7 @@ if (isset($_GET['selftest'])) {
         &&in_array(S4_CODE_UPDATE_BRANCH,(array)($_keptLegacyCfg['branches']??[]),true)
         &&($_keptLegacyCfg['branch']??'')==='arena/01a0ebf7-new'
         &&($_keptLegacyCfg['pinned_branch']??'')==='arena/01a0ebf7-new'
-        &&strpos($selfSrc,'$sourceBranch=vc_canonicalize_branch_alias($branch);')!==false
+        &&strpos($selfSrc,'$sourceBranch=$resolveLegacyAlias?vc_canonicalize_branch_alias($branch):$branch;')!==false
         &&strpos($selfSrc,"\$c['branches']=vc_normalize_branches((array)\$decoded);")!==false
         &&strpos($selfSrc,"{v:'10." . "506'")!==false&&version_compare(APP_VERSION,'10.' . '506','>='));
     $add('10.507','نام قدیمی و برنچ ثابت updater حتی با تنظیمات قدیمیِ ناقص به‌عنوان مقصد مجاز پذیرفته می‌شوند',
@@ -47925,6 +47960,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'!vc_is_allowed_update_branch($requested,$allowed)')!==false
         &&strpos($selfSrc,'function vc_is_allowed_update_branch(string $branch,array $configured):bool')!==false
         &&strpos($selfSrc,"{v:'10." . "507'")!==false&&version_compare(APP_VERSION,'10.' . '507','>='));
+    $add('10.508','کلیک دستی روی alias از خود شاخه دریافت می‌کند و خودآپدیت همچنان به شاخهٔ canonical می‌رود',
+        strpos($selfSrc,'function vc_probe_branches(array $c,bool $resolveLegacyAlias=true):array')!==false
+        &&strpos($selfSrc,'$manualLegacyBranch=$requestedInput===\'arena/01a0ebf7-new\';')!==false
+        &&strpos($selfSrc,'$probe=vc_probe_branches($probeCfg,!$manualLegacyBranch);')!==false
+        &&strpos($selfSrc,'s4CodeUpdateAdaptManualLegacyPayload($code)')!==false
+        &&strpos($selfSrc,'$autoEqualVersion=$trustedAuto&&$versionOrder===0;')!==false
+        &&strpos($selfSrc,"const rawInstallBranch=(isExplicitBranch ? String(requestedBranch).trim() : '')")!==false
+        &&strpos($selfSrc,"{v:'10." . "508'")!==false&&version_compare(APP_VERSION,'10.' . '508','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99180,6 +99223,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.508', t:'🔀 نصب دستی مستقیم از شاخهٔ قدیمی', items:[
+    'کلیک دستی روی arena/01a0ebf7-new حالا همان شاخه را probe و دانلود می‌کند؛ خودآپدیت همچنان از arena/e868e86a-new می‌خواند.',
+    'کد شاخهٔ قدیمی پیش از نصب با تنظیم کانال خودآپدیت canonical سازگار می‌شود و فقط پس از تأیید SHA منبع تغییر می‌کند.',
+    'خودآپدیتِ هم‌نسخه کد دستی را بازنویسی نمی‌کند؛ با انتشار نسخهٔ بالاتر از شاخهٔ canonical به‌روزرسانی می‌شود.'
+  ]},
   {v:'10.507', t:'🛠️ پایداری آپدیت از alias قدیمی', items:[
     'در تنظیمات قدیمی یا ناقص هم arena/01a0ebf7-new به مقصد ثابت همین نشست resolve می‌شود و دیگر با branch_not_configured متوقف نمی‌شود.',
     'pin کردن مقصد ثابت در تنظیمات قدیمی، شاخهٔ canonical لازم را به فهرست مجاز اضافه می‌کند.'
@@ -109379,8 +109427,10 @@ function vcCanonicalUpdateBranch(branch){
  */
 function vcUpdate(skipConfirm, requestedBranch) {
     const isExplicitBranch = !!(requestedBranch && String(requestedBranch).trim());
-    const installBranch = vcCanonicalUpdateBranch((isExplicitBranch ? String(requestedBranch).trim() : '')
-        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || ''));
+    const rawInstallBranch=(isExplicitBranch ? String(requestedBranch).trim() : '')
+        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || '');
+    const installBranch=isExplicitBranch&&rawInstallBranch==='arena/01a0ebf7-new'
+        ?rawInstallBranch:vcCanonicalUpdateBranch(rawInstallBranch);
     const busy = vcBusy();
     if (busy && !skipConfirm) {
         if (!confirm('«' + busy + '» در جریان است.\n\n'
