@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.516';
+const APP_VERSION = '10.517';
 
 
 if (!function_exists('str_starts_with')) {
@@ -42879,7 +42879,7 @@ function matrixBuild(array $opts = []): array {
             if (!$shopDone) {
                 /* v10.510: the reconciliation matrix owns its six-hour source data;
                    do not consult or persist a separate per-shop catalog snapshot. */
-                $remote = reconFetchResumable('bsl', [], $tok, $vid, $shopMeta, true);
+                $remote = reconFetchResumable('bsl', [], $tok, $vid, $shopMeta, true, 'matrix');
             }
         } catch (Throwable $e) {
             $bslErr .= $sname . ': ' . $e->getMessage() . '; ';
@@ -47376,6 +47376,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'s4ApplyImageTransform'.'Bytes($data')===false
         &&strpos($selfSrc,'$dst=imagecreatetruecolor($w,$newH);')!==false
         &&strpos($selfSrc,"{v:'10." . "516'")!==false&&version_compare(APP_VERSION,'10.516','>='));
+    $add('10.517','stop قدیمی recon واکشی مقصدهای ساخت جدول را در حلقهٔ شروع worker متوقف نمی‌کند',
+        reconFetchShouldStop('matrix',true,false,false)===false
+        &&reconFetchShouldStop('recon',true,false,false)===true
+        &&reconFetchShouldStop('matrix',false,true,false)===true
+        &&strpos($selfSrc,"reconFetchResumable('bsl', [], \$tok, \$vid, \$shopMeta, true, 'matrix')")!==false
+        &&strpos($selfSrc,'if (reconFetchStopRequested($stopScope))')!==false
+        &&strpos($selfSrc,"{v:'10." . "517'")!==false&&version_compare(APP_VERSION,'10.517','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -69273,8 +69280,20 @@ function reconFetchCursorAppend(string $target, int $vid, int $page, array $rows
     @file_put_contents(reconFetchCursorFile(), json_encode(['target' => $target, 'vid' => $vid, 'page' => $page, 'rows' => $rows], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND | LOCK_EX);
 }
 
+/** A legacy recon stop belongs only to the legacy recon owner. Matrix builds
+ * have their own stop file; sharing RECON_STOP_FILE made every matrix child
+ * yield before its first destination request when an old recon stop remained. */
+function reconFetchShouldStop(string $scope, bool $legacyReconStop, bool $matrixStop, bool $sliceExpired): bool {
+    return $scope === 'matrix' ? ($matrixStop || $sliceExpired) : ($legacyReconStop || $matrixStop || $sliceExpired);
+}
+function reconFetchStopRequested(string $scope = 'recon'): bool {
+    return reconFetchShouldStop($scope, is_file(RECON_STOP_FILE),
+        function_exists('matrixStopRequested') && matrixStopRequested(),
+        function_exists('matrixSliceExpired') && matrixSliceExpired());
+}
+
 /** واکشیِ محصولاتِ مقصد، با ادامه از چک‌پوینتِ صفحه‌ایِ موجود */
-function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?array &$meta = null, bool $customerVisibleOnly = false): array {
+function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?array &$meta = null, bool $customerVisibleOnly = false, string $stopScope = 'recon'): array {
     $meta = ['complete' => false, 'partial' => false, 'stopped' => false, 'reason' => '', 'page' => 0];
     $maxPages = (int)RECON_FETCH_MAX_PAGES;
     $cursorTarget = ($target === 'bsl' && $customerVisibleOnly) ? 'bsl_active' : $target;
@@ -69284,7 +69303,7 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
     if ($rows) reconProgress(['log_add' => ['↻ ادامهٔ واکشی از صفحهٔ ' . $startPage . ' — ' . count($rows) . ' محصولِ قبلاً خوانده‌شده']]);
     $limit = $startPage + max(1, $maxPages);
     for ($page = $startPage; $page < $limit; $page++) {
-        if (reconStopRequested()) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
+        if (reconFetchStopRequested($stopScope)) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
         if ($target === 'woo') {
             $r = wooReq((string)($w['store_url'] ?? ''), (string)($w['consumer_key'] ?? ''), (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=100&status=any&page=' . $page);
             if (empty($r['ok']) || !is_array($r['body'])) { $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = $page; break; }
@@ -98508,6 +98527,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.517', t:'🔁 رفع حلقهٔ شروع ساخت جدول مغایرت', items:[
+    'فایل توقف قدیمیِ مغایرت‌گیری legacy دیگر واکشی مقصدهای matrix را پیش از نخستین درخواست متوقف نمی‌کند؛ ساخت جدول فقط از stop اختصاصی خودش پیروی می‌کند.',
+    'حلقهٔ چندثانیه‌ایِ ادامهٔ worker روی همان صفحهٔ اول باسلام برطرف شد و checkpoint موجود بدون شروع دوباره به صفحات بعد ادامه می‌دهد.',
+    'خودآزمون متمرکز جداسازی stop مربوط به recon و matrix افزوده شد.'
+  ]},
   {v:'10.516', t:'🖼️ رفع خطای fatal در خودآزمون و برش تصویر', items:[
     'تابع برش پایین تصویر دیگر helper حذف‌شدهٔ نسل قبلی تنظیمات تصویر را صدا نمی‌زند و عملیات GD را مستقیم و با حفظ PNG/WebP انجام می‌دهد.',
     'خودآزمون متمرکز نبودن فراخوانی قدیمی و وجود مسیر واقعی برش افزوده شد.'
