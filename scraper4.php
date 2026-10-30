@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.524';
+const APP_VERSION = '10.525';
 
 
 if (!function_exists('str_starts_with')) {
@@ -32781,8 +32781,9 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         $rs = bslReqMulti($jobs, $conc);
         // موجِ دوم: 404 یا 403 در مسیر عمومی، یک‌بار با مسیرِ مالکِ غرفه امتحان می‌شود.
         // بعضی توکن‌های معتبر فقط vendors/{vendor_id}/products/{id} را مجاز می‌دانند.
-        $again = [];
+        $again = [];$genericForbidden=[];
         foreach ($rs as $vid => $r) {
+            if ((int)($r['code'] ?? 0) === 403) $genericForbidden[(int)$vid]=true;
             if (in_array((int)($r['code'] ?? 0), [403, 404], true)) {
                 $again[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
                                 'ep' => 'vendors/' . $vid . '/products/' . $ids[$vid], 'd' => $jobs[$vid]['d']];
@@ -32794,7 +32795,10 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
            همان vendor است؛ بنابراین امکان ویرایش محصول غرفهٔ دیگر وجود ندارد. */
         $againBatch = [];
         foreach ($rs as $vid => $r) {
-            if ((int)($r['code'] ?? 0) !== 403 || empty($jobs[$vid]['d'])) continue;
+            /* اگر مسیر عمومی 403 داده، 404 مسیر تکی vendor نباید fallback رسمی
+               batch را حذف کند؛ این دقیقاً الگوی API غرفهٔ پیش‌فرض است. */
+            if (empty($genericForbidden[(int)$vid]) && (int)($r['code'] ?? 0) !== 403) continue;
+            if (empty($jobs[$vid]['d'])) continue;
             $batchRow = $jobs[$vid]['d']; $batchRow['id'] = (int)$ids[$vid];
             $againBatch[$vid] = ['tk'=>(string)$live[$vid]['token'],'m'=>'PATCH',
                 'ep'=>'vendors/'.$vid.'/products/batch-updates','d'=>['data'=>[$batchRow]]];
@@ -33015,10 +33019,11 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
         $_bslShopVarsUpd = bslBuildVariantsPayload($p, $priceRial, $stock);
         if ($_bslShopVarsUpd) $bu['variants'] = $_bslShopVarsUpd;
         $r = bslReqWithVariantsFallback($tk, 'PATCH', 'products/' . $exId, $bu);
-        if (in_array((int)($r['code'] ?? 0), [403, 404], true)) {
+        $genericUpdateCode=(int)($r['code']??0);
+        if (in_array($genericUpdateCode, [403, 404], true)) {
             $r = bslReqWithVariantsFallback($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
         }
-        if ((int)($r['code'] ?? 0) === 403) {
+        if ($genericUpdateCode === 403 || (int)($r['code'] ?? 0) === 403) {
             $batchRow=$bu;$batchRow['id']=$exId;
             $rb=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batchRow]]);
             if(!empty($rb['ok'])){if(!is_array($rb['body']??null))$rb['body']=[];$rb['body']['id']=$exId;}
@@ -47494,6 +47499,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$retryOpts['stale_id_recovered']=1")!==false
         &&strpos($selfSrc,"int \$maxPages = 20, bool \$skipMatrix = false")!==false
         &&strpos($selfSrc,"{v:'10." . "524'")!==false&&version_compare(APP_VERSION,'10.524','>='));
+    $add('10.525','403 عمومی حتی اگر vendor-scoped 404 شود fallback رسمی batch را اجرا می‌کند',
+        strpos($selfSrc,'$genericForbidden[(int)$vid]=true')!==false
+        &&strpos($selfSrc,'$genericUpdateCode === 403 ||')!==false
+        &&strpos($selfSrc,"{v:'10." . "525'")!==false&&version_compare(APP_VERSION,'10.525','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98738,6 +98747,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.525', t:'⚡ حذف مسیر کندِ 404 کاذب در ارسال غرفهٔ پیش‌فرض', items:[
+    'اگر PATCH عمومی 403 و مسیر vendor-scoped سپس 404 بدهد، 404 دیگر به‌اشتباه شناسهٔ حذف‌شده تلقی نمی‌شود و fallback رسمی batch-updates حتماً اجرا می‌شود.',
+    'این تغییر از جستجوی چندمرحله‌ای و ساخت دوبارهٔ غیرضروری جلوگیری می‌کند و مسیر رایج محصول موجود را به آپدیت مستقیم و سریع برمی‌گرداند.',
+    'همان رفتار در ارسال تک‌غرفه‌ای و ارسال موازی چندغرفه‌ای اعمال شده و checkpoint هر محصول حفظ می‌شود.'
+  ]},
   {v:'10.524', t:'🔎 بازیابی واقعی شناسه‌های 404 غرفهٔ پیش‌فرض', items:[
     '404 از PATCH عمومی و vendor-scoped اکنون به‌عنوان شناسهٔ قدیمی تشخیص داده می‌شود و فقط نگاشت همان محصول/غرفه از shard حذف می‌شود.',
     'بازیابی، matrix قدیمی را دور می‌زند و همان غرفه را با درخواست واقعی عنوان جستجو می‌کند؛ محصول موجود با ID تازه update و محصول واقعاً حذف‌شده دوباره create می‌شود.',
