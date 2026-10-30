@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.515';
+const APP_VERSION = '10.516';
 
 
 if (!function_exists('str_starts_with')) {
@@ -16075,7 +16075,27 @@ function s4ApplyImageEditBytes(string $data, array $cfg): array {
 }
 
 function s4CropImageBottomBytes(string $data, int $cropBottomPct = 0, int $cropBottomPx = 0): array {
-    return s4ApplyImageTransformBytes($data,['transform_mode'=>'crop','crop_bottom_pct'=>$cropBottomPct,'crop_bottom_px'=>$cropBottomPx]);
+    $pct=max(0,min(45,$cropBottomPct));$px=max(0,min(600,$cropBottomPx));
+    if($pct<=0&&$px<=0)return ['ok'=>true,'data'=>$data,'cropped'=>false,'format'=>detectImageFormat($data)?:'jpg'];
+    if(!function_exists('imagecreatefromstring')||!function_exists('imagecreatetruecolor'))return ['ok'=>false,'error'=>'GD not available','data'=>$data,'cropped'=>false];
+    $fmt=detectImageFormat($data);
+    if($fmt==='svg'||$fmt==='gif')return ['ok'=>true,'data'=>$data,'cropped'=>false,'format'=>$fmt];
+    $src=@imagecreatefromstring($data);
+    if(!$src)return ['ok'=>false,'error'=>'imagecreatefromstring failed','data'=>$data,'cropped'=>false];
+    $w=imagesx($src);$h=imagesy($src);$cut=$px>0?$px:(int)round($h*($pct/100));$cut=min($cut,(int)floor($h*.45));$newH=$h-$cut;
+    if($w<20||$h<60||$cut<=0||$newH<40){imagedestroy($src);return ['ok'=>true,'data'=>$data,'cropped'=>false,'format'=>$fmt?:'jpg'];}
+    $dst=imagecreatetruecolor($w,$newH);
+    if(!$dst){imagedestroy($src);return ['ok'=>false,'error'=>'imagecreatetruecolor failed','data'=>$data,'cropped'=>false];}
+    $keepAlpha=($fmt==='png'&&function_exists('imagepng'))||($fmt==='webp'&&function_exists('imagewebp'));
+    if($keepAlpha){imagealphablending($dst,false);imagesavealpha($dst,true);$trans=imagecolorallocatealpha($dst,255,255,255,127);imagefilledrectangle($dst,0,0,$w,$newH,$trans);}
+    else{$white=imagecolorallocate($dst,255,255,255);imagefilledrectangle($dst,0,0,$w,$newH,$white);}
+    imagecopy($dst,$src,0,0,0,0,$w,$newH);imagedestroy($src);ob_start();$outFmt='jpg';
+    if($fmt==='png'&&function_exists('imagepng')){imagepng($dst,null,6);$outFmt='png';}
+    elseif($fmt==='webp'&&function_exists('imagewebp')){imagewebp($dst,null,90);$outFmt='webp';}
+    else imagejpeg($dst,null,92);
+    $outData=(string)ob_get_clean();imagedestroy($dst);
+    if(strlen($outData)>100)return ['ok'=>true,'data'=>$outData,'cropped'=>true,'format'=>$outFmt,'width'=>$w,'old_height'=>$h,'new_height'=>$newH];
+    return ['ok'=>false,'error'=>'encode failed','data'=>$data,'cropped'=>false];
 }
 
 /**
@@ -47351,6 +47371,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$requested=vc_canonicalize'.'_branch_alias')===false
         &&strpos($selfSrc,'$sourceBranch=vc_canonicalize'.'_branch_alias')===false
         &&strpos($selfSrc,"{v:'10." . "515'")!==false&&version_compare(APP_VERSION,'10.515','>='));
+    $add('10.516','برش پایین تصویر تابع حذف‌شده را صدا نمی‌زند و selftest کامل fatal نمی‌شود',
+        strpos($selfSrc,'function s4CropImageBottomBytes(')!==false
+        &&strpos($selfSrc,'s4ApplyImageTransform'.'Bytes($data')===false
+        &&strpos($selfSrc,'$dst=imagecreatetruecolor($w,$newH);')!==false
+        &&strpos($selfSrc,"{v:'10." . "516'")!==false&&version_compare(APP_VERSION,'10.516','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98483,6 +98508,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.516', t:'🖼️ رفع خطای fatal در خودآزمون و برش تصویر', items:[
+    'تابع برش پایین تصویر دیگر helper حذف‌شدهٔ نسل قبلی تنظیمات تصویر را صدا نمی‌زند و عملیات GD را مستقیم و با حفظ PNG/WebP انجام می‌دهد.',
+    'خودآزمون متمرکز نبودن فراخوانی قدیمی و وجود مسیر واقعی برش افزوده شد.'
+  ]},
   {v:'10.515', t:'🎯 نصب دقیق از همان برنچ انتخاب‌شده', items:[
     'دکمهٔ Update هر ردیف نام همان برنچ را بدون alias، canonicalization یا جایگزینی به PHP می‌فرستد.',
     'اعتبارسنجی، probe، دانلود Git blob، pin و نصب همگی نام literal برنچ انتخابی را حفظ می‌کنند؛ محتوای SHA-تأییدشده نیز دیگر پیش از نصب بازنویسی نمی‌شود.',
