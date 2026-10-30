@@ -401,7 +401,7 @@ const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.504';
+const APP_VERSION = '10.505';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -20816,6 +20816,12 @@ function vc_defaults(): array {
     ];
 }
 
+/** The old session branch is an alias for this chat's fixed updater branch. */
+function vc_canonicalize_branch_alias(string $branch):string{
+    $branch=trim($branch);
+    if($branch==='arena/01a0ebf7-new')return defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
+    return $branch;
+}
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
     $legacy='arena/01a0ebf7-new';
@@ -21110,7 +21116,7 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
     try{
         $ghToken=trim((string)($cfg['github_token']??''));
         $allowed=vc_normalize_branches((array)($cfg['branches']??[]));
-        $requested=trim((string)($_POST['branch']??''));
+        $requested=vc_canonicalize_branch_alias((string)($_POST['branch']??''));
         if($requested!==''&&!in_array($requested,$allowed,true))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
         $probeCfg=$cfg;$probeCfg['repo']=S4_CODE_UPDATE_REPO;$probeCfg['path']=S4_CODE_UPDATE_PATH;$probeCfg['branches']=$requested!==''?[$requested]:$allowed;
         $probe=vc_probe_branches($probeCfg);
@@ -21503,7 +21509,7 @@ if (isset($_GET['vc_settings'])) {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         if (!empty($_POST['pin_only']) || !empty($_POST['unpin_only'])) {
             if (!empty($_POST['pin_only'])) {
-                $pinB = trim((string)($_POST['pin_branch'] ?? ''));
+                $pinB = vc_canonicalize_branch_alias((string)($_POST['pin_branch'] ?? ''));
                 if($pinB===''||!in_array($pinB,$c['branches'],true)){
                     http_response_code(422);echo json_encode(['ok'=>false,'error'=>'branch_not_configured'],JSON_UNESCAPED_UNICODE);exit;
                 }
@@ -21523,9 +21529,10 @@ if (isset($_GET['vc_settings'])) {
         if (isset($_POST['branches'])) {
             $decoded=json_decode((string)$_POST['branches'],true);
             if(!is_array($decoded)){$decoded=preg_split('~[\r\n,]+~',(string)$_POST['branches']);}
-            $c['branches']=vc_normalize_branches((array)$decoded);
+            $decoded=vc_normalize_branches((array)$decoded);
+            $c['branches']=vc_normalize_branches(array_map('vc_canonicalize_branch_alias',$decoded));
         }
-        if (isset($_POST['branch']))      $c['branch']      = trim((string)$_POST['branch']);
+        if (isset($_POST['branch']))      $c['branch']      = vc_canonicalize_branch_alias((string)$_POST['branch']);
         if(!$c['branches'])$c['branches']=vc_normalize_branches([(string)$c['branch']]);
         if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0]??'arena/e868e86a-new';
         if (isset($_POST['path']))        $c['path']        = ltrim(trim((string)$_POST['path']), '/');
@@ -47864,6 +47871,12 @@ if (isset($_GET['selftest'])) {
         &&extractNormalizeOriginTrigger('periodic','worker_child')==='periodic'
         &&extractNormalizeOriginTrigger('','worker')==='background'
         &&strpos($selfSrc,"{v:'10." . "504'")!==false&&version_compare(APP_VERSION,'10.' . '504','>='));
+    $add('10.505','درخواست‌های قدیمیِ arena/01a0ebf7-new به برنچ همین نشست هدایت می‌شوند، نه اینکه branch_not_configured بدهند',
+        vc_canonicalize_branch_alias('arena/01a0ebf7-new')===S4_CODE_UPDATE_BRANCH
+        &&strpos($selfSrc,"\$requested=vc_canonicalize_branch_alias((string)(\$_POST['branch']??''));")!==false
+        &&strpos($selfSrc,"\$pinB = vc_canonicalize_branch_alias((string)(\$_POST['pin_branch'] ?? ''));")!==false
+        &&strpos($selfSrc,'function vcCanonicalUpdateBranch(branch)')!==false
+        &&strpos($selfSrc,"{v:'10." . "505'")!==false&&version_compare(APP_VERSION,'10.' . '505','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99119,6 +99132,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.505', t:'🔀 هدایت برنچ قدیمی نشست به برنچ فعلی', items:[
+    'نام قدیمی arena/01a0ebf7-new به برنچ ثابت همین نشست arena/e868e86a-new هدایت می‌شود؛ آپدیت و pin دیگر برای این نام branch_not_configured نمی‌دهند.',
+    'تنظیمات قدیمی و انتخاب‌های ذخیره‌شدهٔ برنچ هم هنگام ثبت به نام فعلی تبدیل می‌شوند.'
+  ]},
   {v:'10.504', t:'🏷️ اصلاح برچسب دستی/خودکار استخراج و همگام‌سازی', items:[
     'برچسب منشأ از trigger واقعیِ کاربر یا زمان‌بندی جدا شد؛ worker و worker_child دیگر به‌اشتباه «دستی» محسوب نمی‌شوند.',
     'درخواست‌های زمان‌بندی‌شده و بازیابی خودکار منشأ periodic را در صف و child حفظ می‌کنند؛ رکوردهای قدیمی extraction/pipeline/report که منشأ قابل‌اعتماد ندارند «پس‌زمینه · منشأ نامشخص» می‌مانند، نه برچسب دستی.',
@@ -109294,14 +109311,20 @@ function vcParseInstallerReply(response, source) {
     });
 }
 
+/** Keep a stale link to the transferred session branch working by redirecting it to this checkout. */
+const VC_SESSION_UPDATE_BRANCH=<?=json_encode(S4_CODE_UPDATE_BRANCH)?>;
+function vcCanonicalUpdateBranch(branch){
+    const b=String(branch||'').trim();
+    return b==='arena/01a0ebf7-new'?VC_SESSION_UPDATE_BRANCH:b;
+}
 /**
  * نصب: این تابع خودش چیزی نمی‌نویسد. یک فرم به deploy.php ارسال می‌کند
  * که فایلی مستقل است و کار نصب را با همان زنجیرهٔ ایمنی انجام می‌دهد.
  */
 function vcUpdate(skipConfirm, requestedBranch) {
     const isExplicitBranch = !!(requestedBranch && String(requestedBranch).trim());
-    const installBranch = (isExplicitBranch ? String(requestedBranch).trim() : '')
-        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || '');
+    const installBranch = vcCanonicalUpdateBranch((isExplicitBranch ? String(requestedBranch).trim() : '')
+        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || ''));
     const busy = vcBusy();
     if (busy && !skipConfirm) {
         if (!confirm('«' + busy + '» در جریان است.\n\n'
