@@ -18,6 +18,8 @@
  *     را نصب می‌کند؛ اگر آخرین نسخهٔ فایل از قبل نصب بود، رد می‌شود.
  *   • v3.2: دانلود API-first برای هاست‌هایی که raw.githubusercontent.com
  *     را می‌بندند، lint کم‌حافظه برای فایل‌های بزرگ، و خطای شبکهٔ قابل فهم.
+ *   • v3.3: عبور امن درخواست‌های POST از ModSecurity/LiteSpeed با پاکت
+ *     Base64URL JSON و text/plain به‌جای multipart/form-data مسدودشده با 406.
  *
  * نصب: فایل را روی هاست بگذارید و یک‌بار باز کنید (راه‌اندازیِ اولیه).
  */
@@ -25,7 +27,7 @@
 @set_time_limit(300);
 @ini_set('memory_limit', '768M');
 
-const DEPLOY_VERSION = '3.2';
+const DEPLOY_VERSION = '3.3';
 const DEPLOY_BUILD   = '1405-08-09';
 const CONFIG_FILE    = __DIR__ . '/.deploy-config.json';
 const BACKUP_DIR     = __DIR__ . '/_backups';
@@ -716,6 +718,37 @@ function do_deploy(array $job, array $cfg, bool $dryRun = false): array {
 }
 
 // ==================================================================
+//  انتقال POST مقاوم در برابر WAF — v3.3
+// ==================================================================
+
+/**
+ * ModSecurity این هاست multipart/form-data را برای branch/pathهای گیت‌هاب
+ * با HTTP 406 پیش از اجرای PHP رد می‌کند. مرورگر داده را به شکل
+ * S4DP1.<base64url-json> با Content-Type: text/plain می‌فرستد. اینجا فقط
+ * objectهای کوچک و scalar پذیرفته و مانند POST عادی در $_POST ادغام می‌شوند.
+ */
+function deploy_unpack_post_envelope(): void {
+    if (strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') return;
+    $contentType = strtolower((string)($_SERVER['CONTENT_TYPE'] ?? ''));
+    if (strpos($contentType, 'text/plain') !== 0) return; // سازگاری با فرم‌های قدیمی
+    $raw = (string)@file_get_contents('php://input');
+    if (strncmp($raw, 'S4DP1.', 6) !== 0) jout(['ok'=>false,'error'=>'پاکت POST نامعتبر است'],400);
+    $encoded = substr($raw, 6);
+    if ($encoded === '' || strlen($encoded) > 1398104 || !preg_match('~^[A-Za-z0-9_-]+$~D', $encoded))
+        jout(['ok'=>false,'error'=>'اندازه یا قالب پاکت POST نامعتبر است'],400);
+    $encoded .= str_repeat('=', (4 - strlen($encoded) % 4) % 4);
+    $json = base64_decode(strtr($encoded, '-_', '+/'), true);
+    $data = is_string($json) ? json_decode($json, true) : null;
+    if (!is_array($data) || array_is_list($data)) jout(['ok'=>false,'error'=>'JSON پاکت POST نامعتبر است'],400);
+    foreach ($data as $key=>$value) {
+        if (!is_string($key) || !preg_match('~^[A-Za-z0-9_]{1,64}$~D',$key)) continue;
+        if (is_scalar($value) || $value === null) $_POST[$key] = $value === null ? '' : (string)$value;
+    }
+    $_SERVER['S4_DEPLOY_ENVELOPE'] = '1';
+}
+deploy_unpack_post_envelope();
+
+// ==================================================================
 //  احراز هویت
 // ==================================================================
 
@@ -777,20 +810,23 @@ if ($isApi) {
         jout(['ok' => true]);
     }
 
-    /* v3.2 focused self-test: no configuration or destination is mutated. */
+    /* v3.3 focused self-test: no configuration or destination is mutated. */
     if ($action === 'selftest') {
         $badErr = null;
         $smallGood = php_syntax_check("<?php echo 'ok';", $smallErr);
         $smallBad = !php_syntax_check("<?php function broken( {", $badErr);
         $self = (string)@file_get_contents(__FILE__);
         $checks = [
-            'version_3_2' => version_compare(DEPLOY_VERSION, '3.2', '>='),
+            'version_3_3' => version_compare(DEPLOY_VERSION, '3.3', '>='),
             'github_api_first' => strpos($self, "'https://api.github.com/repos/'") !== false
                 && strpos($self, "'github_api_raw'") !== false,
             'large_file_cli_lint' => strpos($self, "strlen(\$code) > 1048576") !== false
                 && function_exists('php_lint_binary'),
             'valid_php_accepted' => $smallGood,
             'invalid_php_rejected' => $smallBad && is_string($badErr) && $badErr !== '',
+            'waf_safe_post_envelope' => function_exists('deploy_unpack_post_envelope')
+                && strpos($self,"return 'S4DP1.'+btoa(binary)") !== false
+                && strpos($self,"opt.headers['Content-Type']='text/plain;charset=UTF-8'") !== false,
             'client_network_error_visible' => strpos($self, 'سرور deploy پاسخ کامل نداد') !== false,
         ];
         jout(['ok' => !in_array(false, $checks, true), 'version' => DEPLOY_VERSION,
@@ -1772,14 +1808,23 @@ function msg(el,text,cls){
 function hide(el){ $(el).className='msg'; }
 const esc=s=>{const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;};
 
+function deployPayloadEnvelope(data){
+  const normalized={};
+  for(const k in (data||{})) normalized[k]=data[k]===true?'1':(data[k]===false?'':data[k]);
+  const bytes=new TextEncoder().encode(JSON.stringify(normalized));
+  let binary='';
+  for(let i=0;i<bytes.length;i+=0x8000) binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
+  return 'S4DP1.'+btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
 async function api(action, data, method){
   const ctl=new AbortController(), timer=setTimeout(()=>ctl.abort(),240000);
-  const opt={method:method||'GET',signal:ctl.signal,cache:'no-store'};
+  const opt={method:method||'GET',signal:ctl.signal,cache:'no-store',headers:{'Accept':'application/json'}};
   let url='?action='+encodeURIComponent(action)+'&_v='+Date.now();
   if(data && opt.method==='POST'){
-    const fd=new FormData();
-    for(const k in data) fd.append(k, data[k]===true?'1':(data[k]===false?'':data[k]));
-    opt.body=fd;
+    /* v3.3: multipart values such as arena/... triggered hosting ModSecurity
+       and returned an HTML 406 before PHP ran. A single text envelope avoids it. */
+    opt.headers['Content-Type']='text/plain;charset=UTF-8';
+    opt.body=deployPayloadEnvelope(data);
   } else if(data){
     for(const k in data) url+='&'+k+'='+encodeURIComponent(data[k]);
   }
