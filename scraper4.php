@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.518';
+const APP_VERSION = '10.519';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47413,6 +47413,11 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"[403, 404], true")!==false
         &&strpos($selfSrc,"'cancel_reason'=>'duplicate_active_profile'")!==false
         &&strpos($selfSrc,"{v:'10." . "518'")!==false&&version_compare(APP_VERSION,'10.518','>='));
+    $add('10.519','ارسال پایان‌یافته پس از نصب اصلاح از ابتدای همان snapshot و با شمارندهٔ پاک بازیابی می‌شود',
+        strpos($selfSrc,"isset(\$_GET['bsl_queue_retry'])")!==false
+        &&strpos($selfSrc,"['done','failed','cancelled']")!==false
+        &&strpos($selfSrc,"'start_index'=>'0'")!==false
+        &&strpos($selfSrc,"{v:'10." . "519'")!==false&&version_compare(APP_VERSION,'10.519','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78806,6 +78811,36 @@ echo json_encode(['ok'=>$found,'queue_id'=>$queueId],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
+/* v10.519: بازیابی امنِ یک ارسال terminal از ابتدای همان snapshot. این مسیر
+   برای نصب اصلاحی است که بخشی از ردیف قبلی پیش از deploy خطا داده است؛ upsert
+   شناسه‌محور است، پس موفق‌های قبلی تکراری ساخته نمی‌شوند و خطادارها ترمیم می‌شوند. */
+if(isset($_GET['bsl_queue_retry'])){
+header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+$queueId=trim((string)($_GET['queue_id']??''));
+if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+$retryFp=queueBackendLock('bsl');
+if(!is_resource($retryFp)){echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک پردازش صف در حال اجراست'],JSON_UNESCAPED_UNICODE);exit;}
+$queue=bslReadQueue();$idx=-1;
+foreach((array)($queue['entries']??[]) as $i=>$row){if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}}
+if($idx<0){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$row=&$queue['entries'][$idx];$st=(string)($row['status']??'');
+if(!in_array($st,['done','failed','cancelled'],true)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'فقط ردیف پایان‌یافته قابل بازیابی است'],JSON_UNESCAPED_UNICODE);exit;}
+$pf=(string)($row['products_file']??'');
+if($pf===''||!is_file($pf)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$products=json_decode((string)@file_get_contents($pf),true);$actual=is_array($products)?count($products):0;
+if($actual<=0){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'snapshot محصولات خالی است'],JSON_UNESCAPED_UNICODE);exit;}
+@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
+if(!@copy($pf,BSL_PRODUCTS_FILE)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'کپی snapshot ناموفق بود'],JSON_UNESCAPED_UNICODE);exit;}
+$now=time();$row['status']='running';$row['total']=$actual;$row['current']=0;$row['sent']=0;$row['updated']=0;$row['skipped']=0;$row['failed']=0;
+$row['started_at']=$now;$row['updated_at']=$now;$row['done_at']=0;$row['paused_at']=0;$row['retry_of_terminal_at']=$now;
+foreach(['sent_details','updated_details','skipped_details','failed_details','recent_log','batch_done_indices'] as $k)$row[$k]=[];
+foreach((array)($row['shop_stats']??[]) as $si=>$ss){foreach(['sent','updated','skipped','failed'] as $k)$row['shop_stats'][$si][$k]=0;}
+unset($row['superseded_by'],$row['cancel_reason'],$row['fail_reason'],$row['error'],$row['paused_by'],$row['stopped_by_user']);
+bslWriteQueue($queue);queueBackendUnlock($retryFp);
+$pid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>'0','resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$actual,'worker_pid'=>$pid,'restarted_from'=>0],JSON_UNESCAPED_UNICODE);exit;
+}
+
 if(isset($_GET['bsl_queue_start_server'])){
 header('Content-Type: application/json; charset=UTF-8');
 $__queueRouteFp = queueBackendLock('bsl');
@@ -98592,6 +98627,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.519', t:'♻️ بازیابی ارسالهای خطادار پس از نصب اصلاح', items:[
+    'یک ردیف done/failed/cancelled را می‌توان از ابتدای همان snapshot ذخیره‌شده با شمارنده‌های پاک دوباره اجرا کرد.',
+    'بازیابی فقط در نبود worker فعال و با قفل صف انجام می‌شود؛ upsert مقصد باعث می‌شود موفق‌های قبلی duplicate نشوند و فقط وضعیتشان تأیید یا به‌روز شود.',
+    'برای ردیف جاری پس از نصب 10.518، همین بازیابی سروری استفاده می‌شود تا خطاهای پیش از deploy نیز جا نمانند.'
+  ]},
   {v:'10.518', t:'🛠️ رفع خطاهای جاری ارسال چندغرفه‌ای باسلام', items:[
     'PATCH محصول موجود اگر در مسیر عمومی 403 یا 404 بگیرد، فقط یک‌بار با مسیر vendor-scoped همان غرفه تکرار می‌شود؛ هویت محصول بین غرفه‌ها جابه‌جا نمی‌شود.',
     'SKU تکراری مبدأ در ساخت به SKU پایدار و ویژهٔ همان عنوان تبدیل می‌شود و در PATCH ارسال نمی‌شود تا به‌روزرسانی قیمت/موجودی با 422 یکتایی SKU متوقف نشود.',
