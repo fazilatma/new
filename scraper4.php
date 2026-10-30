@@ -402,7 +402,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.513';
+const APP_VERSION = '10.514';
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -47980,6 +47980,8 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"{v:'10." . "512'")!==false&&version_compare(APP_VERSION,'10.512','>='));
     $add('10.513','deploy.php v3.6 کش HTML و JavaScript قدیمیِ POSTفرست را کاملاً غیرفعال می‌کند',
         strpos($selfSrc,"{v:'10." . "513'")!==false&&version_compare(APP_VERSION,'10.513','>='));
+    $add('10.514','deploy.php v3.7 cache CDN منبع updater را برای API و raw دور می‌زند',
+        strpos($selfSrc,"{v:'10." . "514'")!==false&&version_compare(APP_VERSION,'10.514','>='));
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -99260,6 +99262,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.514', t:'🔄 جلوگیری از دریافت نسخهٔ کهنه در آپدیتر deploy.php', items:[
+    'دانلود API و raw هر دو cache-buster یکتا دارند؛ در نتیجه self-updater پس از push دیگر نسخهٔ قبلی CDN را به‌اشتباه «به‌روز» تشخیص نمی‌دهد.',
+    'خودآزمون source_cache_busted افزوده شد و حفاظت no-store پنل حفظ شده است.'
+  ]},
   {v:'10.513', t:'🧹 جلوگیری از اجرای JavaScript کش‌شدهٔ deploy.php', items:[
     'HTML و اسکریپت داخلی پنل با no-store/no-cache/must-revalidate تحویل می‌شوند تا تب یا cache قدیمی دوباره POST مسدودشده و خطای 406 تولید نکند.',
     'خودآزمون panel_cache_disabled افزوده شد؛ انتقال رمز‌شدهٔ GET نسخهٔ 3.5 بدون تغییر حفظ شده است.'

@@ -25,6 +25,7 @@
  *   • v3.5: حذف کامل POST روی هاستِ 406؛ عملیات تغییردهنده با پاکت رمز‌شدهٔ
  *     AES-256-GCM در GET حمل می‌شوند تا اسرار نیز وارد URL/log نشوند.
  *   • v3.6: منع cache شدن HTML/JS پنل تا تب قدیمی دوباره POST مسدودشده نفرستد.
+ *   • v3.7: cache-busting مسیر API/raw تا self-updater نسخهٔ کهنهٔ CDN را نگیرد.
  *
  * نصب: فایل را روی هاست بگذارید و یک‌بار باز کنید (راه‌اندازیِ اولیه).
  */
@@ -37,7 +38,7 @@ if(PHP_SAPI!=='cli'&&!headers_sent()){
     header('Expires: 0');
 }
 
-const DEPLOY_VERSION = '3.6';
+const DEPLOY_VERSION = '3.7';
 const DEPLOY_BUILD   = '1405-08-09';
 const CONFIG_FILE    = __DIR__ . '/.deploy-config.json';
 const BACKUP_DIR     = __DIR__ . '/_backups';
@@ -198,8 +199,10 @@ function gh_download_file(string $repo, string $branch, string $path, string $to
     }
     $encPath = implode('/', array_map('rawurlencode', explode('/', ltrim($path, '/'))));
     $repoParts = array_map('rawurlencode', explode('/', $repo));
+    $cacheBust=time().'-'.bin2hex(random_bytes(4));
     $api = 'https://api.github.com/repos/' . implode('/', $repoParts) . '/contents/' . $encPath
-         . '?ref=' . rawurlencode($branch);
+         . '?ref=' . rawurlencode($branch).'&_cb='.rawurlencode($cacheBust);
+    $rawUrl=gh_raw_url($repo,$branch,$path).'?_cb='.rawurlencode($cacheBust);
     $attempts = [];
     $r = http_get($api, $token, false);
     $attempts[] = 'api.github.com: ' . ($r['ok'] ? 'OK' : ($r['error'] ?? 'failed'));
@@ -215,11 +218,11 @@ function gh_download_file(string $repo, string $branch, string $path, string $to
         if (!empty($r['ok'])) { $r['via'] = 'github_api_raw_no_token'; return $r; }
     }
 
-    $raw = http_get(gh_raw_url($repo, $branch, $path), $token, false);
+    $raw = http_get($rawUrl, $token, false);
     $attempts[] = 'raw.githubusercontent.com: ' . ($raw['ok'] ? 'OK' : ($raw['error'] ?? 'failed'));
     if (!empty($raw['ok'])) { $raw['via'] = 'github_raw_fallback'; return $raw; }
     if ((int)($raw['code'] ?? 0) === 401 && $token !== '') {
-        $raw = http_get(gh_raw_url($repo, $branch, $path), '', false);
+        $raw = http_get($rawUrl, '', false);
         $attempts[] = 'raw(no token): ' . ($raw['ok'] ? 'OK' : ($raw['error'] ?? 'failed'));
         if (!empty($raw['ok'])) { $raw['via'] = 'github_raw_fallback_no_token'; return $raw; }
     }
@@ -915,14 +918,14 @@ if ($isApi) {
         if(empty($result['ok']))jout($result,500);jout($result);
     }
 
-    /* v3.6 focused self-test: no configuration or destination is mutated. */
+    /* v3.7 focused self-test: no configuration or destination is mutated. */
     if ($action === 'selftest') {
         $badErr = null;
         $smallGood = php_syntax_check("<?php echo 'ok';", $smallErr);
         $smallBad = !php_syntax_check("<?php function broken( {", $badErr);
         $self = (string)@file_get_contents(__FILE__);
         $checks = [
-            'version_3_6' => version_compare(DEPLOY_VERSION, '3.6', '>='),
+            'version_3_7' => version_compare(DEPLOY_VERSION, '3.7', '>='),
             'github_api_first' => strpos($self, "'https://api.github.com/repos/'") !== false
                 && strpos($self, "'github_api_raw'") !== false,
             'large_file_cli_lint' => strpos($self, "strlen(\$code) > 1048576") !== false
@@ -934,6 +937,8 @@ if ($isApi) {
                 && strpos($self,"url+='&_e='+encodeURIComponent") !== false
                 && strpos($self,"const opt={method:'GET'") !== false,
             'panel_cache_disabled' => strpos($self,"header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0')") !== false,
+            'source_cache_busted' => strpos($self,"'&_cb='.rawurlencode(\$cacheBust)") !== false
+                && strpos($self,"'?_cb='.rawurlencode(\$cacheBust)") !== false,
             'built_in_self_updater' => function_exists('deploy_self_update')
                 && strpos($self,"if (\$action === 'self_update')") !== false
                 && strpos($self,"'method'=>'GET'") !== false,
