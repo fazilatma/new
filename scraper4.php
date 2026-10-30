@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.528';
+const APP_VERSION = '10.529';
 
 
 if (!function_exists('str_starts_with')) {
@@ -32427,7 +32427,11 @@ function bslShopPriceForProfile(array $profile, $rawPrice, array $shop, int $rou
    دارد (کلید#vشناسهٔ‌غرفه) و شناسه‌ها با هم قاطی نمی‌شوند. */
 function bslShopMapKey(string $productKey, array $shop): string {
     if ($productKey === '') return '';
-    if (!empty($shop['is_default'])) return $productKey;
+    /* v10.529: Always scope ownership by vendor, including the default shop.
+       The serial/default path already passed a shop without is_default and
+       therefore used #v{vendor}; the parallel path passed is_default=true and
+       read the legacy bare key instead. That split let a stale ID from another
+       default/vendor be PATCHed only in parallel mode. */
     $vid = (int)($shop['vendor_id'] ?? 0);
     return $vid > 0 ? $productKey . '#v' . $vid : $productKey;
 }
@@ -47535,6 +47539,12 @@ if (isset($_GET['selftest'])) {
         &&(int)($__shops528[1]['vendor_id']??0)===710223
         &&strpos($selfSrc,'if ($defVid > 0 && $vid === $defVid) continue;')!==false
         &&strpos($selfSrc,"{v:'10." . "528'")!==false&&version_compare(APP_VERSION,'10.528','>='));
+    $add('10.529','کلید مالکیت غرفهٔ پیش‌فرض در ارسال موازی دقیقاً به vendor_id همان غرفه محدود است',
+        bslShopMapKey('product-key',['vendor_id'=>735703,'is_default'=>true])==='product-key#v735703'
+        &&bslShopMapKey('product-key',['vendor_id'=>710223,'is_default'=>false])==='product-key#v710223'
+        &&bslShopMapKey('product-key',['vendor_id'=>735703])==='product-key#v735703'
+        &&strpos($selfSrc,'Always scope ownership by vendor, including the default shop')!==false
+        &&strpos($selfSrc,"{v:'10." . "529'")!==false&&version_compare(APP_VERSION,'10.529','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98786,6 +98796,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.529', t:'🧭 جداسازی قطعی شناسه‌های غرفهٔ پیش‌فرض در ارسال موازی', items:[
+    'کلید remote-map غرفهٔ پیش‌فرض نیز مانند همهٔ غرفه‌های دیگر اکنون همیشه vendor_id دارد؛ مسیر موازی دیگر کلید قدیمی و بدون مالک را نمی‌خواند.',
+    'ناهماهنگی مسیر تکی و موازی که می‌توانست ID متعلق به غرفه‌ای دیگر را برای غرفهٔ پیش‌فرض انتخاب کند حذف شد.',
+    'پس از نصب، صف از checkpoint محفوظ ادامه می‌یابد و ID صحیح همان vendor را از ماتریس یا جست‌وجوی vendor-scoped پیدا می‌کند.'
+  ]},
   {v:'10.528', t:'🔐 تثبیت هویت و سرعت غرفهٔ پیش‌فرض باسلام', items:[
     'اگر شناسهٔ غرفهٔ پیش‌فرض به‌صورت قدیمی یا تکراری در فهرست غرفه‌های اضافی هم ذخیره شده باشد، نسخهٔ اضافی دیگر نمی‌تواند توکن اصلی غرفه را بازنویسی کند.',
     'ارسال موازی همیشه توکن و پرچم is_default تنظیمات اصلی را برای همان vendor_id نگه می‌دارد؛ بنابراین خطای «آیدی به غرفه تعلق ندارد» برای همهٔ محصولات غرفهٔ پیش‌فرض ایجاد نمی‌شود.',
