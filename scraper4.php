@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.530';
+const APP_VERSION = '10.531';
 
 
 if (!function_exists('str_starts_with')) {
@@ -32759,7 +32759,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     // ---- فاز ۲: آپدیتِ همزمان
     $ledger = [];
     if ($ids) {
-        $jobs = [];
+        $jobs = [];$directDefaultBatch=[];
         /* v10.33 (۴۶): دفترچه یک بار خوانده می‌شود، نه یک بار برای هر غرفه.
            در حلقهٔ چند هزار محصولی، خواندنِ مکررِ همین فایل خودش گران است. */
         $__bslMap = remoteMapLoad()['bsl'] ?? [];
@@ -32785,14 +32785,34 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             bslApplyContent($bu, $p); /* v10.98: توضیح + تنوع */
             $_mvUpd = bslBuildVariantsPayload($p, (int)$prices[$vid], $stock);
             if ($_mvUpd) $bu['variants'] = $_mvUpd;
-            $jobs[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
-                           'ep' => 'products/' . $exId, 'd' => $bu];
+            /* v10.531: The default token consistently rejects generic PATCH
+               and accepts its official vendor batch endpoint. Start there in
+               parallel instead of paying for generic + scoped failures first.
+               Source variants have no destination IDs, so they cannot legally
+               be included in an update batch; phase 4 retains the full fallback
+               if the safe base/content batch itself is rejected. */
+            if (!empty($live[$vid]['is_default'])) {
+                $batchRow=$bu;$batchRow['id']=(int)$exId;unset($batchRow['variants']);
+                $jobs[$vid]=['tk'=>(string)$live[$vid]['token'],'m'=>'PATCH',
+                    'ep'=>'vendors/'.$vid.'/products/batch-updates','d'=>['data'=>[$batchRow]]];
+                $directDefaultBatch[(int)$vid]=true;
+            } else {
+                $jobs[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
+                               'ep' => 'products/' . $exId, 'd' => $bu];
+            }
         }
         $rs = bslReqMulti($jobs, $conc);
+        foreach($directDefaultBatch as $vid=>$_yes){
+            if(!empty($rs[$vid]['ok'])){
+                if(!is_array($rs[$vid]['body']??null))$rs[$vid]['body']=[];
+                $rs[$vid]['body']['id']=(int)$ids[$vid];
+            }
+        }
         // موجِ دوم: 404 یا 403 در مسیر عمومی، یک‌بار با مسیرِ مالکِ غرفه امتحان می‌شود.
         // بعضی توکن‌های معتبر فقط vendors/{vendor_id}/products/{id} را مجاز می‌دانند.
         $again = [];$genericForbidden=[];
         foreach ($rs as $vid => $r) {
+            if (!empty($directDefaultBatch[(int)$vid])) continue;
             if ((int)($r['code'] ?? 0) === 403) $genericForbidden[(int)$vid]=true;
             if (in_array((int)($r['code'] ?? 0), [403, 404], true)) {
                 $again[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
@@ -32805,6 +32825,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
            همان vendor است؛ بنابراین امکان ویرایش محصول غرفهٔ دیگر وجود ندارد. */
         $againBatch = [];
         foreach ($rs as $vid => $r) {
+            if (!empty($directDefaultBatch[(int)$vid])) continue;
             /* اگر مسیر عمومی 403 داده، 404 مسیر تکی vendor نباید fallback رسمی
                batch را حذف کند؛ این دقیقاً الگوی API غرفهٔ پیش‌فرض است. */
             if (empty($genericForbidden[(int)$vid]) && (int)($r['code'] ?? 0) !== 403) continue;
@@ -32822,6 +32843,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         }
         $againNoVar = [];
         foreach ($rs as $vid => $r) {
+            if (!empty($directDefaultBatch[(int)$vid])) continue;
             if (empty($r['ok']) && in_array((int)($r['code'] ?? 0), [400, 422], true) && !empty($jobs[$vid]['d']['variants']) && !bslIsCategoryError($r)) {
                 $dNoVar = $jobs[$vid]['d'];
                 unset($dNoVar['variants']);
@@ -47553,6 +47575,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($__multiBlock530,'matrixEmptyVids')===false
         &&strpos($__multiBlock530,"!empty(\$opts['force_all'])")!==false
         &&strpos($selfSrc,"{v:'10." . "530'")!==false&&version_compare(APP_VERSION,'10.530','>='));
+    $add('10.531','غرفهٔ پیش‌فرض در ارسال موازی مستقیم از batch رسمی شروع می‌کند',
+        strpos($selfSrc,'$directDefaultBatch=[]')!==false
+        &&strpos($selfSrc,"unset(\$batchRow['variants'])")!==false
+        &&strpos($selfSrc,"'ep'=>'vendors/'.\$vid.'/products/batch-updates'")!==false
+        &&substr_count($selfSrc,'if (!empty($directDefaultBatch[(int)$vid])) continue;')>=3
+        &&strpos($selfSrc,"{v:'10." . "531'")!==false&&version_compare(APP_VERSION,'10.531','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98804,6 +98832,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.531', t:'🚀 حذف دو درخواست شکست‌خوردهٔ همیشگی غرفهٔ پیش‌فرض', items:[
+    'در ارسال موازی، آپدیت غرفهٔ پیش‌فرض مستقیماً از endpoint رسمی batch-updates همان vendor آغاز می‌شود و دیگر ابتدا PATCH عمومی و vendor-scoped ناموفق اجرا نمی‌شوند.',
+    'تنوع‌های مبدأ بدون ID مقصد وارد batch آپدیت نمی‌شوند؛ در صورت رد batch امن، مسیر کامل قبلی همچنان fallback می‌شود و خطا پنهان نمی‌ماند.',
+    'درخواست batch غرفهٔ پیش‌فرض همزمان با درخواست‌های دو غرفهٔ دیگر اجرا می‌شود تا زمان هر محصول به یک موج شبکه نزدیک شود.'
+  ]},
   {v:'10.530', t:'⚡ بازگردانی مسیر سریع محصولات همگام در چندغرفه‌ای', items:[
     'نبود موقت snapshot ماتریس دیگر همهٔ محصولات ارسال موازی را مجبور به PATCH در هر سه غرفه نمی‌کند.',
     'بعد از تأیید vendor-scoped شناسه، ledger فقط با تطابق دقیق ID، قیمت، موجودی و وزن اجازهٔ «بدون تغییر» می‌دهد و بازبینی اجباری هفت‌روزه همچنان برقرار است.',
