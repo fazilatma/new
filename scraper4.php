@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.520';
+const APP_VERSION = '10.521';
 
 
 if (!function_exists('str_starts_with')) {
@@ -14990,7 +14990,8 @@ function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): 
     if (!empty($payload['data']) && is_array($payload['data'])) {
         foreach ($payload['data'] as $idx => $item) {
             if (is_array($item)) {
-                $payload['data'][$idx] = bslSanitizeProductWritePayload($item, 'products');
+                /* batch-updates is an update: apply the same SKU rule as products/{id}. */
+                $payload['data'][$idx] = bslSanitizeProductWritePayload($item, 'products/' . max(1, (int)($item['id'] ?? 1)));
             }
         }
     }
@@ -32777,6 +32778,23 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             }
         }
         if ($again) foreach (bslReqMulti($again, $conc) as $vid => $r2) $rs[$vid] = $r2;
+        /* v10.521: برخی توکن‌ها هر دو PATCH تکی را 403 می‌کنند ولی endpoint رسمی
+           batch-updates همان غرفه را مجاز می‌دانند. آخرین fallback فقط همان ID و
+           همان vendor است؛ بنابراین امکان ویرایش محصول غرفهٔ دیگر وجود ندارد. */
+        $againBatch = [];
+        foreach ($rs as $vid => $r) {
+            if ((int)($r['code'] ?? 0) !== 403 || empty($jobs[$vid]['d'])) continue;
+            $batchRow = $jobs[$vid]['d']; $batchRow['id'] = (int)$ids[$vid];
+            $againBatch[$vid] = ['tk'=>(string)$live[$vid]['token'],'m'=>'PATCH',
+                'ep'=>'vendors/'.$vid.'/products/batch-updates','d'=>['data'=>[$batchRow]]];
+        }
+        if ($againBatch) foreach (bslReqMulti($againBatch, $conc) as $vid => $rb) {
+            if (!empty($rb['ok'])) {
+                if (!is_array($rb['body'] ?? null)) $rb['body'] = [];
+                $rb['body']['id'] = (int)$ids[$vid];
+            }
+            $rs[$vid] = $rb;
+        }
         $againNoVar = [];
         foreach ($rs as $vid => $r) {
             if (empty($r['ok']) && in_array((int)($r['code'] ?? 0), [400, 422], true) && !empty($jobs[$vid]['d']['variants']) && !bslIsCategoryError($r)) {
@@ -32982,6 +33000,12 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
         $r = bslReqWithVariantsFallback($tk, 'PATCH', 'products/' . $exId, $bu);
         if (in_array((int)($r['code'] ?? 0), [403, 404], true)) {
             $r = bslReqWithVariantsFallback($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
+        }
+        if ((int)($r['code'] ?? 0) === 403) {
+            $batchRow=$bu;$batchRow['id']=$exId;
+            $rb=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batchRow]]);
+            if(!empty($rb['ok'])){if(!is_array($rb['body']??null))$rb['body']=[];$rb['body']['id']=$exId;}
+            $r=$rb;
         }
         if (!empty($r['ok']) && !empty($r['body']['id'])) {
             bslShopMapRecord($p, $shop, $exId, $title, $priceRial, $stock);   // v10.20 (۳۳الف) · v10.33 (۴۶)
@@ -47422,6 +47446,11 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"'retry_queued_at'")!==false
         &&strpos($selfSrc,"'queued'=>true")!==false
         &&strpos($selfSrc,"{v:'10." . "520'")!==false&&version_compare(APP_VERSION,'10.520','>='));
+    $__batchSku=bslSanitizeProductWritePayload(['data'=>[['id'=>9,'sku'=>'DUP','stock'=>3]]],'vendors/735703/products/batch-updates');
+    $add('10.521','403 هر دو PATCH تکی به batch-updates همان vendor می‌رود و SKU از batch حذف می‌شود',
+        !isset($__batchSku['data'][0]['sku'])
+        &&strpos($selfSrc,"'ep'=>'vendors/'.\$vid.'/products/batch-updates'")!==false
+        &&strpos($selfSrc,"{v:'10." . "521'")!==false&&version_compare(APP_VERSION,'10.521','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98654,6 +98683,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.521', t:'🔐 fallback رسمی برای PATCHهای 403 باسلام', items:[
+    'اگر مسیر عمومی و vendor-scoped هر دو برای محصول موجود 403 بدهند، آپدیت فقط برای همان ID و همان vendor از endpoint رسمی batch-updates تکرار می‌شود.',
+    'پاسخ موفق batch به شناسهٔ همان محصول متصل می‌شود تا remote-map درست ثبت شود و هیچ هویت بین غرفه‌ای جابه‌جا نشود.',
+    'SKU در payloadهای batch update نیز حذف می‌شود تا fallback رسمی دوباره به خطای یکتایی 422 برخورد نکند.'
+  ]},
   {v:'10.520', t:'⏱️ بازیابی صف در نخستین کران پس از worker قدیمی', items:[
     'اگر process نسخهٔ قبل پس از ثبت done هنوز lock را نگه داشته باشد، درخواست بازیابی گم یا رد نمی‌شود و همان ردیف با current=0 در waiting ثبت می‌شود.',
     'تا زمان آزاد شدن lock هیچ worker دوم ساخته نمی‌شود؛ اولین cron همان snapshot اصلاح‌شده را به‌طور خودکار آغاز می‌کند.'
