@@ -61,6 +61,8 @@ const PROFILES_DELETED_FILE = __DIR__ . '/profiles_deleted.json';
 const CONNECTIONS_FILE = __DIR__ . '/connections.json';
 const BSL_PROGRESS_FILE = __DIR__ . '/bsl_progress.json';
 const BSL_STOP_FILE = __DIR__ . '/bsl_stop_signal.json';
+const BSL_ADAPTIVE_RATE_FILE = __DIR__ . '/bsl_adaptive_rate.json'; // v10.559
+const BSL_PHOTO_ID_CACHE_FILE = __DIR__ . '/bsl_photo_id_cache.json'; // v10.559
 // v8.57: تا این مدت بعد از فشردن «توقف»، هیچ ارسال تازه‌ای شروع نمی‌شود.
 // بدون این، رابط کاربری بلافاصله بعد از توقف دوباره ارسال را راه می‌انداخت.
 const BSL_STOP_HOLD_SEC = 900;
@@ -395,7 +397,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.558';
+const APP_VERSION = '10.559';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1953,8 +1955,10 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         $segments++;$driver=matrixExecutionDecision();
         /* Accelerated means no intentional handoff pause, not an unbounded child.
            Shared hosts killed the old unlimited correction before checkpoint handoff. */
-        $accelerated=!empty($driver['accelerated']);$payload['max_items']=$accelerated?30:20;
-        $segmentCap=$accelerated?2:8;
+        $accelerated=!empty($driver['accelerated']);$__sendPressure=bslSendResourcePressureActive();
+        $payload['max_items']=$__sendPressure?5:($accelerated?30:20);
+        $segmentCap=$__sendPressure?1:($accelerated?2:8);
+        if($__sendPressure)matrixFixProgress(['log_add'=>['🫁 ارسال باسلام فعال است؛ برش اصلاح برای جلوگیری از OOM به ۵ عملیات محدود شد']]);
         $payload['resume']=$segments>1||!empty($payload['resume']);
         $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
         $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
@@ -2087,6 +2091,7 @@ function s4WorkerRunMatrixChild(array $payload): array {
     $segments=0;$retries=0;$resume=!empty($payload['resume']);
     do{
         $segments++;$part=$payload;$part['one_segment']=true;$part['resume']=$resume;
+        if(bslSendResourcePressureActive())$part['slice_seconds']=min(3,max(2,(int)($part['slice_seconds']??3)));
         $raw=json_encode($part,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
         $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
         $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';
@@ -11868,6 +11873,81 @@ function bslCurlOpts(string $url, string $tk, string $m, $d, bool $mp, array $ne
     return $opt;
 }
 
+/* v10.559: persistent AIMD controller shared by browser, cron and CLI senders.
+   It separates image uploads from reads/writes: a photo 429 no longer causes a
+   blind 20-shop fan-out, while healthy lanes can recover one slot at a time. */
+function bslAdaptiveRequestKind(string $method,string $endpoint,bool $multipart=false): string {
+    $method=strtoupper(trim($method));$endpoint=strtolower($endpoint);
+    if($multipart||str_contains($endpoint,'files'))return 'photo';
+    if($method==='GET')return 'read';
+    return 'write';
+}
+function bslAdaptiveStateRead(): array {
+    $x=is_file(BSL_ADAPTIVE_RATE_FILE)?json_decode((string)@file_get_contents(BSL_ADAPTIVE_RATE_FILE),true):null;
+    return is_array($x)?$x:['version'=>1,'kinds'=>[],'updated_at'=>0];
+}
+function bslAdaptiveStateMutate(callable $fn): array {
+    $lf=@fopen(BSL_ADAPTIVE_RATE_FILE.'.lock','c');
+    if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return bslAdaptiveStateRead();}
+    try{
+        $st=bslAdaptiveStateRead();$next=$fn($st);if(is_array($next))$st=$next;
+        $st['version']=1;$st['updated_at']=time();
+        $tmp=BSL_ADAPTIVE_RATE_FILE.'.tmp.'.getmypid().'.'.bin2hex(random_bytes(3));
+        $raw=json_encode($st,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+        if($raw!==false&&@file_put_contents($tmp,$raw,LOCK_EX)!==false){@chmod($tmp,0644);@rename($tmp,BSL_ADAPTIVE_RATE_FILE);}else @unlink($tmp);
+        return $st;
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+function bslAdaptiveLimit(string $kind,int $requested): int {
+    $requested=max(1,min(8,$requested));$st=bslAdaptiveStateRead();$row=is_array($st['kinds'][$kind]??null)?$st['kinds'][$kind]:[];
+    $learned=max(1,min(8,(int)($row['limit']??$requested)));
+    return min($requested,$learned);
+}
+function bslAdaptiveCooldownLeft(string $kind): int {
+    $st=bslAdaptiveStateRead();$row=is_array($st['kinds'][$kind]??null)?$st['kinds'][$kind]:[];
+    return max(0,(int)($row['cool_until']??0)-time());
+}
+function bslAdaptiveWait(string $kind,bool $skipStop=false): bool {
+    while(($left=bslAdaptiveCooldownLeft($kind))>0){
+        if(bslProductDeadlineExceeded())return false;
+        if(!$skipStop&&bslStopRequestedForQueue())return false;
+        bslLongOperationHeartbeat('adaptive_rate_wait');sleep(min(2,$left));
+    }
+    return !bslProductDeadlineExceeded();
+}
+function bslAdaptiveObserve(string $kind,array $responses,int $ceiling=8): array {
+    $ceiling=max(1,min(8,$ceiling));$codes=[];$retryAfter=0;
+    foreach($responses as $r){if(!is_array($r))continue;$codes[]=(int)($r['code']??0);$retryAfter=max($retryAfter,(int)($r['retry_after']??0));}
+    if(!$codes)return bslAdaptiveStateRead();
+    return bslAdaptiveStateMutate(static function(array $st)use($kind,$codes,$retryAfter,$ceiling):array{
+        $now=time();$row=is_array($st['kinds'][$kind]??null)?$st['kinds'][$kind]:[];
+        $limit=max(1,min($ceiling,(int)($row['limit']??$ceiling)));$has429=in_array(429,$codes,true);
+        $has5xx=false;foreach($codes as $c)if($c>=500||$c===0){$has5xx=true;break;}
+        if($has429){
+            $streak=min(8,(int)($row['rate_streak']??0)+1);$limit=max(1,(int)floor($limit/2));
+            $wait=$retryAfter>0?min(300,$retryAfter):min(120,5*(2**min(5,$streak-1)));
+            $row['rate_streak']=$streak;$row['success_streak']=0;$row['cool_until']=$now+$wait;$row['last_429_at']=$now;
+            $row['total_429']=(int)($row['total_429']??0)+count(array_filter($codes,static fn($c)=>$c===429));
+        }elseif($has5xx){
+            $row['success_streak']=0;$row['error_streak']=min(20,(int)($row['error_streak']??0)+1);
+            if((int)$row['error_streak']>=3)$limit=max(1,$limit-1);
+            $row['cool_until']=max((int)($row['cool_until']??0),$now+min(15,2*(int)$row['error_streak']));
+        }else{
+            $good=count(array_filter($codes,static fn($c)=>$c>=200&&$c<400));
+            $row['error_streak']=0;$row['rate_streak']=0;$row['success_streak']=(int)($row['success_streak']??0)+$good;
+            if((int)$row['success_streak']>=24&&$limit<$ceiling){$limit++;$row['success_streak']=0;$row['last_increase_at']=$now;}
+            if((int)($row['cool_until']??0)<=$now)$row['cool_until']=0;
+        }
+        $row['limit']=$limit;$row['ceiling']=$ceiling;$row['last_codes']=array_slice($codes,-12);$row['updated_at']=$now;
+        $st['kinds'][$kind]=$row;return $st;
+    });
+}
+function bslSendResourcePressureActive(int $freshSec=180): bool {
+    $p=readProgress(BSL_PROGRESS_FILE);if(!is_array($p)||empty($p['running']))return false;
+    $beat=max((int)($p['last_progress_ts']??0),(int)($p['heartbeat']??0),(int)($p['started_at']??0));
+    return $beat>0&&(time()-$beat)<max(30,$freshSec);
+}
+
 function bslReqMode(string $url, string $tk, string $m, $d, bool $mp, array $net, string $mode): array {
     $opt = bslCurlOpts($url, $tk, $m, $d, $mp, $net, $mode);
     /* هدرهای واقعی پاسخ را نگه می‌داریم تا 429 باسلام/پروکسی از یک پیام
@@ -11973,6 +12053,8 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
     if (!$jobs) return $out;
     if(bslProductDeadlineExceeded()){foreach($jobs as $k=>$_j)$out[$k]=array_merge(bslProductTimeoutResult(),['mode'=>'multi']);return $out;}
     $concurrency = max(1, min(8, $concurrency));
+    $__requestedConcurrency=$concurrency;$__firstJob=reset($jobs);$__multiKind=bslAdaptiveRequestKind((string)($__firstJob['m']??'GET'),(string)($__firstJob['ep']??''),!empty($__firstJob['mp']));
+    $concurrency=bslAdaptiveLimit($__multiKind,$concurrency);
     if (!function_exists('curl_multi_init')) {
         foreach ($jobs as $k => $j) {
             $out[$k] = bslReq((string)($j['tk'] ?? ''), (string)($j['m'] ?? 'GET'), (string)($j['ep'] ?? ''),
@@ -11991,9 +12073,13 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
                 return $out;
             }
         }
+        if(!bslAdaptiveWait($__multiKind,$skipStop)){
+            foreach(array_slice($keys,$off) as $kk)$out[$kk]=bslProductDeadlineExceeded()?array_merge(bslProductTimeoutResult(),['mode'=>'multi']):['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'','mode'=>'multi'];
+            return $out;
+        }
         $slice = array_slice($keys, $off, $concurrency);
         $mh = curl_multi_init();
-        $hs = [];   // شمارندهٔ ساده → [هندل، کلید]  (هندل در PHP 8 شیء است)
+        $hs = [];$__multiHeaders=[];   // شمارندهٔ ساده → [هندل، کلید]  (هندل در PHP 8 شیء است)
         foreach ($slice as $kk) {
             $j   = $jobs[$kk];
             $tk  = (string)($j['tk'] ?? '');
@@ -12009,6 +12095,8 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
                 $dBody = bslSanitizeProductWritePayload($dBody, (string)($j['ep'] ?? ''));
             }
             $opt = bslCurlOpts($url, $tk, (string)($j['m'] ?? 'GET'), $dBody, !empty($j['mp']), $net, $mmode);
+            $__multiHeaders[$kk]=[];
+            $opt[CURLOPT_HEADERFUNCTION]=static function($ch,string $line)use(&$__multiHeaders,$kk):int{$len=strlen($line);$p=strpos($line,':');if($p!==false){$hk=strtolower(trim(substr($line,0,$p)));if($hk!=='')$__multiHeaders[$kk][$hk]=trim(substr($line,$p+1));}return $len;};
             $ch  = curl_init();
             curl_setopt_array($ch, $opt);
             curl_multi_add_handle($mh, $ch);
@@ -12027,14 +12115,18 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
             $b  = curl_multi_getcontent($ch);
             $e  = curl_error($ch);
             $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-            $out[$row['k']] = $__deadlineHit
+            $__rk=$row['k'];$__rh=(array)($__multiHeaders[$__rk]??[]);$__body=@json_decode((string)$b,true);
+            $__retryAfter=max(0,(int)($__rh['retry-after']??(is_array($__body)?($__body['retry_after']??$__body['retryAfter']??0):0)));
+            $out[$__rk] = $__deadlineHit
                 ? array_merge(bslProductTimeoutResult(),['mode'=>'multi'])
                 : ['ok' => $code >= 200 && $code < 300, 'code' => $code, 'error' => $e,
-                   'body' => @json_decode((string)$b, true), 'raw' => $b, 'mode' => 'multi'];
+                   'body' => $__body, 'raw' => $b, 'mode' => 'multi','response_headers'=>$__rh,'retry_after'=>$__retryAfter];
             curl_multi_remove_handle($mh, $ch);
             curl_close($ch);
         }
         curl_multi_close($mh);
+        $__batchResponses=[];foreach($slice as $__rk)if(isset($out[$__rk]))$__batchResponses[]=$out[$__rk];
+        bslAdaptiveObserve($__multiKind,$__batchResponses,$__requestedConcurrency);
         /* v10.459: در ارسال موازی (bslReqMulti) هم اگر محصولی به خطای ۴۲۲/۴۰۰
            preparation_days برخورد کرد، از طریق bslReq هر بار ۱ روز کم می‌شود تا تایید شود. */
         foreach ($slice as $kk => $j) {
@@ -12310,6 +12402,7 @@ function bslRepairValidationPayload(array $r,array $payload):array{
 
 function bslReq(string $tk, string $m, string $ep, $d=null, bool $mp=false, ?array $net=null, bool $skipStop=false, int $maxAttempts=3): array {
 if(bslProductDeadlineExceeded())return bslProductTimeoutResult();
+$__adaptiveKind=bslAdaptiveRequestKind($m,$ep,$mp);
 if (!$mp && is_array($d) && in_array(strtoupper(trim($m)), ['POST', 'PATCH', 'PUT'], true)
     && function_exists('bslSanitizeProductWritePayload')) {
     $d = bslSanitizeProductWritePayload($d, $ep);
@@ -12355,7 +12448,9 @@ for($attempt=1;$attempt<=$maxRetries;$attempt++){
 if(!$skipStop&&bslStopRequestedForQueue()){
 return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 }
+if(!bslAdaptiveWait($__adaptiveKind,$skipStop))return $traceReturn(bslProductDeadlineExceeded()?bslProductTimeoutResult():['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
+bslAdaptiveObserve($__adaptiveKind,[$r],8);
 if(bslProductDeadlineExceeded())return $traceReturn(bslProductTimeoutResult());
 /* v10.459: اگر خطای ۴۲۲/۴۰۰ مربوط به preparation_days (مدت زمان آماده‌سازی) باشد،
    هر بار ۱ روز کم می‌کنیم و دوباره می‌فرستیم تا تایید شود (تا سقف ۰ روز). */
@@ -32847,41 +32942,111 @@ function s4PrepareLocalPhotosForMultiShop(array $p, int $maxPhotos = 1): array {
             if (@file_put_contents($stdPath, $fdata)) $pickedPath = $stdPath;
         }
         $mime = 'image/' . ($realFmt === 'jpg' ? 'jpeg' : $realFmt);
-        $out[] = ['path' => $pickedPath, 'mime' => $mime, 'name' => 'product_' . substr($cacheKey, 0, 12) . '.' . $realFmt];
+        $out[] = ['path' => $pickedPath, 'mime' => $mime, 'name' => 'product_' . substr($cacheKey, 0, 12) . '.' . $realFmt,
+            'content_hash' => hash('sha256', $fdata)];
     }
     if ($prevRole === null) unset($GLOBALS['_s4CurrentImageRole']);
     else $GLOBALS['_s4CurrentImageRole'] = $prevRole;
     return $out;
 }
+function bslPhotoIdCacheRead(): array {
+    $x=is_file(BSL_PHOTO_ID_CACHE_FILE)?json_decode((string)@file_get_contents(BSL_PHOTO_ID_CACHE_FILE),true):null;
+    return is_array($x)?$x:['version'=>1,'entries'=>[],'updated_at'=>0];
+}
+function bslPhotoIdCacheKey(int $vendorId,string $hash): string {return $vendorId.'|'.strtolower(trim($hash));}
+function bslPhotoIdCacheStoreMany(array $rows): void {
+    if(!$rows)return;$lf=@fopen(BSL_PHOTO_ID_CACHE_FILE.'.lock','c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return;}
+    try{
+        $c=bslPhotoIdCacheRead();if(!is_array($c['entries']??null))$c['entries']=[];$now=time();
+        foreach($rows as $r){$vid=(int)($r['vendor_id']??0);$hash=(string)($r['hash']??'');$id=(int)($r['photo_id']??0);if($vid<=0||$hash===''||$id<=0)continue;
+            $c['entries'][bslPhotoIdCacheKey($vid,$hash)]=['id'=>$id,'at'=>$now];}
+        $cut=$now-7776000;foreach($c['entries'] as $k=>$r)if(!is_array($r)||(int)($r['id']??0)<=0||(int)($r['at']??0)<$cut)unset($c['entries'][$k]);
+        if(count($c['entries'])>50000){uasort($c['entries'],static fn($a,$b)=>(int)($a['at']??0)<=>(int)($b['at']??0));$c['entries']=array_slice($c['entries'],-50000,null,true);}
+        $c['version']=1;$c['updated_at']=$now;$tmp=BSL_PHOTO_ID_CACHE_FILE.'.tmp.'.getmypid();$raw=json_encode($c,JSON_UNESCAPED_SLASHES);
+        if($raw!==false&&@file_put_contents($tmp,$raw,LOCK_EX)!==false){@chmod($tmp,0644);@rename($tmp,BSL_PHOTO_ID_CACHE_FILE);}else @unlink($tmp);
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+function bslPhotoIdCacheForget(int $vendorId,string $hash): void {
+    if($vendorId<=0||$hash==='')return;$lf=@fopen(BSL_PHOTO_ID_CACHE_FILE.'.lock','c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return;}
+    try{$c=bslPhotoIdCacheRead();unset($c['entries'][bslPhotoIdCacheKey($vendorId,$hash)]);$c['updated_at']=time();$tmp=BSL_PHOTO_ID_CACHE_FILE.'.tmp.'.getmypid();$raw=json_encode($c,JSON_UNESCAPED_SLASHES);if($raw!==false&&@file_put_contents($tmp,$raw,LOCK_EX)!==false)@rename($tmp,BSL_PHOTO_ID_CACHE_FILE);else @unlink($tmp);}
+    finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
 function bslUploadPhotosMultiShops(array $localFiles, array $shops, int $conc = 4): array {
-    $perShopIds = [];
-    foreach ($shops as $vid => $_sh) $perShopIds[(int)$vid] = [];
-    foreach ($localFiles as $fileMeta) {
-        $path = (string)($fileMeta['path'] ?? '');
-        if ($path === '' || !is_file($path)) continue;
-        $mime = (string)($fileMeta['mime'] ?? 'image/jpeg');
-        $fname = (string)($fileMeta['name'] ?? 'product.jpg');
-        $jobs = [];
-        foreach ($shops as $vid => $sh) {
-            $vid = (int)$vid;
-            $tk = trim((string)($sh['token'] ?? ''));
-            if ($vid <= 0 || $tk === '') continue;
-            $jobs[$vid] = [
-                'tk' => $tk, 'm' => 'POST', 'ep' => 'files', 'mp' => true,
-                'd' => ['file' => new CURLFile($path, $mime, $fname), 'file_type' => 'product.photo'],
-            ];
-        }
-        if (!$jobs) continue;
-        foreach (bslReqMulti($jobs, $conc) as $vid => $r) {
-            if (!empty($r['ok']) && !empty($r['body']['id'])) {
-                $perShopIds[(int)$vid][] = (int)$r['body']['id'];
+    $perShopIds=[];$cache=bslPhotoIdCacheRead();$entries=is_array($cache['entries']??null)?$cache['entries']:[];$cacheWrites=[];$now=time();
+    foreach($shops as $vid=>$_sh)$perShopIds[(int)$vid]=[];
+    foreach($localFiles as $fileMeta){
+        $path=(string)($fileMeta['path']??'');if($path===''||!is_file($path))continue;
+        $mime=(string)($fileMeta['mime']??'image/jpeg');$fname=(string)($fileMeta['name']??'product.jpg');
+        $hash=trim((string)($fileMeta['content_hash']??''));if($hash==='')$hash=hash_file('sha256',$path)?:'';$jobs=[];
+        foreach($shops as $__vidHash=>$__shHash){$__vidHash=(int)$__vidHash;if($__vidHash>0&&$hash!=='')$GLOBALS['_bslPhotoHashesByVendor'][$__vidHash][$hash]=true;}
+        foreach($shops as $vid=>$sh){
+            $vid=(int)$vid;$tk=trim((string)($sh['token']??''));if($vid<=0||$tk==='')continue;
+            $ck=bslPhotoIdCacheKey($vid,$hash);$hit=is_array($entries[$ck]??null)?$entries[$ck]:null;
+            if($hit&&(int)($hit['id']??0)>0&&($now-(int)($hit['at']??0))<=7776000){
+                $perShopIds[$vid][]=(int)$hit['id'];$GLOBALS['_bslPhotoCacheHits']=(int)($GLOBALS['_bslPhotoCacheHits']??0)+1;continue;
             }
+            $jobs[$vid]=['tk'=>$tk,'m'=>'POST','ep'=>'files','mp'=>true,'d'=>['file'=>new CURLFile($path,$mime,$fname),'file_type'=>'product.photo']];
+        }
+        if(!$jobs)continue;
+        foreach(bslReqMulti($jobs,$conc) as $vid=>$r){
+            if(!empty($r['ok'])&&!empty($r['body']['id'])){$pid=(int)$r['body']['id'];$perShopIds[(int)$vid][]=$pid;
+                $cacheWrites[]=['vendor_id'=>(int)$vid,'hash'=>$hash,'photo_id'=>$pid];$GLOBALS['_bslPhotoCacheMisses']=(int)($GLOBALS['_bslPhotoCacheMisses']??0)+1;}
         }
     }
-    return $perShopIds;
+    bslPhotoIdCacheStoreMany($cacheWrites);return $perShopIds;
+}
+
+/** v10.559: bounded cross-product update window for multi-shop queues.
+ * Existing products with a trusted vendor-scoped ledger ID are grouped into
+ * one official batch request per vendor. New products, variants and every
+ * failed vendor batch stay on the full per-product path. */
+function bslParallelBatchWindow(array $products,int $baseIndex,array $shops,array $opts,int $conc=4): array {
+    $results=[];$jobs=[];$meta=[];$ledger=remoteMapLoad()['bsl']??[];$round=(int)($opts['round']??0);
+    $profile=is_array($opts['profile']??null)?$opts['profile']:null;$eligible=[];
+    foreach($shops as $sh){$vid=(int)($sh['vendor_id']??0);$tk=trim((string)($sh['token']??''));if($vid>0&&$tk!==''&&!empty(bslCheckVendorActiveStatus($tk,$vid)['active']))$eligible[]=$sh;}
+    foreach($products as $off=>$p){
+        if(!is_array($p))continue;$abs=$baseIndex+(int)$off;$rawTitle=trim((string)($p['title']??$p['name']??''));$pKey=(string)($p['key']??'');
+        if($rawTitle===''||$pKey===''||bslBuildVariantsPayload($p,1,1))continue;
+        $barcode=bslExtractValidBarcode($p);$title=bslSanitizeModerationTitle($rawTitle,$barcode!=='');if($title==='')$title=$rawTitle;
+        $stock=effectiveStock($p,(int)($opts['stock']??10));$prep=max(1,(int)($opts['preparation_days']??3));
+        $defW=(int)($opts['weight']??500);$defPkg=(int)($opts['package_weight']??($defW+100));$wr=bslResolveProductWeights($p,$defW,$defPkg);
+        $weight=(int)$wr['weight'];$pkg=max(1,(int)$wr['package_weight']);$wantWeight=!empty($wr['overridden'])?$weight:0;
+        foreach($eligible as $sh){
+            $vid=(int)($sh['vendor_id']??0);$tk=trim((string)($sh['token']??''));if($vid<=0||$tk==='')continue;
+            $mk=bslShopMapKey($pKey,$sh);$lr=is_array($ledger[$mk]??null)?$ledger[$mk]:null;$id=(int)($lr['id']??0);
+            if($id<=0||trim((string)($lr['title']??''))===''||reconNormTitle((string)$lr['title'])!==reconNormTitle($title))continue;
+            $rawPrice=extractSourcePrice($p);
+            if($profile&&$rawPrice!==''&&extractPriceNum($rawPrice)>0)$pf=bslShopPriceForProfile($profile,$rawPrice,$sh,$round);
+            else{$base=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));if($base<=0)continue;$pf=bslShopPriceFor($base,$sh,$round);}
+            $price=(int)($pf['price']??0);if($price<=0)continue;if((string)($p['price_unit']??'')!=='rial')$price*=10;
+            if(!bslIsRealisticPriceRial($price))continue;
+            if(bslSkipUnchanged($mk,$id,$price,$stock,$lr,$wantWeight,!empty($opts['force_all']),$title)){
+                bslSkipCount(1);$results[$abs][$vid]=['ok'=>true,'id'=>$id,'action'=>'unchanged','skipped'=>true,'batch_window'=>true];continue;
+            }
+            $row=['id'=>$id,'primary_price'=>$price,'stock'=>$stock,'status'=>$stock>0?2976:3790,'preparation_days'=>$prep,'weight'=>$weight,'package_weight'=>$pkg];
+            bslApplyContent($row,$p);
+            if(!isset($jobs[$vid]))$jobs[$vid]=['tk'=>$tk,'m'=>'PATCH','ep'=>'vendors/'.$vid.'/products/batch-updates','d'=>['data'=>[]]];
+            $jobs[$vid]['d']['data'][]=$row;
+            $meta[$vid][]=['abs'=>$abs,'vid'=>$vid,'id'=>$id,'mk'=>$mk,'title'=>$title,'price'=>$price,'stock'=>$stock,'weight'=>$wantWeight];
+        }
+    }
+    if(!$jobs)return $results;
+    bslLongOperationStage('existing_update',3,9,'آپدیت گروهی پنجرهٔ '.count($products).' محصول در '.count($jobs).' غرفه');
+    $responses=bslReqMulti($jobs,$conc);$mapRows=[];
+    foreach($responses as $vid=>$r){
+        if(empty($r['ok']))continue;
+        foreach((array)($meta[(int)$vid]??[]) as $m){
+            $results[(int)$m['abs']][(int)$vid]=['ok'=>true,'id'=>(int)$m['id'],'action'=>'updated','update_reason'=>'آپدیت گروهی پنجره‌ای','changes_detail'=>'batch-updates چندمحصولی','batch_window'=>true];
+            $mr=['key'=>(string)$m['mk'],'remote_id'=>(int)$m['id'],'title'=>(string)$m['title'],'price_rial'=>(int)$m['price'],'stock'=>(int)$m['stock']];
+            if((int)$m['weight']>0)$mr['weight_g']=(int)$m['weight'];$mapRows[]=$mr;
+        }
+    }
+    if($mapRows)remoteMapRecord('bsl',$mapRows);
+    return $results;
 }
 
 function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4): array {
+    unset($GLOBALS['_bslPhotoHashesByVendor']);
     $out = [];
     $rawTitle = trim((string)($p['title'] ?? ($p['name'] ?? '')));
     $pKey  = (string)($p['key'] ?? '');
@@ -33135,6 +33300,10 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
                 $out[(int)$vid] = ['ok' => true, 'id' => (int)$r['body']['id'], 'action' => 'created', 'used_cat_id' => $catUsed, 'update_reason' => 'ایجاد موازی در غرفه'];
                 $ledger[(int)$vid] = (int)$r['body']['id'];
             } else {
+                $__photoErrText=strtolower((string)($r['raw']??json_encode($r['body']??[])));
+                if(in_array((int)($r['code']??0),[400,404,422],true)&&(str_contains($__photoErrText,'photo')||str_contains($__photoErrText,'تصویر'))){
+                    foreach(array_keys((array)($GLOBALS['_bslPhotoHashesByVendor'][(int)$vid]??[])) as $__badHash)bslPhotoIdCacheForget((int)$vid,(string)$__badHash);
+                }
                 $em = $r['body']['message'] ?? $r['body']['error'] ?? ($r['error'] ?? '؟');
                 if (is_array($em)) $em = json_encode($em, JSON_UNESCAPED_UNICODE);
                 $out[(int)$vid] = array_merge(['ok' => false], bslSendErrorInfo($r, 'multi_shop_create', 'vendors/' . $vid . '/products'));
@@ -47986,6 +48155,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'Resume means the exact durable operation')!==false
         &&strpos($selfSrc,"\$resumeWorker = \$matrixFixCp && !empty(\$_GET['resume'])")!==false
         &&strpos($selfSrc,"{v:'10." . "558'")!==false&&version_compare(APP_VERSION,'10.558','>='));
+    $add('10.559','کنترل تطبیقی نرخ، کش شناسه تصویر و کاهش فشار همزمان فعال است',
+        bslAdaptiveRequestKind('POST','files',true)==='photo'
+        &&bslAdaptiveRequestKind('GET','vendors/1/products',false)==='read'
+        &&bslAdaptiveRequestKind('PATCH','products/1',false)==='write'
+        &&strpos($selfSrc,'function bslPhotoIdCacheStoreMany')!==false
+        &&strpos($selfSrc,'function bslParallelBatchWindow')!==false
+        &&strpos($selfSrc,'batch-updates چندمحصولی')!==false
+        &&strpos($selfSrc,"\$payload['max_items']=\$__sendPressure?5")!==false
+        &&strpos($selfSrc,"{v:'10." . "559'")!==false&&version_compare(APP_VERSION,'10.559','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79842,6 +80020,8 @@ $__failedPersist=is_array($bslFailedList)?array_slice($bslFailedList,-2000):[];
 $d=['running'=>true,'sent'=>$__sW,'updated'=>$__uW,'skipped'=>$__skW,'failed'=>$__fW,'total'=>$t,'last_title'=>$lt,'current'=>$cWrite,'done'=>false,'started_at'=>$GLOBALS['startedAt'],'last_progress_ts'=>time(),'recent_log'=>$recentSlice,'total_log_count'=>$totalLog,'sent_details'=>$__sentPersist,'updated_details'=>$__updatedPersist,'skipped_details'=>$__skippedPersist,'failed_details'=>$__failedPersist,
    'checkpoint'=>['queue_id'=>(string)($bslQueueId??''),'current'=>(int)$cWrite,'total'=>(int)$t,'sent'=>(int)$__sW,'updated'=>(int)$__uW,'skipped'=>(int)$__skW,'failed'=>(int)$__fW,'started_at'=>(int)$GLOBALS['startedAt']]];
 if($bslQueueId!='')$d['queue_id']=$bslQueueId;
+$__rate=bslAdaptiveStateRead();$d['adaptive_rate']=is_array($__rate['kinds']??null)?$__rate['kinds']:[];
+$d['photo_cache_hits']=(int)($GLOBALS['_bslPhotoCacheHits']??0);$d['photo_cache_uploads']=(int)($GLOBALS['_bslPhotoCacheMisses']??0);
 /* v10.23 (۳۶ه): شمارنده‌های هر غرفه در هر ضربانِ پیشرفت هم می‌روند تا صف
    بتواند «زنده» نشانشان بدهد، نه فقط در پایانِ کار. */
 $__ss=bslShopStatRows((int)$s,(int)$u,(int)$sk,(int)$f);
@@ -81055,8 +81235,16 @@ $__parStartMsg=$bslResumeStart>0
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,max($bslResumeStart,0),'',[$__parStartMsg],
     ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__parallelShops).' غرفه','phase_current'=>$__parDone,
      'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+$__parWindowResults=[];$__parWindowSize=20;$__parNextWindow=max(0,$bslResumeStart-1);
 foreach($pd as $__pi=>$p){
 if(($__pi+1)<$bslResumeStart)continue;
+if($__pi===$__parNextWindow){
+    $__windowProducts=array_slice($pd,$__pi,$__parWindowSize);$__windowCn=loadConnections();$__windowShops=[];
+    foreach($__parallelShops as $__windowShop){$__windowVid=(int)($__windowShop['vendor_id']??0);if($__windowVid>0&&!bslRowDisabledByShopPicker($nextEntry,$__windowCn,$__windowVid))$__windowShops[]=$__windowShop;}
+    $__windowRes=$__windowShops?bslParallelBatchWindow($__windowProducts,$__pi,$__windowShops,$__parOpts,bslSendParallelCount($cn,count($__windowProducts),count($__windowShops))):[];
+    foreach($__windowRes as $__wi=>$__wr)$__parWindowResults[(int)$__wi]=(array)$__wr;
+    $__parNextWindow+=$__parWindowSize;
+}
 $__liveParCn=loadConnections();
 $__activeParShops=[];
 foreach($__parallelShops as $__pShChk){
@@ -81086,7 +81274,7 @@ $__inflightStarted=time();
 $GLOBALS['_bslLongOperationHeartbeat']=function(string $__stage='')use(&$sent,&$updated,&$skipped,&$fail,$total,&$__parDone,&$__activeParShops,&$__pTitle,$__inflightStarted){
     $__labels=['product_start'=>'شروع پردازش محصول','shop_validation'=>'بررسی غرفه‌ها و قیمت‌ها','existing_lookup'=>'جست‌وجوی محصول موجود',
       'existing_update'=>'به‌روزرسانی محصول موجود','create_prepare'=>'آماده‌سازی ساخت محصول','photo_prepare'=>'آماده‌سازی تصاویر',
-      'photo_upload'=>'آپلود تصاویر','product_create'=>'ثبت محصول تازه','single_shop_fallback'=>'ترمیم تک‌غرفه‌ای','checkpoint_save'=>'ثبت نتیجه و checkpoint'];
+      'photo_upload'=>'آپلود تصاویر','product_create'=>'ثبت محصول تازه','adaptive_rate_wait'=>'مکث تطبیقی محدودیت باسلام','single_shop_fallback'=>'ترمیم تک‌غرفه‌ای','checkpoint_save'=>'ثبت نتیجه و checkpoint'];
     $__step=(int)($GLOBALS['_bslLongOperationStep']??0);$__stepTotal=(int)($GLOBALS['_bslLongOperationTotal']??9);
     $__detail=(string)($GLOBALS['_bslLongOperationDetail']??'');$__label=(string)($__labels[$__stage]??'در حال ارتباط با باسلام');
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,60),null,
@@ -81097,7 +81285,9 @@ $GLOBALS['_bslLongOperationHeartbeat']=function(string $__stage='')use(&$sent,&$
          'inflight_started_at'=>$__inflightStarted,'inflight_elapsed'=>max(0,time()-$__inflightStarted)]);
 };
 bslLongOperationHeartbeat('product_start');
-try{$__parResAll=bslUpsertManyShops($p,$__activeParShops,$__parOpts,$__parConc);}
+$__preWindow=(array)($__parWindowResults[$__pi]??[]);$__remainingParShops=[];
+foreach($__activeParShops as $__remainShop){$__remainVid=(int)($__remainShop['vendor_id']??0);if(!isset($__preWindow[$__remainVid]))$__remainingParShops[]=$__remainShop;}
+try{$__parResAll=$__preWindow+($__remainingParShops?bslUpsertManyShops($p,$__remainingParShops,$__parOpts,$__parConc):[]);}
 finally{unset($GLOBALS['_bslLongOperationHeartbeat'],$GLOBALS['_bslLongOperationHeartbeatAt'],$GLOBALS['_bslLongOperationHeartbeatStage'],
     $GLOBALS['_bslLongOperationStage'],$GLOBALS['_bslLongOperationStep'],$GLOBALS['_bslLongOperationTotal'],$GLOBALS['_bslLongOperationDetail']);}
 $__pKey=(string)($p['key']??'');
@@ -99467,6 +99657,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.559', t:'🚦 ارسال تطبیقی چندغرفه‌ای و استفادهٔ مجدد از تصویر', items:[
+    'کنترل AIMD ماندگار برای خواندن، نوشتن و آپلود تصویر اضافه شد: 429 همزمانی همان مسیر را نصف و Retry-After را رعایت می‌کند؛ پس از ۲۴ پاسخ سالم ظرفیت یک پله برمی‌گردد.',
+    'شناسهٔ فایل آپلودشده بر اساس vendor و SHA-256 تصویر تا ۹۰ روز نگه‌داری می‌شود؛ resume و retry همان تصویر را دوباره آپلود نمی‌کنند و کش نامعتبر پس از خطای photo پاک می‌شود.',
+    'در صف چندغرفه‌ای، محصولات موجودِ دارای ID مطمئن در پنجره‌های ۲۰تایی به batch-updates هر vendor تبدیل می‌شوند؛ درخواست‌های چند محصول همزمان می‌شوند، ولی محصول تازه/تنوع‌دار/خطادار روی مسیر کامل و checkpointدار می‌ماند.',
+    'هنگام ارسال فعال باسلام، childهای ساخت/اصلاح ماتریس به برش‌های کوچک کاهش می‌یابند تا رقابت حافظه و OOM میزبان، sender را متوقف نکند؛ limitهای زنده و hitهای کش در progress ثبت می‌شوند.'
+  ]},
   {v:'10.558', t:'⏯ ادامهٔ دقیق اصلاح با همان فیلترها', items:[
     'دکمهٔ ادامه، scope، فیلترها، مقصدها، روش نگه‌داری تکراری و شمارنده‌های همان checkpoint را عیناً به worker بعدی منتقل می‌کند.',
     'صف‌کردن ادامه دیگر checkpoint را با فرم پیش‌فرض خالی جایگزین نمی‌کند؛ اصلاح موفق قبلی تکرار نمی‌شود.'
