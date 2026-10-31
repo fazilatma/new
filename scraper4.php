@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.557';
+const APP_VERSION = '10.558';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1921,7 +1921,8 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
         'resume'=>$resume,'dedup_key'=>(string)($opts['dedup_key']??((string)($opts['source']??'')==='manual_selected'?'matrix_fix_selected|'.substr(sha1(json_encode([$opts['view_filters']??[],$opts['selected_destinations']??[]],JSON_UNESCAPED_UNICODE)),0,16):'matrix_fix')),'requested_at'=>microtime(true)];
     $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
     if(!empty($enq['ok'])&&empty($enq['duplicate'])){
-        $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
+        $old=$resume?matrixFixProgressRead():[];
+        $cp=$resume&&is_array($opts['checkpoint']??null)?$opts['checkpoint']:($resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null);
         /* queued یعنی منتظر build؛ هنوز runner اصلاح نیست و نباید UI ساخت را بپوشاند. */
         matrixFixProgress(['running'=>false,'done'=>false,'queued'=>true,'worker'=>true,'reset_log'=>!$resume,'phase'=>'در صف worker','pct'=>1,
             'source'=>'worker','job'=>'fix','scope'=>$payload['scope'],'selected_destinations'=>$payload['selected_destinations'],'delay_ms'=>$payload['delay_ms'],'job_id'=>(string)($enq['job_id']??''),
@@ -46006,6 +46007,16 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             && is_array($oldFixCp['done_jobs'] ?? null)) $matrixFixCp = $oldFixCp;
     }
     $opts['checkpoint'] = $matrixFixCp;
+    /* Resume means the exact durable operation, not a new request populated by
+       empty/default form fields. Restore scope, filters, keeper and destinations
+       before compatibility and queue decisions. */
+    if($matrixFixCp&& !empty($_GET['resume'])){
+        $opts['scope']=(string)($matrixFixCp['scope']??$opts['scope']);
+        $opts['duplicate_keep']=(string)($matrixFixCp['duplicate_keep']??$opts['duplicate_keep']);
+        if(is_array($matrixFixCp['view_filters']??null))$opts['view_filters']=$matrixFixCp['view_filters'];
+        $resumeDest=(array)($oldFix['selected_destinations']??[]);
+        if($resumeDest)$opts['selected_destinations']=matrixNormalizeDestinations($resumeDest);
+    }
     matrixFixStopClear();
     /* اصلاح دستی روی snapshot تازه اجرا می‌شود، اما snapshot همین چند دقیقهٔ
        اخیر تازه است و checkpoint ناتمام همیشه باید قبل از هر rebuild ادامه یابد. */
@@ -46103,7 +46114,8 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         $oldCp = is_array($oldFix['checkpoint'] ?? null) ? $oldFix['checkpoint'] : null;
         $sameFilters = $oldCp && json_encode($oldCp['view_filters'] ?? []) === json_encode($opts['view_filters']);
         $sameDestinations = !$oldCp || json_encode(array_values((array)($oldFix['selected_destinations']??[]))) === json_encode($opts['selected_destinations']);
-        $resumeWorker = $oldCp && ((int)($oldCp['cur'] ?? 0) > 0 || !empty($oldCp['done_jobs']))
+        $resumeWorker = $matrixFixCp && !empty($_GET['resume']);
+        if(!$resumeWorker)$resumeWorker=$oldCp && ((int)($oldCp['cur'] ?? 0) > 0 || !empty($oldCp['done_jobs']))
             && (string)($oldCp['scope'] ?? 'all') === $opts['scope']
             && (string)($oldCp['duplicate_keep'] ?? 'newest') === $opts['duplicate_keep'] && $sameFilters && $sameDestinations;
         matrixFixStopClear();
@@ -47969,6 +47981,11 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"'recovered_child_exit'=>\$rc")!==false
         &&strpos($selfSrc,"\$msOrigin = extractNormalizeOriginTrigger")!==false
         &&strpos($selfSrc,"{v:'10." . "557'")!==false&&version_compare(APP_VERSION,'10.557','>='));
+    $add('10.558','ادامهٔ اصلاح checkpoint صریح را با همان فیلتر و مقصد به enqueue منتقل می‌کند',
+        strpos($selfSrc,"is_array(\$opts['checkpoint']??null)?\$opts['checkpoint']")!==false
+        &&strpos($selfSrc,'Resume means the exact durable operation')!==false
+        &&strpos($selfSrc,"\$resumeWorker = \$matrixFixCp && !empty(\$_GET['resume'])")!==false
+        &&strpos($selfSrc,"{v:'10." . "558'")!==false&&version_compare(APP_VERSION,'10.558','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -99450,6 +99467,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.558', t:'⏯ ادامهٔ دقیق اصلاح با همان فیلترها', items:[
+    'دکمهٔ ادامه، scope، فیلترها، مقصدها، روش نگه‌داری تکراری و شمارنده‌های همان checkpoint را عیناً به worker بعدی منتقل می‌کند.',
+    'صف‌کردن ادامه دیگر checkpoint را با فرم پیش‌فرض خالی جایگزین نمی‌کند؛ اصلاح موفق قبلی تکرار نمی‌شود.'
+  ]},
   {v:'10.557', t:'🛡 اصلاح مغایرت کم‌حافظه و بازیابی خودکار', items:[
     'فهرست ده‌هاهزار عملیات اصلاح دیگر یکجا در حافظه ساخته نمی‌شود؛ هر child فقط پنجرهٔ کوچک مرتب را اجرا و checkpoint می‌کند.',
     'اگر هاست child اصلاح را با OOM/SIGKILL ببندد، worker آن را ناموفق نهایی نمی‌کند و از checkpoint در daemon تازه ادامه می‌دهد؛ خطای origin همگام‌سازی نیز رفع شد.'
