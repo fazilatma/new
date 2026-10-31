@@ -397,7 +397,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.561';
+const APP_VERSION = '10.562';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48174,6 +48174,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'forced_queue_id_mismatch'")!==false
         &&strpos($selfSrc,"\$ownerRecoveryDue=\$__forcedPausedQid!==''")!==false
         &&strpos($selfSrc,"{v:'10." . "561'")!==false&&version_compare(APP_VERSION,'10.561','>='));
+    $add('10.562','recycle وضعیت paused دقیق را مستقل از heartbeat پردازهٔ قدیمی می‌سازد',
+        strpos($selfSrc,"'explicit_code_recycle'")!==false
+        &&strpos($selfSrc,"'forced_paused_row_missing'")!==false
+        &&strpos($selfSrc,"\$__probe=queueBackendLock('bsl')")!==false
+        &&strpos($selfSrc,"{v:'10." . "562'")!==false&&version_compare(APP_VERSION,'10.562','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65955,6 +65960,14 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     $chk = queueStallCheck($which, $staleAfter, $includePaused, $allowUserStopped);
     $chk['which'] = $which;
     $__forcedPausedQid=trim((string)($GLOBALS['_s4ForcePausedQueueOwner']??''));
+    if($__forcedPausedQid!==''&&$which==='bsl'){
+        $__fq=bslReadQueue();$__fr=null;foreach((array)($__fq['entries']??[]) as $__qr)if(is_array($__qr)&&(string)($__qr['id']??'')===$__forcedPausedQid&&(string)($__qr['status']??'')==='paused'){$__fr=$__qr;break;}
+        if(!$__fr)return ['stalled'=>false,'resumed'=>false,'which'=>$which,'reason_defer'=>'forced_paused_row_missing'];
+        $__probe=queueBackendLock('bsl');$__held=!is_resource($__probe);if(is_resource($__probe))queueBackendUnlock($__probe);
+        $__prog=readProgress(BSL_PROGRESS_FILE);$__cur=max((int)($__fr['current']??0),(string)($__prog['queue_id']??'')===$__forcedPausedQid?(int)($__prog['current']??0):0);
+        $chk=['stalled'=>true,'kind'=>'paused','idle'=>max(181,time()-(int)($__fr['paused_at']??0)),'queue_id'=>$__forcedPausedQid,
+            'lock_held'=>$__held,'beat_from'=>'explicit_code_recycle','current'=>$__cur,'resume_from'=>$__cur,'total'=>(int)($__fr['total']??0),'which'=>$which];
+    }
     if($__forcedPausedQid!==''&&(string)($chk['queue_id']??'')!==$__forcedPausedQid)return $chk+['resumed'=>false,'reason_defer'=>'forced_queue_id_mismatch'];
     if (empty($chk['stalled']) || $dryRun) {
         $chk['resumed'] = false;
@@ -99687,6 +99700,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.562', t:'🔒 تشخیص مستقیم lock صف paused', items:[
+    'heartbeat پردازهٔ قدیمی دیگر recycle را خنثی نمی‌کند؛ ردیف paused با queue_id دقیق مستقیماً از صف خوانده و مالکیت flock همان مقصد probe می‌شود.',
+    'cursor بزرگ‌ترِ صف و progress حفظ می‌شود و فقط پس از احراز paused بودن همان ردیف، بازیافت مالک و ادامه انجام می‌گیرد.'
+  ]},
   {v:'10.561', t:'🎯 بازیافت فوری مالک صف دقیق', items:[
     'کنترل recycle دیگر با نوشتن heartbeat تازه، صف را ناخواسته «در حال اجرا» نمی‌کند؛ queue_id انتخاب‌شده مستقیماً به نگهبان مالک flock منتقل می‌شود.',
     'فقط شرط سن برای همان ردیف paused کنار می‌رود؛ تطابق queue_id، PID و مالکیت flock همچنان اجباری است و پردازهٔ نامرتبط قابل توقف نیست.'
