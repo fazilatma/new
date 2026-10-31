@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.537';
+const APP_VERSION = '10.538';
 
 
 if (!function_exists('str_starts_with')) {
@@ -40766,22 +40766,35 @@ if (isset($_GET['tasks_order'])) {
     exit;
 }
 
+/** v10.538: Task state has two durable copies: JSON and SQLite. Deleting only
+ * the JSON lets localTaskStateRead() immediately resurrect the finished card
+ * from SQLite, which made the cleanup button appear ineffective. */
+function tasksClearPersistedState(string $file): bool {
+    if ($file === '') return false;
+    if (function_exists('localTaskDbForget')) localTaskDbForget($file);
+    $fileOk = !is_file($file) || @unlink($file);
+    $dbOk = !function_exists('localTaskDbRead') || localTaskDbRead($file) === null;
+    return $fileOk && $dbOk;
+}
+
 /** پاک‌کردنِ ردِ یک کارِ تمام‌شده یا رهاشده.
- *  فایلِ پیشرفت حذف می‌شود تا کار از «تمام‌شده» به «بی‌کار» برگردد و
- *  قفلِ احتمالی‌اش هم برداشته شود — همان کاری که تا حالا باید دستی با
- *  حذفِ فایل روی هاست انجام می‌شد. */
+ *  فایلِ پیشرفت و نسخهٔ SQLite آن حذف می‌شوند تا کار از «تمام‌شده» به
+ *  «بی‌کار» برگردد؛ کار زنده دست‌نخورده می‌ماند. */
 if (isset($_GET['tasks_clear'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $key = (string)($_GET['key'] ?? '');
     $reg = tasksRegistry();
     if ($key === 'all') {
-        $n = 0; $now = time();
+        $n = 0; $failed = []; $now = time();
         foreach ($reg as $k => $def) {
             $row = tasksBuildRow($k, $def, $now);
             if ($row['state'] === 'running') continue;   // کارِ زنده دست نمی‌خورد
-            if (@unlink((string)$def['file'])) $n++;
+            $stateFile=(string)($def['file']??'');
+            if ($stateFile===''||!localTaskStateExists($stateFile)) continue;
+            if (tasksClearPersistedState($stateFile)) $n++; else $failed[]=(string)$k;
         }
-        echo json_encode(['ok' => true, 'cleared' => $n], JSON_UNESCAPED_UNICODE); exit;
+        echo json_encode(['ok' => !$failed, 'cleared' => $n, 'failed' => $failed,
+            'error' => $failed ? 'پاک‌سازی بعضی وضعیت‌ها از فایل/SQLite ناموفق بود' : ''], JSON_UNESCAPED_UNICODE); exit;
     }
     if (!isset($reg[$key])) { echo json_encode(['ok' => false, 'error' => 'کارِ ناشناخته'], JSON_UNESCAPED_UNICODE); exit; }
     $now = time();
@@ -40797,8 +40810,9 @@ if (isset($_GET['tasks_clear'])) {
         }
         /* lock مسیرش را حفظ می‌کند؛ فقط فایلِ progress پاک می‌شود. */
     }
-    @unlink((string)$reg[$key]['file']);
-    echo json_encode(['ok' => true, 'cleared' => 1], JSON_UNESCAPED_UNICODE);
+    $cleared=tasksClearPersistedState((string)$reg[$key]['file']);
+    echo json_encode(['ok' => $cleared, 'cleared' => $cleared ? 1 : 0,
+        'error' => $cleared ? '' : 'پاک‌سازی وضعیت از فایل/SQLite ناموفق بود'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -47697,6 +47711,15 @@ if (isset($_GET['selftest'])) {
         &&substr_count($selfSrc,"if(\$realFmt==='gif')")>=2
         &&strpos($selfSrc,'GIF decoder unavailable')!==false
         &&strpos($selfSrc,"{v:'10." . "537'")!==false&&version_compare(APP_VERSION,'10.537','>='));
+    $__taskClear538=strpos($selfSrc,'function tasksClearPersistedState');
+    $__taskClearEnd538=$__taskClear538===false?false:strpos($selfSrc,"if (isset(\$_GET['tasks_reorder']))",$__taskClear538);
+    $__taskClearBlock538=$__taskClear538!==false&&$__taskClearEnd538!==false?substr($selfSrc,$__taskClear538,$__taskClearEnd538-$__taskClear538):'';
+    $add('10.538','پاک‌سازی مدیر وظیفه هر دو نسخهٔ JSON و SQLite کارهای تمام‌شده را حذف می‌کند',
+        $__taskClearBlock538!==''
+        &&strpos($__taskClearBlock538,'localTaskDbForget($file)')!==false
+        &&substr_count($__taskClearBlock538,'tasksClearPersistedState(')>=3
+        &&strpos($__taskClearBlock538,"'failed' => \$failed")!==false
+        &&strpos($selfSrc,"{v:'10." . "538'")!==false&&version_compare(APP_VERSION,'10.538','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98992,6 +99015,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.538', t:'🧽 پاک‌سازی واقعی کارهای تمام‌شده در مدیر وظیفه', items:[
+    'دکمهٔ پاک‌سازی اکنون وضعیت هر کار تمام‌شده را هم‌زمان از فایل JSON و جدول SQLite حذف می‌کند؛ نسخهٔ دیتابیس دیگر کارت پاک‌شده را برنمی‌گرداند.',
+    'کارهای واقعاً در حال اجرا محفوظ می‌مانند و هر شکست حذف نیز به‌جای موفقیت کاذب، با نام وضعیت‌های حذف‌نشده گزارش می‌شود.'
+  ]},
   {v:'10.537', t:'🖼️ تبدیل یک‌بارهٔ GIF پیش از ارسال چندغرفه‌ای', items:[
     'تصویر GIF نامعتبر برای باسلام پیش از اولین درخواست به JPEG تبدیل و همان فایل سازگار برای غرفه‌ها استفاده می‌شود.',
     'اگر سرور امکان decode نداشته باشد، خطا فوری و روشن ثبت می‌شود و سه تلاش 422 برای هر غرفه تکرار نمی‌شود.'
