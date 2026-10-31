@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.555';
+const APP_VERSION = '10.556';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1806,8 +1806,31 @@ function matrixBuildCheckpointGuard(array $opts): array {
     $haveProfile=(string)($cp['profile_filter']??'all');if($haveProfile==='')$haveProfile='all';
     $cn=loadConnections();$want=matrixNormalizeDestinations(array_key_exists('selected_destinations',$opts)?$opts['selected_destinations']:null,$cn);
     $have=matrixNormalizeDestinations($cp['selected_destinations']??null,$cn);sort($want);sort($have);
-    return ['exists'=>true,'compatible'=>$wantProfile===$haveProfile&&$want===$have,'checkpoint'=>$cp,'state'=>$old,
+    return ['exists'=>true,'compatible'=>$wantProfile===$haveProfile&&$want===$have,
+        'same_profile'=>$wantProfile===$haveProfile,'checkpoint'=>$cp,'state'=>$old,
         'have_profile'=>$haveProfile,'want_profile'=>$wantProfile,'have_destinations'=>$have,'want_destinations'=>$want];
+}
+/** A new manual build is authoritative about its checked destinations. Keep the
+ * expensive source-profile checkpoint, but discard destination data/cursors
+ * that belong to the old scope. In particular an unchecked Woo destination can
+ * never be resurrected by Resume or a stale checkpoint. */
+function matrixRebaseCheckpointDestinations(array $cp,array $wanted): array {
+    $wanted=matrixNormalizeDestinations($wanted);$set=array_fill_keys($wanted,true);
+    $cp['selected_destinations']=$wanted;$cp['phase']='profiles_done';
+    if(!isset($set['woo'])){
+        $cp['woo_rows']=[];$cp['woo_done']=true;$cp['woo_page']=0;$cp['woo_complete']=true;
+        if(function_exists('matrixFetchCursorFile'))@unlink(matrixFetchCursorFile());
+    } else {
+        $cp['woo_rows']=[];$cp['woo_done']=false;$cp['woo_page']=0;$cp['woo_complete']=false;
+        if(function_exists('matrixFetchCursorFile'))@unlink(matrixFetchCursorFile());
+    }
+    $keep=[];foreach($wanted as $d)if(str_starts_with($d,'bsl:'))$keep[(string)(int)substr($d,4)]=true;
+    foreach(['shop_rows','shop_pages','shop_done'] as $field){
+        $src=is_array($cp[$field]??null)?$cp[$field]:[];$dst=[];
+        foreach($src as $vid=>$v)if(isset($keep[(string)(int)$vid]))$dst[(string)(int)$vid]=$v;
+        $cp[$field]=$dst;
+    }
+    return $cp;
 }
 
 /** Keep one periodic build→fix chain. v10.336 intentionally gave every tick a
@@ -1839,10 +1862,19 @@ function s4WorkerCoalescePeriodicMatrixChains(): array {
 function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
     $checkpointGuard=matrixBuildCheckpointGuard($opts);
     if(!empty($checkpointGuard['exists'])){
-        if(empty($checkpointGuard['compatible']))return ['ok'=>false,'error'=>'unfinished_matrix_checkpoint_scope_conflict',
-            'checkpoint_preserved'=>true,'have_destinations'=>$checkpointGuard['have_destinations']??[],
-            'want_destinations'=>$checkpointGuard['want_destinations']??[]];
-        $resume=true;$opts['_resume_promoted']=true;
+        if(empty($checkpointGuard['compatible'])){
+            /* Clicking Build (not Continue) with a changed checkbox set means
+               replace the destination scope, not silently restore old Woo. */
+            $manualFresh=!$resume&&in_array((string)($opts['source']??'manual'),['manual','manual_selected'],true);
+            if(!$manualFresh||empty($checkpointGuard['same_profile']))return ['ok'=>false,'error'=>'unfinished_matrix_checkpoint_scope_conflict',
+                'checkpoint_preserved'=>true,'have_destinations'=>$checkpointGuard['have_destinations']??[],
+                'want_destinations'=>$checkpointGuard['want_destinations']??[]];
+            $rebased=matrixRebaseCheckpointDestinations((array)$checkpointGuard['checkpoint'],(array)($checkpointGuard['want_destinations']??[]));
+            matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'phase'=>'scope_rebased','selected_destinations'=>$rebased['selected_destinations'],
+                'checkpoint'=>$rebased,'log_add'=>['🎯 مقصدهای checkpoint با تیک‌های فعلی جایگزین شد؛ مقصد حذف‌شده هیچ واکشی نخواهد داشت']]);
+            $checkpointGuard=matrixBuildCheckpointGuard($opts);$opts['_scope_rebased']=true;
+        }
+        $resume=true;$opts['_resume_promoted']=empty($opts['_scope_rebased']);
     }
     $execDriver=function_exists('matrixExecutionDecision')?matrixExecutionDecision():['accelerated'=>false];
     $requestedSlice=max(2,min(20,(int)($opts['slice_seconds']??8)));
@@ -5581,7 +5613,10 @@ function wooTestConnection(array $opts = []): array {
             $api['steps'][] = ['step' => 'validate', 'ok' => false, 'info' => 'کلید ناقص'];
         } else {
             $api['steps'][] = ['step' => 'validate', 'ok' => true, 'info' => 'URL و کلیدها پر است'];
-            $ep = 'system_status';
+            /* Products is the capability the discrepancy builder actually needs.
+               system_status is slower and may be forbidden to an otherwise valid
+               read key, so it must never decide connection success. */
+            $ep = 'products?per_page=1&status=any';
             $full = $url . '/wp-json/wc/v3/' . $ep;
             $api['url'] = $full;
             $t0 = microtime(true);
@@ -5601,16 +5636,12 @@ function wooTestConnection(array $opts = []): array {
                 $api['detail'] = 'HTTP ' . $api['http_code'] . ' · ' . $ms . 'ms · WC ' . $api['version'];
                 if (!empty($envB['home_url'])) $api['home_url'] = $envB['home_url'];
                 if (!empty($envB['site_url'])) $api['site_url'] = $envB['site_url'];
-                $api['steps'][] = ['step' => 'system_status', 'ok' => true, 'info' => $api['detail']];
-                /* products count sample */
-                $t1 = microtime(true);
-                $rp = wooReq($url, $ck, $cs, 'GET', 'products?per_page=1');
-                $api['products_probe'] = [
-                    'ok' => !empty($rp['ok']),
-                    'http_code' => (int)($rp['code'] ?? 0),
-                    'latency_ms' => (int)round((microtime(true) - $t1) * 1000),
-                ];
-                $api['steps'][] = ['step' => 'products', 'ok' => !empty($rp['ok']), 'info' => 'HTTP ' . (int)($rp['code'] ?? 0)];
+                $api['steps'][] = ['step' => 'products', 'ok' => true, 'info' => $api['detail']];
+                /* system_status used to add 10–15 seconds and can reject a valid
+                   read key. Do not call it in the normal connection test. */
+                $api['system_status_probe'] = ['skipped' => true, 'optional' => true];
+                $api['steps'][] = ['step' => 'system_status_optional', 'ok' => true,
+                    'info' => 'رد شد (اختیاری؛ endpoint محصولات معیار اتصال است)'];
             } else {
                 $code = (int)($r['code'] ?? 0);
                 $cerr = (string)($r['error'] ?? '');
@@ -5646,7 +5677,7 @@ function wooTestConnection(array $opts = []): array {
                     $api['message'] = 'پاسخ ناموفق';
                     $api['detail'] = 'HTTP ' . $code . ($msgBody !== '' ? (' — ' . $msgBody) : ($cerr ?: ''));
                 }
-                $api['steps'][] = ['step' => 'system_status', 'ok' => false, 'info' => $api['detail']];
+                $api['steps'][] = ['step' => 'products', 'ok' => false, 'info' => $api['detail']];
                 $api['raw_preview'] = mb_substr($raw, 0, 240);
             }
         }
@@ -5662,8 +5693,9 @@ function wooTestConnection(array $opts = []): array {
         ];
         $dir['steps'][] = ['step' => 'env', 'ok' => $env['in_wp'], 'info' => $env['in_wp'] ? 'داخل وردپرس' : 'خارج از وردپرس'];
         if (!$env['in_wp']) {
-            $dir['message'] = 'همگام مستقیم اینجا در دسترس نیست';
-            $dir['detail'] = 'scraper4.php به‌صورت standalone اجرا می‌شود و کلاس‌های WC لود نیستند.';
+            $dir['not_applicable'] = true;
+            $dir['message'] = 'مسیر مستقیم در اجرای standalone کاربرد ندارد';
+            $dir['detail'] = 'این وضعیت خطای تنظیمات نیست؛ scraper4.php خارج از هستهٔ وردپرس اجرا می‌شود و REST API مسیر صحیح این نصب است.';
             $dir['hint'] = 'اسکرپر را از داخل افزونه وردپرس (منوی ادمین «پنل اسکرپر») باز کنید، یا دکمه «فعال‌سازی اتصال مستقیم از ادمین» را بزنید.';
             $dir['steps'][] = ['step' => 'wc_load', 'ok' => false, 'info' => 'WooCommerce class missing'];
         } elseif (!$env['has_wc']) {
@@ -5738,7 +5770,7 @@ function wooTestConnection(array $opts = []): array {
     $dirOk = is_array($out['direct']) && !empty($out['direct']['ok']);
     $out['ok'] = $apiOk || $dirOk;
     if ($apiOk && $dirOk) $out['message'] = 'API و مستقیم هر دو سالم‌اند';
-    elseif ($apiOk) $out['message'] = 'اتصال API موفق' . ($doDirect && !$dirOk ? ' — مستقیم ناموفق/غیرفعال' : '');
+    elseif ($apiOk) $out['message'] = 'اتصال API موفق' . ($doDirect && !$dirOk && empty($out['direct']['not_applicable']) ? ' — مسیر مستقیم ناموفق' : '');
     elseif ($dirOk) $out['message'] = 'اتصال مستقیم موفق' . ($doApi && !$apiOk ? ' — API ناموفق/بدون کلید' : '');
     else {
         $out['message'] = 'هیچ مسیری متصل نشد';
@@ -43032,7 +43064,7 @@ function matrixBuild(array $opts = []): array {
     if ($parallelDest) {
         $parallelShops = $shopList;
         matrixProgress(['phase'=>'parallel_fetch','pct'=>30,
-            'log_add'=>['⚡ حالت موازی: ووکامرس + '.count($parallelShops).' غرفه هم‌زمان']]);
+            'log_add'=>['⚡ حالت موازی: '.($includeWoo?'ووکامرس + ':'').count($parallelShops).' غرفه هم‌زمان']]);
         $pr = matrixFetchDestinationsParallel($cn, $parallelShops, $matrixWooCp, $matrixWooDone,
             $matrixWooPage, $matrixWooComplete, $matrixShopCp, $matrixShopPages, $matrixShopDone, $includeWoo);
         matrixProgress(['checkpoint'=>$matrixCp('parallel_fetch',$rowsByKey,$profilesDone,$matrixWooCp,$matrixShopCp,$startedAt,$matrixWooDone)]);
@@ -43056,10 +43088,11 @@ function matrixBuild(array $opts = []): array {
     $wooErr = '';
     $wooRows = array_values(array_filter($matrixWooCp, 'is_array'));
     $w = $cn['woocommerce'] ?? [];
-    matrixProgress(['phase' => 'woo_fetch', 'pct' => 32, 'log_add' => [
-            $matrixWooDone ? '↻ ووکامرس از checkpoint خوانده شد' : ('📥 دریافت محصولات ووکامرس…'
+    matrixProgress(['phase' => $includeWoo ? 'woo_fetch' : 'woo_skipped', 'pct' => 32, 'log_add' => [
+            !$includeWoo ? '⏭ ووکامرس تیک نخورده است — بدون هیچ درخواست شبکه رد شد'
+            : ($matrixWooDone ? '↻ ووکامرس از checkpoint خوانده شد' : ('📥 دریافت محصولات ووکامرس…'
             . ((function_exists('wooDirectAvailable') && wooDirectAvailable())
-                ? ' (مسیر ⚡ مستقیم DB — سریع)' : ' (مسیر 🌐 REST API — کندتر)')),
+                ? ' (مسیر ⚡ مستقیم DB — سریع)' : ' (مسیر 🌐 REST API — کندتر)'))),
         ]]);
     if (!$matrixWooDone) {
         $wooMeta = [];
@@ -43108,8 +43141,10 @@ function matrixBuild(array $opts = []): array {
     }
     $wooCount=count($wooRows);if($wooCount===0&&$matrixWooDone)foreach($rowsByKey as $wcRow)if(!empty($wcRow['woo']))$wooCount++;
     matrixProgress([
-        'phase' => 'woo_map', 'pct' => 48,
-        'log_add' => ['✅ ووکامرس: ' . $wooCount . ' محصول' . ($wooErr !== '' ? (' — ' . $wooErr) : '')],
+        'phase' => $includeWoo ? 'woo_map' : 'woo_skipped', 'pct' => 48,
+        'log_add' => [$includeWoo
+            ? ('✅ ووکامرس: ' . $wooCount . ' محصول' . ($wooErr !== '' ? (' — ' . $wooErr) : ''))
+            : '✅ ووکامرس خارج از محدودهٔ این جدول باقی ماند'],
     ]);
     foreach ($wooRows as $wr) {
         if ($codedOnly && !matrixTitleHasCode((string)($wr['title'] ?? ''))) continue;
@@ -47892,6 +47927,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"!empty(\$chk['product_timeout'])")!==false
         &&strpos($selfSrc,"'product-timeout-'")!==false
         &&strpos($selfSrc,"{v:'10." . "555'")!==false&&version_compare(APP_VERSION,'10.555','>='));
+    $add('10.556','ساخت تازه مقصدهای تیک‌خورده را بر checkpoint مقدم می‌کند و Woo بدون تیک هیچ درخواست یا گزارش واکشی ندارد',
+        function_exists('matrixRebaseCheckpointDestinations')
+        &&strpos($selfSrc,"!\$includeWoo ? '⏭ ووکامرس تیک نخورده است")!==false
+        &&strpos($selfSrc,"\$manualFresh=!\$resume")!==false
+        &&strpos($selfSrc,"{v:'10." . "556'")!==false&&version_compare(APP_VERSION,'10.556','>='));
+    $add('10.556','تست اتصال ووکامرس محصولات را معیار اصلی و system_status را عیب‌یابی اختیاری می‌داند',
+        strpos($selfSrc,"\$ep = 'products?per_page=1&status=any'")!==false
+        &&strpos($selfSrc,"'system_status_optional'")!==false
+        &&strpos($selfSrc,"'not_applicable' => true")!==false);
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -99373,6 +99417,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.556', t:'🎯 اجرای دقیق انتخاب مقصد و تست واقعی ووکامرس', items:[
+    'ساخت تازهٔ جدول، انتخاب فعلی مقصدها را بر checkpoint ناتمام مقدم می‌داند؛ با برداشتن تیک ووکامرس، داده و cursor ووکامرس کنار گذاشته می‌شود و هیچ درخواست Woo ارسال نمی‌گردد.',
+    'مرحله و گزارش Woo برای مقصد بدون تیک صریحاً «رد شد؛ بدون درخواست شبکه» است و تست API با endpoint واقعی محصولات سنجیده می‌شود؛ system_status فقط عیب‌یابی اختیاری است.'
+  ]},
   {v:'10.555', t:'⏭ اجرای قطعی سقف محصول توسط کران', items:[
     'سقف محصول دیگر به همکاری همان پردازه وابسته نیست؛ کران سن inflight را حتی با heartbeat تازه مستقیماً با تنظیم زنده مقایسه می‌کند.',
     'در عبور از سقف، مالک دقیق flock همان ارسال متوقف، خطای timeout یک‌بار ثبت، cursor به محصول بعدی منتقل و صف از اولین کران ادامه داده می‌شود.'
@@ -110950,7 +110998,7 @@ function renderWooTestReport(d){
   const block=(title,col,x)=>{
     if(!x) return '';
     let b='<div style="margin-top:8px;padding:8px;border-radius:8px;background:#0f172a;border:1px solid #1e293b">';
-    b+='<div style="font-weight:800;color:'+col+';margin-bottom:4px">'+title+' — '+(x.ok?'✓ موفق':'✗ ناموفق')+'</div>';
+    b+='<div style="font-weight:800;color:'+col+';margin-bottom:4px">'+title+' — '+(x.ok?'✓ موفق':(x.not_applicable?'ℹ نامرتبط با این نصب':'✗ ناموفق'))+'</div>';
     if(x.message) b+='<div style="color:#e2e8f0">'+esc(x.message)+'</div>';
     if(x.detail) b+='<div style="color:#94a3b8;font-size:10.5px;margin-top:2px">'+esc(x.detail)+'</div>';
     if(x.hint) b+='<div style="color:#fbbf24;font-size:10.5px;margin-top:4px">💡 '+esc(x.hint)+'</div>';
