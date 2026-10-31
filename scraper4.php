@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.547';
+const APP_VERSION = '10.548';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47777,6 +47777,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'if($oldMatrixExecMode!==$newExecMode)')!==false
         &&strpos($selfSrc,'$buildOnlyJustEnabled=')!==false
         &&strpos($selfSrc,"{v:'10." . "547'")!==false&&version_compare(APP_VERSION,'10.547','>='));
+    $add('10.548','پس‌زمینهٔ باکس پالسر وضعیت ذخیره را رنگی و چراغ را دقیقاً وسط نشان می‌دهد',
+        strpos($selfSrc,'.runtime-pulse.save-pending')!==false
+        &&strpos($selfSrc,'@keyframes runtimePulseCentered')!==false
+        &&strpos($selfSrc,"pulse.classList.add(cls)")!==false
+        &&strpos($selfSrc,"{v:'10." . "548'")!==false&&version_compare(APP_VERSION,'10.548','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -87548,6 +87553,17 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 .runtime-pulse.cron-pulse-external .runtime-pulse-core{background:#a78bfa!important;box-shadow:0 0 5px #a78bfa,0 0 14px #a78bfa!important}
 .runtime-pulse.cron-pulse-external .runtime-pulse-ring{background:#a78bfa80!important;animation-duration:.85s!important}
 .runtime-pulse.cron-pulse-external .runtime-pulse-tag{color:#ddd6fe!important}
+/* v10.548: the lamp itself is geometrically centered; the tiny label is an
+   overlay and no longer shifts the light. Save state colors the whole sticky
+   pulser box so feedback stays visible even when the settings panel is closed. */
+.runtime-pulse{position:relative!important;display:flex!important;align-items:center!important;justify-content:center!important;grid-template-columns:none!important;gap:0!important;transition:background .22s,border-color .22s,box-shadow .22s}
+.runtime-pulse .runtime-pulse-core,.runtime-pulse .runtime-pulse-ring{position:absolute!important;left:50%!important;top:50%!important;margin:0!important;justify-self:auto!important;transform:translate(-50%,-50%)}
+.runtime-pulse .runtime-pulse-ring{animation-name:runtimePulseCentered!important}
+.runtime-pulse .runtime-pulse-tag{position:absolute;right:3px;bottom:2px;line-height:1;min-width:10px;pointer-events:none}
+.runtime-pulse.save-pending{background:#78350f!important;border-color:#f59e0b!important;box-shadow:inset 0 0 14px #f59e0b55}
+.runtime-pulse.save-ok{background:#14532d!important;border-color:#22c55e!important;box-shadow:inset 0 0 14px #22c55e55}
+.runtime-pulse.save-error{background:#7f1d1d!important;border-color:#ef4444!important;box-shadow:inset 0 0 14px #ef444466}
+@keyframes runtimePulseCentered{0%{transform:translate(-50%,-50%) scale(.8);opacity:.9}75%,100%{transform:translate(-50%,-50%) scale(2.7);opacity:0}}
 /* v10.19 (۳۲): دکمهٔ مدیر وظیفه — سومین دکمهٔ شناورِ هدر، کنارِ ☰ و ⛶ */
 .tasks-btn{position:fixed;top:10px;left:110px;z-index:10001;width:44px;height:44px;border-radius:12px;background:#1e293b;border:1px solid #475569;color:#e2e8f0;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.4);transition:background .2s}
 /* v10.82 (96): دکمهٔ چت باسلام در نوارِ هدر — کنارِ مدیرِ وظیفه */
@@ -99122,6 +99138,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.548', t:'🎨 نمایش رنگی ذخیره روی پالسر بالای صفحه', items:[
+    'کل پس‌زمینهٔ باکس پالسر هنگام آماده‌سازی کهربایی، پس از ذخیره سبز و هنگام خطا قرمز می‌شود؛ بنابراین با بسته بودن پنل تنظیمات نیز وضعیت روشن است.',
+    'چراغ و حلقهٔ پالسر مستقل از برچسب H/S دقیقاً در مرکز افقی و عمودی باکس قرار گرفتند و در موبایل نیز جابه‌جا نمی‌شوند.'
+  ]},
   {v:'10.547', t:'⚡ ذخیرهٔ فوری تنظیمات بدون اسکن سنگین صف', items:[
     'صف چندمگابایتی باسلام فقط وقتی انتخاب غرفه‌ها واقعاً تغییر کند بررسی می‌شود، نه پس از هر autosave.',
     'تغییر روش اجرا همچنان همان لحظه اعمال می‌شود؛ mutationهای matrix و worker فقط هنگام تغییر مرتبط اجرا می‌شوند.'
@@ -110522,6 +110542,21 @@ function _connSaveIndicator(state){
             el._t=setTimeout(function(){el.textContent='';},2500);}
         else if(state==='err'){el.textContent='⚠';el.title='خطا در ذخیره';el.style.color='#f87171';}
     });
+    var pulse=document.getElementById('runtimePulse');
+    if(pulse){
+        clearTimeout(pulse._saveStateTimer);
+        pulse.classList.remove('save-pending','save-ok','save-error');
+        var cls=state==='pending'?'save-pending':(state==='ok'?'save-ok':'save-error');
+        pulse.classList.add(cls);
+        pulse.dataset.saveState=state;
+        var saveLabel=state==='pending'?'در حال ذخیرهٔ تغییرات':(state==='ok'?'تغییرات ذخیره شد':'خطا در ذخیرهٔ تغییرات');
+        pulse.title=saveLabel;
+        pulse.setAttribute('aria-label',saveLabel);
+        if(state==='ok')pulse._saveStateTimer=setTimeout(function(){
+            pulse.classList.remove('save-ok');delete pulse.dataset.saveState;
+            if(typeof s4RuntimeHealthCheck==='function')s4RuntimeHealthCheck(false);
+        },2500);
+    }
 }
 (function setupConnAutoSave(){
     var SKIP={'rlSearch':1,'bslFallbackCatSearch':1,'aiQueryInput':1,
