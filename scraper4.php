@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.538';
+const APP_VERSION = '10.539';
 
 
 if (!function_exists('str_starts_with')) {
@@ -40790,7 +40790,9 @@ if (isset($_GET['tasks_clear'])) {
             $row = tasksBuildRow($k, $def, $now);
             if ($row['state'] === 'running') continue;   // کارِ زنده دست نمی‌خورد
             $stateFile=(string)($def['file']??'');
-            if ($stateFile===''||!localTaskStateExists($stateFile)) continue;
+            $hadActivity=(string)($row['state']??'idle')!=='idle';
+            $hadPersisted=$stateFile!==''&&localTaskStateExists($stateFile);
+            if (!$hadActivity&&!$hadPersisted) continue;
             if (tasksClearPersistedState($stateFile)) $n++; else $failed[]=(string)$k;
         }
         echo json_encode(['ok' => !$failed, 'cleared' => $n, 'failed' => $failed,
@@ -47720,6 +47722,10 @@ if (isset($_GET['selftest'])) {
         &&substr_count($__taskClearBlock538,'tasksClearPersistedState(')>=3
         &&strpos($__taskClearBlock538,"'failed' => \$failed")!==false
         &&strpos($selfSrc,"{v:'10." . "538'")!==false&&version_compare(APP_VERSION,'10.538','>='));
+    $add('10.539','شمارندهٔ پاک‌سازی بر اساس کارت فعالیت قبل از حذف محاسبه می‌شود',
+        strpos($__taskClearBlock538,"\$hadActivity=(string)(\$row['state']??'idle')!=='idle'")!==false
+        &&strpos($__taskClearBlock538,'if (!$hadActivity&&!$hadPersisted) continue;')!==false
+        &&strpos($selfSrc,"{v:'10." . "539'")!==false&&version_compare(APP_VERSION,'10.539','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -99015,6 +99021,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.539', t:'🔢 شمارش درست پاک‌سازی مدیر وظیفه', items:[
+    'تعداد پاک‌شده‌ها از کارت‌های فعالیت موجود پیش از حذف محاسبه می‌شود؛ پیام موفقیت دیگر پس از حذف واقعی، عدد صفر نشان نمی‌دهد.'
+  ]},
   {v:'10.538', t:'🧽 پاک‌سازی واقعی کارهای تمام‌شده در مدیر وظیفه', items:[
     'دکمهٔ پاک‌سازی اکنون وضعیت هر کار تمام‌شده را هم‌زمان از فایل JSON و جدول SQLite حذف می‌کند؛ نسخهٔ دیتابیس دیگر کارت پاک‌شده را برنمی‌گرداند.',
     'کارهای واقعاً در حال اجرا محفوظ می‌مانند و هر شکست حذف نیز به‌جای موفقیت کاذب، با نام وضعیت‌های حذف‌نشده گزارش می‌شود.'
