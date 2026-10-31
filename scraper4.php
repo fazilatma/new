@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.554';
+const APP_VERSION = '10.555';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47887,6 +47887,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function bslProductDeadlineExceeded')!==false
         &&strpos($selfSrc,"'__product_timeout'")!==false
         &&strpos($selfSrc,"{v:'10." . "554'")!==false&&version_compare(APP_VERSION,'10.554','>='));
+    $add('10.555','کران سقف محصول را مستقل از heartbeat اجرا و مالک دقیق محصول زمان‌بر را تعویض می‌کند',
+        strpos($selfSrc,"'beat_from'=>'product_deadline'")!==false
+        &&strpos($selfSrc,"!empty(\$chk['product_timeout'])")!==false
+        &&strpos($selfSrc,"'product-timeout-'")!==false
+        &&strpos($selfSrc,"{v:'10." . "555'")!==false&&version_compare(APP_VERSION,'10.555','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65319,6 +65324,28 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
            is released. Previously ['lock'=>$now] reset idle to zero forever. */
         $_iwS = queueRowIdle($which, $running, $prog, $now, [], $runningCount);
         $idle = (int)$_iwS['idle'];
+        /* v10.555: product deadline is independent of heartbeat freshness. A
+           wedged fallback can keep emitting heartbeats forever, so cron must
+           compare the persisted in-flight start directly with the live limit. */
+        if($isBsl&&$progressOwned&&(int)($prog['inflight_product']??0)>0&&(int)($prog['inflight_started_at']??0)>0){
+            $__liveCn=loadConnections();
+            $__rowLimit=(int)($running['config']['product_timeout_sec']??180);
+            $__effectiveLimit=(int)($__liveCn['basalam']['product_timeout_sec']??$__rowLimit);
+            if($__effectiveLimit<=0)$__effectiveLimit=180;
+            $__limit=max(30,min(1800,$__effectiveLimit));
+            $__inflightAt=(int)$prog['inflight_started_at'];$__productElapsed=max(0,$now-$__inflightAt);
+            if($__productElapsed>=$__limit){
+                $__inflightNo=max(1,(int)$prog['inflight_product']);
+                $__resume=max((int)($running['current']??0),(int)($prog['current']??0),$__inflightNo)+1;
+                return ['stalled'=>true,'kind'=>'running','product_timeout'=>true,'idle'=>$idle,
+                    'queue_id'=>$running['id']??'','lock_held'=>$lockFresh,
+                    'beat_from'=>'product_deadline','current'=>(int)($prog['current']??0),'resume_from'=>$__resume,
+                    'total'=>(int)($running['total']??0),'product_no'=>$__inflightNo,
+                    'product_title'=>(string)($prog['inflight_title']??$prog['last_title']??''),
+                    'product_stage'=>(string)($prog['inflight_stage_label']??$prog['phase_label']??''),
+                    'product_elapsed'=>$__productElapsed,'product_timeout_sec'=>$__limit];
+            }
+        }
         /* v10.419: an unlocked backend is conclusive evidence that this running
            row has no sender. Do not turn the heartbeat threshold into an extra
            one-minute grace period: hand it to queueStallRecover on this cron.
@@ -65669,13 +65696,13 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
        cursor after release—never spawn two concurrent senders. */
     if (!empty($chk['lock_held'])) {
         $pendingBook=queueResumeBook($which,$qid);
-        $ownerPid=(int)($pendingBook['dispatch_pid']??0);
+        $ownerPid=!empty($chk['product_timeout'])?0:(int)($pendingBook['dispatch_pid']??0);
         $ownerTries=(int)($pendingBook['tries']??0);
         $idleSec=(int)($chk['idle']??0);$ownerSignalled=false;$lockReleased=false;
         /* nohup may report its launcher PID while the surviving PHP child owns
            flock. If that PID is gone, ask the kernel who holds this exact lock
            and accept only our own scraper4.php queue_backend command. */
-        $ownerRecoveryDue=($ownerTries>=3&&$idleSec>=90)||$idleSec>=180;
+        $ownerRecoveryDue=!empty($chk['product_timeout'])||($ownerTries>=3&&$idleSec>=90)||$idleSec>=180;
         if($ownerRecoveryDue&&($ownerPid<=1||!function_exists('s4WorkerPidAlive')||!s4WorkerPidAlive($ownerPid))&&function_exists('exec')){
             $lockPath=__DIR__.($which==='bsl'?'/bsl_backend.lock':'/woo_backend.lock');$fo=[];$frc=1;
             @exec('fuser '.escapeshellarg($lockPath).' 2>/dev/null',$fo,$frc);
@@ -65816,6 +65843,22 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             @flock($resumeFp,LOCK_UN);@fclose($resumeFp);$resumeFp=null;
             $chk['resumed']=false;$chk['deferred']=false;$chk['reason_defer']='products_file_missing';return $chk;
         }
+        if($which==='bsl'&&!empty($chk['product_timeout'])){
+            $__tp=readProgress(BSL_PROGRESS_FILE);
+            $__newFailed=max((int)($rentry['failed']??0),(int)($__tp['failed']??0))+1;
+            $__timeoutDetail=['title'=>(string)($chk['product_title']??''),'key'=>'product-timeout-'.(int)($chk['product_no']??0),
+              'error'=>'⏳ سقف '.(int)($chk['product_timeout_sec']??180).' ثانیه گذشت؛ محصول رد و صف ادامه داده شد',
+              'error_code'=>0,'error_step'=>'product_timeout','reason_kind'=>'product_timeout',
+              'timeout_sec'=>(int)($chk['product_timeout_sec']??180),'elapsed_sec'=>(int)($chk['product_elapsed']??0)];
+            $rq['entries'][$ridx]['failed']=$__newFailed;
+            $rq['entries'][$ridx]['current']=$start;
+            $__fd=is_array($rq['entries'][$ridx]['failed_details']??null)?$rq['entries'][$ridx]['failed_details']:[];
+            $__fd[]=$__timeoutDetail;$rq['entries'][$ridx]['failed_details']=array_slice($__fd,-2000);
+            $__rl=is_array($rq['entries'][$ridx]['recent_log']??null)?$rq['entries'][$ridx]['recent_log']:[];
+            $__rl[]='⏳ محصول #'.(int)($chk['product_no']??0).' پس از '.(int)($chk['product_elapsed']??0).' ثانیه رد شد؛ ادامه از #'.$start;
+            $rq['entries'][$ridx]['recent_log']=array_slice($__rl,-200);
+            $rentry=$rq['entries'][$ridx];
+        }
         /* A free destination flock proves every old running owner is dead.
            Mirror the manual Continue transaction: demote ambiguous stale
            owners, make the selected row the sole owner, and publish a fresh
@@ -65843,7 +65886,14 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         $priorQid=trim((string)($prior['queue_id']??''));
         $priorOwned=$priorQid!==''&&hash_equals($qid,$priorQid);
         $snapshot=$priorOwned?array_merge($rentry,$prior):$rentry;
+        if($which==='bsl'&&!empty($chk['product_timeout'])){
+            $snapshot['failed']=(int)($rentry['failed']??$snapshot['failed']??0);
+            $snapshot['failed_details']=$rentry['failed_details']??($snapshot['failed_details']??[]);
+            $snapshot['current']=$start;
+        }
         $resumeLog=is_array($snapshot['recent_log']??null)?$snapshot['recent_log']:[];
+        if($which==='bsl'&&!empty($chk['product_timeout']))
+            $resumeLog[]='⏳ سقف محصول #'.(int)($chk['product_no']??0).' تمام شد؛ از صف رد و از محصول #'.$start.' ادامه داده شد';
         $resumeLog[]='🔄 ادامهٔ کران با همان مالکیت دکمهٔ ادامه از محصول #'.($start+1);
         $progressRow=['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$qid,
             'sent'=>(int)($snapshot['sent']??0),'updated'=>(int)($snapshot['updated']??0),
@@ -99323,6 +99373,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.555', t:'⏭ اجرای قطعی سقف محصول توسط کران', items:[
+    'سقف محصول دیگر به همکاری همان پردازه وابسته نیست؛ کران سن inflight را حتی با heartbeat تازه مستقیماً با تنظیم زنده مقایسه می‌کند.',
+    'در عبور از سقف، مالک دقیق flock همان ارسال متوقف، خطای timeout یک‌بار ثبت، cursor به محصول بعدی منتقل و صف از اولین کران ادامه داده می‌شود.'
+  ]},
   {v:'10.554', t:'⏳ سقف قابل تنظیم زمان پردازش هر محصول باسلام', items:[
     'تنظیم «سقف هر محصول» با پیش‌فرض ۱۸۰ ثانیه و بازهٔ امن ۳۰ تا ۱۸۰۰ ثانیه به تنظیمات ارسال اضافه شد.',
     'با عبور از سقف، درخواست‌های همان محصول متوقف، یک خطای کوتاه product_timeout ثبت، checkpoint جلو برده و محصول بعدی بدون توقف صف پردازش می‌شود.'
