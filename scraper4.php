@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.544';
+const APP_VERSION = '10.545';
 
 
 if (!function_exists('str_starts_with')) {
@@ -3695,8 +3695,18 @@ function noExtractRefreshOn(array $syncCfg): bool {
    موجودی صفر می‌رود، وگرنه همان موجودیِ پیش‌فرضِ تنظیمات. بدونِ این تابع،
    تشخیصِ ناموجودی فقط روی دیسک می‌نشست و هیچ‌وقت به غرفه/فروشگاه نمی‌رسید. */
 function effectiveStock(array $p, int $defaultStock): int {
-    if (array_key_exists('in_stock', $p) && empty($p['in_stock'])) return 0;
-    return $defaultStock;
+    if (array_key_exists('in_stock', $p) && empty($p['in_stock'])) {
+        /* v10.545: detail/list merges can leave a stale false flag while the
+           same current row still has a valid sellable price. Availability in
+           this extractor is price-based; do not suppress creation in every new
+           shop when price/final_price proves the product is currently sold. */
+        foreach (['price','final_price','orig_price','original_price'] as $priceKey) {
+            if (array_key_exists($priceKey,$p) && extractPriceNum($p[$priceKey])>0)
+                return max(0,$defaultStock);
+        }
+        return 0;
+    }
+    return max(0,$defaultStock);
 }
 
 /* v10.21 (۳۴الف): «ناموجود» از روی قیمتِ صفحهٔ محصول.
@@ -47747,6 +47757,11 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"glob('/proc/[0-9]*/fd/*')")!==false
         &&strpos($selfSrc,"(int)(\$fs['dev']??-1)!==\$dev")!==false
         &&strpos($selfSrc,"{v:'10." . "544'")!==false&&version_compare(APP_VERSION,'10.544','>='));
+    $add('10.545','پرچم ناموجودی کهنه با قیمت معتبر، ساخت در غرفهٔ تازه را مسدود نمی‌کند',
+        effectiveStock(['in_stock'=>false,'price'=>'125,000'],7)===7
+        &&effectiveStock(['in_stock'=>false,'price'=>'0','final_price'=>''],7)===0
+        &&effectiveStock(['in_stock'=>true,'price'=>''],7)===7
+        &&strpos($selfSrc,"{v:'10." . "545'")!==false&&version_compare(APP_VERSION,'10.545','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -99093,6 +99108,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.545', t:'📦 ساخت محصولات قیمت‌دار در غرفه‌های تازه', items:[
+    'پرچم in_stock=false که پس از ادغام استخراج کهنه مانده، وقتی همان ردیف قیمت معتبر فعلی دارد دیگر موجودی را صفر نمی‌کند.',
+    'محصول واقعاً بدون قیمت همچنان ناموجود می‌ماند و در غرفهٔ تازه ساخته نمی‌شود؛ شمارندهٔ جدید فقط پس از ایجاد موفق باسلام بالا می‌رود.'
+  ]},
   {v:'10.544', t:'🧬 یافتن مالک قفل از file descriptor', items:[
     'در محیط‌هایی که proc locks پنهان است، device و inode دقیق فایل قفل در fd پردازه‌های همان حساب جست‌وجو می‌شود.'
   ]},
