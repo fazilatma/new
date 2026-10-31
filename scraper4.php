@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.545';
+const APP_VERSION = '10.546';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47762,6 +47762,10 @@ if (isset($_GET['selftest'])) {
         &&effectiveStock(['in_stock'=>false,'price'=>'0','final_price'=>''],7)===0
         &&effectiveStock(['in_stock'=>true,'price'=>''],7)===7
         &&strpos($selfSrc,"{v:'10." . "545'")!==false&&version_compare(APP_VERSION,'10.545','>='));
+    $add('10.546','قفل دقیقاً شناسایی‌شده پس از ۱۸۰ ثانیه سکون بدون نیاز به سه تلاش آزاد می‌شود',
+        strpos($selfSrc,'$ownerRecoveryDue=($ownerTries>=3&&$idleSec>=90)||$idleSec>=180')!==false
+        &&substr_count($selfSrc,'if($ownerRecoveryDue&&')>=2
+        &&strpos($selfSrc,"{v:'10." . "546'")!==false&&version_compare(APP_VERSION,'10.546','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65537,13 +65541,11 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     if(!$allowUserStopped&&queueHasExplicitUserStop($which,$qid)){
         $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop_row';return $chk;
     }
-    /* A fresh flock normally proves a live owner. v10.540 adds one bounded
-       exception: after three recovery dispatches, a detached CLI child whose
-       progress has stayed frozen for at least 90 seconds is a wedged owner,
-       not useful work. Retire only the PID recorded for this exact queue,
-       then let this same cron continue from the persisted cursor if the lock
-       is released. This avoids an immortal held flock without spawning two
-       concurrent senders. */
+    /* A fresh flock normally proves a live owner. Bounded exceptions identify
+       a wedged child after either three failed recoveries plus 90 seconds, or
+       one uninterrupted 180-second checkpoint freeze. Retire only the exact
+       PID holding this destination lock, then continue from the persisted
+       cursor after release—never spawn two concurrent senders. */
     if (!empty($chk['lock_held'])) {
         $pendingBook=queueResumeBook($which,$qid);
         $ownerPid=(int)($pendingBook['dispatch_pid']??0);
@@ -65552,7 +65554,8 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         /* nohup may report its launcher PID while the surviving PHP child owns
            flock. If that PID is gone, ask the kernel who holds this exact lock
            and accept only our own scraper4.php queue_backend command. */
-        if($ownerTries>=3&&$idleSec>=90&&($ownerPid<=1||!function_exists('s4WorkerPidAlive')||!s4WorkerPidAlive($ownerPid))&&function_exists('exec')){
+        $ownerRecoveryDue=($ownerTries>=3&&$idleSec>=90)||$idleSec>=180;
+        if($ownerRecoveryDue&&($ownerPid<=1||!function_exists('s4WorkerPidAlive')||!s4WorkerPidAlive($ownerPid))&&function_exists('exec')){
             $lockPath=__DIR__.($which==='bsl'?'/bsl_backend.lock':'/woo_backend.lock');$fo=[];$frc=1;
             @exec('fuser '.escapeshellarg($lockPath).' 2>/dev/null',$fo,$frc);
             foreach($fo as$fl)foreach((array)preg_split('/\s+/',trim((string)$fl))as$fpRaw){
@@ -65585,7 +65588,7 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
                 }
             }
         }
-        if($ownerTries>=3&&$idleSec>=90&&$ownerPid>1&&$ownerPid!==(int)@getmypid()
+        if($ownerRecoveryDue&&$ownerPid>1&&$ownerPid!==(int)@getmypid()
             &&function_exists('s4WorkerPidAlive')&&s4WorkerPidAlive($ownerPid)){
             if(function_exists('posix_kill'))$ownerSignalled=(bool)@posix_kill($ownerPid,defined('SIGTERM')?SIGTERM:15);
             elseif(function_exists('exec')){$ko=[];$krc=1;@exec('kill -TERM '.(int)$ownerPid.' >/dev/null 2>&1',$ko,$krc);$ownerSignalled=$krc===0;}
@@ -99108,6 +99111,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.546', t:'⏱️ بازیابی قفل گیرکرده بدون انتظار برای سه تلاش', items:[
+    'اگر checkpoint صف ۱۸۰ ثانیه کامل ثابت بماند، مالک دقیق همان flock حتی با tries صفر بازنشسته و صف از cursor ذخیره‌شده ادامه داده می‌شود.'
+  ]},
   {v:'10.545', t:'📦 ساخت محصولات قیمت‌دار در غرفه‌های تازه', items:[
     'پرچم in_stock=false که پس از ادغام استخراج کهنه مانده، وقتی همان ردیف قیمت معتبر فعلی دارد دیگر موجودی را صفر نمی‌کند.',
     'محصول واقعاً بدون قیمت همچنان ناموجود می‌ماند و در غرفهٔ تازه ساخته نمی‌شود؛ شمارندهٔ جدید فقط پس از ایجاد موفق باسلام بالا می‌رود.'
