@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.548';
+const APP_VERSION = '10.549';
 
 
 if (!function_exists('str_starts_with')) {
@@ -11872,6 +11872,18 @@ function bslStopRequestedForQueue(string $queueId=''): bool {
        it will select another waiting row and re-check after ownership is set. */
     return $target===''||($queueId!==''&&hash_equals($target,$queueId));
 }
+/* v10.549: a single multi-shop product can legitimately spend more than the
+   stall threshold in lookup, upload and API retries. Emit a throttled in-flight
+   heartbeat without advancing the durable product cursor, so cron does not
+   repeatedly kill/restart the same product. */
+function bslLongOperationHeartbeat(string $stage = ''): void {
+    $cb=$GLOBALS['_bslLongOperationHeartbeat']??null;
+    if(!is_callable($cb))return;
+    $now=time();$last=(int)($GLOBALS['_bslLongOperationHeartbeatAt']??0);
+    if($last>0&&($now-$last)<10)return;
+    $GLOBALS['_bslLongOperationHeartbeatAt']=$now;
+    try{$cb($stage);}catch(Throwable $e){}
+}
 function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false): array {
     $out = [];
     if (!$jobs) return $out;
@@ -11921,7 +11933,9 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
         do {
             $st = curl_multi_exec($mh, $running);
             if ($running) curl_multi_select($mh, 0.5);
+            bslLongOperationHeartbeat('api_multi');
         } while ($running > 0 && $st === CURLM_OK);
+        bslLongOperationHeartbeat('api_multi_done');
         foreach ($hs as $row) {
             $ch = $row['h'];
             $b  = curl_multi_getcontent($ch);
@@ -12212,7 +12226,7 @@ if (!$mp && is_array($d) && in_array(strtoupper(trim($m)), ['POST', 'PATCH', 'PU
     $d = bslSanitizeProductWritePayload($d, $ep);
 }
 $url=bslApiBase().ltrim($ep,'/');
-$traceReturn=function(array $response)use($m,$ep,&$d){if(!empty($GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE'])){$GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'http_actual','at'=>microtime(true),'request'=>['destination'=>'basalam','method'=>$m,'endpoint'=>ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d],'response'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($response):$response];}return $response;};
+$traceReturn=function(array $response)use($m,$ep,&$d){bslLongOperationHeartbeat('api_'.strtolower($m));if(!empty($GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE'])){$GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'http_actual','at'=>microtime(true),'request'=>['destination'=>'basalam','method'=>$m,'endpoint'=>ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d],'response'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($response):$response];}return $response;};
 if($net===null)$net = function_exists('bslNetCfg') ? bslNetCfg() : ['indirect'=>false,'mode'=>'direct','fallback'=>false];
 
 // ترتیب روش‌ها: عادی مستقیم؛ اگر «اتصال غیرمستقیم» روشن باشد، اول روشِ تنظیم‌شده،
@@ -47782,6 +47796,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'@keyframes runtimePulseCentered')!==false
         &&strpos($selfSrc,"pulse.classList.add(cls)")!==false
         &&strpos($selfSrc,"{v:'10." . "548'")!==false&&version_compare(APP_VERSION,'10.548','>='));
+    $add('10.549','عملیات طولانی یک محصول ضربان زنده دارد و دکمهٔ ارسال از وضعیت واقعی صف خوانده می‌شود',
+        strpos($selfSrc,'function bslLongOperationHeartbeat')!==false
+        &&strpos($selfSrc,"'inflight_product'=>")!==false
+        &&strpos($selfSrc,'function bslApplyQueueActionState')!==false
+        &&strpos($selfSrc,"btn.textContent='🚀 + افزودن به صف'")!==false
+        &&strpos($selfSrc,"{v:'10." . "549'")!==false&&version_compare(APP_VERSION,'10.549','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -80803,8 +80823,19 @@ if(bslStopRequestedForQueue()){
     $__parStop=true;break;
 }
 $__parConc=bslSendParallelCount($cn,$total,count($__activeParShops));
-$__parResAll=bslUpsertManyShops($p,$__activeParShops,$__parOpts,$__parConc);
 $__pTitle=trim((string)($p['title']??$p['name']??''));
+/* Keep the saved cursor on the last fully completed product while exposing a
+   fresh heartbeat and the in-flight product number throughout long API work. */
+$GLOBALS['_bslLongOperationHeartbeatAt']=0;
+$GLOBALS['_bslLongOperationHeartbeat']=function(string $__stage='')use(&$sent,&$updated,&$skipped,&$fail,$total,&$__parDone,&$__activeParShops,&$__pTitle){
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,30),null,
+        ['phase'=>'parallel_shops','phase_label'=>'در حال پردازش محصول '.($__parDone+1).' در '.count($__activeParShops).' غرفه',
+         'phase_current'=>$__parDone,'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total)),
+         'inflight_product'=>$__parDone+1,'inflight_stage'=>$__stage]);
+};
+bslLongOperationHeartbeat('product_start');
+try{$__parResAll=bslUpsertManyShops($p,$__activeParShops,$__parOpts,$__parConc);}
+finally{unset($GLOBALS['_bslLongOperationHeartbeat'],$GLOBALS['_bslLongOperationHeartbeatAt']);}
 $__pKey=(string)($p['key']??'');
 $__pRawP=extractSourcePrice($p);
 $__pBasePrice=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));
@@ -99138,6 +99169,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.549', t:'🚀 جلوگیری از گیر تکراری ارسال و نمایش درست افزودن به صف', items:[
+    'در پردازش طولانی یک محصول برای چند غرفه، هنگام جست‌وجو، آپلود و انتظار API ضربان زنده ثبت می‌شود؛ checkpoint جلو نمی‌رود اما watchdog دیگر همان محصول سالم را بارها قطع و از نو آغاز نمی‌کند.',
+    'متن دکمهٔ باسلام در هر polling مستقیماً از صف سرور تعیین می‌شود: هنگام running یا waiting همیشه «افزودن به صف» نمایش داده می‌شود و ارسال تکی پنهان می‌ماند.'
+  ]},
   {v:'10.548', t:'🎨 نمایش رنگی ذخیره روی پالسر بالای صفحه', items:[
     'کل پس‌زمینهٔ باکس پالسر هنگام آماده‌سازی کهربایی، پس از ذخیره سبز و هنگام خطا قرمز می‌شود؛ بنابراین با بسته بودن پنل تنظیمات نیز وضعیت روشن است.',
     'چراغ و حلقهٔ پالسر مستقل از برچسب H/S دقیقاً در مرکز افقی و عمودی باکس قرار گرفتند و در موبایل نیز جابه‌جا نمی‌شوند.'
@@ -115822,12 +115857,32 @@ const vCheck=document.querySelector('h1');if(vCheck&&!vCheck.textContent.include
 })();
 // v7.48: Queue management functions
 let bslQueuePollTimer=null;
+/* v10.549: derive the primary action from the server queue on every poll. The
+   local bSend flag can survive refreshes or race with progress polling and must
+   never make an active server send look like a new direct send. */
+function bslApplyQueueActionState(q){
+    const entries=Array.isArray(q&&q.entries)?q.entries:[];
+    const running=entries.find(e=>e&&e.status==='running');
+    const queued=entries.some(e=>e&&['running','waiting'].includes(e.status));
+    const btn=$('bSB'),legacy=$('bSBlegacy'),stop=$('bST');
+    if(queued){
+        if(btn){btn.textContent='🚀 + افزودن به صف';btn.classList.remove('hidden');btn.dataset.queueActive='1';}
+        if(legacy)legacy.classList.add('hidden');
+        if(stop)stop.classList.toggle('hidden',!running);
+    }else if(btn&&!bslClientRunning){
+        btn.textContent='🚀 ارسال باسلام';delete btn.dataset.queueActive;
+        btn.classList.remove('hidden');
+        if(legacy)legacy.classList.remove('hidden');
+        if(stop)stop.classList.add('hidden');
+    }
+    return running||null;
+}
 function checkBslQueue(){
-    fetch('?bsl_queue_status=1').then(r=>r.json()).then(q=>{
+    fetch('?bsl_queue_status=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(q=>{
         renderBslQueue(q);
+        const running=bslApplyQueueActionState(q);
         // v7.66: NEVER start client-driven sendNextQueueProduct — bsl_backend does the work
         // If a 'running' entry is found and no polling is active, just start polling to display progress
-        const running=q.entries?.find(e=>e.status==='running');
         if(running&&!bSend){
             console.log('[v7.81 checkBslQueue] Found running entry, starting pollBslProgress (server-side mode)');
             window._currentBslQueueId=String(running.id||'');
