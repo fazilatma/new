@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.541';
+const APP_VERSION = '10.542';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47735,6 +47735,10 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"@exec('fuser '.escapeshellarg(\$lockPath)")!==false
         &&strpos($selfSrc,"strpos(\$cmd,'queue_backend')!==false")!==false
         &&strpos($selfSrc,"{v:'10." . "541'")!==false&&version_compare(APP_VERSION,'10.541','>='));
+    $add('10.542','مالک دقیق flock در PHP-FPM حتی بدون آرگومان command line قابل بازنشستگی است',
+        strpos($selfSrc,'Holding this destination-specific flock is itself the ownership')!==false
+        &&strpos($selfSrc,'$ownerPid=$fpId;')!==false
+        &&strpos($selfSrc,"{v:'10." . "542'")!==false&&version_compare(APP_VERSION,'10.542','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65531,7 +65535,13 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             foreach($fo as$fl)foreach((array)preg_split('/\s+/',trim((string)$fl))as$fpRaw){
                 $fpId=(int)preg_replace('/\D/','',(string)$fpRaw);if($fpId<=1||$fpId===(int)@getmypid())continue;
                 $cmd=(string)@file_get_contents('/proc/'.$fpId.'/cmdline');
+                /* PHP-FPM/lsphp often hides script arguments in /proc. Holding
+                   this destination-specific flock is itself the ownership
+                   proof; the stale/three-attempt gates above prevent killing
+                   a normal request. Prefer an explicit queue_backend command,
+                   otherwise retain the first exact flock owner. */
                 if($cmd!==''&&strpos($cmd,basename(__FILE__))!==false&&strpos($cmd,'queue_backend')!==false){$ownerPid=$fpId;break 2;}
+                if($ownerPid<=1||!s4WorkerPidAlive($ownerPid))$ownerPid=$fpId;
             }
         }
         if($ownerTries>=3&&$idleSec>=90&&$ownerPid>1&&$ownerPid!==(int)@getmypid()
@@ -99057,6 +99067,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.542', t:'🧯 آزادسازی مالک دقیق flock در PHP-FPM', items:[
+    'در هاست‌هایی که lsphp/PHP-FPM آرگومان اسکریپت را در proc پنهان می‌کند، مالک دقیق فایل قفل باسلام پس از احراز سکون و سه تلاش بازیابی همچنان قابل توقف امن است.'
+  ]},
   {v:'10.541', t:'🔍 شناسایی مالک واقعی قفل صف باسلام', items:[
     'اگر PID ثبت‌شده فقط launcher بوده و مرده باشد، مالک واقعی همان فایل flock از kernel پیدا می‌شود؛ فقط پردازهٔ scraper4.php queue_backend پذیرفته و متوقف می‌شود.'
   ]},
