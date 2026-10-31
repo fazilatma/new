@@ -397,7 +397,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.559';
+const APP_VERSION = '10.560';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48164,6 +48164,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'batch-updates چندمحصولی')!==false
         &&strpos($selfSrc,"\$payload['max_items']=\$__sendPressure?5")!==false
         &&strpos($selfSrc,"{v:'10." . "559'")!==false&&version_compare(APP_VERSION,'10.559','>='));
+    $add('10.560','بازیافت مالک دقیق صف paused از checkpoint همان queue انجام می‌شود',
+        strpos($selfSrc,"isset(\$_GET['bsl_queue_recycle'])")!==false
+        &&strpos($selfSrc,"'queue_must_be_paused'")!==false
+        &&strpos($selfSrc,"queueStallRecover('bsl',30,false,3000,true,true,false)")!==false
+        &&strpos($selfSrc,"{v:'10." . "560'")!==false&&version_compare(APP_VERSION,'10.560','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79588,6 +79593,25 @@ echo json_encode(['ok'=>$found,'queue_id'=>$queueId],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
+/* v10.560: controlled hot-code recycle. The selected row must already be
+   paused, so its durable cursor is authoritative. Recovery then identifies and
+   retires only the process holding Basalam's exact flock before dispatching the
+   same queue from that cursor; unrelated queues/processes are untouched. */
+if(isset($_GET['bsl_queue_recycle'])){
+header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+$queueId=trim((string)($_GET['queue_id']??''));if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+$q=bslReadQueue();$row=null;foreach((array)($q['entries']??[]) as $qr)if(is_array($qr)&&(string)($qr['id']??'')===$queueId){$row=$qr;break;}
+if(!$row){echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+if((string)($row['status']??'')!=='paused'){echo json_encode(['ok'=>false,'error'=>'queue_must_be_paused','status'=>(string)($row['status']??'')],JSON_UNESCAPED_UNICODE);exit;}
+@file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'time'=>time(),'queue_id'=>$queueId,'by'=>'code_recycle'],JSON_UNESCAPED_UNICODE),LOCK_EX);
+/* Make the pause checkpoint old enough for the existing exact-owner safety
+   gate; the row/status/qid checks above prevent this maintenance action from
+   selecting a healthy unrelated sender. */
+$p=readProgress(BSL_PROGRESS_FILE);if(is_array($p)&&(string)($p['queue_id']??'')===$queueId){$p['last_progress_ts']=min((int)($p['last_progress_ts']??time()),time()-181);writeProgress(BSL_PROGRESS_FILE,$p);}
+$res=queueStallRecover('bsl',30,false,3000,true,true,false);
+echo json_encode(['ok'=>!empty($res['resumed']),'queue_id'=>$queueId,'result'=>$res],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+
 if(isset($_GET['bsl_queue_resume'])){
 header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
 $queueId=trim((string)($_GET['queue_id']??''));
@@ -99657,6 +99681,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.560', t:'♻️ بازیافت امن sender پس از نصب کد', items:[
+    'صف انتخاب‌شده فقط در حالت paused و با queue_id دقیق قابل recycle است؛ cursor و شمارنده‌های checkpoint پیش از هر اقدامی حفظ می‌شوند.',
+    'مالک دقیق flock باسلام با نگهبان‌های موجود شناسایی و فقط همان پردازه بازنشسته می‌شود؛ سپس همان ردیف با کد تازه ادامه می‌یابد و صف دیگری لمس نمی‌شود.'
+  ]},
   {v:'10.559', t:'🚦 ارسال تطبیقی چندغرفه‌ای و استفادهٔ مجدد از تصویر', items:[
     'کنترل AIMD ماندگار برای خواندن، نوشتن و آپلود تصویر اضافه شد: 429 همزمانی همان مسیر را نصف و Retry-After را رعایت می‌کند؛ پس از ۲۴ پاسخ سالم ظرفیت یک پله برمی‌گردد.',
     'شناسهٔ فایل آپلودشده بر اساس vendor و SHA-256 تصویر تا ۹۰ روز نگه‌داری می‌شود؛ resume و retry همان تصویر را دوباره آپلود نمی‌کنند و کش نامعتبر پس از خطای photo پاک می‌شود.',
