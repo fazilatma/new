@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.550';
+const APP_VERSION = '10.551';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47829,6 +47829,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"progText='📦 محصول '")!==false
         &&strpos($selfSrc,"pulse.style.setProperty('background',saveBg,'important')")!==false
         &&strpos($selfSrc,"{v:'10." . "550'")!==false&&version_compare(APP_VERSION,'10.550','>='));
+    $add('10.551','ارسال پایان‌یافتهٔ بدون snapshot از پروفایل و تنظیمات همان ردیف قابل بازسازی است',
+        strpos($selfSrc,"isset(\$_GET['bsl_queue_requeue_profile'])")!==false
+        &&strpos($selfSrc,"\$_GET['bsl_queue_add']=1")!==false
+        &&strpos($selfSrc,"{v:'10." . "551'")!==false&&version_compare(APP_VERSION,'10.551','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78792,6 +78796,28 @@ echo json_encode(['ok'=>true,'saved'=>count($pd),'chunk'=>$chunkIndex,'total_sav
 exit;
 }
 
+/* v10.551: recover a terminal row even when its temporary snapshot was cleaned.
+   Rebuild from the row's saved profile/config, then pass through the canonical
+   queue-add path instead of duplicating queue/worker ownership logic. */
+if(isset($_GET['bsl_queue_requeue_profile'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $__rqId=trim((string)($_GET['queue_id']??''));$__rqRow=null;
+    foreach((array)(bslReadQueue()['entries']??[]) as $__rr){if(is_array($__rr)&&(string)($__rr['id']??'')===$__rqId){$__rqRow=$__rr;break;}}
+    if(!$__rqRow||!in_array((string)($__rqRow['status']??''),['done','failed','cancelled'],true)){
+        echo json_encode(['ok'=>false,'error'=>'ردیف پایان‌یافته یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
+    }
+    $__rqKey=trim((string)($__rqRow['profile_key']??''));
+    if($__rqKey===''){echo json_encode(['ok'=>false,'error'=>'پروفایل ردیف مشخص نیست'],JSON_UNESCAPED_UNICODE);exit;}
+    $__rqCfg=is_array($__rqRow['config']??null)?$__rqRow['config']:[];
+    $_POST=['queue_id'=>'q_'.round(microtime(true)*1000).'_recover','total'=>'0','profile_key'=>$__rqKey,
+      'profile_name'=>(string)($__rqRow['profile_name']??$__rqKey),'from_profile'=>'1','start_immediately'=>'1','force'=>'1',
+      'category_id'=>(string)($__rqCfg['category_id']??0),'auto_category'=>!empty($__rqCfg['auto_category'])?'1':'0',
+      'title_suffix'=>(string)($__rqCfg['title_suffix']??''),'delay_ms'=>(string)($__rqCfg['delay_ms']??500),
+      'retry_delay_ms'=>(string)($__rqCfg['retry_delay_ms']??1000),'shop_send_mode'=>(string)($__rqCfg['shop_send_mode']??'parallel'),
+      'send_all_shops'=>'1','selected_shop_vids'=>json_encode(array_values((array)($__rqCfg['parallel_shop_vids']??[]))),
+      'fallback_cat_ids'=>json_encode(array_values((array)($__rqCfg['fallback_cat_ids']??[])))];
+    unset($_GET['bsl_queue_requeue_profile']);$_GET['bsl_queue_add']=1;
+}
 if(isset($_GET['bsl_queue_add'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_POST['queue_id']??'');
@@ -99205,6 +99231,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.551', t:'♻️ بازسازی امن صف باسلام از پروفایل', items:[
+    'اگر snapshot موقت یک ردیف پایان‌یافته پاک شده باشد، همان پروفایل و تنظیمات غرفه‌های ردیف از منبع ذخیره‌شده بازسازی و از مسیر استاندارد صف دوباره اجرا می‌شود.'
+  ]},
   {v:'10.550', t:'🔎 جزئیات مرحله‌ای محصول و رنگ قطعی ذخیره روی پالسر', items:[
     'هنگام پردازش طولانی، شماره و عنوان محصول، نام عملیات جاری، مرحله از ۹، جزئیات غرفه/تصویر و زمان سپری‌شده به‌صورت زنده نمایش داده می‌شود.',
     'رنگ کهربایی/سبز/قرمز ذخیره با inline important روی کل باکس پالسر اعمال می‌شود تا رنگ runtime، کران، hover یا CSS کش‌شده نتواند آن را بپوشاند.'
