@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.535';
+const APP_VERSION = '10.536';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47664,6 +47664,11 @@ if (isset($_GET['selftest'])) {
     $add('10.535','هر دو متن 422 رسمی باسلام برای محصول تنوع‌دار وارد repair می‌شوند',
         bslIsVariantUpdateMethodError(['code'=>422,'body'=>['message'=>'قادر به تغییر قیمت یا موجودی محصول دارای تنوع به صورت مستقیم نمی باشید']])
         &&strpos($selfSrc,"{v:'10." . "535'")!==false&&version_compare(APP_VERSION,'10.535','>='));
+    $add('10.536','checkpoint محصولات همگام در پنجرهٔ محدود batch می‌شود و نتیجه‌های واقعی فوری می‌مانند',
+        strpos($selfSrc,'$__parFastCheckpointN=max(2,min(12')!==false
+        &&strpos($selfSrc,'$__mustCheckpoint=!$__allParSkipped')!==false
+        &&strpos($selfSrc,'if($__parDeferredCheckpoint>0)bslBackendProgress')!==false
+        &&strpos($selfSrc,"{v:'10." . "536'")!==false&&version_compare(APP_VERSION,'10.536','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -80602,6 +80607,12 @@ foreach($__parallelShops as $__pShInit){
     }
 }
 $__parStop=false;$__parDone=max(0,$bslResumeStart-1);
+/* v10.536: unchanged rows do no network write. Persisting the same large
+   progress/queue JSON after every one of them was the remaining bottleneck.
+   Commit a small bounded window atomically; updates/creates/errors still
+   checkpoint immediately, and stop flushes the last deferred cursor. */
+$__parFastCheckpointN=max(2,min(12,(int)($cn['basalam']['send_parallel_n']??4)));
+$__parDeferredCheckpoint=0;
 $__parStartMsg=$bslResumeStart>0
     ?('⚡ [ارسال موازی به '.count($__parallelShops).' غرفه] ادامه از محصول #'.$bslResumeStart.' — '.$total.' محصول')
     :('⚡ [ارسال موازی به '.count($__parallelShops).' غرفه] شروعِ ارسال همزمان — '.$total.' محصول — فاصله: '.$bslDelayMs.'ms');
@@ -80622,13 +80633,19 @@ if(empty($__activeParShops)){
     bslFinishDisabledShopRow((string)$bslQueueId,(int)($__parallelShops[0]['vendor_id']??0),'همهٔ غرفه‌های ارسال موازی',$__parDone,$total,$sent,$updated,$skipped,$fail);
 }
 clearstatcache(true,BSL_STOP_FILE);
-if(bslStopRequestedForQueue()){$__parStop=true;break;}
+if(bslStopRequestedForQueue()){
+    if($__parDeferredCheckpoint>0)bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,'',null,
+        ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__activeParShops).' غرفه','phase_current'=>$__parDone,
+         'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+    $__parStop=true;break;
+}
 $__parConc=bslSendParallelCount($cn,$total,count($__activeParShops));
 $__parResAll=bslUpsertManyShops($p,$__activeParShops,$__parOpts,$__parConc);
 $__pTitle=trim((string)($p['title']??$p['name']??''));
 $__pKey=(string)($p['key']??'');
 $__pRawP=extractSourcePrice($p);
 $__pBasePrice=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));
+$__allParSkipped=true;
 foreach($__activeParShops as $__pShOne){
     $__pVid=(int)($__pShOne['vendor_id']??0);
     if(!isset($__parResAll[$__pVid]))continue;
@@ -80642,12 +80659,14 @@ foreach($__activeParShops as $__pShOne){
         'link'=>$p['link']??'','vendor_id'=>$__pVid,'shop_name'=>$__pShopName];
     if(!empty($__pRes['ok'])){
         if(($__pRes['action']??'')==='created'){
+            $__allParSkipped=false;
             $sent++;bslShopStatBump($__pVid,$__pShopName,'c');
             $bslSentList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'remote_id'=>(int)($__pRes['id']??0)],$__pCard);
         }elseif(!empty($__pRes['skipped'])){
             $skipped++;bslShopStatBump($__pVid,$__pShopName,'s');
             $bslSkippedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'reason'=>'بدون تغییر','remote_id'=>(int)($__pRes['id']??0)],$__pCard);
         }else{
+            $__allParSkipped=false;
             $updated++;bslShopStatBump($__pVid,$__pShopName,'u');
             $bslUpdatedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'remote_id'=>(int)($__pRes['id']??0),
                 'changes'=>(string)($__pRes['update_reason']??'آپدیت موازی غرفه‌ها'),
@@ -80656,6 +80675,7 @@ foreach($__activeParShops as $__pShOne){
                 'action'=>(string)($__pRes['action']??'parallel_shops')],$__pCard);
         }
     }else{
+        $__allParSkipped=false;
         if(!empty($__pRes['stopped'])||($__pRes['error']??'')==='stopped'){$__parStop=true;break;}
         $fail++;bslShopStatBump($__pVid,$__pShopName,'f');
         $bslFailedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,
@@ -80670,10 +80690,15 @@ foreach($__activeParShops as $__pShOne){
 }
 if($__parStop)break;
 $__parDone=$__pi+1;
-bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,30),
-    '⚡ [موازی '.count($__activeParShops).' غرفه] '.$__parDone.'/'.$total.' محصول — '.$sent.'✅ '.$updated.'⚡ '.$skipped.'⏭ '.$fail.'❌',
-    ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__activeParShops).' غرفه','phase_current'=>$__parDone,
-     'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+if($__allParSkipped){$__parDeferredCheckpoint++;}else{$__parDeferredCheckpoint=0;}
+$__mustCheckpoint=!$__allParSkipped||$__parDeferredCheckpoint>=$__parFastCheckpointN||$__parDone>=$total;
+if($__mustCheckpoint){
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,30),
+        '⚡ [موازی '.count($__activeParShops).' غرفه] '.$__parDone.'/'.$total.' محصول — '.$sent.'✅ '.$updated.'⚡ '.$skipped.'⏭ '.$fail.'❌',
+        ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__activeParShops).' غرفه','phase_current'=>$__parDone,
+         'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+    $__parDeferredCheckpoint=0;
+}
 /* درخواست‌های سه غرفه خودشان rate pacing شبکه را دارند؛ فاصلهٔ 100ms صف
    موازی فقط زمان مرده بود. مقادیر بالاتر از 100ms همچنان محترم می‌مانند. */
 usleep(max(0,$bslDelayMs-100)*1000);
@@ -98939,6 +98964,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.536', t:'⚡ checkpoint گروهی تطبیقی برای محصولات همگام', items:[
+    'محصولاتی که در هر سه غرفه واقعاً بدون تغییرند در پنجرهٔ محدود ۲ تا ۱۲تایی checkpoint می‌شوند و بازنویسی JSON سنگین پس از تک‌تک آن‌ها حذف شد.',
+    'ایجاد، آپدیت و خطا همچنان همان لحظه checkpoint می‌شوند؛ توقف نیز cursor معوق را پیش از خروج flush می‌کند، بنابراین پایداری حفظ می‌شود.',
+    'اندازهٔ پنجره از parallel تنظیم‌شده گرفته می‌شود و منطق pacing/کاهش فشار موجود روی پاسخ‌های محدودیت API همچنان فعال است.'
+  ]},
   {v:'10.535', t:'🧩 پوشش متن دوم خطای تنوع باسلام', items:[
     'متن 422 «قادر به تغییر قیمت یا موجودی محصول دارای تنوع…» نیز مانند متن قبلی شناسایی و به repair با ID واقعی تنوع‌های مقصد هدایت می‌شود.',
     'این خطا دیگر برای محصولات بعدی با همین شکل پاسخ تکرار نمی‌شود.'
