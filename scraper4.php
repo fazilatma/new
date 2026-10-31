@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.533';
+const APP_VERSION = '10.534';
 
 
 if (!function_exists('str_starts_with')) {
@@ -13906,6 +13906,49 @@ function bslBuildVariantsPayload(array $p, int $defaultPriceRial = 0, int $defau
         $variants[] = $vItem;
     }
     return $variants;
+}
+
+function bslIsVariantUpdateMethodError(array $r): bool {
+    if (!in_array((int)($r['code']??0),[400,422],true)) return false;
+    $txt=mb_strtolower(bslErrText($r),'UTF-8');
+    $raw=json_encode($r['body']??[],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    return mb_strpos($txt,'محصولات دارای تنوع')!==false
+        || mb_strpos($txt,'ویرایش قیمت و موجودی')!==false
+        || (strpos((string)$raw,'variants')!==false&&strpos((string)$raw,'id')!==false&&strpos((string)$raw,'Field required')!==false);
+}
+function bslRemoteVariantRows(array $row): array {
+    $candidates=[
+        $row['variants']??null,$row['product_variants']??null,$row['variations']??null,
+        $row['revision']['data']['variants']??null,$row['data']['variants']??null,
+    ];
+    foreach($candidates as $rows){
+        if(!is_array($rows)||!$rows)continue;$out=[];
+        foreach($rows as $vr){
+            if(!is_array($vr))continue;$id=(int)($vr['id']??$vr['variant_id']??$vr['vendor_product_variant_id']??0);
+            if($id>0)$out[]=['id'=>$id];
+        }
+        if($out)return $out;
+    }
+    return [];
+}
+/** v10.534: Basalam requires destination variant IDs for price/stock updates. */
+function bslRepairExistingVariantUpdate(string $tk,int $vid,int $pid,array $basePayload,array $sourceVariants=[]): array {
+    $row=bslGetProductRow($tk,$vid,$pid,2);
+    $remote=is_array($row)?bslRemoteVariantRows($row):[];
+    if(!$remote)return ['ok'=>false,'code'=>422,'error'=>'destination_variant_ids_not_found'];
+    $fallbackPrice=max(10000,(int)($basePayload['primary_price']??0));
+    $fallbackStock=max(0,(int)($basePayload['stock']??0));
+    $variants=[];
+    foreach($remote as $i=>$rv){
+        $src=is_array($sourceVariants[$i]??null)?$sourceVariants[$i]:[];
+        $variants[]=['id'=>(int)$rv['id'],
+            'primary_price'=>max(10000,(int)($src['primary_price']??$fallbackPrice)),
+            'stock'=>max(0,(int)($src['stock']??$fallbackStock))];
+    }
+    $batch=$basePayload;unset($batch['variants']);$batch['id']=$pid;$batch['variants']=$variants;
+    $r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batch]]);
+    if(!empty($r['ok'])){if(!is_array($r['body']??null))$r['body']=[];$r['body']['id']=$pid;$r['variant_ids_repaired']=count($variants);}
+    return $r;
 }
 
 function bslReqWithVariantsFallback(string $tk, string $method, string $ep, array &$payload): array {
@@ -32486,12 +32529,20 @@ const BSL_REVERIFY_SEC = 604800;   // ۷ روز
  * و از آخرین تأیید هم خیلی نگذشته باشد.
  */
 function bslSkipUnchanged(string $mapKey, int $exId, int $priceRial, int $stock,
-                          ?array $ledgerRow = null, int $wantWeightG = 0, bool $force = false): bool {
+                          ?array $ledgerRow = null, int $wantWeightG = 0, bool $force = false,
+                          string $expectedTitle = ''): bool {
     if ($mapKey === '' || $exId <= 0) return false;
     if ($force || (defined('BSL_FORCE_SYNC') && BSL_FORCE_SYNC)) return false;
     if ($ledgerRow === null) $ledgerRow = (remoteMapLoad()['bsl'][$mapKey] ?? null);
     if (!is_array($ledgerRow)) return false;
     if ((int)($ledgerRow['id'] ?? 0) !== $exId) return false;
+    /* v10.534: An ID being active in the vendor is not enough if a damaged or
+       collided source key points at another product. Require the title stored
+       with that exact vendor-scoped ledger row to match the current payload. */
+    if ($expectedTitle !== '') {
+        $ledgerTitle=trim((string)($ledgerRow['title']??''));
+        if ($ledgerTitle==='' || reconNormTitle($ledgerTitle)!==reconNormTitle($expectedTitle)) return false;
+    }
     /* نبودِ قیمت در دفترچه یعنی ردیفِ قدیمیِ پیش از v10.33 — دربارهٔ آن
        چیزی نمی‌دانیم، پس محافظه‌کارانه آپدیت می‌کنیم تا ردیف تازه شود. */
     if (!isset($ledgerRow['price_rial'])) return false;
@@ -32525,7 +32576,16 @@ function bslShopsFindExistingMulti(string $title, string $productKey, array $sho
         $vid = (int)($sh['vendor_id'] ?? 0);
         if ($vid <= 0 || trim((string)($sh['token'] ?? '')) === '') continue;
         $mk = bslShopMapKey($productKey, $sh);
-        $known = $mk !== '' ? (int)($map[$mk]['id'] ?? 0) : 0;
+        $knownRow=$mk!==''&&is_array($map[$mk]??null)?$map[$mk]:null;
+        $known = is_array($knownRow) ? (int)($knownRow['id'] ?? 0) : 0;
+        /* v10.534: never let an active but wrongly mapped product suppress a
+           creation. A vendor-scoped ID is trusted only when its stored title
+           belongs to this exact source product; otherwise perform the real
+           vendor title lookup below. */
+        if($known>0){
+            $knownTitle=trim((string)($knownRow['title']??''));
+            if($knownTitle===''||reconNormTitle($knownTitle)!==reconNormTitle($title))$known=0;
+        }
         if ($known > 0) {
             /* An active-only matrix hit confirms presence. A miss stays unknown,
                so it never invalidates a mapped ID across all product statuses. */
@@ -32772,7 +32832,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
                ledger's exact ID/payload checks and seven-day reverify remain. */
             if (bslSkipUnchanged($__mk, (int)$exId, (int)$prices[$vid], $stock,
                                  $__bslMap[$__mk] ?? null, $_wantWG,
-                                 !empty($opts['force_all']))) {
+                                 !empty($opts['force_all']), $title)) {
                 bslSkipCount(1);
                 $out[(int)$vid] = ['ok' => true, 'id' => (int)$exId,
                                    'action' => 'unchanged', 'skipped' => true];
@@ -33035,7 +33095,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     if ($exId > 0) {
         /* v10.33 (۴۶): اگر قیمت و موجودی همانی است که خودمان آخرین بار
            فرستادیم، این PATCH هیچ کاری نمی‌کند جز مصرفِ یک درخواست. */
-        if (bslSkipUnchanged($__mk, $exId, $priceRial, $stock, null, 0, !empty($opts['force_all']))) {
+        if (bslSkipUnchanged($__mk, $exId, $priceRial, $stock, null, 0, !empty($opts['force_all']), $title)) {
             $_oldSingleLedgerRow = $__mk !== '' ? (remoteMapLoad()['bsl'][$__mk] ?? null) : null;
             if ($_wantShopWG <= 0 || (is_array($_oldSingleLedgerRow) && (int)($_oldSingleLedgerRow['weight_g'] ?? 0) === $_wantShopWG)) {
                 bslSkipCount(1);
@@ -33059,6 +33119,9 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
             $rb=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batchRow]]);
             if(!empty($rb['ok'])){if(!is_array($rb['body']??null))$rb['body']=[];$rb['body']['id']=$exId;}
             $r=$rb;
+        }
+        if(empty($r['ok'])&&bslIsVariantUpdateMethodError($r)){
+            $r=bslRepairExistingVariantUpdate($tk,$vid,$exId,$bu,$_bslShopVarsUpd);
         }
         if (!empty($r['ok']) && !empty($r['body']['id'])) {
             bslShopMapRecord($p, $shop, $exId, $title, $priceRial, $stock);   // v10.20 (۳۳الف) · v10.33 (۴۶)
@@ -47588,6 +47651,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"{v:'10." . "532'")!==false&&version_compare(APP_VERSION,'10.532','>='));
     $add('10.533','آزمون checkpoint بدون needle خودارجاع اجرا می‌شود',
         strpos($selfSrc,"{v:'10." . "533'")!==false&&version_compare(APP_VERSION,'10.533','>='));
+    $__skip534=bslSkipUnchanged('k#v735703',55,100000,10,
+        ['id'=>55,'title'=>'محصول دیگر','price_rial'=>100000,'stock'=>10,'at'=>time(),'plain_desc_v1'=>1],0,false,'محصول اصلی');
+    $__vars534=bslRemoteVariantRows(['variants'=>[['id'=>91],['variant_id'=>92]]]);
+    $add('10.534','skip فقط با عنوان دقیق همان vendor مجاز است و variant ID مقصد استخراج می‌شود',
+        $__skip534===false
+        &&array_column($__vars534,'id')===[91,92]
+        &&strpos($selfSrc,'destination_variant_ids_not_found')!==false
+        &&strpos($selfSrc,'bslRepairExistingVariantUpdate($tk,$vid,$exId,$bu,$_bslShopVarsUpd)')!==false
+        &&strpos($selfSrc,"{v:'10." . "534'")!==false&&version_compare(APP_VERSION,'10.534','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98863,6 +98935,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.534', t:'🎯 جلوگیری از skip اشتباه و ترمیم آپدیت تنوع‌ها', items:[
+    'وجود یک ID فعال در غرفه دیگر برای «بدون تغییر» کافی نیست؛ عنوان ثبت‌شده در ledger همان vendor نیز باید دقیقاً با محصول فعلی یکسان باشد، وگرنه جست‌وجوی واقعی عنوان انجام می‌شود و محصول واقعاً ناموجود ساخته خواهد شد.',
+    'خطای 422 محصولات دارای تنوع با دریافت ID واقعی تنوع‌های مقصد و ارسال batch-updates معتبر ترمیم می‌شود؛ variant بدون ID دیگر تکرار نمی‌شود.',
+    'شمارندهٔ جدید فقط پس از پاسخ ایجاد موفق باسلام افزایش می‌یابد و محصولات موجود به‌اشتباه جدید شمرده نمی‌شوند.'
+  ]},
   {v:'10.533', t:'✅ اصلاح آزمون ترمیم checkpoint', items:[
     'بررسی ایستای v10.532 از needle خودارجاع پاک شد تا خود متن آزمون باعث شکست کاذب همان آزمون نشود.',
     'منطق اجرایی checkpoint تغییری نکرده و checkpoint تولیدی روی production با موفقیت ثبت و ادامه داده شد.'
