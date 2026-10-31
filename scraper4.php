@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.553';
+const APP_VERSION = '10.554';
 
 
 if (!function_exists('str_starts_with')) {
@@ -11782,6 +11782,12 @@ function bslCurlOpts(string $url, string $tk, string $m, $d, bool $mp, array $ne
         CURLOPT_SSL_VERIFYPEER => 0, CURLOPT_SSL_VERIFYHOST => 0,
         CURLOPT_HTTPHEADER => $h, CURLOPT_CUSTOMREQUEST => $m,
     ];
+    $__deadline=(float)($GLOBALS['_bslProductDeadlineAt']??0);
+    if($__deadline>0){
+        $__remain=max(1,(int)ceil($__deadline-microtime(true)));
+        $opt[CURLOPT_TIMEOUT]=min(30,$__remain);
+        $opt[CURLOPT_CONNECTTIMEOUT]=min(10,$__remain);
+    }
     if ($d !== null) $opt[CURLOPT_POSTFIELDS] = $mp ? $d : json_encode($d, JSON_UNESCAPED_UNICODE);
 
     if ($mode === 'worker' && trim((string)($net['worker_url'] ?? '')) !== '') {
@@ -11872,6 +11878,28 @@ function bslStopRequestedForQueue(string $queueId=''): bool {
        it will select another waiting row and re-check after ownership is set. */
     return $target===''||($queueId!==''&&hash_equals($target,$queueId));
 }
+/* v10.554: bounded per-product wall clock. Network helpers consult this shared
+   deadline; timeout is a product result, never a queue stop signal. */
+function bslProductDeadlineStart(int $seconds): void {
+    $seconds=max(30,min(1800,$seconds));
+    $GLOBALS['_bslProductDeadlineAt']=microtime(true)+$seconds;
+    $GLOBALS['_bslProductTimeoutSec']=$seconds;
+    $GLOBALS['_bslProductTimedOut']=false;
+}
+function bslProductDeadlineClear(): void {
+    unset($GLOBALS['_bslProductDeadlineAt'],$GLOBALS['_bslProductTimeoutSec'],$GLOBALS['_bslProductTimedOut']);
+}
+function bslProductDeadlineExceeded(): bool {
+    $at=(float)($GLOBALS['_bslProductDeadlineAt']??0);
+    $hit=$at>0&&microtime(true)>=$at;
+    if($hit)$GLOBALS['_bslProductTimedOut']=true;
+    return $hit;
+}
+function bslProductTimeoutResult(): array {
+    $sec=(int)($GLOBALS['_bslProductTimeoutSec']??180);
+    return ['ok'=>false,'code'=>0,'error'=>'مهلت پردازش محصول پس از '.$sec.' ثانیه تمام شد','body'=>null,'raw'=>'',
+      'reason_kind'=>'product_timeout','error_step'=>'product_timeout','product_timeout'=>true,'timeout_sec'=>$sec];
+}
 /* v10.549: a single multi-shop product can legitimately spend more than the
    stall threshold in lookup, upload and API retries. Emit a throttled in-flight
    heartbeat without advancing the durable product cursor, so cron does not
@@ -11897,6 +11925,7 @@ function bslLongOperationStage(string $stage,int $step,int $total,string $detail
 function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false): array {
     $out = [];
     if (!$jobs) return $out;
+    if(bslProductDeadlineExceeded()){foreach($jobs as $k=>$_j)$out[$k]=array_merge(bslProductTimeoutResult(),['mode'=>'multi']);return $out;}
     $concurrency = max(1, min(8, $concurrency));
     if (!function_exists('curl_multi_init')) {
         foreach ($jobs as $k => $j) {
@@ -11939,11 +11968,12 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
             curl_multi_add_handle($mh, $ch);
             $hs[] = ['h' => $ch, 'k' => $kk];
         }
-        $running = null;
+        $running = null;$__deadlineHit=false;
         do {
             $st = curl_multi_exec($mh, $running);
             if ($running) curl_multi_select($mh, 0.5);
             bslLongOperationHeartbeat('api_multi');
+            if(bslProductDeadlineExceeded()){$__deadlineHit=true;break;}
         } while ($running > 0 && $st === CURLM_OK);
         bslLongOperationHeartbeat('api_multi_done');
         foreach ($hs as $row) {
@@ -11951,8 +11981,10 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
             $b  = curl_multi_getcontent($ch);
             $e  = curl_error($ch);
             $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-            $out[$row['k']] = ['ok' => $code >= 200 && $code < 300, 'code' => $code, 'error' => $e,
-                               'body' => @json_decode((string)$b, true), 'raw' => $b, 'mode' => 'multi'];
+            $out[$row['k']] = $__deadlineHit
+                ? array_merge(bslProductTimeoutResult(),['mode'=>'multi'])
+                : ['ok' => $code >= 200 && $code < 300, 'code' => $code, 'error' => $e,
+                   'body' => @json_decode((string)$b, true), 'raw' => $b, 'mode' => 'multi'];
             curl_multi_remove_handle($mh, $ch);
             curl_close($ch);
         }
@@ -12231,6 +12263,7 @@ function bslRepairValidationPayload(array $r,array $payload):array{
 }
 
 function bslReq(string $tk, string $m, string $ep, $d=null, bool $mp=false, ?array $net=null, bool $skipStop=false, int $maxAttempts=3): array {
+if(bslProductDeadlineExceeded())return bslProductTimeoutResult();
 if (!$mp && is_array($d) && in_array(strtoupper(trim($m)), ['POST', 'PATCH', 'PUT'], true)
     && function_exists('bslSanitizeProductWritePayload')) {
     $d = bslSanitizeProductWritePayload($d, $ep);
@@ -12277,6 +12310,7 @@ if(!$skipStop&&bslStopRequestedForQueue()){
 return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 }
 $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
+if(bslProductDeadlineExceeded())return $traceReturn(bslProductTimeoutResult());
 /* v10.459: اگر خطای ۴۲۲/۴۰۰ مربوط به preparation_days (مدت زمان آماده‌سازی) باشد،
    هر بار ۱ روز کم می‌کنیم و دوباره می‌فرستیم تا تایید شود (تا سقف ۰ روز). */
 if(empty($r['ok'])&&!$mp&&is_array($d)&&stripos($ep,'product')!==false&&bslIsPreparationDaysError($r)){
@@ -27260,7 +27294,7 @@ if (isset($_POST['basalam'])) {
     $_shopSendMode = in_array(($b['shop_send_mode'] ?? ''), ['serial', 'parallel'], true)
         ? (string)$b['shop_send_mode']
         : (in_array(($_prevBslCfg['shop_send_mode'] ?? ''), ['serial', 'parallel'], true) ? (string)$_prevBslCfg['shop_send_mode'] : 'serial');
-    $conn['basalam'] = ['enabled'=>!empty($b['enabled']),'token'=>trim($b['token']??''),'vendor_id'=>(int)($b['vendor_id']??0),'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>(int)($b['weight']??500),'package_weight'=>(int)($b['package_weight']??0),'stock'=>(int)($b['stock']??10),'net_indirect'=>!empty($b['net_indirect']),'category_id'=>(int)($b['category_id']??0),'auto_category'=>!empty($b['auto_category']),'send_all_shops'=>!empty($b['send_all_shops']),'send_shop_ids'=>$_newSendShopIds,'send_shop_ids_at'=>$_sendShopIdsAt,'shop_send_mode'=>$_shopSendMode,'delay_ms'=>max(0,(int)($b['delay_ms']??500)),'retry_delay_ms'=>max(0,(int)($b['retry_delay_ms']??1000)),'send_parallel_n'=>max(1,min(8,(int)($b['send_parallel_n']??4))),'send_parallel_auto'=>!array_key_exists('send_parallel_auto',$b)||!empty($b['send_parallel_auto']),'fallback_cat_ids'=>$fallbackCats,'vendors'=>$vendors,'price_mode'=>in_array(($b['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$b['price_mode']:'none','price_val'=>(float)($b['price_val']??0),'price_round'=>max(0,(int)($b['price_round']??0))];
+    $conn['basalam'] = ['enabled'=>!empty($b['enabled']),'token'=>trim($b['token']??''),'vendor_id'=>(int)($b['vendor_id']??0),'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>(int)($b['weight']??500),'package_weight'=>(int)($b['package_weight']??0),'stock'=>(int)($b['stock']??10),'net_indirect'=>!empty($b['net_indirect']),'category_id'=>(int)($b['category_id']??0),'auto_category'=>!empty($b['auto_category']),'send_all_shops'=>!empty($b['send_all_shops']),'send_shop_ids'=>$_newSendShopIds,'send_shop_ids_at'=>$_sendShopIdsAt,'shop_send_mode'=>$_shopSendMode,'delay_ms'=>max(0,(int)($b['delay_ms']??500)),'retry_delay_ms'=>max(0,(int)($b['retry_delay_ms']??1000)),'product_timeout_sec'=>max(30,min(1800,(int)($b['product_timeout_sec']??180))),'send_parallel_n'=>max(1,min(8,(int)($b['send_parallel_n']??4))),'send_parallel_auto'=>!array_key_exists('send_parallel_auto',$b)||!empty($b['send_parallel_auto']),'fallback_cat_ids'=>$fallbackCats,'vendors'=>$vendors,'price_mode'=>in_array(($b['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$b['price_mode']:'none','price_val'=>(float)($b['price_val']??0),'price_round'=>max(0,(int)($b['price_round']??0))];
 }
 
 
@@ -33101,6 +33135,11 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             }
         }
         if ($rows) remoteMapRecord('bsl', $rows);
+    }
+    if(!empty($GLOBALS['_bslProductTimedOut'])){
+        return ['__product_timeout'=>array_merge(bslProductTimeoutResult(),[
+            'elapsed_sec'=>max(0,(int)($GLOBALS['_bslProductTimeoutSec']??180)),
+            'partial_shop_results'=>count($out)])];
     }
     return $out;
 }
@@ -47843,6 +47882,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function bslQueueRateMetric')!==false
         &&strpos($selfSrc,"'s4_bsl_rate_'")!==false
         &&strpos($selfSrc,"{v:'10." . "553'")!==false&&version_compare(APP_VERSION,'10.553','>='));
+    $add('10.554','سقف قابل تنظیم برای زمان هر محصول، محصول زمان‌بر را رد و صف را ادامه می‌دهد',
+        strpos($selfSrc,'id="bsProductTimeout"')!==false
+        &&strpos($selfSrc,'function bslProductDeadlineExceeded')!==false
+        &&strpos($selfSrc,"'__product_timeout'")!==false
+        &&strpos($selfSrc,"{v:'10." . "554'")!==false&&version_compare(APP_VERSION,'10.554','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78823,7 +78867,7 @@ if(isset($_GET['bsl_queue_requeue_profile'])){
       'profile_name'=>(string)($__rqRow['profile_name']??$__rqKey),'from_profile'=>'1','start_immediately'=>'1','force'=>'1',
       'category_id'=>(string)($__rqCfg['category_id']??0),'auto_category'=>!empty($__rqCfg['auto_category'])?'1':'0',
       'title_suffix'=>(string)($__rqCfg['title_suffix']??''),'delay_ms'=>(string)($__rqCfg['delay_ms']??500),
-      'retry_delay_ms'=>(string)($__rqCfg['retry_delay_ms']??1000),'shop_send_mode'=>(string)($__rqCfg['shop_send_mode']??'parallel'),
+      'retry_delay_ms'=>(string)($__rqCfg['retry_delay_ms']??1000),'product_timeout_sec'=>(string)($__rqCfg['product_timeout_sec']??180),'shop_send_mode'=>(string)($__rqCfg['shop_send_mode']??'parallel'),
       'send_all_shops'=>'1','selected_shop_vids'=>json_encode(array_values((array)($__rqCfg['parallel_shop_vids']??[]))),
       'fallback_cat_ids'=>json_encode(array_values((array)($__rqCfg['fallback_cat_ids']??[])))];
     unset($_GET['bsl_queue_requeue_profile']);$_GET['bsl_queue_add']=1;
@@ -78838,6 +78882,7 @@ $titleSuffix=trim($_POST['title_suffix']??'');
 $cn=loadConnections();
 $delayMs=max(0,(int)($_POST['delay_ms']??500));
 $retryDelayMs=max(0,(int)($_POST['retry_delay_ms']??1000));
+$productTimeoutSec=max(30,min(1800,(int)($_POST['product_timeout_sec']??($cn['basalam']['product_timeout_sec']??180))));
 $parallelN=max(1,min(8,(int)($_POST['send_parallel_n']??($cn['basalam']['send_parallel_n']??4))));
 $parallelAuto=isset($_POST['send_parallel_auto'])
     ? ($_POST['send_parallel_auto']!=='0')
@@ -78998,13 +79043,13 @@ $fanStatus=$startImm?'running':'waiting';
 if(count($fanoutShops)>1&&$_reqShopSendMode==='parallel'){
 $__parVids=array_values(array_map(static fn($__x)=>(int)$__x['vendor_id'],$fanoutShops));
 $__parNames=array_values(array_map(static fn($__x)=>(string)$__x['shop_name'],$fanoutShops));
-$queue['entries'][]=['id'=>$queueId,'status'=>$fanStatus,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'shop_name'=>'⚡ موازی ('.count($fanoutShops).' غرفه)','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>0,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'parallel_shop_names'=>$__parNames]];
+$queue['entries'][]=['id'=>$queueId,'status'=>$fanStatus,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'shop_name'=>'⚡ موازی ('.count($fanoutShops).' غرفه)','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>0,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'parallel_shop_names'=>$__parNames]];
 }else{
 $fanFirst=true;
 foreach($fanoutShops as $__fs){
 $__fsVid=(int)$__fs['vendor_id'];
 $__fsId=$fanFirst?$queueId:$queueId.'_s'.$__fsVid;
-$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'shop_send_mode'=>'serial','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
+$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'shop_send_mode'=>'serial','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
 $fanFirst=false;
 }
 }
@@ -79013,7 +79058,7 @@ $_bslFanPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAnd
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shop_send_mode'=>$_reqShopSendMode,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
-$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
+$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
 $queue['entries'][]=$entry;
 bslWriteQueue($queue);
 $_bslAddPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
@@ -79917,6 +79962,7 @@ if(isset($qCfg['auto_category'])) $cn['basalam']['auto_category']=!empty($qCfg['
 if(isset($qCfg['title_suffix']))  $cn['basalam']['title_suffix']=(string)$qCfg['title_suffix'];
 if(isset($qCfg['delay_ms']))      $cn['basalam']['delay_ms']=(int)$qCfg['delay_ms'];
 if(isset($qCfg['retry_delay_ms']))$cn['basalam']['retry_delay_ms']=(int)$qCfg['retry_delay_ms'];
+if(isset($qCfg['product_timeout_sec']))$cn['basalam']['product_timeout_sec']=max(30,min(1800,(int)$qCfg['product_timeout_sec']));
 if(isset($qCfg['send_parallel_n']))$cn['basalam']['send_parallel_n']=max(1,min(8,(int)$qCfg['send_parallel_n']));
 if(array_key_exists('send_parallel_auto',$qCfg))$cn['basalam']['send_parallel_auto']=!empty($qCfg['send_parallel_auto']);
 if(!empty($qCfg['fallback_cat_ids'])&&is_array($qCfg['fallback_cat_ids'])){
@@ -80889,6 +80935,8 @@ $__parConc=bslSendParallelCount($cn,$total,count($__activeParShops));
 $__pTitle=trim((string)($p['title']??$p['name']??''));
 /* Keep the saved cursor on the last fully completed product while exposing a
    fresh heartbeat and the in-flight product number throughout long API work. */
+$__productTimeoutSec=max(30,min(1800,(int)($__liveParCn['basalam']['product_timeout_sec']??$cn['basalam']['product_timeout_sec']??180)));
+bslProductDeadlineStart($__productTimeoutSec);
 $GLOBALS['_bslLongOperationHeartbeatAt']=0;$GLOBALS['_bslLongOperationHeartbeatStage']='';
 $__inflightStarted=time();
 $GLOBALS['_bslLongOperationHeartbeat']=function(string $__stage='')use(&$sent,&$updated,&$skipped,&$fail,$total,&$__parDone,&$__activeParShops,&$__pTitle,$__inflightStarted){
@@ -80911,6 +80959,18 @@ finally{unset($GLOBALS['_bslLongOperationHeartbeat'],$GLOBALS['_bslLongOperation
 $__pKey=(string)($p['key']??'');
 $__pRawP=extractSourcePrice($p);
 $__pBasePrice=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));
+if(isset($__parResAll['__product_timeout'])){
+    $__to=$__parResAll['__product_timeout'];$fail++;$__parDone=$__pi+1;
+    $bslFailedList[]=['title'=>$__pTitle,'key'=>$__pKey,
+      'error'=>'⏳ محصول پس از '.(int)($__to['timeout_sec']??$__productTimeoutSec).' ثانیه رد شد؛ ارسال با محصول بعدی ادامه یافت',
+      'error_code'=>0,'error_step'=>'product_timeout','reason_kind'=>'product_timeout','timeout_sec'=>(int)($__to['timeout_sec']??$__productTimeoutSec)];
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,60),
+      '⏳ ['.$__parDone.'/'.$total.'] سقف زمان محصول تمام شد — رد شد و ادامه از محصول بعدی',
+      ['phase'=>'parallel_shops','phase_label'=>'محصول زمان‌بر رد شد؛ ادامهٔ صف','phase_current'=>$__parDone,
+       'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total)),'last_product_timeout'=>true,
+       'product_timeout_sec'=>(int)($__to['timeout_sec']??$__productTimeoutSec)]);
+    continue;
+}
 $__allParSkipped=true;
 foreach($__activeParShops as $__pShOne){
     $__pVid=(int)($__pShOne['vendor_id']??0);
@@ -80969,6 +81029,7 @@ if($__mustCheckpoint){
    موازی فقط زمان مرده بود. مقادیر بالاتر از 100ms همچنان محترم می‌مانند. */
 usleep(max(0,$bslDelayMs-100)*1000);
 }
+bslProductDeadlineClear();
 if($__parStop){
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,'',['⏹ ارسال موازی غرفه‌ها با سیگنال توقف متوقف شد'],
     ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__parallelShops).' غرفه','phase_current'=>$__parDone,
@@ -81322,8 +81383,9 @@ exit;
 
 if (isset($_GET['bsl_send_one'])) {
 header('Content-Type: application/json; charset=UTF-8');
-set_time_limit(30);
 $cn=loadConnections();$bs=$cn['basalam']??[];
+$__oneTimeout=max(30,min(1800,(int)($_POST['product_timeout_sec']??($bs['product_timeout_sec']??180))));
+@set_time_limit($__oneTimeout+15);
 if(empty($bs['token'])||empty($bs['vendor_id'])){echo json_encode(['ok'=>false,'error'=>'تنظیمات باسلام ناقص'],JSON_UNESCAPED_UNICODE);exit;}
 
 $queueCatId=(int)($_POST['queue_category_id']??-1);
@@ -81356,6 +81418,7 @@ $mode=$_POST['mode']??'send';
 $pTitle=trim($p['title']??$p['name']??'');
 $pKey=$p['key']??'';
 $n=$productIndex+1;
+bslProductDeadlineStart($__oneTimeout);
 
 $GLOBALS['_currentProductLink']=$p['link']??'';
 $pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
@@ -81733,6 +81796,7 @@ if($i<$startIndex){continue;}
 $pTitle=trim($p['title']??$p['name']??'');
 $pKey=$p['key']??'';
 $n=$i+1;
+bslProductDeadlineStart(max(30,min(1800,(int)($bs['product_timeout_sec']??180))));
 
 if($pTitle===''){$fail++;$bslFailedList[]=['title'=>'','key'=>$pKey,'error'=>'عنوان خالی'];bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,'',"[{$n}] ❌ عنوان خالی - محصول رد شد");continue;}
 $titleWords=preg_split('/\s+/u',$pTitle);
@@ -82184,6 +82248,7 @@ bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30
 usleep($bslDelayMs*1000);
 }
 
+bslProductDeadlineClear();
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$total,'',['🔄 Phase 2: بررسی محصولات رد شده (دسته نامعتبر)...']);
 $catFixed=0;$catRetryFailed=0;
 
@@ -82360,6 +82425,7 @@ foreach($pd as $i=>$p){
 $n=$i+1;
 $pTitle=trim($p['title']??$p['name']??'');
 $pKey=$p['key']??'';
+bslProductDeadlineStart(max(30,min(1800,(int)($bs['product_timeout_sec']??180))));
 $pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
 $_bslSseCfg=destPriceCfg($cn,'basalam');
 if(($_bslSseCfg['mode']??'none')!=='none'&&$pn>0)$pn=destAdjustPrice($pn,$_bslSseCfg);
@@ -92042,6 +92108,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div class="crow" style="margin-top:8px"><label>🏷️ دسته خودکار:</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#67e8f9"><input type="checkbox" id="bsAutoCat" style="width:16px;height:16px"><span>تشخیص خودکار</span></label></div>
 <div class="crow"><label>⏱️ فاصله:</label><input type="number" id="bsDelayMs" value="500" min="0" max="10000" step="100" style="max-width:120px" dir="ltr"><small>ms</small></div>
 <div class="crow"><label>🔄 تاخیر:</label><input type="number" id="bsRetryDelayMs" value="1000" min="0" max="30000" step="100" style="max-width:120px" dir="ltr"><small>ms</small></div>
+<div class="crow"><label>⏳ سقف هر محصول:</label><input type="number" id="bsProductTimeout" value="180" min="30" max="1800" step="30" style="max-width:120px" dir="ltr"><small>ثانیه؛ پس از آن محصول رد و صف ادامه می‌یابد</small></div>
 <div class="crow"><label>🚀 همزمانی ارسال:</label><input type="number" id="bsParallelN" value="4" min="1" max="8" step="1" style="max-width:80px" dir="ltr"><label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#93c5fd"><input type="checkbox" id="bsParallelAuto" checked> خودکار</label><small>۱ تا ۸ درخواست امن</small></div>
 </div>
 
@@ -99256,6 +99323,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.554', t:'⏳ سقف قابل تنظیم زمان پردازش هر محصول باسلام', items:[
+    'تنظیم «سقف هر محصول» با پیش‌فرض ۱۸۰ ثانیه و بازهٔ امن ۳۰ تا ۱۸۰۰ ثانیه به تنظیمات ارسال اضافه شد.',
+    'با عبور از سقف، درخواست‌های همان محصول متوقف، یک خطای کوتاه product_timeout ثبت، checkpoint جلو برده و محصول بعدی بدون توقف صف پردازش می‌شود.'
+  ]},
   {v:'10.553', t:'⚡ سرعت میانگین و زمان پایان واقعی‌تر برای ارسال باسلام', items:[
     'سلول مستقل سرعت، میانگین واقعی محصولات تکمیل‌شده در دقیقه را از حرکت checkpoint در بازهٔ اخیر نشان می‌دهد.',
     'زمان باقی‌مانده از سرعت rolling ده‌دقیقه‌ای همان صف محاسبه و میان refresh حفظ می‌شود؛ توقف‌ها، resume و پردازش طولانی در تخمین اثر واقعی دارند.'
@@ -109831,7 +109902,7 @@ try{if(typeof catfixAutoApplyCfg==='function') catfixAutoApplyCfg(cn.catfix_auto
 if(w.store_url&&$('wcUrl'))$('wcUrl').value=w.store_url;if(w.consumer_key&&$('wcCK'))$('wcCK').value=w.consumer_key;if(w.consumer_secret&&$('wcCS'))$('wcCS').value=w.consumer_secret;try{const sm=w.sync_mode||'api';if($('wcModeApi'))$('wcModeApi').checked=(sm!=='direct');if($('wcModeDirect'))$('wcModeDirect').checked=(sm==='direct');if($('wcSyncFallback'))$('wcSyncFallback').value=w.sync_fallback||'api_then_direct';}catch(e){}if(w.default_status&&$('wcSt'))$('wcSt').value=w.default_status;if(w.default_category&&$('wcCat'))$('wcCat').value=w.default_category;if($('wcMS'))$('wcMS').checked=!!w.manage_stock;if(w.stock_quantity&&$('wcSQ'))$('wcSQ').value=w.stock_quantity;if($('wcPMode'))$('wcPMode').value=w.price_mode||'none';if($('wcPVal'))$('wcPVal').value=(w.price_val!==undefined?w.price_val:0);if($('wcPRound'))$('wcPRound').value=String(w.price_round||0);try{syncWcPriceUi('main');}catch(e){}if($('bsPMode'))$('bsPMode').value=b.price_mode||'none';if($('bsPVal'))$('bsPVal').value=(b.price_val!==undefined?b.price_val:0);if($('bsPRound'))$('bsPRound').value=String(b.price_round||0);try{destPricePreview('wc');destPricePreview('bs');}catch(e){}if(b.token&&$('bsTk'))$('bsTk').value=b.token;if(b.vendor_id&&$('bsVid'))$('bsVid').value=b.vendor_id;if(b.preparation_days&&$('bsPD'))$('bsPD').value=b.preparation_days;if(b.weight&&$('bsW'))$('bsW').value=b.weight;if($('bsPW')&&b.package_weight)$('bsPW').value=b.package_weight;if(b.stock&&$('bsSt'))$('bsSt').value=b.stock;// v9.80: سوییچ «اتصال غیرمستقیم» باسلام
 if($('bsIndirect'))$('bsIndirect').checked=!!b.net_indirect;// v7.48: Restore category in searchable dropdown
 if(b.category_id){$('bsCat').value=String(b.category_id);bslSelectedCatId=b.category_id;if(bslAllCats.length>0){renderBslCatDropdown(bslAllCats,b.category_id);}else{loadBslCats();}}else{$('bsCat').value='0';bslSelectedCatId=0;if($('bsCatSearch'))$('bsCatSearch').value='';}
-if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsShopSendMode'))$('bsShopSendMode').value=(b.shop_send_mode==='parallel'?'parallel':'serial');if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);
+if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsShopSendMode'))$('bsShopSendMode').value=(b.shop_send_mode==='parallel'?'parallel':'serial');if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsProductTimeout'))$('bsProductTimeout').value=Math.max(30,Math.min(1800,parseInt(b.product_timeout_sec)||180));if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);
 // v8.17: Restore global fallback categories
 if(b.fallback_cat_ids&&Array.isArray(b.fallback_cat_ids)){renderBslFallbackCats(b.fallback_cat_ids);}
 // v8.17: Restore extra vendors
@@ -110636,7 +110707,7 @@ window.addEventListener('load',()=>setTimeout(syncMatrixAutoLate,6000));
 
 function saveConn(){const fd=new FormData();fd.append('action','save_connections');fd.append('woocommerce',JSON.stringify({enabled:1,store_url:$('wcUrl').value.trim(),consumer_key:$('wcCK').value.trim(),consumer_secret:$('wcCS').value.trim(),default_status:$('wcSt').value,default_category:parseInt($('wcCat').value)||0,manage_stock:$('wcMS').checked,stock_quantity:parseInt($('wcSQ').value)||10,price_mode:($('wcPMode')||{}).value||'none',price_val:parseFloat(($('wcPVal')||{}).value)||0,price_round:parseInt(($('wcPRound')||{}).value)||0,sync_mode:(($('wcModeDirect')&&$('wcModeDirect').checked)?'direct':'api'),sync_fallback:(($('wcSyncFallback')||{}).value||'api_then_direct')}));bslFlushVendors(); /* v10.87: flush price fields before saving */
 
-fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,send_shop_ids:(typeof bslGetSelectedVids==='function'?bslGetSelectedVids():null),shop_send_mode:(typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial'),delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
+fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,send_shop_ids:(typeof bslGetSelectedVids==='function'?bslGetSelectedVids():null),shop_send_mode:(typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial'),delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,product_timeout_sec:Math.max(30,Math.min(1800,parseInt($('bsProductTimeout')?.value)||180)),send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
 
 // v8.06: Save AI settings
 fd.append('ai_net',JSON.stringify(getAiNet()));
@@ -115669,6 +115740,7 @@ function queueBslSend(ps,catId){
         fd2.append('auto_category',autoCat?'1':'0');
         fd2.append('delay_ms',$('bsDelayMs')?($('bsDelayMs').value||'500'):'500');
         fd2.append('retry_delay_ms',$('bsRetryDelayMs')?($('bsRetryDelayMs').value||'1000'):'1000');
+        fd2.append('product_timeout_sec',$('bsProductTimeout')?($('bsProductTimeout').value||'180'):'180');
         fd2.append('send_parallel_n',$('bsParallelN')?($('bsParallelN').value||'4'):'4');
         fd2.append('send_parallel_auto',($('bsParallelAuto')&&!$('bsParallelAuto').checked)?'0':'1');
         fd2.append('start_immediately','1');
@@ -115838,6 +115910,7 @@ function sendBslClient(){
         fd.append('mode','send');
         fd.append('delay_ms',$('bsDelayMs')?($('bsDelayMs').value||'500'):'500');
         fd.append('retry_delay_ms',$('bsRetryDelayMs')?($('bsRetryDelayMs').value||'1000'):'1000');
+        fd.append('product_timeout_sec',$('bsProductTimeout')?($('bsProductTimeout').value||'180'):'180');
         fd.append('send_parallel_n',$('bsParallelN')?($('bsParallelN').value||'4'):'4');
         fd.append('send_parallel_auto',($('bsParallelAuto')&&!$('bsParallelAuto').checked)?'0':'1');
         fetch('?bsl_send_one=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
