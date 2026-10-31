@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.556';
+const APP_VERSION = '10.557';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1961,7 +1961,19 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
         if(!is_array($decoded))$decoded=['ok'=>false,'error'=>'matrix_fix_child_no_json'];
         $tail=mb_substr(trim(implode("\n",array_slice($out,-20))),-2000);if($tail!=='')$tails[]=$tail;
-        $decoded['child_exit_code']=$rc;if($rc!==0&&empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}
+        $decoded['child_exit_code']=$rc;if($rc!==0){
+            $st=matrixFixProgressRead();$cp=is_array($st['checkpoint']??null)?$st['checkpoint']:null;
+            if($cp){
+                /* SIGKILL/OOM cannot run PHP finally/catch. A durable checkpoint
+                   is proof that this is resumable, so recycle instead of marking
+                   the queue job failed and leaving UI forever running. */
+                $decoded=['ok'=>true,'yielded'=>true,'resume_needed'=>true,'daemon_recycle'=>true,
+                    'recovered_child_exit'=>$rc,'child_exit_code'=>$rc,'error'=>''];
+                matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'runner_pid'=>0,
+                    'phase'=>'بازیابی خودکار پردازهٔ اصلاح','checkpoint'=>$cp,
+                    'log_add'=>['🛡 پردازهٔ اصلاح با exit '.$rc.' قطع شد؛ ادامه از checkpoint به worker تازه سپرده شد']]);
+            }elseif(empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}
+        }
         $last=$decoded;s4WorkerStateWrite(['phase'=>'job','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time()]);
         if(function_exists('s4AutoResumeInterruptedExtractions'))s4AutoResumeInterruptedExtractions('worker_loop',true);
         if($rc!==0||empty($decoded['ok'])||empty($decoded['yielded']))break;
@@ -2530,6 +2542,7 @@ function s4WorkerRunJob(array $job): array {
     if ($type === 'manual_sync') {
         $pk = trim((string)($payload['profile_key'] ?? ''));
         $msResume = !empty($payload['resume']);
+        $msOrigin = extractNormalizeOriginTrigger((string)($payload['origin_trigger'] ?? $payload['trigger'] ?? 'manual_sync'));
         $msSeg = 0;
         $msMaxSeg = max(1, min(200, (int)(loadConnections()['worker_extract_max_segments'] ?? 60)));
         $msLast = ['ok' => false, 'error' => 'manual_sync_not_started'];
@@ -43831,8 +43844,19 @@ function matrixFixTraceExchange(array $job,array $response): void {
     $GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'operation_summary','at'=>microtime(true),'request'=>$req,'response'=>matrixFixTraceSanitize($response)];
 }
 
-function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest'): array {
-    $jobs = [];
+function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest', array $skipJobSet = [], int $limit = 0, array $selectedDestinations = [], ?array &$collectMeta = null): array {
+    $jobs = []; $allCount=0; $kindCounts=[]; $selectedSet=array_fill_keys(array_map('strval',$selectedDestinations),true);
+    $emit=static function(array $job)use(&$jobs,&$allCount,&$kindCounts,$skipJobSet,$limit,$selectedSet):void{
+        $kind=(string)($job['kind']??'');
+        if($selectedSet){
+            if(str_ends_with($kind,'_woo')&&!isset($selectedSet['woo']))return;
+            if(str_ends_with($kind,'_bsl')&&!isset($selectedSet['bsl:'.(int)($job['vendor_id']??0)]))return;
+        }
+        $allCount++;$kindCounts[$kind]=(int)($kindCounts[$kind]??0)+1;
+        $key=$kind.'|'.(string)($job['bare']??'').'|'.(int)($job['id']??0).'|'.(int)($job['vendor_id']??0);
+        if(isset($skipJobSet[$key])||($limit>0&&count($jobs)>=$limit))return;
+        $jobs[]=$job;
+    };
     $errorHolds=matrixFixErrorsLoad();
     $exactRetry=trim((string)($viewFilters['exact_bare']??''));
     if($exactRetry!=='')matrixFixClearRowError($exactRetry);
@@ -43850,7 +43874,8 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         $vid = (int)($sh['vendor_id'] ?? 0);
         if ($vid > 0) $shopsMeta[$vid] = $sh;
     }
-    $orderedRows=array_values((array)($data['rows']??[]));
+    /* Keep copy-on-write sharing unless an explicit sort really needs mutation. */
+    $orderedRows=(array)($data['rows']??[]);
     /* Match the visible table order, including a user-selected server-side sort. */
     $rowSort=trim((string)($viewFilters['sort']??''));$rowSortDir=strtolower((string)($viewFilters['sort_dir']??'asc'))==='desc'?'desc':'asc';
     $validRowSort=['title','profile','src_price','profile_price','woo_expect','woo_actual','status'];
@@ -43897,12 +43922,12 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         $woo = is_array($wooPick['keep'] ?? null) ? $wooPick['keep'] : null;
         if (($scope === 'all' || $scope === 'woo') && count($wooItems) > 1) {
             if ($hasProf) {
-                foreach ((array)$wooPick['drop'] as $drop) $jobs[] = $base + [
+                foreach ((array)$wooPick['drop'] as $drop) $emit($base + [
                     'kind' => 'dedup_woo', 'id' => (int)$drop['id'], 'keeper' => $woo,
                     'duplicate_keep' => $duplicateKeep, 'prefer_coded_duplicate'=>$preferCodedDuplicate,
-                ];
+                ]);
             } else {
-                foreach ($wooItems as $drop) $jobs[] = $base + ['kind' => 'del_woo', 'id' => (int)$drop['id']];
+                foreach ($wooItems as $drop) $emit($base + ['kind' => 'del_woo', 'id' => (int)$drop['id']]);
                 $woo = null; // all destination-only copies are removed
             }
         }
@@ -43910,13 +43935,13 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         if ($scope === 'all' || $scope === 'woo') {
             if ($hasProf && $woo) {
                 $exp = $wooExpectedNow>0?$wooExpectedNow:(int)($r['woo_expect'] ?? 0); $got = (int)($woo['price'] ?? 0);
-                if ($exp > 0 && $got > 0 && $exp !== $got) $jobs[] = $base + [
+                if ($exp > 0 && $got > 0 && $exp !== $got) $emit($base + [
                     'kind' => 'price_woo', 'id' => (int)($woo['id'] ?? 0), 'from' => $got, 'to' => $exp,
-                ];
+                ]);
             } elseif ($hasProf && !$woo && ($wooExpectedNow>0||(int)($r['woo_expect']??0)>0)) {
-                $jobs[] = $base + ['kind' => 'send_woo', 'expect' => $wooExpectedNow>0?$wooExpectedNow:(int)$r['woo_expect']];
+                $emit($base + ['kind' => 'send_woo', 'expect' => $wooExpectedNow>0?$wooExpectedNow:(int)$r['woo_expect']]);
             } elseif (!$hasProf && $woo) {
-                $jobs[] = $base + ['kind' => 'del_woo', 'id' => (int)($woo['id'] ?? 0)];
+                $emit($base + ['kind' => 'del_woo', 'id' => (int)($woo['id'] ?? 0)]);
             }
         }
 
@@ -43934,15 +43959,15 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
             $sname = (string)($cell['shop_name'] ?? $sh['name'] ?? $sh['shop_name'] ?? ('غرفه ' . $vid));
             if (($scope === 'all' || $scope === 'bsl') && count($cellItems) > 1) {
                 if ($hasProf) {
-                    foreach ((array)$pick['drop'] as $drop) $jobs[] = $base + [
+                    foreach ((array)$pick['drop'] as $drop) $emit($base + [
                         'kind' => 'dedup_bsl', 'id' => (int)$drop['id'], 'vendor_id' => $vid,
                         'shop_name' => $sname, 'keeper' => $cell, 'duplicate_keep' => $duplicateKeep,
                         'prefer_coded_duplicate'=>$preferCodedDuplicate,
-                    ];
+                    ]);
                 } else {
-                    foreach ($cellItems as $drop) $jobs[] = $base + [
+                    foreach ($cellItems as $drop) $emit($base + [
                         'kind' => 'del_bsl', 'id' => (int)$drop['id'], 'vendor_id' => $vid, 'shop_name' => $sname,
-                    ];
+                    ]);
                     $cell = null;
                 }
             }
@@ -43952,18 +43977,19 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
             if($hasProf&&$memberProfile&&isset($shopNow[$vid])&&extractPriceNum($memberRaw)>0){$curAdj=bslShopPriceForProfile($memberProfile,$memberRaw,$shopNow[$vid],(int)($bslCfgNow['round']??0));if((int)($curAdj['price']??0)>0)$exp=(int)$curAdj['price'];}
             if ($hasProf && $cell) {
                 $got = (int)($cell['price'] ?? 0);
-                if ($exp > 0 && $got > 0 && $exp !== $got) $jobs[] = $base + [
+                if ($exp > 0 && $got > 0 && $exp !== $got) $emit($base + [
                     'kind' => 'price_bsl', 'id' => (int)($cell['id'] ?? 0), 'vendor_id' => $vid,
                     'shop_name' => $sname, 'from' => $got, 'to' => $exp,
-                ];
+                ]);
             } elseif ($hasProf && !$cell && $exp > 0) {
-                $jobs[] = $base + ['kind' => 'send_bsl', 'vendor_id' => $vid, 'shop_name' => $sname, 'expect' => $exp];
+                $emit($base + ['kind' => 'send_bsl', 'vendor_id' => $vid, 'shop_name' => $sname, 'expect' => $exp]);
             } elseif (!$hasProf && $cell) {
-                $jobs[] = $base + ['kind' => 'del_bsl', 'id' => (int)($cell['id'] ?? 0),
-                    'vendor_id' => $vid, 'shop_name' => $sname];
+                $emit($base + ['kind' => 'del_bsl', 'id' => (int)($cell['id'] ?? 0),
+                    'vendor_id' => $vid, 'shop_name' => $sname]);
             }
         }
     }
+    $collectMeta=['total'=>$allCount,'kind_counts'=>$kindCounts,'returned'=>count($jobs),'truncated'=>$limit>0&&count($jobs)<$allCount];
     return $jobs;
 }
 
@@ -44369,25 +44395,23 @@ function matrixFixRun(array $opts = []): array {
 
     $viewFilters=is_array($opts['view_filters']??null)?$opts['view_filters']:[];
     if(is_array($fixCp['view_filters']??null))$viewFilters=$fixCp['view_filters'];
-    $jobs = matrixFixCollectJobs($data, $scope, $viewFilters, $duplicateKeep);
-    /* مقصد خاموش اصلاً job و log اصلاح تولید نمی‌کند؛ نتیجهٔ قدیمی ماتریس
-       نباید ووکامرس خاموش را دوباره وارد صف کند. */
+    /* Build only a small executable window. The old code materialised all
+       66k+ operations beside the 32k-row matrix and profile membership map;
+       shared hosting killed that child for OOM before its first handoff. */
     $cn = loadConnections();
     $requestedDest=array_key_exists('selected_destinations',$opts)&&is_array($opts['selected_destinations'])?$opts['selected_destinations']:($data['selected_destinations']??null);
-    $selectedFix=array_fill_keys(matrixNormalizeDestinations($requestedDest,$cn),true);
-    if (empty($cn['woocommerce']['enabled']) || !isset($selectedFix['woo'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_woo')));
-    if (empty($cn['basalam']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_bsl')));
-    $jobs=array_values(array_filter($jobs,static function($j)use($selectedFix){return !str_ends_with((string)($j['kind']??''),'_bsl')||isset($selectedFix['bsl:'.(int)($j['vendor_id']??0)]);}));
-    /* v10.333: matrixFixCollectJobs already emits every operation of row 1, then
-       every operation of row 2, etc. Never regroup globally by operation type. */
-    $total = count($jobs);
-    $nPrice = $nSend = $nDel = $nOnlyDestDel = 0;
-    foreach ($jobs as $j) {
-        $k = (string)($j['kind'] ?? '');
-        if (str_starts_with($k, 'price_')) $nPrice++;
-        elseif (str_starts_with($k, 'send_')) $nSend++;
-        elseif (str_starts_with($k, 'del_') || str_starts_with($k, 'dedup_')) { $nDel++; if(!empty($j['only_dest'])&&str_starts_with($k,'del_'))$nOnlyDestDel++; }
-    }
+    $selectedList=matrixNormalizeDestinations($requestedDest,$cn);
+    if(empty($cn['woocommerce']['enabled']))$selectedList=array_values(array_filter($selectedList,static fn($d)=>(string)$d!=='woo'));
+    if(empty($cn['basalam']['enabled']))$selectedList=array_values(array_filter($selectedList,static fn($d)=>!str_starts_with((string)$d,'bsl:')));
+    $consumedSet=$doneJobSet+$attemptedJobSet;
+    $requestedMax=max(1,(int)($opts['max_items']??30));$collectLimit=max(40,min(120,$requestedMax*2));$collectMeta=[];
+    $jobs = matrixFixCollectJobs($data, $scope, $viewFilters, $duplicateKeep, $consumedSet, $collectLimit, $selectedList, $collectMeta);
+    /* v10.333: collector emits every operation of row 1, then row 2. The
+       bounded window preserves that order without retaining the full queue. */
+    $total=max((int)($fixCp['total']??0),(int)($collectMeta['total']??0),count($consumedSet)+count($jobs));
+    $kindCounts=(array)($collectMeta['kind_counts']??[]);$nPrice=$nSend=$nDel=0;
+    foreach($kindCounts as $k=>$count){if(str_starts_with((string)$k,'price_'))$nPrice+=(int)$count;elseif(str_starts_with((string)$k,'send_'))$nSend+=(int)$count;elseif(str_starts_with((string)$k,'del_')||str_starts_with((string)$k,'dedup_'))$nDel+=(int)$count;}
+    $nOnlyDestDel=0; /* exact value is intentionally omitted in bounded mode */
     matrixFixProgress([
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
         'phase' => 'start', 'started_at' => $fixStartedAt, 'source' => $source,
@@ -44454,8 +44478,11 @@ function matrixFixRun(array $opts = []): array {
     $periodicBuildOnlyStop = false;
     $details = [];
     $rateLimited=false;$rateRetryAfter=0;
-    $maxItems = max(0, (int)($opts['max_items'] ?? 0)); $segmentItems = 0;
-    $continuousCronRun = $maxItems === 0 && !empty(matrixExecutionDecision()['accelerated']);
+    /* A hard per-child item cap is also a memory/process-lifetime boundary.
+       Cron acceleration removes artificial sleep between children, not this
+       safety handoff. */
+    $maxItems = $rowMode ? 50 : max(1, (int)($opts['max_items'] ?? 30)); $segmentItems = 0;
+    $continuousCronRun = false;
 
     foreach ($jobs as $ji => $job) {
         $jk = $jobKey($job);
@@ -44477,7 +44504,7 @@ function matrixFixRun(array $opts = []): array {
             matrixFixProgress(['log_add' => ['⏹ توقف توسط کاربر']]);
             break;
         }
-        $n = $ji + 1;
+        $n = count($doneJobSet) + count($attemptedJobSet) + 1;
         $jobOk = false; $err = '';
         $pct = 5 + (int)round(90 * $n / max(1, $total));
         $title = mb_substr((string)$job['title'], 0, 48);
@@ -44843,11 +44870,9 @@ function matrixFixRun(array $opts = []): array {
         $effectiveDelayMs=str_ends_with($kind,'_bsl')?max(1000,$delayMs):$delayMs;
         usleep($effectiveDelayMs * 1000);
         $segmentItems++;
-        /* Re-read the mode after every corrected row. Entering cron mode removes
-           the old item cap now; leaving cron mode checkpoints now. */
+        /* Re-read scheduling mode, while retaining the hard child boundary. */
         $liveDriver=matrixExecutionDecision();
-        if($maxItems>0&&$segmentItems>=$maxItems&&!empty($liveDriver['accelerated'])){$maxItems=0;$continuousCronRun=true;}
-        $driverHandoff=$continuousCronRun&&empty($liveDriver['accelerated']);
+        $driverHandoff=false;
         if (($driverHandoff || ($maxItems > 0 && $segmentItems >= $maxItems)) && $n < $total) {
             $waitCron=empty($liveDriver['can_run']);
             matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,
@@ -47936,6 +47961,14 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"\$ep = 'products?per_page=1&status=any'")!==false
         &&strpos($selfSrc,"'system_status_optional'")!==false
         &&strpos($selfSrc,"'not_applicable' => true")!==false);
+    $add('10.557','اصلاح انبوه فقط پنجرهٔ محدود jobها را نگه می‌دارد و سقف child در حالت کران نیز حذف نمی‌شود',
+        strpos($selfSrc,'int $limit = 0, array $selectedDestinations')!==false
+        &&strpos($selfSrc,'$collectLimit=max(40,min(120,$requestedMax*2))')!==false
+        &&strpos($selfSrc,'A hard per-child item cap')!==false);
+    $add('10.557','خروج اجباری child اصلاح از checkpoint بازیابی و origin همگام‌سازی همیشه رشته می‌شود',
+        strpos($selfSrc,"'recovered_child_exit'=>\$rc")!==false
+        &&strpos($selfSrc,"\$msOrigin = extractNormalizeOriginTrigger")!==false
+        &&strpos($selfSrc,"{v:'10." . "557'")!==false&&version_compare(APP_VERSION,'10.557','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -99417,6 +99450,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.557', t:'🛡 اصلاح مغایرت کم‌حافظه و بازیابی خودکار', items:[
+    'فهرست ده‌هاهزار عملیات اصلاح دیگر یکجا در حافظه ساخته نمی‌شود؛ هر child فقط پنجرهٔ کوچک مرتب را اجرا و checkpoint می‌کند.',
+    'اگر هاست child اصلاح را با OOM/SIGKILL ببندد، worker آن را ناموفق نهایی نمی‌کند و از checkpoint در daemon تازه ادامه می‌دهد؛ خطای origin همگام‌سازی نیز رفع شد.'
+  ]},
   {v:'10.556', t:'🎯 اجرای دقیق انتخاب مقصد و تست واقعی ووکامرس', items:[
     'ساخت تازهٔ جدول، انتخاب فعلی مقصدها را بر checkpoint ناتمام مقدم می‌داند؛ با برداشتن تیک ووکامرس، داده و cursor ووکامرس کنار گذاشته می‌شود و هیچ درخواست Woo ارسال نمی‌گردد.',
     'مرحله و گزارش Woo برای مقصد بدون تیک صریحاً «رد شد؛ بدون درخواست شبکه» است و تست API با endpoint واقعی محصولات سنجیده می‌شود؛ system_status فقط عیب‌یابی اختیاری است.'
