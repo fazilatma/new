@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.549';
+const APP_VERSION = '10.550';
 
 
 if (!function_exists('str_starts_with')) {
@@ -11879,10 +11879,20 @@ function bslStopRequestedForQueue(string $queueId=''): bool {
 function bslLongOperationHeartbeat(string $stage = ''): void {
     $cb=$GLOBALS['_bslLongOperationHeartbeat']??null;
     if(!is_callable($cb))return;
+    if(str_starts_with($stage,'api_')&&!empty($GLOBALS['_bslLongOperationStage']))$stage=(string)$GLOBALS['_bslLongOperationStage'];
     $now=time();$last=(int)($GLOBALS['_bslLongOperationHeartbeatAt']??0);
-    if($last>0&&($now-$last)<10)return;
+    $lastStage=(string)($GLOBALS['_bslLongOperationHeartbeatStage']??'');
+    if($last>0&&($now-$last)<10&&$stage===$lastStage)return;
     $GLOBALS['_bslLongOperationHeartbeatAt']=$now;
+    $GLOBALS['_bslLongOperationHeartbeatStage']=$stage;
     try{$cb($stage);}catch(Throwable $e){}
+}
+function bslLongOperationStage(string $stage,int $step,int $total,string $detail=''): void {
+    $GLOBALS['_bslLongOperationStage']=$stage;
+    $GLOBALS['_bslLongOperationStep']=max(0,$step);
+    $GLOBALS['_bslLongOperationTotal']=max(1,$total);
+    $GLOBALS['_bslLongOperationDetail']=$detail;
+    bslLongOperationHeartbeat($stage);
 }
 function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false): array {
     $out = [];
@@ -32806,6 +32816,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
 
     $round   = (int)($opts['round'] ?? 0);
     $profile = is_array($opts['profile'] ?? null) ? $opts['profile'] : null;
+    bslLongOperationStage('shop_validation',1,9,'بررسی دسترسی، وضعیت و قیمت '.count($shops).' غرفه');
 
     // قیمتِ هر غرفه + بررسی فعال بودن غرفه (پیشگیری از ۷۰۹۴ و ۵۰۱۱/۶۳۸۱)
     $prices = []; $live = [];
@@ -32859,6 +32870,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     $cData    = is_array($opts['cdata'] ?? null) ? $opts['cdata'] : [];
 
     // ---- فاز ۱: شناسه‌ها، همزمان (هم با عنوان پاک‌سازی‌شده هم در صورت تغییر با عنوان خام قبلی)
+    bslLongOperationStage('existing_lookup',2,9,'جست‌وجوی محصول موجود در '.count($live).' غرفه');
     $ids = bslShopsFindExistingMulti($title, $pKey, $live, $conc);
     if ($rawTitle !== $title) {
         $missingLive = [];
@@ -32915,6 +32927,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
                                'ep' => 'products/' . $exId, 'd' => $bu];
             }
         }
+        bslLongOperationStage('existing_update',3,9,'ارسال همزمان تغییرات به '.count($jobs).' غرفه');
         $rs = bslReqMulti($jobs, $conc);
         foreach($directDefaultBatch as $vid=>$_yes){
             if(!empty($rs[$vid]['ok'])){
@@ -32987,6 +33000,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         $toCreate[$vid] = $sh;
     }
     if ($toCreate) {
+        bslLongOperationStage('create_prepare',4,9,'آماده‌سازی دسته، متن و اطلاعات ساخت برای '.count($toCreate).' غرفه');
         $bslCfgIn = is_array($opts['basalam_cfg'] ?? null) ? $opts['basalam_cfg'] : null;
         $fallback = is_array($opts['fallback_cat_ids'] ?? null) ? $opts['fallback_cat_ids'] : [];
         $prodMappedCat = (int)($p['bsl_category_id'] ?? $p['category_id'] ?? 0);
@@ -33002,9 +33016,11 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         $_builtCreate = bslBuildUnifiedDescription($p, $title);
         $brief = $_builtCreate['brief'] !== '' ? $_builtCreate['brief'] : mb_substr(s4HtmlToPlainTextForBsl($title), 0, 250, 'UTF-8');
         $desc  = bslEnsureRichCompliantDescription($_builtCreate['description'], $title, $p, $hasBarcode);
+        bslLongOperationStage('photo_prepare',5,9,'دریافت و آماده‌سازی تصاویر محصول');
         $localPhotos = ($catUsed > 0 && !bslStopRequestedForQueue())
             ? s4PrepareLocalPhotosForMultiShop($p, max(1, min(3, (int)($opts['upload_max_photos'] ?? 1))))
             : [];
+        bslLongOperationStage('photo_upload',6,9,count($localPhotos).' تصویر برای '.count($toCreate).' غرفه');
         $shopPhotoMap = !empty($localPhotos) ? bslUploadPhotosMultiShops($localPhotos, $toCreate, $conc) : [];
         $jobs = [];
         foreach ($toCreate as $vid => $sh) {
@@ -33023,6 +33039,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             $jobs[$vid] = ['tk' => (string)$sh['token'], 'm' => 'POST',
                            'ep' => 'vendors/' . $vid . '/products', 'd' => $bp];
         }
+        bslLongOperationStage('product_create',7,9,'ثبت محصول تازه در '.count($jobs).' غرفه');
         $rsCreate = bslReqMulti($jobs, $conc);
         $retryNoVarCreate = [];
         foreach ($rsCreate as $vid => $r) {
@@ -33050,9 +33067,12 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     //      اگر سیگنالِ توقف رسیده باشد این فاز اجرا نمی‌شود، وگرنه هر غرفه
     //      یک 'stopped' می‌گیرد و آن محصول بی‌دلیل «خطا» شمرده می‌شود.
     $__stopNow = bslStopRequestedForQueue();
+    $__fallbackN=0;foreach($live as $__fv=>$__fs){if(empty($out[$__fv]['ok']))$__fallbackN++;}
+    if($__fallbackN>0)bslLongOperationStage('single_shop_fallback',8,9,'ترمیم تک‌غرفه‌ای برای '.$__fallbackN.' غرفه');
     foreach ($live as $vid => $sh) {
         if (!empty($out[$vid]['ok'])) continue;
         if ($__stopNow) { $out[(int)$vid] = ['ok' => false, 'stopped' => true, 'error' => 'stopped']; continue; }
+        bslLongOperationStage('single_shop_fallback',8,9,'ترمیم '.((string)($sh['shop_name']??'غرفهٔ '.$vid)));
         $__oneOpts=$opts;
         $one = bslUpsertToShop($p, $sh, $__oneOpts);
         $out[(int)$vid] = $one;
@@ -33064,6 +33084,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     }
 
     // شناسه‌ها را برای دفعهٔ بعد ثبت کن تا جست‌وجو لازم نشود
+    bslLongOperationStage('checkpoint_save',9,9,'ثبت نتیجه و شناسه‌های محصول');
     if ($ledger && $pKey !== '') {
         $rows = [];
         foreach ($ledger as $vid => $rid) {
@@ -47802,6 +47823,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function bslApplyQueueActionState')!==false
         &&strpos($selfSrc,"btn.textContent='🚀 + افزودن به صف'")!==false
         &&strpos($selfSrc,"{v:'10." . "549'")!==false&&version_compare(APP_VERSION,'10.549','>='));
+    $add('10.550','پردازش هر محصول مرحله و جزئیات زنده دارد و رنگ ذخیرهٔ پالسر با اولویت قطعی اعمال می‌شود',
+        strpos($selfSrc,'function bslLongOperationStage')!==false
+        &&strpos($selfSrc,"'inflight_stage_label'=>")!==false
+        &&strpos($selfSrc,"progText='📦 محصول '")!==false
+        &&strpos($selfSrc,"pulse.style.setProperty('background',saveBg,'important')")!==false
+        &&strpos($selfSrc,"{v:'10." . "550'")!==false&&version_compare(APP_VERSION,'10.550','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -80826,16 +80853,25 @@ $__parConc=bslSendParallelCount($cn,$total,count($__activeParShops));
 $__pTitle=trim((string)($p['title']??$p['name']??''));
 /* Keep the saved cursor on the last fully completed product while exposing a
    fresh heartbeat and the in-flight product number throughout long API work. */
-$GLOBALS['_bslLongOperationHeartbeatAt']=0;
-$GLOBALS['_bslLongOperationHeartbeat']=function(string $__stage='')use(&$sent,&$updated,&$skipped,&$fail,$total,&$__parDone,&$__activeParShops,&$__pTitle){
-    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,30),null,
-        ['phase'=>'parallel_shops','phase_label'=>'در حال پردازش محصول '.($__parDone+1).' در '.count($__activeParShops).' غرفه',
+$GLOBALS['_bslLongOperationHeartbeatAt']=0;$GLOBALS['_bslLongOperationHeartbeatStage']='';
+$__inflightStarted=time();
+$GLOBALS['_bslLongOperationHeartbeat']=function(string $__stage='')use(&$sent,&$updated,&$skipped,&$fail,$total,&$__parDone,&$__activeParShops,&$__pTitle,$__inflightStarted){
+    $__labels=['product_start'=>'شروع پردازش محصول','shop_validation'=>'بررسی غرفه‌ها و قیمت‌ها','existing_lookup'=>'جست‌وجوی محصول موجود',
+      'existing_update'=>'به‌روزرسانی محصول موجود','create_prepare'=>'آماده‌سازی ساخت محصول','photo_prepare'=>'آماده‌سازی تصاویر',
+      'photo_upload'=>'آپلود تصاویر','product_create'=>'ثبت محصول تازه','single_shop_fallback'=>'ترمیم تک‌غرفه‌ای','checkpoint_save'=>'ثبت نتیجه و checkpoint'];
+    $__step=(int)($GLOBALS['_bslLongOperationStep']??0);$__stepTotal=(int)($GLOBALS['_bslLongOperationTotal']??9);
+    $__detail=(string)($GLOBALS['_bslLongOperationDetail']??'');$__label=(string)($__labels[$__stage]??'در حال ارتباط با باسلام');
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,60),null,
+        ['phase'=>'parallel_shops','phase_label'=>$__label,
          'phase_current'=>$__parDone,'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total)),
-         'inflight_product'=>$__parDone+1,'inflight_stage'=>$__stage]);
+         'inflight_product'=>$__parDone+1,'inflight_title'=>$__pTitle,'inflight_stage'=>$__stage,'inflight_stage_label'=>$__label,
+         'inflight_step'=>$__step,'inflight_step_total'=>$__stepTotal,'inflight_detail'=>$__detail,
+         'inflight_started_at'=>$__inflightStarted,'inflight_elapsed'=>max(0,time()-$__inflightStarted)]);
 };
 bslLongOperationHeartbeat('product_start');
 try{$__parResAll=bslUpsertManyShops($p,$__activeParShops,$__parOpts,$__parConc);}
-finally{unset($GLOBALS['_bslLongOperationHeartbeat'],$GLOBALS['_bslLongOperationHeartbeatAt']);}
+finally{unset($GLOBALS['_bslLongOperationHeartbeat'],$GLOBALS['_bslLongOperationHeartbeatAt'],$GLOBALS['_bslLongOperationHeartbeatStage'],
+    $GLOBALS['_bslLongOperationStage'],$GLOBALS['_bslLongOperationStep'],$GLOBALS['_bslLongOperationTotal'],$GLOBALS['_bslLongOperationDetail']);}
 $__pKey=(string)($p['key']??'');
 $__pRawP=extractSourcePrice($p);
 $__pBasePrice=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));
@@ -99169,6 +99205,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.550', t:'🔎 جزئیات مرحله‌ای محصول و رنگ قطعی ذخیره روی پالسر', items:[
+    'هنگام پردازش طولانی، شماره و عنوان محصول، نام عملیات جاری، مرحله از ۹، جزئیات غرفه/تصویر و زمان سپری‌شده به‌صورت زنده نمایش داده می‌شود.',
+    'رنگ کهربایی/سبز/قرمز ذخیره با inline important روی کل باکس پالسر اعمال می‌شود تا رنگ runtime، کران، hover یا CSS کش‌شده نتواند آن را بپوشاند.'
+  ]},
   {v:'10.549', t:'🚀 جلوگیری از گیر تکراری ارسال و نمایش درست افزودن به صف', items:[
     'در پردازش طولانی یک محصول برای چند غرفه، هنگام جست‌وجو، آپلود و انتظار API ضربان زنده ثبت می‌شود؛ checkpoint جلو نمی‌رود اما watchdog دیگر همان محصول سالم را بارها قطع و از نو آغاز نمی‌کند.',
     'متن دکمهٔ باسلام در هر polling مستقیماً از صف سرور تعیین می‌شود: هنگام running یا waiting همیشه «افزودن به صف» نمایش داده می‌شود و ارسال تکی پنهان می‌ماند.'
@@ -110584,11 +110624,22 @@ function _connSaveIndicator(state){
         var cls=state==='pending'?'save-pending':(state==='ok'?'save-ok':'save-error');
         pulse.classList.add(cls);
         pulse.dataset.saveState=state;
+        /* v10.550: inline !important is intentional. Runtime health, cron flash,
+           hover and cached theme rules all color this same sticky control. The
+           save result must remain authoritative for its short visible window. */
+        var saveBg=state==='pending'?'#78350f':(state==='ok'?'#14532d':'#7f1d1d');
+        var saveBorder=state==='pending'?'#f59e0b':(state==='ok'?'#22c55e':'#ef4444');
+        var saveGlow=state==='pending'?'#f59e0b66':(state==='ok'?'#22c55e66':'#ef444477');
+        pulse.style.setProperty('background-color',saveBg,'important');
+        pulse.style.setProperty('background',saveBg,'important');
+        pulse.style.setProperty('border-color',saveBorder,'important');
+        pulse.style.setProperty('box-shadow','inset 0 0 18px '+saveGlow+',0 0 8px '+saveGlow,'important');
         var saveLabel=state==='pending'?'در حال ذخیرهٔ تغییرات':(state==='ok'?'تغییرات ذخیره شد':'خطا در ذخیرهٔ تغییرات');
         pulse.title=saveLabel;
         pulse.setAttribute('aria-label',saveLabel);
         if(state==='ok')pulse._saveStateTimer=setTimeout(function(){
             pulse.classList.remove('save-ok');delete pulse.dataset.saveState;
+            ['background-color','background','border-color','box-shadow'].forEach(function(p){pulse.style.removeProperty(p);});
             if(typeof s4RuntimeHealthCheck==='function')s4RuntimeHealthCheck(false);
         },2500);
     }
@@ -114663,7 +114714,16 @@ function pollBslProgress() {
             let progText='';
             const phaseCurrent=parseInt(d.phase_current)||0,phaseTotal=parseInt(d.phase_total)||0;
             const phasePct=Math.max(0,Math.min(100,Number.isFinite(Number(d.phase_pct))?Number(d.phase_pct):(phaseTotal?phaseCurrent*100/phaseTotal:0)));
-            if(d.phase_label&&phaseTotal>0){
+            if(running&&parseInt(d.inflight_product)>0){
+                const ip=parseInt(d.inflight_product)||current||1,is=parseInt(d.inflight_step)||0,ist=parseInt(d.inflight_step_total)||9;
+                const il=String(d.inflight_stage_label||d.phase_label||'در حال پردازش محصول');
+                const id=String(d.inflight_detail||'').trim(),ie=Math.max(0,parseInt(d.inflight_elapsed)||0);
+                progText='📦 محصول '+toFa(ip)+' از '+toFa(total)+' · '+il;
+                if(is>0)progText+=' · مرحله '+toFa(is)+' از '+toFa(ist);
+                if(id)progText+=' · '+id;
+                if(ie>0)progText+=' · '+toFa(ie)+' ثانیه';
+                if(d.inflight_title)$('bSS').title='محصول فعلی: '+String(d.inflight_title)+' | '+il+(id?' | '+id:'');
+            }else if(d.phase_label&&phaseTotal>0){
                 progText=String(d.phase_label)+' — '+toFa(phaseCurrent)+'/'+toFa(phaseTotal)+' ('+Math.round(phasePct)+'٪)';
                 if(d.batch_chunks)progText+=' · بسته '+toFa(d.batch_chunk||0)+'/'+toFa(d.batch_chunks);
             }else if(running&&total>0&&current<=0){
@@ -114678,7 +114738,7 @@ function pollBslProgress() {
             $('bSS').textContent=progText;
             $('bPB').style.width=((d.phase_label&&phaseTotal>0)?phasePct:(total>0?current/total*100:0))+'%';
             // v7.48: Show product title being processed
-            if(d.last_title){
+            if(d.last_title&&!d.inflight_product){
                 $('bSS').title='محصول فعلی: '+d.last_title;
             }
         }
