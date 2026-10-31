@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.536';
+const APP_VERSION = '10.537';
 
 
 if (!function_exists('str_starts_with')) {
@@ -16323,6 +16323,19 @@ $localPath = UPLOAD_DIR . 'img_' . $cacheKey . '.' . $ext;
 return $localPath;
 }
 
+/* v10.537: Basalam rejects GIF product photos. Convert the first frame once
+   before any upload retry; if this host cannot decode GIF, fail immediately
+   instead of repeating the same 422 three times for every selected shop. */
+function bslGifFirstFrameJpeg(string $data): array {
+    if(detectImageFormat($data)!=='gif')return ['ok'=>true,'data'=>$data,'converted'=>false];
+    if(!function_exists('imagecreatefromstring')||!function_exists('imagejpeg'))
+        return ['ok'=>false,'error'=>'GIF decoder unavailable'];
+    $im=@imagecreatefromstring($data);if(!$im)return ['ok'=>false,'error'=>'GIF decode failed'];
+    ob_start();$ok=@imagejpeg($im,null,88);$jpg=(string)ob_get_clean();@imagedestroy($im);
+    if(!$ok||strlen($jpg)<200)return ['ok'=>false,'error'=>'GIF to JPEG failed'];
+    return ['ok'=>true,'data'=>$jpg,'converted'=>true];
+}
+
 function bslUpload(string $tk, string $imgUrl): array {
 
 $imgUrl=html_entity_decode($imgUrl,ENT_QUOTES|ENT_HTML5,'UTF-8');
@@ -16359,6 +16372,11 @@ if(!$fdata||!isImageData($fdata))return['ok'=>0,'error'=>'not valid image'];
 $realFmt=detectImageFormat($fdata);
 if($realFmt==='')$realFmt='jpg';
 $fmtLog='fmt:'.$realFmt;
+if($realFmt==='gif'){
+$gifNorm=bslGifFirstFrameJpeg($fdata);
+if(empty($gifNorm['ok']))return['ok'=>0,'error'=>(string)($gifNorm['error']??'GIF unsupported'),'error_code'=>422];
+if(!empty($gifNorm['converted'])){$fdata=(string)$gifNorm['data'];$realFmt='jpg';$fmtLog='fmt:gif→jpg';@file_put_contents($filePath,$fdata);}
+}
 
 $convResult=convertToSupportedFormat($fdata);
 if(!empty($convResult['ok'])&&!empty($convResult['converted_from'])){
@@ -32689,6 +32707,11 @@ function s4PrepareLocalPhotosForMultiShop(array $p, int $maxPhotos = 1): array {
         $fdata = @file_get_contents($pickedPath);
         if (!$fdata || !isImageData($fdata)) continue;
         $realFmt = detectImageFormat($fdata) ?: 'jpg';
+        if($realFmt==='gif'){
+            $gifNorm=bslGifFirstFrameJpeg($fdata);
+            if(empty($gifNorm['ok']))continue;
+            if(!empty($gifNorm['converted'])){$fdata=(string)$gifNorm['data'];$realFmt='jpg';@file_put_contents($pickedPath,$fdata);}
+        }
         $conv = convertToSupportedFormat($fdata);
         if (!empty($conv['ok']) && !empty($conv['converted_from'])) {
             $fdata = $conv['data'];
@@ -47669,6 +47692,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$__mustCheckpoint=!$__allParSkipped')!==false
         &&strpos($selfSrc,'if($__parDeferredCheckpoint>0)bslBackendProgress')!==false
         &&strpos($selfSrc,"{v:'10." . "536'")!==false&&version_compare(APP_VERSION,'10.536','>='));
+    $add('10.537','GIF یک‌بار پیش از آپلود چندغرفه‌ای به JPEG تبدیل می‌شود و 422 تکراری نمی‌سازد',
+        strpos($selfSrc,'function bslGifFirstFrameJpeg')!==false
+        &&substr_count($selfSrc,"if(\$realFmt==='gif')")>=2
+        &&strpos($selfSrc,'GIF decoder unavailable')!==false
+        &&strpos($selfSrc,"{v:'10." . "537'")!==false&&version_compare(APP_VERSION,'10.537','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98964,6 +98992,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.537', t:'🖼️ تبدیل یک‌بارهٔ GIF پیش از ارسال چندغرفه‌ای', items:[
+    'تصویر GIF نامعتبر برای باسلام پیش از اولین درخواست به JPEG تبدیل و همان فایل سازگار برای غرفه‌ها استفاده می‌شود.',
+    'اگر سرور امکان decode نداشته باشد، خطا فوری و روشن ثبت می‌شود و سه تلاش 422 برای هر غرفه تکرار نمی‌شود.'
+  ]},
   {v:'10.536', t:'⚡ checkpoint گروهی تطبیقی برای محصولات همگام', items:[
     'محصولاتی که در هر سه غرفه واقعاً بدون تغییرند در پنجرهٔ محدود ۲ تا ۱۲تایی checkpoint می‌شوند و بازنویسی JSON سنگین پس از تک‌تک آن‌ها حذف شد.',
     'ایجاد، آپدیت و خطا همچنان همان لحظه checkpoint می‌شوند؛ توقف نیز cursor معوق را پیش از خروج flush می‌کند، بنابراین پایداری حفظ می‌شود.',
