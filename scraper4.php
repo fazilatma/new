@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.543';
+const APP_VERSION = '10.544';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47743,6 +47743,10 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"is_readable('/proc/locks')")!==false
         &&strpos($selfSrc,"strpos((string)\$ll,'FLOCK')")!==false
         &&strpos($selfSrc,"{v:'10." . "543'")!==false&&version_compare(APP_VERSION,'10.543','>='));
+    $add('10.544','در محیط مخفی‌شده proc locks، مالک از fd با device و inode دقیق پیدا می‌شود',
+        strpos($selfSrc,"glob('/proc/[0-9]*/fd/*')")!==false
+        &&strpos($selfSrc,"(int)(\$fs['dev']??-1)!==\$dev")!==false
+        &&strpos($selfSrc,"{v:'10." . "544'")!==false&&version_compare(APP_VERSION,'10.544','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65549,12 +65553,20 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             }
             /* fuser is not installed on every shared host. Linux /proc/locks
                is authoritative and records FLOCK owner PID plus inode. */
+            $lst=@stat($lockPath);$ino=(int)($lst['ino']??0);$dev=(int)($lst['dev']??0);
             if(($ownerPid<=1||!s4WorkerPidAlive($ownerPid))&&is_readable('/proc/locks')){
-                $lst=@stat($lockPath);$ino=(int)($lst['ino']??0);
                 foreach((array)@file('/proc/locks',FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES)as$ll){
                     if(strpos((string)$ll,'FLOCK')===false)continue;
                     $parts=preg_split('/\s+/',trim((string)$ll));$lp=(int)($parts[4]??0);$devIno=(string)($parts[5]??'');
                     if($lp>1&&$lp!==(int)@getmypid()&&$ino>0&&preg_match('/(?:^|:)'.preg_quote((string)$ino,'/').'$/',$devIno)){$ownerPid=$lp;break;}
+                }
+            }
+            /* Some containerized LiteSpeed hosts hide flock rows. File
+               descriptors for same-account processes remain visible: match
+               the exact device+inode instead of trusting command arguments. */
+            if(($ownerPid<=1||!s4WorkerPidAlive($ownerPid))&&$ino>0){
+                foreach((array)glob('/proc/[0-9]*/fd/*')as$fdPath){$fs=@stat($fdPath);if(!is_array($fs)||(int)($fs['ino']??0)!==$ino||(int)($fs['dev']??-1)!==$dev)continue;
+                    if(preg_match('~^/proc/(\d+)/fd/~',$fdPath,$pm)){$lp=(int)$pm[1];if($lp>1&&$lp!==(int)@getmypid()){$ownerPid=$lp;break;}}
                 }
             }
         }
@@ -99081,6 +99093,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.544', t:'🧬 یافتن مالک قفل از file descriptor', items:[
+    'در محیط‌هایی که proc locks پنهان است، device و inode دقیق فایل قفل در fd پردازه‌های همان حساب جست‌وجو می‌شود.'
+  ]},
   {v:'10.543', t:'🧭 یافتن مالک flock از هستهٔ لینوکس', items:[
     'اگر ابزار fuser روی هاست نصب نباشد، PID مالک قفل از proc locks و inode دقیق فایل پیدا می‌شود تا صف گیرکرده قابل ادامه باشد.'
   ]},
