@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.540';
+const APP_VERSION = '10.541';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47731,6 +47731,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'stale_owner_terminating'")!==false
         &&strpos($selfSrc,'$probe=queueBackendLock($which)')!==false
         &&strpos($selfSrc,"{v:'10." . "540'")!==false&&version_compare(APP_VERSION,'10.540','>='));
+    $add('10.541','اگر PID launcher مرده باشد مالک واقعی همان flock از kernel شناسایی می‌شود',
+        strpos($selfSrc,"@exec('fuser '.escapeshellarg(\$lockPath)")!==false
+        &&strpos($selfSrc,"strpos(\$cmd,'queue_backend')!==false")!==false
+        &&strpos($selfSrc,"{v:'10." . "541'")!==false&&version_compare(APP_VERSION,'10.541','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65518,6 +65522,18 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         $ownerPid=(int)($pendingBook['dispatch_pid']??0);
         $ownerTries=(int)($pendingBook['tries']??0);
         $idleSec=(int)($chk['idle']??0);$ownerSignalled=false;$lockReleased=false;
+        /* nohup may report its launcher PID while the surviving PHP child owns
+           flock. If that PID is gone, ask the kernel who holds this exact lock
+           and accept only our own scraper4.php queue_backend command. */
+        if($ownerTries>=3&&$idleSec>=90&&($ownerPid<=1||!function_exists('s4WorkerPidAlive')||!s4WorkerPidAlive($ownerPid))&&function_exists('exec')){
+            $lockPath=__DIR__.($which==='bsl'?'/bsl_backend.lock':'/woo_backend.lock');$fo=[];$frc=1;
+            @exec('fuser '.escapeshellarg($lockPath).' 2>/dev/null',$fo,$frc);
+            foreach($fo as$fl)foreach((array)preg_split('/\s+/',trim((string)$fl))as$fpRaw){
+                $fpId=(int)preg_replace('/\D/','',(string)$fpRaw);if($fpId<=1||$fpId===(int)@getmypid())continue;
+                $cmd=(string)@file_get_contents('/proc/'.$fpId.'/cmdline');
+                if($cmd!==''&&strpos($cmd,basename(__FILE__))!==false&&strpos($cmd,'queue_backend')!==false){$ownerPid=$fpId;break 2;}
+            }
+        }
         if($ownerTries>=3&&$idleSec>=90&&$ownerPid>1&&$ownerPid!==(int)@getmypid()
             &&function_exists('s4WorkerPidAlive')&&s4WorkerPidAlive($ownerPid)){
             if(function_exists('posix_kill'))$ownerSignalled=(bool)@posix_kill($ownerPid,defined('SIGTERM')?SIGTERM:15);
@@ -99041,6 +99057,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.541', t:'🔍 شناسایی مالک واقعی قفل صف باسلام', items:[
+    'اگر PID ثبت‌شده فقط launcher بوده و مرده باشد، مالک واقعی همان فایل flock از kernel پیدا می‌شود؛ فقط پردازهٔ scraper4.php queue_backend پذیرفته و متوقف می‌شود.'
+  ]},
   {v:'10.540', t:'🔓 بازیابی قفل worker گیرکردهٔ ارسال', items:[
     'اگر یک child CLI پس از سه تلاش بازیابی، حداقل ۹۰ ثانیه هیچ checkpoint تازه‌ای نسازد، فقط همان PID ثبت‌شده برای همان صف متوقف می‌شود.',
     'پس از آزادشدن قفل، همان cron از cursor ذخیره‌شده ادامه می‌دهد؛ worker دوم همزمان و صف تکراری ساخته نمی‌شود.'
