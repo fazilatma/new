@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.542';
+const APP_VERSION = '10.543';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47739,6 +47739,10 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,'Holding this destination-specific flock is itself the ownership')!==false
         &&strpos($selfSrc,'$ownerPid=$fpId;')!==false
         &&strpos($selfSrc,"{v:'10." . "542'")!==false&&version_compare(APP_VERSION,'10.542','>='));
+    $add('10.543','مالک flock بدون وابستگی به fuser از proc locks و inode پیدا می‌شود',
+        strpos($selfSrc,"is_readable('/proc/locks')")!==false
+        &&strpos($selfSrc,"strpos((string)\$ll,'FLOCK')")!==false
+        &&strpos($selfSrc,"{v:'10." . "543'")!==false&&version_compare(APP_VERSION,'10.543','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65542,6 +65546,16 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
                    otherwise retain the first exact flock owner. */
                 if($cmd!==''&&strpos($cmd,basename(__FILE__))!==false&&strpos($cmd,'queue_backend')!==false){$ownerPid=$fpId;break 2;}
                 if($ownerPid<=1||!s4WorkerPidAlive($ownerPid))$ownerPid=$fpId;
+            }
+            /* fuser is not installed on every shared host. Linux /proc/locks
+               is authoritative and records FLOCK owner PID plus inode. */
+            if(($ownerPid<=1||!s4WorkerPidAlive($ownerPid))&&is_readable('/proc/locks')){
+                $lst=@stat($lockPath);$ino=(int)($lst['ino']??0);
+                foreach((array)@file('/proc/locks',FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES)as$ll){
+                    if(strpos((string)$ll,'FLOCK')===false)continue;
+                    $parts=preg_split('/\s+/',trim((string)$ll));$lp=(int)($parts[4]??0);$devIno=(string)($parts[5]??'');
+                    if($lp>1&&$lp!==(int)@getmypid()&&$ino>0&&preg_match('/(?:^|:)'.preg_quote((string)$ino,'/').'$/',$devIno)){$ownerPid=$lp;break;}
+                }
             }
         }
         if($ownerTries>=3&&$idleSec>=90&&$ownerPid>1&&$ownerPid!==(int)@getmypid()
@@ -99067,6 +99081,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.543', t:'🧭 یافتن مالک flock از هستهٔ لینوکس', items:[
+    'اگر ابزار fuser روی هاست نصب نباشد، PID مالک قفل از proc locks و inode دقیق فایل پیدا می‌شود تا صف گیرکرده قابل ادامه باشد.'
+  ]},
   {v:'10.542', t:'🧯 آزادسازی مالک دقیق flock در PHP-FPM', items:[
     'در هاست‌هایی که lsphp/PHP-FPM آرگومان اسکریپت را در proc پنهان می‌کند، مالک دقیق فایل قفل باسلام پس از احراز سکون و سه تلاش بازیابی همچنان قابل توقف امن است.'
   ]},
