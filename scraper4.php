@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.534';
+const APP_VERSION = '10.535';
 
 
 if (!function_exists('str_starts_with')) {
@@ -13914,6 +13914,7 @@ function bslIsVariantUpdateMethodError(array $r): bool {
     $raw=json_encode($r['body']??[],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
     return mb_strpos($txt,'محصولات دارای تنوع')!==false
         || mb_strpos($txt,'ویرایش قیمت و موجودی')!==false
+        || mb_strpos($txt,'تغییر قیمت یا موجودی محصول دارای تنوع')!==false
         || (strpos((string)$raw,'variants')!==false&&strpos((string)$raw,'id')!==false&&strpos((string)$raw,'Field required')!==false);
 }
 function bslRemoteVariantRows(array $row): array {
@@ -47660,6 +47661,9 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'destination_variant_ids_not_found')!==false
         &&strpos($selfSrc,'bslRepairExistingVariantUpdate($tk,$vid,$exId,$bu,$_bslShopVarsUpd)')!==false
         &&strpos($selfSrc,"{v:'10." . "534'")!==false&&version_compare(APP_VERSION,'10.534','>='));
+    $add('10.535','هر دو متن 422 رسمی باسلام برای محصول تنوع‌دار وارد repair می‌شوند',
+        bslIsVariantUpdateMethodError(['code'=>422,'body'=>['message'=>'قادر به تغییر قیمت یا موجودی محصول دارای تنوع به صورت مستقیم نمی باشید']])
+        &&strpos($selfSrc,"{v:'10." . "535'")!==false&&version_compare(APP_VERSION,'10.535','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98935,6 +98939,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.535', t:'🧩 پوشش متن دوم خطای تنوع باسلام', items:[
+    'متن 422 «قادر به تغییر قیمت یا موجودی محصول دارای تنوع…» نیز مانند متن قبلی شناسایی و به repair با ID واقعی تنوع‌های مقصد هدایت می‌شود.',
+    'این خطا دیگر برای محصولات بعدی با همین شکل پاسخ تکرار نمی‌شود.'
+  ]},
   {v:'10.534', t:'🎯 جلوگیری از skip اشتباه و ترمیم آپدیت تنوع‌ها', items:[
     'وجود یک ID فعال در غرفه دیگر برای «بدون تغییر» کافی نیست؛ عنوان ثبت‌شده در ledger همان vendor نیز باید دقیقاً با محصول فعلی یکسان باشد، وگرنه جست‌وجوی واقعی عنوان انجام می‌شود و محصول واقعاً ناموجود ساخته خواهد شد.',
     'خطای 422 محصولات دارای تنوع با دریافت ID واقعی تنوع‌های مقصد و ارسال batch-updates معتبر ترمیم می‌شود؛ variant بدون ID دیگر تکرار نمی‌شود.',
