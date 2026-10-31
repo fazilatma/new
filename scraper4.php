@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.546';
+const APP_VERSION = '10.547';
 
 
 if (!function_exists('str_starts_with')) {
@@ -27207,6 +27207,8 @@ header('Content-Type: application/json; charset=UTF-8');
 $conn = loadConnections();
 $oldMxShopSig = function_exists('shopPricingSignature') ? shopPricingSignature($conn) : '';
 $oldMatrixExecMode=(string)($conn['recon_auto']['execution_mode']??'cron_first');
+$oldReconAuto=is_array($conn['recon_auto']??null)?$conn['recon_auto']:[];
+$_bslShopSelectionChanged=false;
 if (isset($_POST['woocommerce'])) { $w = json_decode($_POST['woocommerce'], true) ?: [];
     $_wMode = strtolower(trim((string)($w['sync_mode'] ?? 'api')));
     if (!in_array($_wMode, ['api', 'direct'], true)) $_wMode = 'api';
@@ -27229,7 +27231,8 @@ if (isset($_POST['basalam'])) {
     }
     $_newSendShopIds = is_array($b['send_shop_ids'] ?? null) ? array_values(array_unique(array_filter(array_map('intval', $b['send_shop_ids']), function($v){ return $v > 0; }))) : null;
     $_oldSendShopIds = is_array($_prevBslCfg['send_shop_ids'] ?? null) ? array_values(array_unique(array_filter(array_map('intval', $_prevBslCfg['send_shop_ids']), function($v){ return $v > 0; }))) : null;
-    $_sendShopIdsAt = ($_newSendShopIds !== $_oldSendShopIds) ? time() : (int)($_prevBslCfg['send_shop_ids_at'] ?? 0);
+    $_bslShopSelectionChanged=($_newSendShopIds !== $_oldSendShopIds);
+    $_sendShopIdsAt = $_bslShopSelectionChanged ? time() : (int)($_prevBslCfg['send_shop_ids_at'] ?? 0);
     $_shopSendMode = in_array(($b['shop_send_mode'] ?? ''), ['serial', 'parallel'], true)
         ? (string)$b['shop_send_mode']
         : (in_array(($_prevBslCfg['shop_send_mode'] ?? ''), ['serial', 'parallel'], true) ? (string)$_prevBslCfg['shop_send_mode'] : 'serial');
@@ -27439,11 +27442,13 @@ if (isset($_POST['digest_enabled']))    $conn['digest_enabled']    = !empty($_PO
 if (isset($_POST['digest_hour']))       $conn['digest_hour']       = max(0, min(23, (int)$_POST['digest_hour']));
 if (isset($_POST['digest_hours']))      $conn['digest_hours']      = max(1, min(168, (int)$_POST['digest_hours']));
 if (isset($_POST['digest_tz']))         $conn['digest_tz']         = trim((string)$_POST['digest_tz']);
+$reconAutoChanged=isset($_POST['recon_auto'])&&json_encode($oldReconAuto)!==json_encode((array)($conn['recon_auto']??[]));
 $_savedC = writeJsonFile(CONNECTIONS_FILE, $conn);
 if ($_savedC['ok']) {
-    /* Shop-picker changes are operational controls, not merely settings for a
-       future queue. Apply them now; a live backend rechecks before next item. */
-    $bslShopSelectionApply=isset($_POST['basalam'])?bslReconcileDisabledShopsNow($conn):null;
+    /* v10.547: this scans the potentially multi-megabyte queue. Run it only
+       when the shop picker actually changed, not on every debounced field save. */
+    $bslShopSelectionApply=(isset($_POST['basalam'])&&$_bslShopSelectionChanged)
+        ?bslReconcileDisabledShopsNow($conn):['ok'=>true,'skipped'=>true,'reason'=>'selection_unchanged'];
     $newMxShopSig=function_exists('shopPricingSignature')?shopPricingSignature($conn):'';
     $destinationPriceChanged=$oldMxShopSig!==$newMxShopSig;
     /* v10.505: acknowledge the settings write before a potentially large matrix scan. */
@@ -27451,14 +27456,15 @@ if ($_savedC['ok']) {
     $modeTransition=null;
     if(isset($_POST['recon_auto'])){
         $newExecMode=(string)($conn['recon_auto']['execution_mode']??'cron_first');
-        /* Apply even when the name did not change: Save acts as an immediate
-           control pulse and wakes a job paused under an expired lease. */
-        $modeTransition=matrixExecutionApplyMode($newExecMode);
+        /* Applying mode and mutating the worker queue are operational work.
+           A changed mode still applies immediately; unrelated autosaves skip it. */
         if($oldMatrixExecMode!==$newExecMode){
+            $modeTransition=matrixExecutionApplyMode($newExecMode);
             matrixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
             matrixFixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
         }
-        if(!empty($conn['recon_auto']['build_only'])&&function_exists('s4WorkerQueueMutate')){
+        $buildOnlyJustEnabled=!empty($conn['recon_auto']['build_only'])&&empty($oldReconAuto['build_only']);
+        if($reconAutoChanged&&$buildOnlyJustEnabled&&function_exists('s4WorkerQueueMutate')){
             s4WorkerQueueMutate(static function(&$q){
                 $now=time();
                 foreach((array)($q['entries']??[]) as $idx=>$e){
@@ -47766,6 +47772,11 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,'$ownerRecoveryDue=($ownerTries>=3&&$idleSec>=90)||$idleSec>=180')!==false
         &&substr_count($selfSrc,'if($ownerRecoveryDue&&')>=2
         &&strpos($selfSrc,"{v:'10." . "546'")!==false&&version_compare(APP_VERSION,'10.546','>='));
+    $add('10.547','ذخیرهٔ تنظیمات بدون تغییر غرفه یا روش اجرا عملیات سنگین صف را اجرا نمی‌کند',
+        strpos($selfSrc,'&&$_bslShopSelectionChanged)')!==false
+        &&strpos($selfSrc,'if($oldMatrixExecMode!==$newExecMode)')!==false
+        &&strpos($selfSrc,'$buildOnlyJustEnabled=')!==false
+        &&strpos($selfSrc,"{v:'10." . "547'")!==false&&version_compare(APP_VERSION,'10.547','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -99111,6 +99122,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.547', t:'⚡ ذخیرهٔ فوری تنظیمات بدون اسکن سنگین صف', items:[
+    'صف چندمگابایتی باسلام فقط وقتی انتخاب غرفه‌ها واقعاً تغییر کند بررسی می‌شود، نه پس از هر autosave.',
+    'تغییر روش اجرا همچنان همان لحظه اعمال می‌شود؛ mutationهای matrix و worker فقط هنگام تغییر مرتبط اجرا می‌شوند.'
+  ]},
   {v:'10.546', t:'⏱️ بازیابی قفل گیرکرده بدون انتظار برای سه تلاش', items:[
     'اگر checkpoint صف ۱۸۰ ثانیه کامل ثابت بماند، مالک دقیق همان flock حتی با tries صفر بازنشسته و صف از cursor ذخیره‌شده ادامه داده می‌شود.'
   ]},
