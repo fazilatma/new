@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.552';
+const APP_VERSION = '10.553';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47838,6 +47838,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function bslRenderSendStatusGrid')!==false
         &&strpos($selfSrc,'.bsl-send-status-grid')!==false
         &&strpos($selfSrc,"{v:'10." . "552'")!==false&&version_compare(APP_VERSION,'10.552','>='));
+    $add('10.553','سرعت واقعی محصول در دقیقه و زمان پایان بر پایهٔ حرکت اخیر checkpoint محاسبه می‌شود',
+        strpos($selfSrc,'id="bsgRate"')!==false
+        &&strpos($selfSrc,'function bslQueueRateMetric')!==false
+        &&strpos($selfSrc,"'s4_bsl_rate_'")!==false
+        &&strpos($selfSrc,"{v:'10." . "553'")!==false&&version_compare(APP_VERSION,'10.553','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -87663,8 +87668,8 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 .runtime-pulse.save-error{background:#7f1d1d!important;border-color:#ef4444!important;box-shadow:inset 0 0 14px #ef444466}
 @keyframes runtimePulseCentered{0%{transform:translate(-50%,-50%) scale(.8);opacity:.9}75%,100%{transform:translate(-50%,-50%) scale(2.7);opacity:0}}
 /* v10.552: readable live Basalam state instead of one dense sentence. */
-.bsl-send-status-grid{display:grid;grid-template-columns:repeat(5,minmax(110px,1fr));gap:1px;margin:7px 0 8px;background:#334155;border:1px solid #334155;border-radius:9px;overflow:hidden;direction:rtl}
-.bsl-send-status-grid.hidden{display:none!important}.bsl-sg-cell{min-width:0;background:#0f172a;padding:7px 9px;display:flex;flex-direction:column;gap:4px;justify-content:center}.bsl-sg-cell>span{font-size:9.5px;color:#94a3b8;white-space:nowrap}.bsl-sg-cell>b{font-size:11.5px;color:#e2e8f0;line-height:1.55;overflow-wrap:anywhere}.bsl-sg-cell:nth-child(1)>b{color:#67e8f9}.bsl-sg-cell:nth-child(2)>b{color:#fbbf24}.bsl-sg-cell:nth-child(3)>b{color:#c4b5fd}.bsl-sg-cell:nth-child(5)>b{color:#86efac}.bsl-sg-title{grid-column:1/-1;display:grid;grid-template-columns:110px 1fr;align-items:center;gap:8px}.bsl-sg-title>span{font-size:10px}.bsl-sg-title>b{color:#f8fafc;font-size:12px}
+.bsl-send-status-grid{display:grid;grid-template-columns:repeat(6,minmax(105px,1fr));gap:1px;margin:7px 0 8px;background:#334155;border:1px solid #334155;border-radius:9px;overflow:hidden;direction:rtl}
+.bsl-send-status-grid.hidden{display:none!important}.bsl-sg-cell{min-width:0;background:#0f172a;padding:7px 9px;display:flex;flex-direction:column;gap:4px;justify-content:center}.bsl-sg-cell>span{font-size:9.5px;color:#94a3b8;white-space:nowrap}.bsl-sg-cell>b{font-size:11.5px;color:#e2e8f0;line-height:1.55;overflow-wrap:anywhere}.bsl-sg-cell:nth-child(1)>b{color:#67e8f9}.bsl-sg-cell:nth-child(2)>b{color:#fbbf24}.bsl-sg-cell:nth-child(3)>b{color:#c4b5fd}.bsl-sg-cell:nth-child(5)>b{color:#86efac}.bsl-sg-cell:nth-child(6)>b{color:#93c5fd}.bsl-sg-title{grid-column:1/-1;display:grid;grid-template-columns:110px 1fr;align-items:center;gap:8px}.bsl-sg-title>span{font-size:10px}.bsl-sg-title>b{color:#f8fafc;font-size:12px}
 @media(max-width:760px){.bsl-send-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bsl-sg-title{grid-column:1/-1;display:flex;align-items:flex-start}.bsl-sg-title>b{font-size:11px}.bsl-sg-cell{padding:7px}}
 /* v10.19 (۳۲): دکمهٔ مدیر وظیفه — سومین دکمهٔ شناورِ هدر، کنارِ ☰ و ⛶ */
 .tasks-btn{position:fixed;top:10px;left:110px;z-index:10001;width:44px;height:44px;border-radius:12px;background:#1e293b;border:1px solid #475569;color:#e2e8f0;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.4);transition:background .2s}
@@ -92090,7 +92095,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
   <div class="bsl-sg-cell"><span>⚙️ عملیات جاری</span><b id="bsgStage">—</b></div>
   <div class="bsl-sg-cell"><span>🧭 مرحله</span><b id="bsgStep">—</b></div>
   <div class="bsl-sg-cell"><span>🏪 جزئیات</span><b id="bsgDetail">—</b></div>
-  <div class="bsl-sg-cell"><span>⏱ زمان این محصول</span><b id="bsgElapsed">—</b></div>
+  <div class="bsl-sg-cell"><span>⚡ میانگین سرعت</span><b id="bsgRate">در حال محاسبه…</b></div>
+  <div class="bsl-sg-cell"><span>⏱ زمان و برآورد پایان</span><b id="bsgElapsed">—</b></div>
   <div class="bsl-sg-cell bsl-sg-title"><span>🏷️ محصول جاری</span><b id="bsgTitle">—</b></div>
 </div>
 <div class="ssum hidden" id="bSM" style="grid-template-columns:repeat(6,1fr)"><div class="si" style="cursor:pointer" onclick="showBslReport('sent')"><b id="bO" style="color:#4ade80">۰</b><span>جدید</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('updated')"><b id="bU" style="color:#facc15">۰</b><span>آپدیت</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('skipped')"><b id="bK" style="color:#94a3b8">۰</b><span>بدون تغییر</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('failed')"><b id="bF" style="color:#f87171">۰</b><span>خطا</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('retired')"><b id="bX" style="color:#fbbf24">۰</b><span>🗂 بایگانی/حذف</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('all')"><b id="bT" style="color:#60a5fa">۰</b><span>کل</span></div></div>
@@ -99250,6 +99256,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.553', t:'⚡ سرعت میانگین و زمان پایان واقعی‌تر برای ارسال باسلام', items:[
+    'سلول مستقل سرعت، میانگین واقعی محصولات تکمیل‌شده در دقیقه را از حرکت checkpoint در بازهٔ اخیر نشان می‌دهد.',
+    'زمان باقی‌مانده از سرعت rolling ده‌دقیقه‌ای همان صف محاسبه و میان refresh حفظ می‌شود؛ توقف‌ها، resume و پردازش طولانی در تخمین اثر واقعی دارند.'
+  ]},
   {v:'10.552', t:'📊 جدول شهودی وضعیت زندهٔ ارسال باسلام', items:[
     'متن فشردهٔ بالای شمارنده‌ها به جدول زنده با ستون‌های پیشرفت محصول، عملیات، مرحله، جزئیات، زمان و عنوان محصول تبدیل شد.',
     'جدول در نمایشگر بزرگ یک‌ردیفه و در موبایل دو‌ستونه است؛ پیام قدیمی فقط برای توقف، پایان یا حالت پشتیبان نمایش داده می‌شود.'
@@ -114630,8 +114640,35 @@ let bslLastCardCount=0;
 // v8.06: WooCommerce polling state
 let wooLastCardCount=0,wooLastUpdateTime=0,wooLastLogCount=0,wooResumeCount=0;
 
+// v10.553: rolling speed/ETA from real cursor movement, persisted per queue.
+function bslQueueRateMetric(d){
+    const now=Date.now(),qid=String(d&&d.queue_id||''),cur=Math.max(0,parseInt(d&&d.current)||0),total=Math.max(0,parseInt(d&&d.total)||0);
+    if(!qid)return {rate:0,eta:0,ready:false};
+    const key='s4_bsl_rate_'+qid;let samples=[];
+    try{samples=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(samples))samples=[];}catch(_e){samples=[];}
+    samples=samples.filter(s=>s&&Number.isFinite(+s.t)&&Number.isFinite(+s.c)&&now-(+s.t)<15*60*1000);
+    if(samples.length&&cur<Number(samples[samples.length-1].c))samples=[];
+    const last=samples[samples.length-1];
+    if(!last||cur!==Number(last.c)){samples.push({t:now,c:cur});}
+    if(samples.length>120)samples=samples.slice(-120);
+    try{localStorage.setItem(key,JSON.stringify(samples));}catch(_e){}
+    const floor=now-10*60*1000;
+    const anchor=samples.find(s=>Number(s.t)>=floor&&Number(s.c)<cur);
+    if(!anchor)return {rate:0,eta:0,ready:false};
+    const mins=(now-Number(anchor.t))/60000,delta=cur-Number(anchor.c);
+    if(mins<0.12||delta<1)return {rate:0,eta:0,ready:false};
+    const rate=delta/mins,eta=rate>0?Math.max(0,total-cur)/rate*60:0;
+    return {rate:rate,eta:eta,ready:Number.isFinite(rate)&&rate>0};
+}
+function bslHumanDuration(sec){
+    sec=Math.max(0,Math.round(Number(sec)||0));
+    if(sec<60)return toFa(sec)+' ثانیه';
+    const min=Math.floor(sec/60),s=sec%60;if(min<60)return toFa(min)+' دقیقه'+(s?' و '+toFa(s)+' ثانیه':'');
+    const h=Math.floor(min/60),m=min%60;if(h<24)return toFa(h)+' ساعت'+(m?' و '+toFa(m)+' دقیقه':'');
+    const day=Math.floor(h/24),rh=h%24;return toFa(day)+' روز'+(rh?' و '+toFa(rh)+' ساعت':'');
+}
 // v10.552: render the live sender as a compact semantic grid.
-function bslRenderSendStatusGrid(d){
+function bslRenderSendStatusGrid(d,rateMetric){
     const grid=$('bslSendStatusGrid'),fallback=$('bSS');if(!grid)return;
     if(!d||!d.running||d.done){grid.classList.add('hidden');if(fallback)fallback.classList.remove('hidden');return;}
     const total=parseInt(d.total)||0,product=parseInt(d.inflight_product)||(parseInt(d.current)||0);
@@ -114645,7 +114682,11 @@ function bslRenderSendStatusGrid(d){
     set('bsgStage',stage);
     set('bsgStep',step>0?(toFa(step)+' از '+toFa(stepTotal||9)):'—');
     set('bsgDetail',detail||'در حال دریافت جزئیات…');
-    set('bsgElapsed',elapsed>0?(toFa(elapsed)+' ثانیه'):'تازه شروع شده');
+    rateMetric=rateMetric||bslQueueRateMetric(d);
+    set('bsgRate',rateMetric.ready?(toFa(rateMetric.rate.toFixed(1))+' محصول در دقیقه'):'در حال محاسبه…');
+    const productAge=elapsed>0?bslHumanDuration(elapsed):'تازه شروع شده';
+    const eta=rateMetric.ready?('حدود '+bslHumanDuration(rateMetric.eta)):'پس از چند محصول محاسبه می‌شود';
+    set('bsgElapsed','این محصول: '+productAge+' · تا پایان: '+eta);
     set('bsgTitle',String(d.inflight_title||d.last_title||'در حال انتخاب محصول…'));
     grid.classList.remove('hidden');if(fallback)fallback.classList.add('hidden');
 }
@@ -114734,15 +114775,12 @@ function pollBslProgress() {
         if(lsBox) lsBox.innerHTML=bslShopStatsHtml(d.shop_stats);
         // v7.48: Calculate elapsed time and ETA
         let elapsedStr='',etaStr='';
+        const bslRateMetric=bslQueueRateMetric(d);
         if(startedAt>0){
             const elapsedSec=Math.floor(Date.now()/1000-startedAt);
-            elapsedStr=elapsedSec>=60?(Math.floor(elapsedSec/60)+'دقیقه '+elapsedSec%60+'ثانیه'):(elapsedSec+' ثانیه');
-            if(current>0&&total>0&&current>1){
-                const perProduct=elapsedSec/current;
-                const remaining=Math.round(perProduct*(total-current));
-                etaStr=remaining>=60?(Math.floor(remaining/60)+'دقیقه '+remaining%60+'ثانیه'):(remaining+' ثانیه');
-            }
+            elapsedStr=bslHumanDuration(elapsedSec);
         }
+        if(bslRateMetric.ready)etaStr=bslHumanDuration(bslRateMetric.eta);
         // v7.48: Add only NEW log entries using total_log_count for proper sync
         // v10.104b: logDiv بالاتر تعریف شده — redeclare نکن (SyntaxError کل اسکریپت را می‌کشت)
         if(!logDiv){/* bR missing */}
@@ -114812,7 +114850,7 @@ function pollBslProgress() {
             if(d.last_title&&!d.inflight_product){
                 $('bSS').title='محصول فعلی: '+d.last_title;
             }
-            bslRenderSendStatusGrid(d);
+            bslRenderSendStatusGrid(d,bslRateMetric);
         }
         // v7.50: Paused — stop polling, keep UI visible for resume
         if(paused&&!running&&!done) {
