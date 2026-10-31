@@ -395,7 +395,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.539';
+const APP_VERSION = '10.540';
 
 
 if (!function_exists('str_starts_with')) {
@@ -47726,6 +47726,11 @@ if (isset($_GET['selftest'])) {
         strpos($__taskClearBlock538,"\$hadActivity=(string)(\$row['state']??'idle')!=='idle'")!==false
         &&strpos($__taskClearBlock538,'if (!$hadActivity&&!$hadPersisted) continue;')!==false
         &&strpos($selfSrc,"{v:'10." . "539'")!==false&&version_compare(APP_VERSION,'10.539','>='));
+    $add('10.540','مالک CLI قفل‌شده پس از سه بازیابی و ۹۰ ثانیه سکون محدود بازنشسته می‌شود',
+        strpos($selfSrc,'$ownerTries>=3&&$idleSec>=90')!==false
+        &&strpos($selfSrc,"'stale_owner_terminating'")!==false
+        &&strpos($selfSrc,'$probe=queueBackendLock($which)')!==false
+        &&strpos($selfSrc,"{v:'10." . "540'")!==false&&version_compare(APP_VERSION,'10.540','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65501,21 +65506,36 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     if(!$allowUserStopped&&queueHasExplicitUserStop($which,$qid)){
         $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop_row';return $chk;
     }
-    /* flock شاهدِ قوی‌تری از سنِ heartbeat است: یک درخواستِ شبکهٔ طولانی
-       ممکن است بیش از staleAfter طول بکشد، اما تا وقتی قفل در دستِ worker
-       است، نه آن را بکش و نه worker دوم بساز. */
+    /* A fresh flock normally proves a live owner. v10.540 adds one bounded
+       exception: after three recovery dispatches, a detached CLI child whose
+       progress has stayed frozen for at least 90 seconds is a wedged owner,
+       not useful work. Retire only the PID recorded for this exact queue,
+       then let this same cron continue from the persisted cursor if the lock
+       is released. This avoids an immortal held flock without spawning two
+       concurrent senders. */
     if (!empty($chk['lock_held'])) {
-        $chk['resumed'] = false;
-        $chk['deferred'] = true;
-        $chk['cron_pending'] = true;
-        $chk['reason_defer'] = 'lock_held_waiting_next_cron';
-        /* Do not consume a retry while the old process still owns the lock.
-           Every cron heartbeat rechecks it and dispatches from this checkpoint
-           immediately after ownership is released. */
         $pendingBook=queueResumeBook($which,$qid);
-        queueResumeBook($which,$qid,['tries'=>(int)($pendingBook['tries']??0),'at'=>time(),
-            'from'=>max(0,(int)($chk['resume_from']??$chk['current']??0)),'status'=>'awaiting_lock_release']);
-        return $chk;
+        $ownerPid=(int)($pendingBook['dispatch_pid']??0);
+        $ownerTries=(int)($pendingBook['tries']??0);
+        $idleSec=(int)($chk['idle']??0);$ownerSignalled=false;$lockReleased=false;
+        if($ownerTries>=3&&$idleSec>=90&&$ownerPid>1&&$ownerPid!==(int)@getmypid()
+            &&function_exists('s4WorkerPidAlive')&&s4WorkerPidAlive($ownerPid)){
+            if(function_exists('posix_kill'))$ownerSignalled=(bool)@posix_kill($ownerPid,defined('SIGTERM')?SIGTERM:15);
+            elseif(function_exists('exec')){$ko=[];$krc=1;@exec('kill -TERM '.(int)$ownerPid.' >/dev/null 2>&1',$ko,$krc);$ownerSignalled=$krc===0;}
+            if($ownerSignalled){usleep(400000);$probe=queueBackendLock($which);if(is_resource($probe)){queueBackendUnlock($probe);$lockReleased=true;$chk['lock_held']=false;}}
+        }
+        if(!$lockReleased){
+            $chk['resumed'] = false;
+            $chk['deferred'] = true;
+            $chk['cron_pending'] = true;
+            $chk['stale_owner_pid']=$ownerPid;$chk['stale_owner_signalled']=$ownerSignalled;
+            $chk['reason_defer'] = $ownerSignalled?'stale_owner_terminating':'lock_held_waiting_next_cron';
+            queueResumeBook($which,$qid,['tries'=>$ownerTries,'at'=>time(),
+                'from'=>max(0,(int)($chk['resume_from']??$chk['current']??0)),
+                'status'=>$ownerSignalled?'terminating_stale_owner':'awaiting_lock_release']);
+            return $chk;
+        }
+        $chk['stale_owner_pid']=$ownerPid;$chk['stale_owner_signalled']=true;
     }
     /* v10.56 (۷۰): resume_from = چک‌پوینتِ واقعی */
     $start = max(0, (int)($chk['resume_from'] ?? $chk['current'] ?? 0));
@@ -99021,6 +99041,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.540', t:'🔓 بازیابی قفل worker گیرکردهٔ ارسال', items:[
+    'اگر یک child CLI پس از سه تلاش بازیابی، حداقل ۹۰ ثانیه هیچ checkpoint تازه‌ای نسازد، فقط همان PID ثبت‌شده برای همان صف متوقف می‌شود.',
+    'پس از آزادشدن قفل، همان cron از cursor ذخیره‌شده ادامه می‌دهد؛ worker دوم همزمان و صف تکراری ساخته نمی‌شود.'
+  ]},
   {v:'10.539', t:'🔢 شمارش درست پاک‌سازی مدیر وظیفه', items:[
     'تعداد پاک‌شده‌ها از کارت‌های فعالیت موجود پیش از حذف محاسبه می‌شود؛ پیام موفقیت دیگر پس از حذف واقعی، عدد صفر نشان نمی‌دهد.'
   ]},
