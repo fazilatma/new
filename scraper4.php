@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.581';
+const APP_VERSION = '10.582';
 
 
 if (!function_exists('str_starts_with')) {
@@ -36258,6 +36258,9 @@ if(isset($_GET['matrix_execution_status'])){
    cron request carry the exact queue checkpoint instead of launching another
    short-lived child. This happens before entering the cron route on purpose. */
 if(isset($_GET['cron_run'])||((string)($_POST['action']??'')==='cron_run')){
+    /* Lane pumping happens on every arrival, even when queue handoff changes
+       this request's route or another long cron owns .cron_run.lock. */
+    if(function_exists('bslCronPumpProfileLanes'))$GLOBALS['_cronBslLanePumps']=bslCronPumpProfileLanes();
     if(function_exists('tasksStopAllClearCheckpoints'))tasksStopAllClearCheckpoints();
     $_queueCronHandoff=queueCronHandoffPrepare();
     if(is_array($_queueCronHandoff)){
@@ -36444,6 +36447,7 @@ if (!$cronLockHeld) {
     $lockOut = ['ok' => true, 'skipped' => true, 'locked' => true,
         'reason' => 'اجرای قبلی کران هنوز قفلِ واقعی را در اختیار دارد',
         'tasks_resume_all' => $GLOBALS['_cronTasksResumeAll'] ?? null,
+        'bsl_lane_pumps'   => $GLOBALS['_cronBslLanePumps'] ?? null,
         'daily_ai_test'    => $GLOBALS['_cronDailyAiTest'] ?? null];
     cronEmit($lockOut);
     exit;
@@ -48375,6 +48379,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'.spb-scroll{overflow:visible')!==false
         &&strpos($selfSrc,"{v:'10." . "581'")!==false
         &&version_compare(APP_VERSION,'10.581','>='));
+    $add('10.582','هر ورود کران هر دو لین ارسال را مستقل هل می‌دهد',
+        strpos($selfSrc,'function bslCronPumpProfileLanes')!==false
+        &&strpos($selfSrc,"\$GLOBALS['_cronBslLanePumps']=bslCronPumpProfileLanes()")!==false
+        &&strpos($selfSrc,"'cron_lane_pump'=>'1'")!==false
+        &&strpos($selfSrc,"'bsl_lane_pumps'   => \$GLOBALS['_cronBslLanePumps']")!==false
+        &&strpos($selfSrc,"{v:'10." . "582'")!==false
+        &&version_compare(APP_VERSION,'10.582','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78992,6 +79003,47 @@ function bslLaneIsLive(string $lane,int $fresh=180): bool {
     $p=readProgress(bslLaneProgressFile($lane));if(empty($p['running']))return false;
     $beat=max((int)($p['last_progress_ts']??0),(int)($p['started_at']??0));return $beat>0&&time()-$beat<$fresh;
 }
+/** Every cron arrival pumps both physical send lanes before the generic cron
+ * mutex. This path is deliberately independent of watchdog/auto-resume flags. */
+function bslCronPumpProfileLanes(): array {
+    if(!bslParallelProfileLanesEnabled())return ['enabled'=>false];
+    $queue=bslReadQueue();$now=time();$out=['enabled'=>true,'at'=>$now,'lanes'=>[]];
+    foreach(['fast','detail'] as $lane){
+        $row=null;foreach((array)($queue['entries']??[]) as $candidate){
+            if(!is_array($candidate)||bslRowLane($candidate)!==$lane||!in_array((string)($candidate['status']??''),['running','waiting'],true))continue;
+            $total=max(0,(int)($candidate['total']??0));$cur=max(0,(int)($candidate['current']??0));if($total>0&&$cur>=$total)continue;$row=$candidate;break;
+        }
+        if(!$row){$out['lanes'][$lane]=['queued'=>false];continue;}
+        $qid=(string)($row['id']??'');$progress=readProgress(bslLaneProgressFile($lane));
+        $beat=max(tasksHeartbeat($progress),(int)($row['last_progress_ts']??0),(int)($row['updated_at']??0),(int)($row['started_at']??0));
+        $idle=$beat>0?max(0,$now-$beat):PHP_INT_MAX;
+        $timeout=max(180,(int)(($row['config']??[])['product_timeout_sec']??180)+30);
+        $lockPath=bslLaneLockFile($lane);$probe=@fopen($lockPath,'c');$free=is_resource($probe)&&@flock($probe,LOCK_EX|LOCK_NB);
+        if($free){@flock($probe,LOCK_UN);}elseif($idle>=$timeout){
+            $owner=bslLaneLockOwnerPid($lane);$signalled=false;
+            if($owner>1){
+                if(function_exists('posix_kill'))$signalled=(bool)@posix_kill($owner,defined('SIGTERM')?SIGTERM:15);
+                elseif(function_exists('exec')){$ko=[];$krc=1;@exec('kill -TERM '.(int)$owner.' >/dev/null 2>&1',$ko,$krc);$signalled=$krc===0;}
+                if($signalled)usleep(500000);
+                $free=is_resource($probe)&&@flock($probe,LOCK_EX|LOCK_NB);
+                if(!$free&&$signalled){
+                    if(function_exists('posix_kill'))@posix_kill($owner,defined('SIGKILL')?SIGKILL:9);
+                    elseif(function_exists('exec'))@exec('kill -KILL '.(int)$owner.' >/dev/null 2>&1');
+                    usleep(250000);$free=is_resource($probe)&&@flock($probe,LOCK_EX|LOCK_NB);
+                }
+            }
+            $out['lanes'][$lane]=['queued'=>true,'queue_id'=>$qid,'idle'=>$idle,'stale_owner_pid'=>$owner,'stale_owner_signalled'=>$signalled,'lock_released'=>$free];
+            if($free)@flock($probe,LOCK_UN);
+        }
+        if(is_resource($probe))@fclose($probe);
+        if(!$free){$out['lanes'][$lane]=array_merge((array)($out['lanes'][$lane]??[]),['queued'=>true,'queue_id'=>$qid,'idle'=>$idle,'running'=>true]);continue;}
+        $post=['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane,'cron_lane_pump'=>'1'];
+        $ok=fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],$post);
+        if(!$ok)$ok=fireAndForget('action=bsl_backend&lane='.$lane,1800,$post);
+        $out['lanes'][$lane]=array_merge((array)($out['lanes'][$lane]??[]),['queued'=>true,'queue_id'=>$qid,'idle'=>$idle,'dispatched'=>$ok,'worker_pid'=>(int)($GLOBALS['_queueDispatchPid']??0)]);
+    }
+    return $out;
+}
 function bslKickParallelProfileLanes(?array $queue=null): array {
     if(!bslParallelProfileLanesEnabled())return [];
     /* Never overlap newly split workers with a pre-upgrade legacy process: its
@@ -100212,6 +100264,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.582', t:'⏱️ هل‌دادن مستقیم لین‌های ارسال با هر کران', items:[
+    'هر ورود cron_run پیش از قفل عمومی و پیش از handoff، لین ۱ و لین ۲ را جداگانه بررسی و ردیف waiting/running ناقص را با queue_id همان checkpoint پمپ می‌کند.',
+    'این مسیر به تنظیم‌های generic watchdog و auto-resume وابسته نیست؛ حتی اگر اجرای قبلی کران قفل عمومی را نگه داشته باشد، پمپ اختصاصی لین‌ها انجام می‌شود.',
+    'اگر flock همان لین پس از بیش از سقف امن محصول بدون heartbeat منجمد بماند، PID دقیق مالک همان flock متوقف و checkpoint همان لین دوباره dispatch می‌شود؛ لین دیگر لمس نمی‌شود.',
+    'نتیجهٔ پمپ هر دو لین در پاسخ کرانِ قفل‌شده نیز با bsl_lane_pumps گزارش می‌شود.'
+  ]},
   {v:'10.581', t:'🕒 زمان روشن جدول شروع و سرستون‌های همیشه‌نمایان', items:[
     'زمان کامل آخرین تولید جدول تفکیک انتهای صفحهٔ شروع با تاریخ، ساعت و ثانیه در یک نشان برجسته کنار دکمهٔ تازه‌سازی نمایش داده می‌شود؛ حالت درحال‌به‌روزرسانی و خطا نیز صریح است.',
     'سرستون‌های جدول در دسکتاپ هنگام اسکرول صفحه زیر نوار ثابت بالایی می‌چسبند؛ overflow افقی که قبلاً sticky را خنثی می‌کرد از مسیر دسکتاپ حذف شد.',
