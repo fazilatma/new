@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.570';
+const APP_VERSION = '10.571';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48289,6 +48289,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'بعضی محصولات می‌توانند بدون جزئیات باشند')!==false
         &&strpos($selfSrc,"{v:'10." . "570'")!==false
         &&version_compare(APP_VERSION,'10.570','>='));
+    $add('10.571','نمای صف/پیشرفت و شروع ردیف بعدی به lane منتخب مقید است',
+        strpos($selfSrc,'function bslResetLiveProgressView()')!==false
+        &&strpos($selfSrc,'const _pollLane=bslSelectedSendLane()')!==false
+        &&strpos($selfSrc,'if(_pollToken!==(Number(window._bslProgressPollToken)||0)')!==false
+        &&strpos($selfSrc,"fetch('?bsl_queue_start_next=1&lane='+encodeURIComponent(lane))")!==false
+        &&strpos($selfSrc,"fetch('?bsl_send_feedback=1&lane='+encodeURIComponent(bslSelectedSendLane())")!==false
+        &&strpos($selfSrc,'readProgress(bslLaneProgressFile($feedbackLaneFb))')!==false
+        &&strpos($selfSrc,'lane!==bslSelectedSendLane()')!==false
+        &&strpos($selfSrc,'$__explicitNextLane=array_key_exists(\'lane\',$_GET)')!==false
+        &&strpos($selfSrc,"{v:'10." . "571'")!==false
+        &&version_compare(APP_VERSION,'10.571','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -77334,10 +77345,10 @@ echo json_encode(['ok'=>true,'paused'=>$stopPaused,'queue_id'=>$stopQid,'lane'=>
    انجام می‌دهد و retireReportToSendQueues نتیجه را به‌صورتِ ردیفِ «done» در
    صف می‌گذارد. این‌جا همان ردیف‌ها را جمع می‌کنیم تا شمارنده‌ها و کارت‌هایِ
    ارسال هم حذف/بایگانی‌شده‌ها را نشان بدهند. */
-function sendQueueRetireAgg(array $queue): array {
+function sendQueueRetireAgg(array $queue,?string $lane=null): array {
     $retired = 0; $notFound = 0; $failed = 0; $details = [];
     foreach ((array)($queue['entries'] ?? []) as $e) {
-        if (!is_array($e)) continue;
+        if (!is_array($e)||($lane!==null&&bslRowLane($e)!==$lane)) continue;
         if (empty($e['retire_report']) && ($e['kind'] ?? '') !== 'retire' && ($e['trigger'] ?? '') !== 'retire') continue;
         $retired  += (int)($e['sent'] ?? 0);
         $notFound += (int)($e['skipped'] ?? 0);
@@ -77358,11 +77369,11 @@ $p = readProgress(bslLaneProgressFile($_pollLane));$p['lane']=$_pollLane;
 
 $hasMore = false;
 foreach ($queue['entries'] as $e) {
-if ($e['status'] === 'waiting') { $hasMore = true; break; }
+if (is_array($e)&&bslRowLane($e)===$_pollLane&&($e['status']??'')==='waiting') { $hasMore = true; break; }
 }
 $p['has_more'] = $hasMore;
 /* v10.127: شمارنده و کارت‌هایِ حذف/بایگانی‌شده در گزارشِ زندهٔ ارسال */
-$_retB = sendQueueRetireAgg($queue);
+$_retB = sendQueueRetireAgg($queue,$_pollLane);
 $p['retired'] = $_retB['retired'];
 $p['retired_not_found'] = $_retB['not_found'];
 $p['retired_failed'] = $_retB['failed'];
@@ -77371,7 +77382,11 @@ $p['retired_details'] = $_retB['details'];
    در sendAutoRecover(). اگر صف گیر کرده باشد، همین‌جا از چک‌پوینت
    خودکار ادامه می‌افتد و رابط با recovered=... یک توست نشان می‌دهد. */
 $_recB = sendAutoRecover('bsl');
-if ($_recB !== null) $p['recovered'] = $_recB;
+if($_recB!==null){
+    if(isset($_recB['profile_lanes'])&&is_array($_recB['profile_lanes'])){
+        if(isset($_recB['profile_lanes'][$_pollLane]))$p['recovered']=['profile_lanes'=>[$_pollLane=>$_recB['profile_lanes'][$_pollLane]]];
+    }elseif((string)($_recB['queue_id']??'')===$_pollQid)$p['recovered']=$_recB;
+}
 echo json_encode($p, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
@@ -79111,24 +79126,25 @@ if($repairRequestedFb){
         $repairResultFb['dispatch']=queueStallRecover('bsl',BSL_SEND_STALL_SEC,false,1500,true,false,true);
 }
 $qFb=bslReadQueue();$entriesFb=(array)($qFb['entries']??[]);
-$progressFb=readProgress(BSL_PROGRESS_FILE);$nowFb=time();
 $requestedQid=trim((string)($_GET['queue_id']??''));
-$runningCountFb=count(array_filter($entriesFb,static fn($r)=>is_array($r)&&($r['status']??'')==='running'));
+$feedbackLaneFb=bslNormalizeProfileLane($_GET['lane']??(bslParallelProfileLanesEnabled()?'fast':'legacy'));
 $selectedFb=null;
-if($requestedQid!=='')foreach($entriesFb as $rowFb){if(is_array($rowFb)&&(string)($rowFb['id']??'')===$requestedQid){$selectedFb=$rowFb;break;}}
+if($requestedQid!=='')foreach($entriesFb as $rowFb){if(is_array($rowFb)&&(string)($rowFb['id']??'')===$requestedQid){$selectedFb=$rowFb;$feedbackLaneFb=bslRowLane($rowFb);break;}}
+$progressFb=readProgress(bslLaneProgressFile($feedbackLaneFb));$nowFb=time();
+$runningCountFb=count(array_filter($entriesFb,static fn($r)=>is_array($r)&&bslRowLane($r)===$feedbackLaneFb&&($r['status']??'')==='running'));
 $progressQidFb=trim((string)($progressFb['queue_id']??''));
 if($selectedFb===null&&$progressQidFb!=='')foreach($entriesFb as $rowFb){
-    if(is_array($rowFb)&&(string)($rowFb['id']??'')===$progressQidFb&&($rowFb['status']??'')==='running'){$selectedFb=$rowFb;break;}
+    if(is_array($rowFb)&&bslRowLane($rowFb)===$feedbackLaneFb&&(string)($rowFb['id']??'')===$progressQidFb&&($rowFb['status']??'')==='running'){$selectedFb=$rowFb;break;}
 }
 if($selectedFb===null){
     foreach(['running','waiting','paused'] as $wantStatus){
-        foreach($entriesFb as $rowFb){if(is_array($rowFb)&&($rowFb['status']??'')===$wantStatus){$selectedFb=$rowFb;break 2;}}
+        foreach($entriesFb as $rowFb){if(is_array($rowFb)&&bslRowLane($rowFb)===$feedbackLaneFb&&($rowFb['status']??'')===$wantStatus){$selectedFb=$rowFb;break 2;}}
     }
 }
 if($selectedFb===null&&$progressQidFb!=='')foreach($entriesFb as $rowFb){
-    if(is_array($rowFb)&&(string)($rowFb['id']??'')===$progressQidFb){$selectedFb=$rowFb;break;}
+    if(is_array($rowFb)&&bslRowLane($rowFb)===$feedbackLaneFb&&(string)($rowFb['id']??'')===$progressQidFb){$selectedFb=$rowFb;break;}
 }
-if($selectedFb===null&&$entriesFb){$lastFb=end($entriesFb);if(is_array($lastFb))$selectedFb=$lastFb;}
+if($selectedFb===null&&$entriesFb){$lastFb=end($entriesFb);if(is_array($lastFb)&&bslRowLane($lastFb)===$feedbackLaneFb)$selectedFb=$lastFb;}
 $selectedQid=(string)($selectedFb['id']??'');
 $progressOwnedFb=is_array($selectedFb)&&($selectedFb['status']??'')==='running'
     &&queueProgressBelongsToRow($progressFb,$selectedFb,max(1,$runningCountFb));
@@ -79138,7 +79154,7 @@ $beatFb=max($progressBeatFb,$rowBeatFb);$idleFb=$beatFb>0?max(0,$nowFb-$beatFb):
 $stallAfterFb=BSL_SEND_STALL_SEC;
 $watchdogEnabledFb=!isset($cnFb['stall_watchdog'])||!empty($cnFb['stall_watchdog']);
 $autoResumeEnabledFb=!isset($cnFb['auto_resume'])||!empty($cnFb['auto_resume']);
-$lockFileFb=__DIR__.'/bsl_backend.lock';$lockFpFb=@fopen($lockFileFb,'c');$lockHeldFb=false;$lockProbeOkFb=false;
+$lockFileFb=bslLaneLockFile($feedbackLaneFb);$lockFpFb=@fopen($lockFileFb,'c');$lockHeldFb=false;$lockProbeOkFb=false;
 if($lockFpFb){$lockFreeFb=@flock($lockFpFb,LOCK_EX|LOCK_NB);$lockProbeOkFb=$lockFreeFb;
     $lockHeldFb=!$lockFreeFb;if($lockFreeFb)@flock($lockFpFb,LOCK_UN);@fclose($lockFpFb);}
 $lockMtimeFb=is_file($lockFileFb)?(int)@filemtime($lockFileFb):0;
@@ -79276,7 +79292,7 @@ if(!$progressOwnedFb&&$progressQidFb!==''&&(!empty($progressFb['stopped'])||!emp
 if(is_array($selectedFb)&&($selectedFb['status']??'')==='running'&&$progressOwnedFb&&!empty($progressFb['done']))$diagnosisFb[]='progress_done_but_queue_row_still_running';
 if(!$diagnosisFb)$diagnosisFb[]='no_obvious_stall_from_saved_state';
 $queueRowsSummaryFb=[];
-foreach($entriesFb as $rowFb){if(!is_array($rowFb))continue;if(!in_array((string)($rowFb['status']??''),['running','waiting','paused'],true))continue;
+foreach($entriesFb as $rowFb){if(!is_array($rowFb)||bslRowLane($rowFb)!==$feedbackLaneFb)continue;if(!in_array((string)($rowFb['status']??''),['running','waiting','paused'],true))continue;
     $queueRowsSummaryFb[]=['id'=>(string)($rowFb['id']??''),'status'=>(string)($rowFb['status']??''),
         'profile'=>$safeFbText($rowFb['profile_name']??'',160),'shop'=>$safeFbText($rowFb['shop_name']??'',160),
         'current'=>(int)($rowFb['current']??0),'total'=>(int)($rowFb['total']??0),
@@ -79298,7 +79314,7 @@ $solution=function(int $code,string $kind,string $detail):array{
     return ['key'=>$kind?:'other','title'=>'خطای دیگر','solution'=>'جزئیات خام و مرحلهٔ ثبت‌شده بررسی شود','auto_repair'=>false];
 };
 foreach($entriesFb as $e){
-    if(!is_array($e)||($requestedQid!==''&&(string)($e['id']??'')!==$requestedQid))continue;
+    if(!is_array($e)||bslRowLane($e)!==$feedbackLaneFb||($requestedQid!==''&&(string)($e['id']??'')!==$requestedQid))continue;
     $details=(array)($e['failed_details']??[]);
     if(!$details&&(!empty($e['fail_reason'])||($e['status']??'')==='failed'))$details=[['error'=>(string)($e['fail_reason']??'وظیفه ناموفق'),'error_code'=>0,'reason_kind'=>'queue']];
     if(!$details)continue;$entriesWithError++;
@@ -79326,7 +79342,7 @@ $handoffFb=$handoffRawFb?[
     'claims'=>(int)($handoffRawFb['claims']??0),'reason'=>(string)($handoffRawFb['reason']??''),
     'version'=>(string)($handoffRawFb['version']??'')]:['pending'=>false];
 echo json_encode([
-    'ok'=>true,'version'=>APP_VERSION,'at'=>$nowFb,
+    'ok'=>true,'version'=>APP_VERSION,'lane'=>$feedbackLaneFb,'at'=>$nowFb,
     'site'=>$identityFb,
     'entries_scanned'=>count($entriesFb),'entries_with_error'=>$entriesWithError,'errors_total'=>$total,
     'groups'=>array_values($groups),'samples'=>$samples,
@@ -79695,45 +79711,59 @@ exit;
 
 if(isset($_GET['bsl_queue_start_next'])){
 header('Content-Type: application/json; charset=UTF-8');
-$__bslNextFp = queueBackendLock('bsl');
-if (!is_resource($__bslNextFp)) { echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک پردازش صف باسلام هم‌اکنون در حال اجراست'],JSON_UNESCAPED_UNICODE); exit; }
-register_shutdown_function(function() use ($__bslNextFp) { queueBackendUnlock($__bslNextFp); });
-$queue=bslReadQueue();
-
-$progress=readProgress(BSL_PROGRESS_FILE);
-$runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
-foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows)&&!empty($progress['done'])){
-$e['status']='done';
-$e['sent']=$progress['sent']??0;
-$e['updated']=$progress['updated']??0;
-$e['skipped']=$progress['skipped']??0;
-$e['failed']=$progress['failed']??0;
-$e['done_at']=time();
+$__explicitNextLane=array_key_exists('lane',$_GET);
+$__requestedNextLane=$__explicitNextLane?bslNormalizeProfileLane($_GET['lane']):(bslParallelProfileLanesEnabled()?'fast':'legacy');
+$__nextLock=queueBackendLock('bsl');
+if(!is_resource($__nextLock)){echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک پردازش صف باسلام هم‌اکنون در حال اجراست'],JSON_UNESCAPED_UNICODE);exit;}
+register_shutdown_function(function()use($__nextLock){queueBackendUnlock($__nextLock);});
+$__laneProbe=@fopen(bslLaneLockFile($__requestedNextLane),'c');
+if(!$__laneProbe||!@flock($__laneProbe,LOCK_EX|LOCK_NB)){
+    if(is_resource($__laneProbe))@fclose($__laneProbe);
+    echo json_encode(['ok'=>false,'running'=>true,'lane'=>$__requestedNextLane,'error'=>'worker همین لین هنوز فعال است'],JSON_UNESCAPED_UNICODE);exit;
 }
+register_shutdown_function(function()use($__laneProbe){queueBackendUnlock($__laneProbe);});
+$queue=bslReadQueue();
+$progress=readProgress(bslLaneProgressFile($__requestedNextLane));
+$runningRows=count(array_filter((array)($queue['entries']??[]),function($row)use($__requestedNextLane){
+    return is_array($row)&&($row['status']??'')==='running'&&bslRowLane($row)===$__requestedNextLane;
+}));
+foreach($queue['entries'] as &$e){
+    if(!is_array($e)||($e['status']??'')!=='running'||bslRowLane($e)!==$__requestedNextLane)continue;
+    if(queueProgressBelongsToRow($progress,$e,$runningRows)&&!empty($progress['done'])){
+        $e['status']='done';$e['sent']=$progress['sent']??0;$e['updated']=$progress['updated']??0;
+        $e['skipped']=$progress['skipped']??0;$e['failed']=$progress['failed']??0;$e['done_at']=time();
+    }
 }
 unset($e);
-
-$nextIdx2=-1;
-$__laneOrder=bslParallelProfileLanesEnabled()?['fast','detail']:['legacy'];
-foreach($__laneOrder as $__wantLane){foreach($queue['entries'] as $i=>$e){
-if(bslRowLane($e)===$__wantLane&&($e['status']==='waiting'||($e['status']==='running'&&($e['current']??0)<=0))){$nextIdx2=$i;break 2;}
-}}
-if($nextIdx2>=0){
-$__nextLane=bslRowLane($queue['entries'][$nextIdx2]);$__nextProducts=bslLaneProductsFile($__nextLane);$__nextProgress=bslLaneProgressFile($__nextLane);
-@unlink($__nextProducts);
-localTaskDbForget($__nextProgress); @unlink($__nextProgress);@unlink(BSL_STOP_FILE);
-@copy($queue['entries'][$nextIdx2]['products_file'],$__nextProducts);
-$queue['entries'][$nextIdx2]['status']='running';
-$queue['entries'][$nextIdx2]['started_at']=time();
-$nextEntry=$queue['entries'][$nextIdx2];
-bslWriteQueue($queue);
-queueBackendUnlock($__bslNextFp);
-$_bslNextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1','lane'=>bslRowLane($nextEntry)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
-echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'total'=>$nextEntry['total'],'worker_pid'=>$_bslNextPid,'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'msg'=>'شروع فرآیند بعدی از صف'],JSON_UNESCAPED_UNICODE);
+$nextIdx=-1;
+$laneOrder=[$__requestedNextLane];
+foreach($laneOrder as $wantLane){
+    foreach($queue['entries'] as $i=>$e){
+        if(!is_array($e)||bslRowLane($e)!==$wantLane)continue;
+        if(($e['status']??'')==='waiting'||(($e['status']??'')==='running'&&(int)($e['current']??0)<=0)){$nextIdx=$i;break 2;}
+    }
+}
+if($nextIdx>=0){
+    $nextEntry=$queue['entries'][$nextIdx];$nextLane=bslRowLane($nextEntry);
+    $nextProducts=bslLaneProductsFile($nextLane);$nextProgress=bslLaneProgressFile($nextLane);
+    @unlink($nextProducts);localTaskDbForget($nextProgress);@unlink($nextProgress);
+    /* A lane may clear only its own targeted stop signal, never a concurrent
+       operation's signal from the other lane. */
+    if(is_file(BSL_STOP_FILE)){
+        $stopSignal=@json_decode((string)@file_get_contents(BSL_STOP_FILE),true);
+        $stopQid=(string)($stopSignal['queue_id']??'');$stopLane=bslNormalizeProfileLane($stopSignal['lane']??$nextLane);
+        if($stopQid!==''&&$stopQid===(string)($nextEntry['id']??'')&&$stopLane===$nextLane)@unlink(BSL_STOP_FILE);
+    }
+    @copy($nextEntry['products_file'],$nextProducts);
+    $queue['entries'][$nextIdx]['status']='running';$queue['entries'][$nextIdx]['started_at']=time();
+    $nextEntry=$queue['entries'][$nextIdx];bslWriteQueue($queue);queueBackendUnlock($__nextLock);
+    $nextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$nextLane],
+        ['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1','lane'=>$nextLane]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+    queueBackendUnlock($__laneProbe);
+    echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'lane'=>$nextLane,'total'=>$nextEntry['total'],'worker_pid'=>$nextPid,
+        'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'msg'=>'شروع فرآیند بعدی همین لین از صف'],JSON_UNESCAPED_UNICODE);
 }else{
-bslWriteQueue($queue);
-echo json_encode(['ok'=>true,'next_id'=>null,'msg'=>'صف خالی — فرآیند بعدی موجود نیست'],JSON_UNESCAPED_UNICODE);
+    bslWriteQueue($queue);echo json_encode(['ok'=>true,'next_id'=>null,'lane'=>$__requestedNextLane,'msg'=>'صف این لین خالی است'],JSON_UNESCAPED_UNICODE);
 }
 exit;
 }
@@ -92838,7 +92868,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <!-- hidden compat: keep bsSendAllShops for saveConn compatibility -->
 <input type="checkbox" id="bsSendAllShops" style="display:none" onchange="bslToggleAllShops()">
 
-<!-- v10.568: each lane tab shows its own live queue state and progress. -->
+<!-- v10.571: show live lane state only on the selected tab; keep the other lane private. -->
 <div id="bslSendLaneTabs" role="tablist" aria-label="مسیرهای ارسال باسلام" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:9px 0 10px;padding:5px;background:#0f172a;border:1px solid #334155;border-radius:11px">
   <button type="button" id="bslLaneTab1" role="tab" aria-selected="true" aria-controls="bslQueueList" class="btn btn-cyan" onclick="setBslSendLane('fast')" style="display:block;min-width:0;padding:9px;text-align:center">
     <span style="display:block;font-weight:800">🛣️ لین ۱</span><small style="display:block;font-size:9px;margin-top:2px">بدون جزئیات · فقط عکس فهرست · همهٔ پروفایل‌ها</small>
@@ -100026,6 +100056,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.571', t:'🧭 جداسازی وضعیت و پیشرفت دو لین باسلام', items:[
+    'صف، کارت عملیات جاری، آمار و گزارشِ قابل‌مشاهده فقط از ردیف‌های لین انتخاب‌شده ساخته می‌شوند؛ تغییر تب، وضعیت و گزارش لین دیگر را پاک/نمایش نمی‌دهد.',
+    'پویش پیشرفت با queue_id و شناسهٔ نسلِ تب مقید شد تا پاسخ دیررس لین قبلی نتواند پنل لین جدید را بازنویسی کند؛ بارگذاری اولیه و گزارش خطا هم فقط وضعیت همان لین را می‌خوانند.',
+    'ادامهٔ خودکار صف پس از پایان عملیات، با پارامتر lane محدود می‌شود و فقط ردیف‌های همان لین را dispatch می‌کند؛ سیگنال توقف لین دیگر پاک نمی‌شود.'
+  ]},
   {v:'10.570', t:'🧾 پذیرش جزئیاتِ ناقص در لین ۲', items:[
     'لین ۲ دیگر پوشش جزئیات ۱۰۰٪ برای همهٔ محصولات را اجباری نمی‌کند؛ کافی است دادهٔ جزئیات واقعی دست‌کم برای یک محصول در پروفایل ذخیره شده باشد.',
     'محصولاتِ فاقد جزئیات همچنان همراه سایر محصولات در صف می‌مانند؛ پروفایلی که هیچ دادهٔ واقعی جزئیات ندارد همچنان از لین ۲ رد می‌شود.',
@@ -115543,15 +115578,18 @@ function bslRenderSendStatusGrid(d,rateMetric){
 // v7.48: Poll BaSalam send progress — live stats, synced logs, elapsed time, ETA
 function pollBslProgress() {
     const _pollQid=String(window._currentBslQueueId||'');
-    fetch('?poll_bsl=1'+(_pollQid?'&queue_id='+encodeURIComponent(_pollQid):'')).then(r=>r.json()).then(d=>{
-        if(!d) {setTimeout(pollBslProgress,2000);return;}
+    if(!_pollQid)return;
+    const _pollLane=bslSelectedSendLane();
+    const _pollToken=Number(window._bslProgressPollToken)||0;
+    const schedulePoll=(delay)=>setTimeout(()=>{
+        if(_pollToken===(Number(window._bslProgressPollToken)||0)&&_pollLane===bslSelectedSendLane()&&_pollQid===String(window._currentBslQueueId||''))pollBslProgress();
+    },delay);
+    fetch('?poll_bsl=1&queue_id='+encodeURIComponent(_pollQid)+'&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{
+        if(_pollToken!==(Number(window._bslProgressPollToken)||0)||_pollLane!==bslSelectedSendLane()||_pollQid!==String(window._currentBslQueueId||''))return;
+        if(!d) {schedulePoll(2000);return;}
         const responseQueueId=String(d.queue_id||'');
-        const activeQueueId=String(window._currentBslQueueId||'');
+        if(responseQueueId&&responseQueueId!==_pollQid){schedulePoll(2000);return;}
         window._bslCompletedQueueIds=window._bslCompletedQueueIds||{};
-        if(responseQueueId&&activeQueueId&&responseQueueId!==activeQueueId&&!window._bslCompletedQueueIds[activeQueueId]){
-            // Ignore the previous row's shared progress while a new/resumed row is starting.
-            setTimeout(pollBslProgress,1000);return;
-        }
         if(responseQueueId&&responseQueueId!==String(window._bslDisplayedQueueId||'')){
             window._bslDisplayedQueueId=responseQueueId;
             window._currentBslQueueId=responseQueueId;
@@ -115733,9 +115771,9 @@ function pollBslProgress() {
             bslLastDoneQueueId=thisQueueId;
             if(rememberBslCompletionToast(d))showToast('✓ '+sent+' جدید, '+updated+' آپدیت, '+skipped+' بدون تغییر, '+failed+' خطا');
             // v7.38: Auto-run Phase 2 — check for category-rejected products
-            setTimeout(bslPhase2Check,2000);
+            setTimeout(()=>{if(_pollToken===(Number(window._bslProgressPollToken)||0)&&_pollLane===bslSelectedSendLane())bslPhase2Check(_pollLane,_pollToken);},2000);
             // v7.48: After process done, check queue and auto-start next entry
-            setTimeout(()=>{startNextBslQueueEntry();},4000);
+            if(['fast','detail'].includes(String(d.lane||'')))setTimeout(()=>startNextBslQueueEntry(String(d.lane)),4000);else setTimeout(()=>startNextBslQueueEntry('legacy'),4000);
             return;
         }
         // v7.66: Improved stale detection — use last_progress_ts from progress file for reliable detection
@@ -115765,7 +115803,7 @@ function pollBslProgress() {
                    FormData above and could select the wrong queue row. */
                 const runningQueueId=d.queue_id||window._currentBslQueueId||'';
                 $('bSS').textContent='⚠ بی‌حرکتی تشخیص داده شد — نگهبان سرور در حال بررسی checkpoint '+toFa(current)+(runningQueueId?' · '+runningQueueId.slice(-8):'');
-                setTimeout(pollBslProgress,1000);
+                schedulePoll(1000);
                 bslLastUpdateTime=Date.now();
                 return;
             }else{
@@ -115779,8 +115817,8 @@ function pollBslProgress() {
         if(!window._bslPollCounter)window._bslPollCounter=0;
         window._bslPollCounter++;
         if(window._bslPollCounter%5===0)checkBslQueue();
-        setTimeout(pollBslProgress, 1000);
-    }).catch(()=>{setTimeout(pollBslProgress, 2000);});
+        schedulePoll(1000);
+    }).catch(()=>{schedulePoll(2000);});
 }
 
 function loadCats(){fetch('',{method:'POST',body:new URLSearchParams('action=woo_categories')}).then(r=>r.json()).then(d=>{if(d.ok&&d.categories){wooAllCats=d.categories;const s=$('wcCat'),v=s.value;s.innerHTML='<option value="0">--</option>';d.categories.forEach(c=>s.innerHTML+='<option value="'+c.id+'">'+esc(c.name)+' ('+c.count+')</option>');if(v)s.value=v;renderWooProfileCats(wooProfileCatId);}}).catch(()=>{});}
@@ -116470,12 +116508,15 @@ function toggleCmpSection(el){
 
 // v7.50 / v10.460: Queue a BSL send — اولویت با ساخت سرورساید از پروفایل (۱ درخواست سبک بدون آپلود مگابایتی)
 function queueBslSend(ps,catId){
+    const sendLane=bslSelectedSendLane();
+    const visibleLane=()=>bslSelectedSendLane()===sendLane;
+    const setVisibleStatus=(text)=>{if(visibleLane())$('bSS').textContent=text;};
     const autoCat=Boolean($('bsAutoCat')&&$('bsAutoCat').checked);
     const profKey=getSelectedSendProfileKey();
     const hasClientItems=Array.isArray(ps)&&ps.length>0;
     const titleSuffix=$('titleSuffix')?$('titleSuffix').value.trim():'';
     const qid='q_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
-    $('bSS').textContent='ثبت در صف و شروع ارسال باسلام...';
+    setVisibleStatus('ثبت در صف و شروع ارسال باسلام...');
     s4ExpandQueuePanel('bsl');
     function finishBslQueueAdded(d,fallbackCount){
         const totalFinal=parseInt(d.total)||fallbackCount||0;
@@ -116485,12 +116526,18 @@ function queueBslSend(ps,catId){
         }
         if(d.status==='waiting'){
             showToast('📋 ارسال دیگری در جریان است — «'+(($('profileName')&&$('profileName').value)||profKey||'این پروفایل')+'» در صف قرار گرفت');
-            $('bSS').textContent='📋 در صف باسلام — بعد از پایان ارسال فعلی خودکار شروع می‌شود';
-            $('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');
+            setVisibleStatus('📋 در صف لین '+(sendLane==='detail'?'۲':'۱')+' — پس از پایان عملیات همین لین شروع می‌شود');
+            if(visibleLane()){$('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');}
             checkBslQueue();
             return;
         }
-        showToast('✓ '+toFa(totalFinal)+' محصول در صف باسلام — سرورساید');
+        showToast('✓ '+toFa(totalFinal)+' محصول در صف لین '+(sendLane==='detail'?'۲':'۱')+' — سرورساید');
+        if(!(d.worker_pid>0)){
+            const fd3=new FormData();fd3.append('from_file','1');fd3.append('queue_id',qid);fd3.append('resume','1');fd3.append('lane',sendLane);
+            fetch('?action=bsl_backend&lane='+encodeURIComponent(sendLane),{method:'POST',body:fd3}).catch(()=>{});
+        }
+        if(!visibleLane()){checkBslQueue();return;}
+        bslResetLiveProgressView();
         bSend=true;
         bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
         bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
@@ -116501,16 +116548,12 @@ function queueBslSend(ps,catId){
         $('bR').classList.remove('hidden');
         $('bR').innerHTML='<div style="color:#67e8f9;font-weight:bold;padding:8px;margin-bottom:4px;background:#1e3a5f;border-radius:6px">✓ ارسال '+toFa(totalFinal)+' محصول باسلام (سرورساید — بسته مرورگر ادامه می‌دهد)</div>';
         $('bSM').classList.remove('hidden');$('bO').textContent=toFa(0);$('bU').textContent=toFa(0);$('bK').textContent=toFa(0);$('bF').textContent=toFa(0);$('bX').textContent=toFa(0);$('bT').textContent=toFa(totalFinal);
-        $('bSS').textContent='✓ شروع ارسال...';
+        setVisibleStatus('✓ شروع ارسال...');
         window._currentBslQueueId=qid;
         console.log('[BSL queue] starting '+qid+' with '+totalFinal+' products (worker_pid='+(d.worker_pid||0)+')');
         checkBslQueue();
-        if(!(d.worker_pid>0)){
-            const fd3=new FormData();fd3.append('from_file','1');fd3.append('queue_id',qid);fd3.append('resume','1');
-            fetch('?action=bsl_backend',{method:'POST',body:fd3}).catch(()=>{});
-        }
         $('bR').innerHTML+='<div style="color:#22c55e;padding:4px;font-size:12px">✓ ارسال شروع شد — پیشرفت زنده نمایش می‌شود</div>';
-        setTimeout(pollBslProgress,1000);
+        if(visibleLane())setTimeout(pollBslProgress,1000);
     }
     function buildBslAddFormData(totalCount,fromProfile){
         const fd2=new FormData();
@@ -116523,7 +116566,7 @@ function queueBslSend(ps,catId){
         fd2.append('product_timeout_sec',$('bsProductTimeout')?($('bsProductTimeout').value||'180'):'180');
         fd2.append('send_parallel_n',$('bsParallelN')?($('bsParallelN').value||'4'):'4');
         fd2.append('send_parallel_auto',($('bsParallelAuto')&&!$('bsParallelAuto').checked)?'0':'1');
-        fd2.append('profile_lane',bslSelectedSendLane());
+        fd2.append('profile_lane',sendLane);
         fd2.append('start_immediately','1');
         fd2.append('profile_key',profKey);
         fd2.append('profile_name',($('profileName')&&$('profileName').value)||'');
@@ -116546,7 +116589,7 @@ function queueBslSend(ps,catId){
     }
     function uploadChunksAndAddBsl(){
         if(!hasClientItems){
-            $('bSS').textContent='⚠️ محصولی برای ارسال یافت نشد';
+            setVisibleStatus('⚠️ محصولی برای ارسال یافت نشد');
             showToast('محصولی برای ارسال در این پروفایل یافت نشد',1);
             return;
         }
@@ -116557,9 +116600,9 @@ function queueBslSend(ps,catId){
             if(savedChunks>=chunks.length){
                 const fd2=buildBslAddFormData(totalSaved,false);
                 fetch('?bsl_queue_add=1',{method:'POST',body:fd2}).then(r=>r.json()).then(d=>{
-                    if(!d.ok){$('bSS').textContent='❌ '+(d.error||'خطا در ثبت صف');showToast('خطا: '+d.error,1);checkBslQueue();return;}
+                    if(!d.ok){setVisibleStatus('❌ '+(d.error||'خطا در ثبت صف'));showToast('خطا: '+d.error,1);checkBslQueue();return;}
                     finishBslQueueAdded(d,totalSaved);
-                }).catch(err=>{$('bSS').textContent='❌ خطا در ثبت صف باسلام';showToast('خطای ارتباط هنگام ثبت صف باسلام: '+(err&&err.message?err.message:'شبکه'),1);});
+                }).catch(err=>{setVisibleStatus('❌ خطا در ثبت صف باسلام');showToast('خطای ارتباط هنگام ثبت صف باسلام: '+(err&&err.message?err.message:'شبکه'),1);});
                 return;
             }
             const chunk=chunks[savedChunks];
@@ -116567,11 +116610,11 @@ function queueBslSend(ps,catId){
             const b64=s4EncodeProductsChunkB64(chunk);
             if(b64)fd.append('products_b64',b64);else fd.append('products',JSON.stringify(chunk));
             fd.append('chunk_index',String(savedChunks));fd.append('queue_id',qid);
-            $('bSS').textContent='ذخیره '+toFa(totalSaved)+'/'+toFa(ps.length)+' محصول...';
+            setVisibleStatus('ذخیره '+toFa(totalSaved)+'/'+toFa(ps.length)+' محصول...');
             fetch('?bsl_queue_save_products=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-                if(!d.ok){$('bSS').textContent='❌ '+(d.error||'خطا در ذخیره محصولات');showToast('خطا: '+d.error,1);return;}
+                if(!d.ok){setVisibleStatus('❌ '+(d.error||'خطا در ذخیره محصولات'));showToast('خطا: '+d.error,1);return;}
                 totalSaved=d.total_saved;savedChunks++;saveNextQueueChunk();
-            }).catch(()=>{$('bSS').textContent='❌ خطا شبکه در ارسال محصولات به صف';showToast('خطا شبکه هنگام ذخیره محصولات در صف',1);});
+            }).catch(()=>{setVisibleStatus('❌ خطا شبکه در ارسال محصولات به صف');showToast('خطا شبکه هنگام ذخیره محصولات در صف',1);});
         }
         saveNextQueueChunk();
     }
@@ -116579,7 +116622,7 @@ function queueBslSend(ps,catId){
         fetch('?bsl_queue_add=1',{method:'POST',body:buildBslAddFormData(hasClientItems?ps.length:0,true)}).then(r=>r.json()).then(d=>{
             if(!d.ok){
                 if(d.code==='fallback_upload_needed'&&hasClientItems){uploadChunksAndAddBsl();return;}
-                $('bSS').textContent='❌ '+(d.error||'خطا در شروع ارسال');
+                setVisibleStatus('❌ '+(d.error||'خطا در شروع ارسال'));
                 showToast('خطا: '+(d.error||'ثبت صف باسلام ناموفق بود'),1);
                 checkBslQueue();
                 return;
@@ -116587,7 +116630,7 @@ function queueBslSend(ps,catId){
             finishBslQueueAdded(d,hasClientItems?ps.length:0);
         }).catch(()=>{
             if(hasClientItems)uploadChunksAndAddBsl();
-            else{$('bSS').textContent='❌ خطا شبکه';showToast('خطای شبکه هنگام شروع ارسال باسلام',1);}
+            else{setVisibleStatus('❌ خطا شبکه');showToast('خطای شبکه هنگام شروع ارسال باسلام',1);}
         });
         return;
     }
@@ -116822,70 +116865,33 @@ const vCheck=document.querySelector('h1');if(vCheck&&!vCheck.textContent.include
 
 // v7.48: Auto-detect running BSL process on page load (works across devices/refreshes)
 // v7.51: Auto-detect running process on page load
-(function checkBslRunningOnLoad(){
-    // v7.56: On page load, check if there's a running server-side process and just POLL to display progress.
-    // NEVER start client-driven sendNextQueueProduct — it conflicts with server-side processing!
-    // If server process died, offer "resume from server" button.
-    fetch('?poll_bsl=1').then(r=>r.json()).then(d=>{
-        if(d&&d.running&&!d.done){
-            window._currentBslQueueId=String(d.queue_id||'');
-            console.log('Server-side BSL process running on load — resuming polling');
-            bSend=true;
-            $('bST').classList.remove('hidden');
-            $('bP').classList.remove('hidden');$('bR').classList.remove('hidden');$('bSM').classList.remove('hidden');
-            const sent=d.sent||0,updated=d.updated||0,skipped=d.skipped||0,failed=d.failed||0,total=d.total||0,current=d.current||0;
-            $('bO').textContent=toFa(sent);$('bU').textContent=toFa(updated);$('bK').textContent=toFa(skipped);$('bF').textContent=toFa(failed);$('bX').textContent=toFa(d.retired||0);$('bT').textContent=toFa(total);
-            $('bPB').style.width=(total>0?current/total*100:0)+'%';
-            const logDiv=$('bR');
-            const logs=d.recent_log||[];
-            const totalLogCount=d.total_log_count||0;
-            for(let i=0;i<logs.length;i++){
-                const raw=logs[i];const m=Array.isArray(raw)?raw.map(String).filter(Boolean).join(' · '):String(raw??'');if(!m)continue;let cls='';
-                if(m.includes('\u2713'))cls='color:#22c55e;background:#14532d20;padding:3px 8px;font-size:12px;border-radius:4px';
-                else if(m.includes('\u2717'))cls='color:#ef4444;background:#7f1d1d20;padding:3px 8px;font-size:12px;border-radius:4px';
-                else if(m.includes('\u26a1'))cls='color:#facc15;background:#42200620;padding:3px 8px;font-size:12px;border-radius:4px';
-                else if(m.includes('\u23ed'))cls='color:#94a3b8;padding:2px 6px;font-size:11px';
-                else cls='color:#64748b;padding:1px 8px;font-size:10px';
-                logDiv.insertAdjacentHTML('beforeend','<div style="'+cls+';margin:1px 0">'+esc(m)+'</div>');
-            }
-            const logNodes=logDiv.children;if(logNodes.length>300){for(let j=0;j<logNodes.length-300;j++)logNodes[0].remove();}
-            scrollElBottom(logDiv);
-            bslLastLogCount=totalLogCount;bslLastUpdateTime=Date.now();
-            if(d.sent_details)bslReportData.sent=d.sent_details;
-            if(d.updated_details)bslReportData.updated=d.updated_details;
-            if(d.skipped_details)bslReportData.skipped=d.skipped_details;
-            if(d.failed_details)bslReportData.failed=d.failed_details;
-            if(d.retired_details)bslReportData.retired=d.retired_details;
-            let elapsedStr='';
-            if(d.started_at>0){const elapsedSec=Math.floor(Date.now()/1000-d.started_at);elapsedStr=elapsedSec>=60?(Math.floor(elapsedSec/60)+' \u062f\u0631\u06cc\u0642\u0647 '+elapsedSec%60+' \u062b\u0627\u0646\u06cc\u0647'):(elapsedSec+' \u062b\u0627\u0646\u06cc\u0647');}
-            const pc=parseInt(d.phase_current)||0,pt=parseInt(d.phase_total)||0;
-            $('bSS').textContent=(d.phase_label&&pt?(String(d.phase_label)+' — '+toFa(pc)+'/'+toFa(pt)+' ('+Math.round(Number(d.phase_pct??pc*100/pt))+'٪)'):(toFa(current)+'/'+toFa(total)+' ('+(total?Math.round(current/total*100):0)+'٪)'))+(elapsedStr?' | '+elapsedStr:'');
-            if(d.last_title)$('bSS').title='\u0645\u062d\u0635\u0648\u0644 \u0641\u0639\u0644\u06cc: '+d.last_title;
-            pollBslProgress();
-        }else{
-            // v7.66: No running process — check for waiting/stuck entries, trigger bsl_backend
-            fetch('?bsl_queue_status=1').then(r=>r.json()).then(q=>{
-                const stuckEntry=q.entries?.find(e=>e.status==='running'&&e.current>0);
-                const waitingEntry=q.entries?.find(e=>e.status==='waiting');
-                if(stuckEntry||waitingEntry){
-                    // Found waiting or stuck — trigger bsl_backend
-                    $('bSS').textContent='\u26a0 \u0631\u0633\u0627\u0646 \u0633\u0631\u0648\u0631 \u0642\u0637\u0639 \u0634\u062f \u2014 \u06a9\u0644\u06cc\u06a9 \u0631\u0627 \u0628\u0631\u0627\u06cc \u0627\u062f\u0627\u0645\u0647';
-                    checkBslQueue();
-                }else{
-                    $('bSS').textContent='';
-                    checkBslQueue();
-                }
-            }).catch(()=>{checkBslQueue();});
-        }
-        checkBslQueue();
-    }).catch(()=>{checkBslQueue();});
-})();
-// v10.565: Basalam Send sub-tabs. Internal fast/detail names are stable disk
-// identifiers; Lane 1 is no-detail and Lane 2 requires complete details.
+/* v10.571: initial lane and its queue are initialized together below; the old
+   unscoped poll_bsl-on-load path could paint whichever lane answered first. */
+// v10.571: lane tabs own their queue view, progress poll, and auto-advance.
+// fast/detail are stable disk identifiers for Lane 1 / Lane 2 respectively.
 let bslSendLane=(localStorage.getItem('s4_bsl_send_lane')==='detail'?'detail':'fast');
 let bslLastQueueSnapshot=null;
 function bslSelectedSendLane(){return bslSendLane==='detail'?'detail':'fast';}
 function bslEntryInSelectedLane(e){const l=String((e&&e.lane)||'legacy');return bslSendLane==='detail'?l==='detail':l!=='detail';}
+function bslResetLiveProgressView(){
+    window._bslProgressPollToken=(Number(window._bslProgressPollToken)||0)+1;
+    window._currentBslQueueId='';window._bslDisplayedQueueId='';bSend=false;
+    bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
+    bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;bslLastCurrent=-1;bslLastPhaseSig='';bslResumeCount=0;
+    ['bP','bR','bSM','bslSendStatusGrid','bST','bRB'].forEach(id=>{const el=$(id);if(el)el.classList.add('hidden');});
+    const bar=$('bPB');if(bar)bar.style.width='0%';
+    const status=$('bSS');if(status){status.textContent='';status.removeAttribute('title');}
+    const log=$('bR');if(log){log.innerHTML='';log.dataset.logIdx='0';}
+    [['bO','۰'],['bU','۰'],['bK','۰'],['bF','۰'],['bX','۰'],['bT','۰']].forEach(([id,value])=>{const el=$(id);if(el)el.textContent=value;});
+    const shops=$('bslLiveShops');if(shops)shops.innerHTML='';
+}
+function bslShowRunningLaneEntry(row){
+    if(!row)return;
+    window._currentBslQueueId=String(row.id||'');bSend=true;
+    $('bST').classList.remove('hidden');$('bP').classList.remove('hidden');
+    $('bR').classList.remove('hidden');$('bSM').classList.remove('hidden');
+    pollBslProgress();
+}
 function bslRenderLaneIndicators(q){
     const all=Array.isArray(q&&q.entries)?q.entries:[];
     [['fast',1],['detail',2]].forEach(([lane,n])=>{
@@ -116898,6 +116904,12 @@ function bslRenderLaneIndicators(q){
             totalProducts+=total;doneProducts+=current;
         });
         const badge=$('bslLaneState'+n),bar=$('bslLaneProgress'+n),tab=$('bslLaneTab'+n);
+        const track=bar&&bar.parentElement;
+        if(lane!==bslSelectedSendLane()){
+            if(badge)badge.style.display='none';if(track)track.style.display='none';if(tab)tab.removeAttribute('title');
+            return;
+        }
+        if(badge)badge.style.display='block';if(track)track.style.display='block';
         const active=count.running+count.waiting+count.paused;
         let text=active?[...(count.running?['🔄 '+toFa(count.running)+' جاری']:[]),...(count.waiting?['⏳ '+toFa(count.waiting)+' در صف']:[]),...(count.paused?['⏸ '+toFa(count.paused)+' متوقف']:[])].join(' · '):
             (count.failed?'❌ '+toFa(count.failed)+' خطا':(count.done?'✅ '+toFa(count.done)+' تکمیل‌شده':'آماده · صف خالی'));
@@ -116913,12 +116925,50 @@ function setBslSendLane(lane){
     if(a){a.classList.toggle('btn-cyan',bslSendLane==='fast');a.classList.toggle('btn-gray',bslSendLane!=='fast');a.setAttribute('aria-selected',bslSendLane==='fast'?'true':'false');}
     if(b){b.classList.toggle('btn-cyan',bslSendLane==='detail');b.classList.toggle('btn-gray',bslSendLane!=='detail');b.setAttribute('aria-selected',bslSendLane==='detail'?'true':'false');}
     const hint=$('bslLaneSelectedHint');if(hint)hint.textContent=bslSendLane==='detail'?'لین ۲ فقط پروفایل ذخیره‌شده با سلکتور جزئیات و دادهٔ واقعی برای دست‌کم یک محصول را می‌پذیرد؛ خالی‌بودن جزئیات بعضی محصولات مانع نیست.':'لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ دو لین می‌توانند همزمان اجرا شوند.';
-    if(bslLastQueueSnapshot)bslRenderLaneIndicators(bslLastQueueSnapshot);
-    const q=bslLastQueueSnapshot;if(q){const row=(q.entries||[]).find(e=>bslEntryInSelectedLane(e)&&e.status==='running');window._currentBslQueueId=row?String(row.id||''):'';bSend=!!row;renderBslQueue(q);bslApplyQueueActionState(q);if(row)pollBslProgress();}
+    bslResetLiveProgressView();
+    const q=bslLastQueueSnapshot;if(q){
+        const row=(q.entries||[]).find(e=>bslEntryInSelectedLane(e)&&e.status==='running');
+        renderBslQueue(q);bslApplyQueueActionState(q);
+        if(row)bslShowRunningLaneEntry(row);
+    }
+    checkBslQueue();
 }
 setTimeout(()=>setBslSendLane(bslSendLane),0);
 // v7.48: Queue management functions
 let bslQueuePollTimer=null;
+let bslLaneBackgroundMonitors={};
+function bslStopLaneBackgroundMonitor(lane){
+    const old=bslLaneBackgroundMonitors[lane];if(old&&old.timer)clearTimeout(old.timer);delete bslLaneBackgroundMonitors[lane];
+}
+function bslWatchHiddenLane(lane,queueId){
+    if(lane===bslSelectedSendLane()){bslStopLaneBackgroundMonitor(lane);return;}
+    const old=bslLaneBackgroundMonitors[lane];if(old&&old.queueId===queueId)return;
+    bslStopLaneBackgroundMonitor(lane);
+    const state={queueId:String(queueId||''),timer:null};bslLaneBackgroundMonitors[lane]=state;
+    const tick=()=>{
+        if(bslLaneBackgroundMonitors[lane]!==state)return;
+        if(lane===bslSelectedSendLane()){bslStopLaneBackgroundMonitor(lane);return;}
+        fetch('?poll_bsl=1&queue_id='+encodeURIComponent(state.queueId)+'&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{
+            if(bslLaneBackgroundMonitors[lane]!==state||lane===bslSelectedSendLane())return;
+            if(d&&d.done){bslStopLaneBackgroundMonitor(lane);startNextBslQueueEntry(lane);checkBslQueue();return;}
+            state.timer=setTimeout(tick,2500);
+        }).catch(()=>{if(bslLaneBackgroundMonitors[lane]===state)state.timer=setTimeout(tick,4000);});
+    };
+    tick();
+}
+function bslManageLaneOperations(q){
+    const all=Array.isArray(q&&q.entries)?q.entries:[];
+    ['fast','detail'].forEach(lane=>{
+        const rows=all.filter(e=>e&&String(e.lane||'legacy')===(lane==='fast'?'fast':'detail')||(lane==='fast'&&e&&String(e.lane||'legacy')==='legacy'));
+        const running=rows.find(e=>e.status==='running');
+        const waiting=rows.some(e=>e.status==='waiting');
+        const runningLane=running&&String(running.lane||'legacy')==='legacy'?'legacy':lane;
+        if(lane===bslSelectedSendLane()){bslStopLaneBackgroundMonitor(lane);if(lane==='fast')bslStopLaneBackgroundMonitor('legacy');}
+        else if(running)bslWatchHiddenLane(runningLane,String(running.id||''));
+        else bslStopLaneBackgroundMonitor(lane);
+        if(waiting&&!running)startNextBslQueueEntry(lane);
+    });
+}
 /* v10.549: derive the primary action from the server queue on every poll. The
    local bSend flag can survive refreshes or race with progress polling and must
    never make an active server send look like a new direct send. */
@@ -116941,7 +116991,7 @@ function bslApplyQueueActionState(q){
 }
 function checkBslQueue(){
     fetch('?bsl_queue_status=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(q=>{
-        bslLastQueueSnapshot=q;renderBslQueue(q);
+        bslLastQueueSnapshot=q;renderBslQueue(q);bslManageLaneOperations(q);
         const running=bslApplyQueueActionState(q);
         // v7.66: NEVER start client-driven sendNextQueueProduct — bsl_backend does the work
         // If a 'running' entry is found and no polling is active, just start polling to display progress
@@ -116959,7 +117009,7 @@ function checkBslQueue(){
 }
 function bslRunSendFeedback(btn){
     if(btn){btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent='⏳ بررسی وضعیت…';}
-    fetch('?bsl_send_feedback=1',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+    fetch('?bsl_send_feedback=1&lane='+encodeURIComponent(bslSelectedSendLane()),{cache:'no-store'}).then(r=>r.json()).then(d=>{
         if(!d||!d.ok)throw new Error((d&&d.error)||'پاسخ فیدبک نامعتبر است');
         const ident=d.site||{},q=d.queue||{},row=q.active_row||{},cron=d.cron||{},worker=cron.worker||{},book=q.resume_book||{},lockInfo=q.backend_lock||{};
         const notif=(d.notifications&&d.notifications.enabled)||{};
@@ -117833,10 +117883,15 @@ function closeBslQueueDetail(){
 // v7.51: Client-driven queue send — like sendBslClient, one product at a time
 // No server-side PHP stream needed. No polling. No timeout issues.
 let bslQueueRunner=null; // track current running queue entry
-function startNextBslQueueEntry(){
-    fetch('?bsl_queue_start_next=1').then(r=>r.json()).then(d=>{
-        if(!d||!d.ok){if(d&&d.running){setTimeout(pollBslProgress,1200);return;}bSend=false;checkBslQueue();return;}
-        if(!d.next_id){bSend=false;checkBslQueue();return;}
+function startNextBslQueueEntry(lane){
+    lane=(lane==='fast'||lane==='detail'||lane==='legacy')?lane:bslSelectedSendLane();
+    window._bslStartNextBusy=window._bslStartNextBusy||{};if(window._bslStartNextBusy[lane])return;
+    window._bslStartNextBusy[lane]=true;
+    fetch('?bsl_queue_start_next=1&lane='+encodeURIComponent(lane)).then(r=>r.json()).then(d=>{
+        if(!d||!d.ok){if(d&&d.running){setTimeout(()=>startNextBslQueueEntry(lane),1200);return;}if(lane===bslSelectedSendLane())bSend=false;checkBslQueue();return;}
+        if(!d.next_id){if(lane===bslSelectedSendLane())bSend=false;checkBslQueue();return;}
+        if(lane!==bslSelectedSendLane()){checkBslQueue();return;}
+        bslResetLiveProgressView();
         window._currentBslQueueId=String(d.next_id||'');
         bSend=true;
         bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
@@ -117844,10 +117899,10 @@ function startNextBslQueueEntry(){
         $('bSM').classList.remove('hidden');$('bPB').style.width='0%';$('bR').classList.remove('hidden');$('bR').innerHTML='';
         if(!(d.worker_pid>0)){
             const fd=new FormData();fd.append('from_file','1');fd.append('queue_id',window._currentBslQueueId);fd.append('resume','1');
-            fetch('?action=bsl_backend',{method:'POST',body:fd}).catch(()=>{});
+            fd.append('lane',lane);fetch('?action=bsl_backend&lane='+encodeURIComponent(lane),{method:'POST',body:fd}).catch(()=>{});
         }
         setTimeout(pollBslProgress,1000);checkBslQueue();
-    }).catch(()=>setTimeout(startNextBslQueueEntry,2000));
+    }).catch(()=>setTimeout(()=>startNextBslQueueEntry(lane),2000)).finally(()=>{if(window._bslStartNextBusy)window._bslStartNextBusy[lane]=false;});
 }
 // v7.81 LEGACY: Old client-driven startNextBslQueueEntry — kept for reference
 function _legacyStartNextBslQueueEntry(){
@@ -117987,7 +118042,7 @@ function finishQueueEntry(){
     markQueueEntryDone(q.id,q);
     bslQueueRunner=null;
     // Auto-start next waiting queue entry after 3 seconds
-    setTimeout(()=>{startNextBslQueueEntry();},3000);
+    setTimeout(()=>{startNextBslQueueEntry(q.lane||bslSelectedSendLane());},3000);
 }
 
 /* v7.24: JS status bar removed — errors only shown in _dbg panel */
@@ -120948,8 +121003,11 @@ showBslProductDetail=function(idx){
 };
 
 // v7.38: Phase 2 — Auto check for category-rejected products after send
-function bslPhase2Check(){
+function bslPhase2Check(expectedLane,expectedToken){
+    const stillOwnsView=()=>expectedLane===undefined||(expectedLane===bslSelectedSendLane()&&Number(expectedToken)===Number(window._bslProgressPollToken||0));
+    if(!stillOwnsView())return;
     fetch('?bsl_rejected_cats=1').then(r=>r.json()).then(d=>{
+        if(!stillOwnsView())return;
         if(!d||!d.ok){showToast('خطا در بررسی محصولات رد شده',1);return;}
         const rejected=d.rejected||[];
         const cats=d.categories||[];
