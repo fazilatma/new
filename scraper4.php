@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.571';
+const APP_VERSION = '10.572';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48300,6 +48300,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$__explicitNextLane=array_key_exists(\'lane\',$_GET)')!==false
         &&strpos($selfSrc,"{v:'10." . "571'")!==false
         &&version_compare(APP_VERSION,'10.571','>='));
+    $add('10.572','کلیکِ ارسال، صف lane منتخب را صریحاً به حرکت درمی‌آورد',
+        strpos($selfSrc,'startNextBslQueueEntry(sendLane);')!==false
+        &&strpos($selfSrc,'setTimeout(()=>startNextBslQueueEntry(sendLane),250);')!==false
+        &&strpos($selfSrc,'Pump the explicit lane even when the enqueue response reports a PID')!==false
+        &&strpos($selfSrc,"{v:'10." . "572'")!==false
+        &&version_compare(APP_VERSION,'10.572','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -100056,6 +100062,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.572', t:'🚀 شروع صریح صف پس از کلیک ارسال در هر لین', items:[
+    'پس از ثبت ردیف، رابط همان لین را مستقیماً به endpoint شروع صف وصل می‌کند؛ ردیف‌های منتظر نیز به همان lane پمپ می‌شوند تا پاسخ بدون PID یا polling قدیمی، عملیات را بی‌صدا معطل نگذارد.',
+    'شروع تکراری با قفل worker همان لین مهار می‌شود و تلاشِ خودکار در صورت اشغال قفل دوباره انجام می‌گیرد.'
+  ]},
   {v:'10.571', t:'🧭 جداسازی وضعیت و پیشرفت دو لین باسلام', items:[
     'صف، کارت عملیات جاری، آمار و گزارشِ قابل‌مشاهده فقط از ردیف‌های لین انتخاب‌شده ساخته می‌شوند؛ تغییر تب، وضعیت و گزارش لین دیگر را پاک/نمایش نمی‌دهد.',
     'پویش پیشرفت با queue_id و شناسهٔ نسلِ تب مقید شد تا پاسخ دیررس لین قبلی نتواند پنل لین جدید را بازنویسی کند؛ بارگذاری اولیه و گزارش خطا هم فقط وضعیت همان لین را می‌خوانند.',
@@ -116529,14 +116539,19 @@ function queueBslSend(ps,catId){
             setVisibleStatus('📋 در صف لین '+(sendLane==='detail'?'۲':'۱')+' — پس از پایان عملیات همین لین شروع می‌شود');
             if(visibleLane()){$('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');}
             checkBslQueue();
+            // Explicitly pump this lane as well: a stale/missing browser poll
+            // must not leave a Lane 2 row waiting without a visible worker.
+            startNextBslQueueEntry(sendLane);
             return;
         }
         showToast('✓ '+toFa(totalFinal)+' محصول در صف لین '+(sendLane==='detail'?'۲':'۱')+' — سرورساید');
-        if(!(d.worker_pid>0)){
-            const fd3=new FormData();fd3.append('from_file','1');fd3.append('queue_id',qid);fd3.append('resume','1');fd3.append('lane',sendLane);
-            fetch('?action=bsl_backend&lane='+encodeURIComponent(sendLane),{method:'POST',body:fd3}).catch(()=>{});
+        if(!visibleLane()){
+            setTimeout(()=>startNextBslQueueEntry(sendLane),250);
+            checkBslQueue();return;
         }
-        if(!visibleLane()){checkBslQueue();return;}
+        // Pump the explicit lane even when the enqueue response reports a PID:
+        // the lane lock makes this idempotent and recovers from a dead dispatcher.
+        setTimeout(()=>startNextBslQueueEntry(sendLane),250);
         bslResetLiveProgressView();
         bSend=true;
         bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
