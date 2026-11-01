@@ -1,0 +1,20 @@
+{
+  "ai_selected": {
+    "provider": "openrouter",
+    "model": "meta-llama/llama-3.3-70b-instruct:free"
+  },
+  "ai_candidates": [
+    {
+      "provider": "openrouter",
+      "model": "meta-llama/llama-3.3-70b-instruct:free"
+    },
+    {
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile"
+    },
+    {
+      "provider": "deepseek",
+      "model": "deepseek-chat"
+    }
+  ]
+}

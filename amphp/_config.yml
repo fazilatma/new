@@ -1,0 +1,17 @@
+kramdown:
+  input: GFM
+  toc_levels: 2..3
+
+baseurl: ""
+layouts_dir: "layout"
+includes_dir: "includes"
+
+exclude: ["Gemfile", "Gemfile.lock", "README.md", "vendor", "layout"]
+
+repository: amphp/amphp.github.io
+plugins:
+ - "jekyll-redirect-from"
+ - "jekyll-github-metadata"
+ - "jekyll-relative-links"
+
+shared_asset_path: "/asset"

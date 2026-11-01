@@ -1,0 +1,28 @@
+{
+  "master": "openrouter::meta-llama/llama-3.3-70b-instruct:free",
+  "pin": "openrouter::meta-llama/llama-3.3-70b-instruct:free",
+  "scores": {
+    "openrouter::meta-llama/llama-3.3-70b-instruct:free": {
+      "wins": 8,
+      "losses": 1,
+      "votes": 9,
+      "score": 0.889,
+      "last_at": 1724775000
+    },
+    "groq::llama-3.3-70b-versatile": {
+      "wins": 6,
+      "losses": 2,
+      "votes": 8,
+      "score": 0.75,
+      "last_at": 1724775000
+    },
+    "deepseek::deepseek-chat": {
+      "wins": 5,
+      "losses": 2,
+      "votes": 7,
+      "score": 0.714,
+      "last_at": 1724775000
+    }
+  },
+  "history": []
+}

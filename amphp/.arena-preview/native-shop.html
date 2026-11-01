@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>پیش‌نمایش فروشگاه بومی وردپرس — نسخه ۱۳٫۳٫۲۱</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css">
+<style>
+:root { --accent:#2563eb; }
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family: Vazirmatn, Sahel, Tahoma, system-ui, sans-serif;
+  background:#f1f5f9;
+  color:#0f172a;
+}
+/* نمونهٔ سربرگ قالب وردپرس */
+.theme-header{
+  background:#0f172a;color:#fff;padding:12px 20px;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  position:sticky;top:0;z-index:20;box-shadow:0 4px 20px rgba(0,0,0,.25)
+}
+.theme-header .logo{font-weight:900;font-size:1.05rem}
+.theme-header nav{display:flex;gap:14px;flex-wrap:wrap;font-size:.88rem;font-weight:700}
+.theme-header a{color:#e2e8f0;text-decoration:none}
+.theme-header a:hover{color:#fff}
+.theme-footer{
+  background:#0f172a;color:#94a3b8;padding:28px 20px;margin-top:40px;
+  text-align:center;font-size:.85rem;font-weight:700;line-height:1.8
+}
+.badge{
+  display:inline-block;background:#1e40af;color:#fff;font-size:.72rem;font-weight:900;
+  padding:4px 10px;border-radius:999px
+}
+.amphp-native-hero{
+  background:linear-gradient(135deg,var(--accent) 0%,#0f172a 100%);
+  color:#fff;padding:36px 20px 28px;margin:0 0 24px;
+  border-radius:0 0 24px 24px;box-shadow:0 12px 40px rgba(15,23,42,.18)
+}
+.amphp-native-hero .inner{max-width:1100px;margin:0 auto}
+.amphp-native-hero h1{margin:0 0 8px;font-size:clamp(1.4rem,3vw,2rem);font-weight:900}
+.amphp-native-hero p{margin:0;opacity:.92;line-height:1.85;font-weight:600;max-width:52ch}
+.amphp-native-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.amphp-native-actions a{
+  display:inline-flex;align-items:center;gap:6px;padding:10px 16px;border-radius:999px;
+  font-weight:800;font-size:.9rem;text-decoration:none
+}
+.amphp-native-actions .primary{background:#fff;color:#0f172a}
+.amphp-native-actions .ghost{
+  background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.35)
+}
+.amphp-native-wrap{max-width:1100px;margin:0 auto 40px;padding:0 16px}
+.amphp-native-note{
+  background:#f8fafc;border:1px dashed #cbd5e1;border-radius:14px;padding:12px 14px;
+  font-size:.85rem;color:#475569;font-weight:700;margin-bottom:18px;line-height:1.85
+}
+.amphp-native-note .amphp-tag{
+  display:inline-block;background:#e2e8f0;color:#0f172a;padding:2px 10px;
+  border-radius:999px;font-size:.78rem;font-weight:800;margin-right:4px
+}
+.amphp-native-section-title{margin:0 0 12px;font-size:1.05rem;font-weight:900;color:#0f172a}
+.amphp-native-fallback-grid{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-top:12px
+}
+.amphp-native-card{
+  background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;
+  box-shadow:0 4px 14px rgba(15,23,42,.06);display:flex;flex-direction:column;
+  transition:transform .15s ease,box-shadow .15s ease
+}
+.amphp-native-card:hover{transform:translateY(-3px);box-shadow:0 10px 28px rgba(15,23,42,.12)}
+.amphp-native-card .img{
+  width:100%;aspect-ratio:1;background:linear-gradient(135deg,#e2e8f0,#cbd5e1);
+  display:flex;align-items:center;justify-content:center;font-size:2.5rem
+}
+.amphp-native-card .body{padding:12px;display:flex;flex-direction:column;gap:6px;flex:1}
+.amphp-native-card h3{margin:0;font-size:.92rem;font-weight:800;line-height:1.55}
+.amphp-native-card .price{color:var(--accent);font-weight:900;font-size:1rem;margin-top:auto}
+.amphp-native-card a.btn{
+  margin-top:8px;text-align:center;background:var(--accent);color:#fff;
+  text-decoration:none;font-weight:800;padding:8px;border-radius:10px;font-size:.85rem
+}
+.amphp-native-footer-hint{
+  margin-top:28px;padding:14px;background:#ecfeff;border:1px solid #a5f3fc;border-radius:12px;
+  font-size:.82rem;color:#155e75;font-weight:700;line-height:1.85
+}
+.top-links{
+  padding:10px 16px;background:#eff6ff;border-bottom:1px solid #bfdbfe;
+  font-size:.82rem;font-weight:700;display:flex;gap:16px;flex-wrap:wrap;align-items:center
+}
+.top-links a{color:#1d4ed8;text-decoration:none}
+@media (max-width:640px){
+  .amphp-native-fallback-grid{grid-template-columns:repeat(2,1fr);gap:10px}
+}
+</style>
+</head>
+<body>
+<div class="top-links">
+  <a href="/">← بازگشت به ویترین اصلی</a>
+  <span class="badge">نسخه ۱۳٫۳٫۲۱ · فروشگاه بومی</span>
+  <span>برگهٔ پشتیبان · در خطای چهارصدوچهار به اینجا هدایت می‌شوید</span>
+</div>
+<header class="theme-header">
+  <div class="logo">🧱 سربرگ قالب وردپرس (نمونه)</div>
+  <nav>
+    <a href="/">خانه</a>
+    <a href="/native-shop.html">فروشگاه</a>
+    <a href="#">وبلاگ</a>
+    <a href="#">تماس با ما</a>
+  </nav>
+</header>
+
+<main class="amphp-native-shop" lang="fa" dir="rtl">
+  <section class="amphp-native-hero" aria-label="سربرگ فروشگاه">
+    <div class="inner">
+      <h1>فروشگاه پشتیبان (native) — ویترین React جداست</h1>
+      <p>ویترین سبک با سربرگ و پاصفحهٔ قالب وردپرس. اگر ویترین اصلی خراب، خاموش یا با خطای چهارصدوچهار باشد، مشتری به اینجا می‌آید.</p>
+      <div class="amphp-native-actions">
+        <a class="primary" href="#">🛍 ورود به فروشگاه</a>
+        <a class="ghost" href="#">🛒 سبد خرید</a>
+        <a class="ghost" href="#">👤 حساب کاربری</a>
+      </div>
+    </div>
+  </section>
+  <div class="amphp-native-wrap">
+    <div class="amphp-native-note" role="note">
+      این صفحه با <strong>قالب بومی وردپرس</strong> (سربرگ و پاصفحهٔ قالب فعال) نمایش داده می‌شود و سبک است.
+      <span class="amphp-tag">منبع کالا: ووکامرس</span>
+    </div>
+    <h2 class="amphp-native-section-title">محصولات</h2>
+    <div class="amphp-native-fallback-grid" id="grid"></div>
+    <div class="amphp-native-footer-hint">
+      💡 برگهٔ پشتیبان فروشگاه · در تنظیمات: ساخت خودکار، ریدایرکت چهارصدوچهار، اتصال به صفحهٔ فروشگاه ووکامرس.
+      پس از خاموش‌کردن افزونهٔ ویترین، لینک همین برگه همچنان کار می‌کند (فایل قالب در پوسته کپی می‌شود).
+    </div>
+  </div>
+</main>
+
+<footer class="theme-footer">
+  پاصفحهٔ قالب وردپرس (نمونه)<br>
+  فروشگاه بومی · نسخه ۱۳٫۳٫۲۱
+</footer>
+<script>
+const items=[
+  ['🎧','هدفون بی‌سیم','۱٬۲۵۰٬۰۰۰'],
+  ['⌚','ساعت هوشمند','۲٬۴۹۰٬۰۰۰'],
+  ['💻','لپ‌تاپ سبک','۲۸٬۹۰۰٬۰۰۰'],
+  ['📱','گوشی میان‌رده','۱۲٬۵۰۰٬۰۰۰'],
+  ['📷','دوربین کامپکت','۸٬۷۰۰٬۰۰۰'],
+  ['🎮','دسته بازی','۹۸۰٬۰۰۰'],
+  ['⌨️','کیبورد مکانیکال','۱٬۱۵۰٬۰۰۰'],
+  ['🖥️','مانیتور ۲۷ اینچ','۶٬۴۰۰٬۰۰۰'],
+];
+document.getElementById('grid').innerHTML=items.map(([e,t,p])=>`
+<article class="amphp-native-card">
+  <div class="img">${e}</div>
+  <div class="body">
+    <h3>${t}</h3>
+    <div class="price">${p} تومان</div>
+    <a class="btn" href="#">مشاهده و خرید</a>
+  </div>
+</article>`).join('');
+</script>
+
+<!-- v13.3.21 chat preview (static sandbox — full widget needs WP ajax) -->
+<link rel="stylesheet" href="/?amphp_sf=storefront.css&ver=13.3.21">
+<div id="amphp-support-chat-root" class="amphp-support-chat-root" dir="rtl" style="position:relative;z-index:99999"></div>
+<script>
+window.AMPHP_STOREFRONT = {
+  mode: 'chat-only', chat_only: true,
+  settings: {
+    enable_support_chat: true,
+    chat_window_title: 'پشتیبانی هوشمند',
+    chat_welcome_message: 'سلام! از برگهٔ پشتیبان بومی پیام بفرستید — همان چت هوشمند ویترین.',
+    chat_button_position: 'left',
+    shop_title: 'فروشگاه پشتیبان',
+    accent_color: '#2563eb'
+  },
+  ajax: { ajaxUrl: '/__no_ajax__', url: '/__no_ajax__', chatNonce: 'preview' },
+  products: [], meta: { version: '13.3.21', mode: 'chat-only' }
+};
+</script>
+<script src="/?amphp_sf=storefront.js&ver=13.3.21"></script>
+
+</body>
+</html>

@@ -1,0 +1,13 @@
+.bundle
+_site
+vendor
+Gemfile.lock
+# React storefront build toolchain
+storefront-react/node_modules/
+storefront-react/dist/
+
+# Local sandbox preview/smoke (not shipped)
+.arena-preview/node_modules/
+.arena-preview/package-lock.json
+.arena-preview/package.json
+deploy/*.zip

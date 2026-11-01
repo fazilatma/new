@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AMPHP Storefront Sandbox Preview</title>
+<!-- v13.3.3 server font boot (mirrors agent get_storefront_font_boot_html) -->
+<style id="appFontVars">:root{--app-font:Sahel,Tahoma,system-ui,sans-serif}</style>
+<link id="appFontLink_sahel" rel="stylesheet" href="https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@3.4.0/dist/font-face.css">
+<script>(function(){
+var F={system:{stack:"Tahoma,system-ui,sans-serif",css:"",face:""},vazirmatn:{stack:"Vazirmatn,Tahoma,system-ui,sans-serif",css:"https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css",face:""},sahel:{stack:"Sahel,Tahoma,system-ui,sans-serif",css:"https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@3.4.0/dist/font-face.css",face:""},shabnam:{stack:"Shabnam,Tahoma,system-ui,sans-serif",css:"https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@5.0.1/dist/font-face.css",face:""}};
+var KEY="scraper_font",FB="Tahoma,system-ui,sans-serif",SERVER_FONT="sahel";
+window.APP_FONTS=F;window.APP_FONT_KEY=KEY;window.APP_FONT_FALLBACK=FB;window.APP_FONT_SERVER=SERVER_FONT;
+function head(){return document.head||document.documentElement;}
+function readFont(){if(SERVER_FONT&&F[SERVER_FONT])return SERVER_FONT;try{var v=localStorage.getItem(KEY);return (v&&F[v])?v:"vazirmatn";}catch(e){return"vazirmatn";}}
+function applyFont(k,save){if(!F[k])k="vazirmatn";var f=F[k];if(save){try{localStorage.setItem(KEY,k);}catch(e){}}try{document.documentElement.style.setProperty("--app-font",f.stack);if(document.body)document.body.style.fontFamily=f.stack;}catch(e){}if(f.css){var lid="appFontLink_"+k;if(!document.getElementById(lid)){var l=document.createElement("link");l.id=lid;l.rel="stylesheet";l.href=f.css;head().appendChild(l);}}window.APP_FONT_CURRENT=k;return k;}
+window.appFontApply=applyFont;window.appFontCurrent=readFont;applyFont(readFont(),false);
+})();</script>
+<link rel="stylesheet" href="/?amphp_sf=storefront.css&ver=13.3.20" id="amphp-storefront-css">
+<style>
+html,body{margin:0;padding:0;background:#f4f6fb;font-family:Tahoma,'Segoe UI',system-ui,sans-serif}
+*{box-sizing:border-box}
+</style>
+</head>
+<body class="scraper-standalone-shop-takeover amphp-react-storefront amphp-bare"><div style="position:fixed;bottom:12px;left:12px;z-index:99999;background:#1e3a8a;color:#fff;padding:8px 14px;border-radius:999px;font:700 12px Tahoma;box-shadow:0 8px 24px rgba(0,0,0,.25)"><a href="/native-shop.html" style="color:#fff;text-decoration:none">🧱 پیش‌نمایش فروشگاه بومی</a></div>
+
+<div class="scraper-shop-fullscreen-wrap" id="amphp-bare-root">
+  <div id="amphp-storefront-root" class="amphp-storefront-root" data-engine="react" dir="rtl">
+    <div class="amphp-sf-bootwait" style="padding:32px 16px;text-align:center;font-family:Tahoma,sans-serif;color:#64748b;font-size:.95rem;font-weight:700;">در حال بارگذاری…</div>
+  </div>
+</div>
+<script>try{localStorage.setItem('scraper_font','system');}catch(e){}</script>
+<script src="/boot-sample.js"></script>
+<script src="/?amphp_sf=storefront.js&ver=13.3.20" id="amphp-storefront-js"></script>
+<script>
+(function(){
+  setTimeout(function(){
+    var el = document.getElementById('amphp-storefront-root');
+    var ff = getComputedStyle(document.documentElement).getPropertyValue('--app-font') || '';
+    var bodyFf = document.body ? (document.body.style.fontFamily || getComputedStyle(document.body).fontFamily || '') : '';
+    window.__AMPHP_TEST__ = {
+      mounted: el && el.getAttribute('data-mounted') === '1',
+      hasHeader: !!(el && el.querySelector('.sf-header, .sf-header-wrap')),
+      hasGrid: !!(el && el.querySelector('.sf-grid, .sf-card')),
+      hasBootWait: !!(el && el.querySelector('.amphp-sf-bootwait')),
+      productCards: el ? el.querySelectorAll('.sf-card').length : 0,
+      text: el ? (el.innerText || '').slice(0, 200) : '',
+      serverFont: window.APP_FONT_SERVER || null,
+      appFontCurrent: typeof window.appFontCurrent==='function' ? window.appFontCurrent() : null,
+      cssVarFont: ff.trim(),
+      bodyFont: bodyFf,
+      lsFont: (function(){try{return localStorage.getItem('scraper_font');}catch(e){return null;}})(),
+      fontServerWins: (ff+bodyFf).toLowerCase().indexOf('sahel') >= 0
+    };
+    console.log('AMPHP_TEST', window.__AMPHP_TEST__);
+    document.title = window.__AMPHP_TEST__.mounted ? 'AMPHP OK' : 'AMPHP FAIL';
+  }, 1500);
+})();
+</script>
+</body>
+</html>
