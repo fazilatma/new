@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.579';
+const APP_VERSION = '10.580';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48363,6 +48363,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'A tab click')!==false
         &&strpos($selfSrc,"{v:'10." . "579'")!==false
         &&version_compare(APP_VERSION,'10.579','>='));
+    $add('10.580','نوار تب‌های لین هنگام اسکرول به بالای صفحه می‌چسبد',
+        strpos($selfSrc,'#bslSendLaneTabs{position:sticky;top:0;z-index:120')!==false
+        &&strpos($selfSrc,'box-shadow:0 5px 12px')!==false
+        &&strpos($selfSrc,"{v:'10." . "580'")!==false
+        &&version_compare(APP_VERSION,'10.580','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -92997,7 +93002,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 
 <!-- v10.578: compact, top-attached tabs rather than two action buttons. -->
 <style>
-#bslSendLaneTabs{display:flex;align-items:flex-end;gap:2px;width:100%;margin:8px 0 0;padding:0;border-bottom:1px solid #475569;background:transparent}
+#bslSendLaneTabs{position:sticky;top:0;z-index:120;display:flex;align-items:flex-end;gap:2px;width:100%;margin:8px 0 0;padding:6px 0 0;border-bottom:1px solid #475569;background:#111827;box-shadow:0 5px 12px #02061780}
 .bsl-send-lane-tab{position:relative;flex:1 1 50%;min-width:0;margin:0 0 -1px;padding:5px 14px 6px;border:1px solid #334155;border-bottom-color:#475569;border-radius:8px 8px 0 0;background:#172033;color:#94a3b8;font-family:inherit;font-size:11px;font-weight:800;line-height:1.35;cursor:pointer;box-shadow:none;transition:color .15s,border-color .15s,background .15s}
 .bsl-send-lane-tab:hover{color:#e2e8f0;background:#1e293b}
 .bsl-send-lane-tab.is-active{z-index:1;color:#67e8f9;background:#111827;border-color:#475569;border-top-color:#22d3ee;border-bottom-color:#111827}
@@ -100197,6 +100202,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.580', t:'📌 چسباندن تب‌های لین به بالای صفحه', items:[
+    'نوار تمام‌عرض لین ۱ و لین ۲ با position: sticky و top: 0 هنگام اسکرول در بالای صفحه ثابت می‌ماند.',
+    'پس‌زمینهٔ مات، z-index مستقل و سایهٔ پایین اضافه شد تا تب‌ها روی محتوای ارسال خوانا و همیشه قابل کلیک باشند.'
+  ]},
   {v:'10.579', t:'↔️ تب‌های تمام‌عرض با پنل‌های ماندگار همزمان', items:[
     'دو تب با سهم برابر ۵۰٪ تمام عرض ناحیهٔ ارسال را می‌پوشانند و در نمایش موبایل نیز شکاف یا عرض ثابت ندارند.',
     'DOM صف و کارت فعال هر دو لین در هر polling همزمان ساخته و نگه‌داری می‌شود؛ کلیک تب فقط hidden/display پنل‌های آماده را عوض می‌کند و innerHTML لین را از نو نمی‌سازد.',
