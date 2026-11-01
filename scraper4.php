@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.572';
+const APP_VERSION = '10.573';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48306,6 +48306,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'Pump the explicit lane even when the enqueue response reports a PID')!==false
         &&strpos($selfSrc,"{v:'10." . "572'")!==false
         &&version_compare(APP_VERSION,'10.572','>='));
+    $add('10.573','worker لین ۲ فقط یک snapshot سبک پروفایل را در حافظه نگه می‌دارد',
+        strpos($selfSrc,'function bslLoadSingleProfileSnapshot')!==false
+        &&strpos($selfSrc,"unset(\$__runtimeProfile['products'],\$__runtimeProfile['productsOrder'],\$__runtimeProfile['lastProducts'])")!==false
+        &&strpos($selfSrc,"\$GLOBALS['_bslActiveProfileSnapshot']=\$__runtimeProfile")!==false
+        &&substr_count($selfSrc,"is_array(\$GLOBALS['_bslActiveProfileSnapshot']??null)")>=4
+        &&strpos($selfSrc,"\$d['memory_peak_mb']")!==false
+        &&strpos($selfSrc,"{v:'10." . "573'")!==false
+        &&version_compare(APP_VERSION,'10.573','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78870,6 +78878,16 @@ function bslRequestedProfileLane($value): string {
     return in_array($v,['2','lane2','lane_2','detail'],true)?'detail':'fast';
 }
 function bslPublicLaneName(string $lane): string {return bslNormalizeProfileLane($lane)==='detail'?'lane_2':'lane_1';}
+/* v10.573: load one profile from the large profiles journal and release every
+ * unrelated profile before the sender allocates products/images. Repeated
+ * loadProfiles() calls previously kept several decoded copies alive in Lane 2. */
+function bslLoadSingleProfileSnapshot(string $profileKey): ?array {
+    $profileKey=trim($profileKey);if($profileKey==='')return null;
+    $all=loadProfiles();$resolved=profileResolveKey($profileKey,$all)?:$profileKey;
+    $one=is_array($all[$resolved]??null)?$all[$resolved]:(is_array($all[$profileKey]??null)?$all[$profileKey]:null);
+    unset($all);if(function_exists('gc_collect_cycles'))gc_collect_cycles();
+    return $one;
+}
 function bslLaneProgressFile(string $lane): string {
     $lane=bslNormalizeProfileLane($lane);return $lane==='fast'?BSL_FAST_PROGRESS_FILE:($lane==='detail'?BSL_DETAIL_PROGRESS_FILE:BSL_PROGRESS_FILE);
 }
@@ -79332,7 +79350,7 @@ foreach($entriesFb as $e){
 }
 foreach($groups as &$g){$g['codes']=(object)$g['codes'];$g['steps']=(object)$g['steps'];}unset($g);
 $progressSummaryFb=[];
-if($progressFb){foreach(['queue_id','running','done','paused','stopped','partial','failed_resume','phase','phase_label','phase_current','phase_total','phase_pct','current','total','sent','updated','skipped','failed','started_at','last_progress_ts','finished_at'] as $k){if(array_key_exists($k,$progressFb))$progressSummaryFb[$k]=$progressFb[$k];}}
+if($progressFb){foreach(['queue_id','running','done','paused','stopped','partial','failed_resume','phase','phase_label','phase_current','phase_total','phase_pct','current','total','sent','updated','skipped','failed','started_at','last_progress_ts','finished_at','memory_mb','memory_peak_mb'] as $k){if(array_key_exists($k,$progressFb))$progressSummaryFb[$k]=$progressFb[$k];}}
 $lastBeatAgeFb=$beatFb>0?max(0,$nowFb-$beatFb):null;
 $handoffAllFb=json_decode((string)@file_get_contents(QUEUE_CRON_HANDOFF_FILE),true);
 $handoffRawFb=is_array($handoffAllFb['bsl']??null)?$handoffAllFb['bsl']:[];
@@ -80389,6 +80407,7 @@ $d=['running'=>true,'sent'=>$__sW,'updated'=>$__uW,'skipped'=>$__skW,'failed'=>$
    'checkpoint'=>['queue_id'=>(string)($bslQueueId??''),'current'=>(int)$cWrite,'total'=>(int)$t,'sent'=>(int)$__sW,'updated'=>(int)$__uW,'skipped'=>(int)$__skW,'failed'=>(int)$__fW,'started_at'=>(int)$GLOBALS['startedAt']]];
 if($bslQueueId!='')$d['queue_id']=$bslQueueId;
 $__rate=bslAdaptiveStateRead();$d['adaptive_rate']=is_array($__rate['kinds']??null)?$__rate['kinds']:[];
+$d['memory_mb']=(int)ceil(memory_get_usage(true)/1048576);$d['memory_peak_mb']=(int)ceil(memory_get_peak_usage(true)/1048576);
 $d['photo_cache_hits']=(int)($GLOBALS['_bslPhotoCacheHits']??0);$d['photo_cache_uploads']=(int)($GLOBALS['_bslPhotoCacheMisses']??0);
 /* v10.23 (۳۶ه): شمارنده‌های هر غرفه در هر ضربانِ پیشرفت هم می‌روند تا صف
    بتواند «زنده» نشانشان بدهد، نه فقط در پایانِ کار. */
@@ -80458,7 +80477,7 @@ if ($bslEntryRound > 0) {
 $bslQueueId=''; $bslSentList=[]; $bslUpdatedList=[]; $bslSkippedList=[]; $bslFailedList=[]; $bslLog=[]; $bslFlatCats=[];
 /* Each queue row starts from its own checkpoint; never leak resume/phase state
    from the row completed immediately before it in this same worker process. */
-unset($GLOBALS['_bslResumeCounters'],$GLOBALS['_bslResumeFloor'],$GLOBALS['_bslPhaseState'],$GLOBALS['_bslBatchDoneIndices']);
+unset($GLOBALS['_bslResumeCounters'],$GLOBALS['_bslResumeFloor'],$GLOBALS['_bslPhaseState'],$GLOBALS['_bslBatchDoneIndices'],$GLOBALS['_bslActiveProfileSnapshot']);
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ هر غرفه.
    تا اینجا صفِ ارسال فقط یک مجموعه شمارنده داشت (جدید/آپدیت/تکراری/خطا) که
    جمعِ کورِ همهٔ غرفه‌ها بود. با «ارسال همزمان به همهٔ غرفه‌ها» این عدد عملاً
@@ -80537,10 +80556,9 @@ exit;
 }
 
 $bslQueueId=$nextEntry['id'];
+$__runtimeProfileKey=trim((string)($nextEntry['profile_key']??''));
+$__runtimeProfile=bslLoadSingleProfileSnapshot($__runtimeProfileKey);
 if($_bslLane==='detail'){
-    $__runtimeProfileKey=trim((string)($nextEntry['profile_key']??''));$__runtimeProfiles=loadProfiles();
-    $__runtimeResolved=$__runtimeProfileKey!==''?profileResolveKey($__runtimeProfileKey,$__runtimeProfiles):null;
-    $__runtimeProfile=is_array($__runtimeProfiles[$__runtimeResolved??'']??null)?$__runtimeProfiles[$__runtimeResolved]:null;
     $__runtimeSummary=$__runtimeProfile?extractProfileDetailSummary($__runtimeProfile):['enabled'=>false,'total'=>0,'detailed'=>0];
     if(!extractProfileHasAnyDetailData($__runtimeSummary)){
         $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
@@ -80552,6 +80570,14 @@ if($_bslLane==='detail'){
         echo json_encode(['ok'=>false,'code'=>'detail_coverage_incomplete','queue_id'=>$bslQueueId,'detail_summary'=>$__runtimeSummary,'error'=>'پروفایل این وظیفه دیگر هیچ دادهٔ جزئیات واقعی ندارد؛ ارسال لین ۲ انجام نشد'],JSON_UNESCAPED_UNICODE);exit;
     }
 }
+/* Queue products already contain prepared send fields. Keep only profile-level
+   pricing/category configuration; retaining its duplicate product catalogue
+   beside $pd can exceed the host's real process memory ceiling. */
+if(is_array($__runtimeProfile)){
+    unset($__runtimeProfile['products'],$__runtimeProfile['productsOrder'],$__runtimeProfile['lastProducts']);
+    $GLOBALS['_bslActiveProfileSnapshot']=$__runtimeProfile;
+}else unset($GLOBALS['_bslActiveProfileSnapshot']);
+unset($__runtimeProfile);if(function_exists('gc_collect_cycles'))gc_collect_cycles();
 
 /* v10.56 (۷۰): چک‌پوینتِ ادامه — فایلِ پیشرفت را پُر از پاک‌کردن می‌خوانیم:
    موقعِ شروعِ درست (شمارهٔ ۱‌مبنا از اولینِ محصولی که باید پردازش شود) و
@@ -80800,11 +80826,7 @@ $bslParallelAuto=(!isset($cn['basalam']['send_parallel_auto']) || !empty($cn['ba
 
 $bslFallbackCats=$cn['basalam']['fallback_cat_ids']??[];if(!is_array($bslFallbackCats))$bslFallbackCats=[];
 $__bslEntryProfKey=trim((string)($nextEntry['profile_key']??''));
-$__bslEntryProfAll=$__bslEntryProfKey!==''?loadProfiles():[];
-$__bslEntryResolvedKey=($__bslEntryProfKey!==''&&function_exists('profileResolveKey'))?profileResolveKey($__bslEntryProfKey,$__bslEntryProfAll):null;
-$__bslEntryProfile=($__bslEntryProfKey!==''&&isset($__bslEntryProfAll[$__bslEntryProfKey]))
-    ?$__bslEntryProfAll[$__bslEntryProfKey]
-    :(($__bslEntryResolvedKey!==null&&isset($__bslEntryProfAll[$__bslEntryResolvedKey]))?$__bslEntryProfAll[$__bslEntryResolvedKey]:null);
+$__bslEntryProfile=is_array($GLOBALS['_bslActiveProfileSnapshot']??null)?$GLOBALS['_bslActiveProfileSnapshot']:null;
 $bslFallbackCats=bslCollectManualCategories(0,$__bslEntryProfile,$bslFallbackCats,$cn['basalam']??[]);
 
 $GLOBALS['_bslRetryDelayMs']=$bslRetryDelayMs;
@@ -81305,8 +81327,7 @@ $__cn2['basalam']['send_parallel_auto']=$cn['basalam']['send_parallel_auto']??($
 $__sendAllShops = isset($qCfg['send_all_shops'])
     ? !empty($qCfg['send_all_shops'])
     : !empty($__cn2['basalam']['send_all_shops']);
-$__profiles2=loadProfiles();
-$__profile2=($nextEntry['profile_key'] ?? '')!=='' ? ($__profiles2[$nextEntry['profile_key']] ?? null) : null;
+$__profile2=is_array($GLOBALS['_bslActiveProfileSnapshot']??null)?$GLOBALS['_bslActiveProfileSnapshot']:null;
 $__extraShops=bslAllShops($__cn2);
 $__shopOpts = [
     'round' => (int)($__cn2['basalam']['price_round'] ?? 0),
@@ -81520,7 +81541,7 @@ if(!$__sendAllShops&&!$__isFanoutRow&&!bslStopRequestedForQueue())
 if($__scopeShop){
 $sShopName=$__scopeName!==''?$__scopeName:(string)$__scopeShop['shop_name'];
 if($sShopName==='')$sShopName='غرفهٔ '.$__scopeVid;
-$__scopeProfKey=trim((string)($nextEntry['profile_key']??''));$__scopeAllProfs=$__scopeProfKey!==''?loadProfiles():[];$__scopeResKey=($__scopeProfKey!==''&&function_exists('profileResolveKey'))?profileResolveKey($__scopeProfKey,$__scopeAllProfs):null;$__scopeProf=($__scopeProfKey!==''&&isset($__scopeAllProfs[$__scopeProfKey]))?$__scopeAllProfs[$__scopeProfKey]:(($__scopeResKey!==null&&isset($__scopeAllProfs[$__scopeResKey]))?$__scopeAllProfs[$__scopeResKey]:null);
+$__scopeProfKey=trim((string)($nextEntry['profile_key']??''));$__scopeProf=is_array($GLOBALS['_bslActiveProfileSnapshot']??null)?$GLOBALS['_bslActiveProfileSnapshot']:null;
 $sOpts=['round'=>(int)($cn['basalam']['price_round']??0),'profile'=>$__scopeProf,'profile_key'=>$__scopeProfKey,'basalam_cfg'=>($cn['basalam']??[]),'stock'=>(int)($cn['basalam']['stock']??10),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100)),'category_id'=>(int)($cn['basalam']['category_id']??0),'auto_category'=>$autoCat,'fallback_cat_ids'=>bslCollectManualCategories(0,$__scopeProf,$bslFallbackCats,$cn['basalam']??[]),'flat_cats'=>$bslFlatCats,'cdata'=>($cData??[]),'force_all'=>!empty($bslForceAllRun),
 /* v10.392: never block a 4k-product send row with a 20-page scan.
    Targeted title lookup remains; deep duplicate recovery belongs to its worker. */
@@ -81594,11 +81615,7 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',['🏪 غرف�
    در یک ردیف یکپارچه با آمار زندهٔ تفکیک‌شدهٔ هر غرفه و ذخیرهٔ چک‌پوینت پس از هر محصول. */
 if($__isParallelShopsRow){
 $__parProfKey=trim((string)($nextEntry['profile_key']??''));
-$__parAllProfs=$__parProfKey!==''?loadProfiles():[];
-$__parResKey=($__parProfKey!==''&&function_exists('profileResolveKey'))?profileResolveKey($__parProfKey,$__parAllProfs):null;
-$__parProf=($__parProfKey!==''&&isset($__parAllProfs[$__parProfKey]))
-    ?$__parAllProfs[$__parProfKey]
-    :(($__parResKey!==null&&isset($__parAllProfs[$__parResKey]))?$__parAllProfs[$__parResKey]:null);
+$__parProf=is_array($GLOBALS['_bslActiveProfileSnapshot']??null)?$GLOBALS['_bslActiveProfileSnapshot']:null;
 $__parOpts=['round'=>(int)($cn['basalam']['price_round']??0),'profile'=>$__parProf,'profile_key'=>$__parProfKey,
     'basalam_cfg'=>($cn['basalam']??[]),'stock'=>(int)($cn['basalam']['stock']??10),
     'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),
@@ -100062,6 +100079,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.573', t:'🧠 رفع مرگ worker لین ۲ در پروفایل‌های بزرگ', items:[
+    'علت زندهٔ توقف لین ۲، نگه‌داشتن چند نسخهٔ decode‌شده از profiles.json در کنار payload جزئیات و تصاویر بود؛ روی هاست worker در مرحلهٔ آماده‌سازی تصویر بدون fatal قابل ثبت کشته می‌شد.',
+    'worker اکنون فقط یک پروفایل را یک‌بار بارگذاری می‌کند، کاتالوگ تکراری محصولات را پس از اعتبارسنجی جزئیات آزاد می‌کند و همان snapshot سبک را در تمام مسیرهای غرفه به اشتراک می‌گذارد.',
+    'مصرف فعلی و اوج حافظه در progress/feedback ثبت می‌شود تا هر فشار بعدی پیش از مرگ پردازه قابل مشاهده باشد.'
+  ]},
   {v:'10.572', t:'🚀 شروع صریح صف پس از کلیک ارسال در هر لین', items:[
     'پس از ثبت ردیف، رابط همان لین را مستقیماً به endpoint شروع صف وصل می‌کند؛ ردیف‌های منتظر نیز به همان lane پمپ می‌شوند تا پاسخ بدون PID یا polling قدیمی، عملیات را بی‌صدا معطل نگذارد.',
     'شروع تکراری با قفل worker همان لین مهار می‌شود و تلاشِ خودکار در صورت اشغال قفل دوباره انجام می‌گیرد.'
