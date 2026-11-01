@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.578';
+const APP_VERSION = '10.579';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48355,6 +48355,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"classList.toggle('is-active'")!==false
         &&strpos($selfSrc,"{v:'10." . "578'")!==false
         &&version_compare(APP_VERSION,'10.578','>='));
+    $add('10.579','هر دو پنل لین همزمان رندر و فقط پنهان/نمایان می‌شوند',
+        strpos($selfSrc,'flex:1 1 50%')!==false
+        &&strpos($selfSrc,'id="bslLanePanelFast"')!==false
+        &&strpos($selfSrc,'id="bslLanePanelDetail"')!==false
+        &&strpos($selfSrc,"renderBslQueueLane(q,'fast');renderBslQueueLane(q,'detail');")!==false
+        &&strpos($selfSrc,'A tab click')!==false
+        &&strpos($selfSrc,"{v:'10." . "579'")!==false
+        &&version_compare(APP_VERSION,'10.579','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -92989,8 +92997,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 
 <!-- v10.578: compact, top-attached tabs rather than two action buttons. -->
 <style>
-#bslSendLaneTabs{display:flex;align-items:flex-end;gap:3px;margin:8px 0 0;padding:0 6px;border-bottom:1px solid #475569;background:transparent}
-.bsl-send-lane-tab{position:relative;min-width:82px;margin:0 0 -1px;padding:5px 14px 6px;border:1px solid #334155;border-bottom-color:#475569;border-radius:8px 8px 0 0;background:#172033;color:#94a3b8;font-family:inherit;font-size:11px;font-weight:800;line-height:1.35;cursor:pointer;box-shadow:none;transition:color .15s,border-color .15s,background .15s}
+#bslSendLaneTabs{display:flex;align-items:flex-end;gap:2px;width:100%;margin:8px 0 0;padding:0;border-bottom:1px solid #475569;background:transparent}
+.bsl-send-lane-tab{position:relative;flex:1 1 50%;min-width:0;margin:0 0 -1px;padding:5px 14px 6px;border:1px solid #334155;border-bottom-color:#475569;border-radius:8px 8px 0 0;background:#172033;color:#94a3b8;font-family:inherit;font-size:11px;font-weight:800;line-height:1.35;cursor:pointer;box-shadow:none;transition:color .15s,border-color .15s,background .15s}
 .bsl-send-lane-tab:hover{color:#e2e8f0;background:#1e293b}
 .bsl-send-lane-tab.is-active{z-index:1;color:#67e8f9;background:#111827;border-color:#475569;border-top-color:#22d3ee;border-bottom-color:#111827}
 .bsl-send-lane-tab:focus-visible{outline:2px solid #22d3ee;outline-offset:2px}
@@ -92999,11 +93007,11 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 @media(max-width:480px){.bsl-send-lane-tab{min-width:72px;padding:5px 10px}}
 </style>
 <div id="bslSendLaneTabs" role="tablist" aria-label="مسیرهای ارسال باسلام">
-  <button type="button" id="bslLaneTab1" role="tab" aria-selected="true" aria-controls="bslQueueList" class="bsl-send-lane-tab is-active" onclick="setBslSendLane('fast')">
+  <button type="button" id="bslLaneTab1" role="tab" aria-selected="true" aria-controls="bslLanePanelFast" class="bsl-send-lane-tab is-active" onclick="setBslSendLane('fast')">
     <span>لین ۱</span><span id="bslLaneState1" class="lane-tab-state">آماده · صف خالی</span>
     <span class="lane-tab-progress" role="progressbar" aria-label="پیشرفت لین ۱" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bslLaneProgress1" style="display:block;width:0;height:100%;background:#22d3ee;transition:width .25s"></i></span>
   </button>
-  <button type="button" id="bslLaneTab2" role="tab" aria-selected="false" aria-controls="bslQueueList" class="bsl-send-lane-tab" onclick="setBslSendLane('detail')">
+  <button type="button" id="bslLaneTab2" role="tab" aria-selected="false" aria-controls="bslLanePanelDetail" class="bsl-send-lane-tab" onclick="setBslSendLane('detail')">
     <span>لین ۲</span><span id="bslLaneState2" class="lane-tab-state">آماده · صف خالی</span>
     <span class="lane-tab-progress" role="progressbar" aria-label="پیشرفت لین ۲" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bslLaneProgress2" style="display:block;width:0;height:100%;background:#a78bfa;transition:width .25s"></i></span>
   </button>
@@ -93011,7 +93019,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div id="bslLaneSelectedHint" hidden></div>
 <!-- v10.415: active Basalam task belongs here in the Send tab, directly below
      Catalog Cache—not only inside Task Manager or the collapsed queue panel. -->
-<div id="bslActiveSendTask" style="display:none;margin-bottom:8px"></div>
+<div id="bslActiveSendTaskFast" data-bsl-lane-panel="fast" style="display:none;margin-bottom:8px"></div>
+<div id="bslActiveSendTaskDetail" data-bsl-lane-panel="detail" style="display:none;margin-bottom:8px"></div>
 <div class="cact"><button class="btn btn-cyan" id="bSB" onclick="sendBsl()" style="flex:1">🚀 ارسال باسلام</button><button class="btn btn-green" id="bSBlegacy" onclick="sendBslClient()" style="flex:1">🚀 ارسال فرات</button><button class="btn btn-orange hidden" id="bRB" onclick="sendBsl()" style="flex:1">🔄 تلاش مجدد</button><button class="btn btn-teal" onclick="showBslProductsModal()" style="flex-shrink:0;font-size:12px;padding:6px 10px">🏪 مدیریت جامع محصولات باسلام</button><button class="btn btn-red hidden" id="bST" onclick="stopBslProcess()">⏹ توقف</button></div>
 <div class="progress hidden" id="bP"><div class="progress-bar" id="bPB" style="background:linear-gradient(90deg,#0891b2,#22d3ee)"></div></div>
 <div class="status" id="bSS" style="color:#67e8f9"></div>
@@ -93045,7 +93054,12 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <button type="button" class="btn btn-cyan" onclick="bslRunSendFeedback(this)" style="font-size:10px;padding:5px 9px">🩺 عیب‌یابی ارسال و کران</button>
 <span style="font-size:9px;color:#64748b">وضع صف، heartbeat، قفل worker، کران و تیک‌های اعلان — بدون نمایش توکن</span>
 </div>
-<div id="bslQueueList" style="font-size:11px;color:#64748b;padding-top:10px">صف خالی — برای افزودن، دکمه «🚀 ارسال باسلام» را کلیک کنید</div>
+<div id="bslLanePanelFast" data-bsl-lane-panel="fast" role="tabpanel" aria-labelledby="bslLaneTab1">
+  <div id="bslQueueListFast" style="font-size:11px;color:#64748b;padding-top:10px">صف خالی — برای افزودن، دکمه «🚀 ارسال باسلام» را کلیک کنید</div>
+</div>
+<div id="bslLanePanelDetail" data-bsl-lane-panel="detail" role="tabpanel" aria-labelledby="bslLaneTab2" hidden>
+  <div id="bslQueueListDetail" style="font-size:11px;color:#64748b;padding-top:10px">صف خالی — برای افزودن، دکمه «🚀 ارسال باسلام» را کلیک کنید</div>
+</div>
 </div>
 </div>
 </div>
@@ -100183,6 +100197,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.579', t:'↔️ تب‌های تمام‌عرض با پنل‌های ماندگار همزمان', items:[
+    'دو تب با سهم برابر ۵۰٪ تمام عرض ناحیهٔ ارسال را می‌پوشانند و در نمایش موبایل نیز شکاف یا عرض ثابت ندارند.',
+    'DOM صف و کارت فعال هر دو لین در هر polling همزمان ساخته و نگه‌داری می‌شود؛ کلیک تب فقط hidden/display پنل‌های آماده را عوض می‌کند و innerHTML لین را از نو نمی‌سازد.',
+    'وضعیت، scroll و اجزای تعاملی هر پنل هنگام رفت‌وبرگشت بین لین‌ها حفظ می‌شوند و aria-controls هر تب به پنل مستقل خودش متصل است.'
+  ]},
   {v:'10.578', t:'🗂️ تب‌های فشرده و واقعی برای لین‌های ارسال', items:[
     'دو کنترل بزرگ لین با تب‌های کوتاه و متصل به لبهٔ بالای محتوای ارسال جایگزین شدند؛ تب فعال با لبهٔ فیروزه‌ای و اتصال بصری به پنل مشخص است.',
     'توضیحات و وضعیت‌های چندخطی از داخل تب‌ها حذف شدند؛ فقط عنوان لین باقی مانده و وضعیت زنده به‌صورت title/ARIA و نوار باریک پیشرفت حفظ شده است.',
@@ -117089,12 +117108,15 @@ function setBslSendLane(lane){
     if(a){a.classList.toggle('is-active',bslSendLane==='fast');a.setAttribute('aria-selected',bslSendLane==='fast'?'true':'false');a.tabIndex=bslSendLane==='fast'?0:-1;}
     if(b){b.classList.toggle('is-active',bslSendLane==='detail');b.setAttribute('aria-selected',bslSendLane==='detail'?'true':'false');b.tabIndex=bslSendLane==='detail'?0:-1;}
     bslResetLiveProgressView();
+    bslToggleRenderedLanePanels();
     const q=bslLastQueueSnapshot;if(q){
         const row=(q.entries||[]).find(e=>bslEntryInSelectedLane(e)&&e.status==='running');
-        renderBslQueue(q);bslApplyQueueActionState(q);
+        bslApplyQueueActionState(q);
         if(row)bslShowRunningLaneEntry(row);
     }
-    checkBslQueue();
+    /* With an existing snapshot both lane panels are already current. Do not
+       trigger a fetch/render cycle merely because visibility changed. */
+    if(!q)checkBslQueue();
 }
 setTimeout(()=>setBslSendLane(bslSendLane),0);
 // v7.48: Queue management functions
@@ -117381,9 +117403,10 @@ function sendQueueVisualCard(e,opt){
 /* v10.415: compact current-task card in the Send tab, immediately below
    Catalog Cache. It deliberately does not depend on the Task Manager modal or
    on opening the full queue accordion. */
-function renderBslActiveSendTask(q){
-    const box=$('bslActiveSendTask');if(!box)return;
-    const entries=(Array.isArray(q&&q.entries)?q.entries:[]).filter(bslEntryInSelectedLane);
+function renderBslActiveSendTaskLane(q,lane){
+    lane=lane==='detail'?'detail':'fast';
+    const box=$(lane==='detail'?'bslActiveSendTaskDetail':'bslActiveSendTaskFast');if(!box)return;
+    const entries=(Array.isArray(q&&q.entries)?q.entries:[]).filter(e=>lane==='detail'?String(e&&e.lane||'')==='detail':String(e&&e.lane||'legacy')!=='detail');
     let row=null;
     if(q&&q.active_send&&q.active_send.queue_id)
         row=entries.find(e=>e&&String(e.id||'')===String(q.active_send.queue_id||''))||null;
@@ -117409,7 +117432,7 @@ function renderBslActiveSendTask(q){
     const etaHuman=etaSec>0?(etaSec>=3600?(Math.floor(etaSec/3600)+' ساعت و '+Math.max(1,Math.round((etaSec%3600)/60))+' دقیقه'):(etaSec>=60?(Math.ceil(etaSec/60)+' دقیقه'):(etaSec+' ثانیه'))):'';
     const etaLine=etaHuman?'⏱ زمان مورد انتظار تا اتمام: حدود '+toFa(etaHuman):'';
     const state=live?'🟢 در حال ارسال واقعی':(canContinue?'⚠ ارسال متوقف/گیرکرده':'⏳ در صف ارسال');
-    box.style.display='block';
+    box.style.display=lane===bslSelectedSendLane()?'block':'none';
     box.innerHTML='<div style="padding:10px 12px;background:'+(live?'#052e164d':'#43140755')+';border:1px solid '+(live?'#22c55e88':'#f9731688')+';border-radius:10px">'
       +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="color:'+(live?'#86efac':'#fdba74')+';font-size:12px">'+state+'</b><span style="flex:1"></span>'
       +(canContinue?'<button class="btn btn-green" style="font-size:11px;padding:5px 12px" onclick="resumeBslQueue(\''+jsAttr(String(row.id||''))+'\')">▶ ادامه از '+toFa(current+1)+'</button>':'')+'</div>'
@@ -117419,24 +117442,21 @@ function renderBslActiveSendTask(q){
       +(etaLine?'<div style="margin-top:4px;color:#67e8f9;font-size:10px;font-weight:700">'+etaLine+'</div>':'')
       +'<div style="height:5px;background:#0f172a;border-radius:99px;overflow:hidden;margin-top:7px"><i style="display:block;height:100%;width:'+pct+'%;background:'+(live?'#22c55e':'#f97316')+'"></i></div></div>';
 }
-function renderBslQueue(q){
+/* Compatibility entry point retained for older focused checks/extensions. */
+function renderBslActiveSendTask(q){renderBslActiveSendTaskLane(q,bslSelectedSendLane());}
+function renderBslQueueLane(q,lane){
+    lane=lane==='detail'?'detail':'fast';
     const section=$('bslQueueSection');
-    const list=$('bslQueueList');
+    const list=$(lane==='detail'?'bslQueueListDetail':'bslQueueListFast');
     if(!section||!list)return;
-    bslRenderLaneIndicators(q);
-    const entries=(q.entries||[]).filter(bslEntryInSelectedLane);
-
-    renderBslActiveSendTask(q);
-    const selectedActive=entries.find(e=>e&&(e._worker_live||e.status==='running'))||null;
-    renderSendQueueProfileSummary('bsl',entries,selectedActive);
-
-    try{const bd=$('bslQueueCountBadge');if(bd){const n=(entries||[]).length;const act=(entries||[]).filter(e=>e&&(e.status==='running'||e.status==='waiting'||e.status==='paused')).length;const rag=sendQueueRetireAgg(entries);bd.textContent=n?(toFa(n)+' وظیفه'+(act?' · '+toFa(act)+' فعال':'')+(rag.retired?' · 🗂 '+toFa(rag.retired)+' حذف/بایگانی':'')):'';}}catch(_e){}
+    const entries=(q.entries||[]).filter(e=>lane==='detail'?String(e&&e.lane||'')==='detail':String(e&&e.lane||'legacy')!=='detail');
+    if(lane===bslSelectedSendLane())try{const bd=$('bslQueueCountBadge');if(bd){const n=entries.length;const act=entries.filter(e=>e&&(e.status==='running'||e.status==='waiting'||e.status==='paused')).length;const rag=sendQueueRetireAgg(entries);bd.textContent=n?(toFa(n)+' وظیفه'+(act?' · '+toFa(act)+' فعال':'')+(rag.retired?' · 🗂 '+toFa(rag.retired)+' حذف/بایگانی':'')):'';}}catch(_e){}
     if(entries.length===0){list.innerHTML='<span style="color:#64748b">صف خالی — برای افزودن، دکمه «🚀 ارسال باسلام» را کلیک کنید</span>';return;}
     section.style.display='block';
     const statusLabels={waiting:'⏳ در صف',running:'🔄 در حال ارسال',paused:'⏸ متوقف',done:'✅ انجام شد',failed:'❌ خطا'};
     const statusColors={waiting:'#fbbf24',running:'#67e8f9',paused:'#f97316',done:'#4ade80',failed:'#f87171'};
     const statusBg={waiting:'#42200630',running:'#0e749020',paused:'#c2410c20',done:'#14532d20',failed:'#7f1d1d20'};
-    let html='<div style="margin-bottom:8px;color:#a5f3fc;font-weight:800">🛣️ '+(bslSendLane==='detail'?'لین ۲ — ارسال با جزئیات':'لین ۱ — ارسال بدون جزئیات')+'</div>';
+    let html='<div style="margin-bottom:8px;color:#a5f3fc;font-weight:800">🛣️ '+(lane==='detail'?'لین ۲ — ارسال با جزئیات':'لین ۱ — ارسال بدون جزئیات')+'</div>';
     /* v10.73 (87): نوارِ خلاصهٔ وضعیت — صف حالا وظایفِ متعدد (هر غرفه
        یک وظیفه) است و باید یک نگاه بگوید چندتایش کجاست. */
     const cnt={waiting:0,running:0,paused:0,done:0,failed:0};
@@ -117541,6 +117561,26 @@ function renderBslQueue(q){
         html+='</div>';
     });
     list.innerHTML=html;
+}
+function bslToggleRenderedLanePanels(){
+    const detail=bslSelectedSendLane()==='detail';
+    const fastPanel=$('bslLanePanelFast'),detailPanel=$('bslLanePanelDetail');
+    if(fastPanel)fastPanel.hidden=detail;if(detailPanel)detailPanel.hidden=!detail;
+    const fastTask=$('bslActiveSendTaskFast'),detailTask=$('bslActiveSendTaskDetail');
+    if(fastTask&&fastTask.innerHTML)fastTask.style.display=detail?'none':'block';
+    if(detailTask&&detailTask.innerHTML)detailTask.style.display=detail?'block':'none';
+}
+function renderBslQueue(q){
+    bslRenderLaneIndicators(q);
+    /* Both lane DOM trees are refreshed together by queue polling. A tab click
+       only changes visibility and never reconstructs either tree. */
+    renderBslQueueLane(q,'fast');renderBslQueueLane(q,'detail');
+    renderBslActiveSendTask(q);
+    renderBslActiveSendTaskLane(q,bslSelectedSendLane()==='detail'?'fast':'detail');
+    const selected=(q.entries||[]).filter(bslEntryInSelectedLane);
+    const selectedActive=selected.find(e=>e&&(e._worker_live||e.status==='running'))||null;
+    renderSendQueueProfileSummary('bsl',selected,selectedActive);
+    bslToggleRenderedLanePanels();
 }
 /* v10.73 (87): تب‌های بخشِ اعلان‌ها — فقط ظاهر عوض می‌شود؛ همهٔ تنظیمات همان‌جا */
 function setNotifTab(name,btn){
