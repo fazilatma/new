@@ -272,6 +272,9 @@ class Scraper_Auto_Shop_Plugin {
 
 		// Complete suppression of legacy WordPress theme header & menu when custom storefront is enabled
 		add_action( 'wp_head', array( __CLASS__, 'inject_custom_header_suppression_css' ), 1 );
+		// The theme-backed homepage needs the same site-name signals as the bare storefront.
+		add_action( 'wp_head', array( __CLASS__, 'print_home_site_name_schema' ), 5 );
+		add_filter( 'pre_get_document_title', array( __CLASS__, 'filter_home_document_title' ), 100 );
 
 		// AJAX actions for syncing to WooCommerce
 		add_action( 'wp_ajax_scraper_sync_to_woo', array( __CLASS__, 'ajax_sync_to_woo' ) );
@@ -9879,6 +9882,31 @@ body.wp-admin{overflow-x:hidden!important;max-width:100vw!important}
 		return true;
 	}
 
+	/** Site-name signals belong on the actual homepage, not shop or search pages. */
+	public static function is_site_name_homepage() {
+		return ! is_admin() && is_front_page() && ! is_paged() && ! is_search() && ! is_preview();
+	}
+
+	public static function filter_home_document_title( $title ) {
+		return self::is_site_name_homepage() ? 'فروشگاه صباشاپ' : $title;
+	}
+
+	/** Print server-rendered WebSite structured data for Google site-name discovery. */
+	public static function print_home_site_name_schema() {
+		if ( ! self::is_site_name_homepage() ) {
+			return;
+		}
+		$home = home_url( '/' );
+		$schema = array(
+			'@context' => 'https://schema.org',
+			'@type'    => 'WebSite',
+			'@id'      => $home . '#website',
+			'url'      => $home,
+			'name'     => 'فروشگاه صباشاپ',
+		);
+		echo '<script type="application/ld+json">' . wp_json_encode( $schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT ) . '</script>' . "\n"; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+	}
+
 	public static function should_render_react_storefront( $settings = null ) {
 		if ( null === $settings ) {
 			$settings = self::get_settings();
@@ -10073,7 +10101,11 @@ body.wp-admin{overflow-x:hidden!important;max-width:100vw!important}
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="<?php echo esc_attr( $settings['accent_color'] ?? '#2563eb' ); ?>">
 <meta name="robots" content="index,follow">
-<title><?php echo esc_html( $title . ( $site ? ' | ' . $site : '' ) ); ?></title>
+<title><?php echo esc_html( self::is_site_name_homepage() ? 'فروشگاه صباشاپ' : $title . ( $site ? ' | ' . $site : '' ) ); ?></title>
+<?php if ( self::is_site_name_homepage() ) : ?>
+<meta property="og:site_name" content="فروشگاه صباشاپ">
+<?php self::print_home_site_name_schema(); ?>
+<?php endif; ?>
 <link rel="preconnect" href="<?php echo esc_url( admin_url() ); ?>">
 <?php echo self::get_storefront_font_boot_html(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
 <link rel="stylesheet" href="<?php echo esc_url( $css_url ); ?>?ver=<?php echo esc_attr( $ver ); ?>" id="amphp-storefront-css">
