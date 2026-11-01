@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.568';
+const APP_VERSION = '10.569';
 
 
 if (!function_exists('str_starts_with')) {
@@ -3673,13 +3673,10 @@ function extractHasDetailSelectors(array $profile): bool {
     return count(extractNormalizeDetailSelectors($profile['detailSelectors'] ?? [])) > 0;
 }
 
-/** v10.422: profile-level detail coverage for the Start-tab breakdown.
- * A durable resolved-detail marker is authoritative. Older products created by
- * inline extraction predate that marker, so distinctive configured detail
- * fields are accepted as a compatibility fallback. List-page price/main image
- * alone are intentionally not treated as proof that stage two completed. */
-function extractProductHasDetailData(array $product,array $detailSelectors): bool {
-    if((int)($product['_detail_checked_at']??0)>0||trim((string)($product['_detail_cycle']??''))!=='')return true;
+/** v10.569: count actual configured detail values for lane-2 eligibility.
+ * Attempt/capped markers remain useful to sync recovery, but are not evidence
+ * that a product has detail content. List price and listing image never count. */
+function extractProductHasDetailValues(array $product,array $detailSelectors): bool {
     foreach(array_keys($detailSelectors)as$field){
         if($field==='variations'){
             foreach(['variations','variation_groups','variations_text']as$key){$v=$product[$key]??null;
@@ -3687,22 +3684,30 @@ function extractProductHasDetailData(array $product,array $detailSelectors): boo
             continue;
         }
         if($field==='shortDesc'||$field==='longDesc'||$field==='description'){
-            foreach([$field,$field==='shortDesc'?'short_desc':'',$field==='longDesc'?'long_desc':'','description']as$key)
+            foreach([$field,$field==='shortDesc'?'short_desc':'',$field==='shortDesc'?'brief':'',$field==='longDesc'?'long_desc':'','description']as$key)
                 if($key!==''&&trim(strip_tags((string)($product[$key]??'')))!=='')return true;
             continue;
         }
         if(in_array($field,['price','image'],true))continue;
-        $v=$product[$field]??null;
-        if((is_array($v)&&count($v)>0)||(!is_array($v)&&trim((string)$v)!==''))return true;
+        $keys=$field==='specs'?['specs','specifications','attributes_table','attributes_html']:[$field];
+        foreach($keys as $key){$v=$product[$key]??null;
+            if((is_array($v)&&count($v)>0)||(!is_array($v)&&trim((string)$v)!==''))return true;
+        }
     }
     return false;
+}
+/** Legacy extraction planning may trust a completed/capped attempt; Lane 2 may
+ * not: it requires actual saved detail values, not just an attempt marker. */
+function extractProductHasDetailData(array $product,array $detailSelectors): bool {
+    if((int)($product['_detail_checked_at']??0)>0||trim((string)($product['_detail_cycle']??''))!=='')return true;
+    return extractProductHasDetailValues($product,$detailSelectors);
 }
 function extractProfileDetailSummary(array $profile): array {
     $selectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
     $total=0;$detailed=0;
     foreach(profileProductsMap($profile)as$product){
         if(!is_array($product))continue;$total++;
-        if($selectors&&extractProductHasDetailData($product,$selectors))$detailed++;
+        if($selectors&&extractProductHasDetailValues($product,$selectors))$detailed++;
     }
     return ['enabled'=>count($selectors)>0,'selector_count'=>count($selectors),
         'total'=>$total,'detailed'=>$detailed];
@@ -30043,6 +30048,7 @@ function extractProductDetailInline(array &$allProducts, string $key, array $det
     $out = ['ok' => false, 'opened' => false, 'fields' => 0, 'imgs' => 0, 'vars' => 0, 'error' => ''];
     if (!isset($allProducts[$key])) return $out;
     $p = &$allProducts[$key];
+    if(empty($p['_list_image'])){$__listImage=trim((string)($p['image']??''));if($__listImage!=='')$p['_list_image']=$__listImage;}
     if (empty($p['link'])) return $out;
     $out['opened'] = true;
     $dr = fetch_html($p['link'], 10);
@@ -30790,6 +30796,7 @@ $newCount=0;
 foreach($pageProducts as $key=>$p){
 if(isset($seenKeys[$key]))continue;
 $seenKeys[$key]=1;
+if(empty($p['_list_image'])&&trim((string)($p['image']??''))!=='')$p['_list_image']=trim((string)$p['image']);
 $p['_detail_new_pending']=1;
 $allProducts[$key]=$p;
 $newCount++;
@@ -31448,6 +31455,9 @@ $GLOBALS['_s4SnappCooldownHeartbeat'] = function(int $leftSec) use ($autoPageMod
 };
 $_detailCapped=0;
 foreach($needDetail as $key=>$p){
+if(isset($allProducts[$key])&&empty($allProducts[$key]['_list_image'])){
+    $__listImage=trim((string)($allProducts[$key]['image']??''));if($__listImage!=='')$allProducts[$key]['_list_image']=$__listImage;
+}
 /* v8.97: وقت تمام شد؟ تمیز بیرون بیا، نه اینکه منتظر بمانی تا هاست بکشد.
    v8.98: ولی حداقل چند محصول باید انجام شود، وگرنه پیشرفتی حاصل نمی‌شود
    و هر نوبت دقیقاً از همان جای قبل شروع می‌کند. */
@@ -33768,6 +33778,7 @@ function prepareForSend(array $profile, string $key, array $p): array {
         'price'       => $raw,
         'price_unit'  => $unit,
         'image'       => (string)($p['image'] ?? ''),
+        'list_image'  => (string)($p['_list_image'] ?? ($p['list_image'] ?? ($p['image'] ?? ''))),
         // v8.64: گالری — بقیهٔ عکس‌های محصول همراهش می‌روند
         'images'      => productImageList($p),
         'sku'         => (string)($p['sku'] ?? ''),
@@ -48248,6 +48259,22 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"setAttribute('aria-selected'")!==false
         &&strpos($selfSrc,"{v:'10." . "568'")!==false
         &&version_compare(APP_VERSION,'10.568','>='));
+    $__laneFastSample569=bslQueueProductsForLane([['title'=>'sample','image'=>'detail-main.jpg','list_image'=>'list-thumb.jpg','images'=>['list-thumb.jpg','gallery.jpg'],'short_desc'=>'short','long_desc'=>'long','specs'=>'spec','variations'=>['red'],'weight'=>'20 g']],'fast');
+    $__laneDetailSample569=bslQueueProductsForLane([['image'=>'list-thumb.jpg','images'=>['list-thumb.jpg','gallery.jpg'],'long_desc'=>'full detail']],'detail');
+    $__strictDetail569=extractProfileDetailSummary(['detailSelectors'=>['longDesc'=>['enabled'=>true,'selector'=>'.desc']],
+        'products'=>[['a',['_detail_checked_at'=>123]],['b',['longDesc'=>'saved detail']]]]);
+    $add('10.569','لین ۱ فقط دادهٔ پایه و عکس فهرست می‌فرستد؛ لین ۲ فقط با جزئیات واقعی کامل کار می‌کند و مالکیت پروفایل یکتا می‌ماند',
+        count($__laneFastSample569)===1
+        &&($__laneFastSample569[0]['image']??'')==='list-thumb.jpg'
+        &&($__laneFastSample569[0]['images']??[])===['list-thumb.jpg']
+        &&!isset($__laneFastSample569[0]['long_desc'],$__laneFastSample569[0]['variations'],$__laneFastSample569[0]['weight'])
+        &&($__laneDetailSample569[0]['images']??[])===['list-thumb.jpg','gallery.jpg']
+        &&($__laneDetailSample569[0]['long_desc']??'')==='full detail'
+        &&(int)($__strictDetail569['detailed']??0)===1
+        &&strpos($selfSrc,"in_array((string)(\$_claimRow['status']??''),['running','waiting','paused'],true)")!==false
+        &&strpos($selfSrc,'function bslQueueProductsForLane')!==false
+        &&strpos($selfSrc,"{v:'10." . "569'")!==false
+        &&version_compare(APP_VERSION,'10.569','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -60338,11 +60365,11 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && $_startPane422<$_table422&&$_table422<$_settingsPane422
       && strpos($selfSrc,'id="startProfileBreakdownBody"')!==false
       && strpos($selfSrc,'renderStartProfileBreakdown(d)')!==false);
-    $add('10.422', 'فعال‌بودن مرحلهٔ دوم و پوشش جزئیات از سلکتورهای فعال و دادهٔ واقعی شمرده می‌شود',
+    $add('10.422', 'پوشش جزئیات از سلکتورهای فعال و مقادیر واقعی شمرده می‌شود، نه از marker تلاش',
          !empty($_detailSummary422['enabled'])
       && (int)($_detailSummary422['selector_count']??0)===1
       && (int)($_detailSummary422['total']??0)===3
-      && (int)($_detailSummary422['detailed']??0)===2
+      && (int)($_detailSummary422['detailed']??0)===1
       && strpos($selfSrc,"\$allProducts[\$key]['_detail_checked_at']=time();")!==false
       && strpos($selfSrc,"{v:'10." . "422'")!==false
       && version_compare(APP_VERSION,'10.422','>='));
@@ -78777,6 +78804,27 @@ function bslParallelLaneBudget(int $configured,string $lane,bool $bothActive): i
 function bslNormalizeProfileLane($lane): string {
     $lane=strtolower(trim((string)$lane));return in_array($lane,['fast','detail'],true)?$lane:'legacy';
 }
+/** Lane 1 receives list-page basics and exactly its original listing image. */
+function bslQueueProductsForLane(array $products,string $lane): array {
+    if(bslNormalizeProfileLane($lane)!=='fast')return $products;
+    foreach($products as &$product){
+        if(!is_array($product))continue;
+        $listImage=trim((string)($product['list_image']??$product['_list_image']??$product['image']??''));
+        if($listImage===''&&is_array($product['images']??null)){
+            $first=reset($product['images']);
+            if(is_array($first))$first=(string)($first['src']??($first['url']??''));
+            $listImage=trim((string)$first);
+        }
+        $product['image']=$listImage;
+        $product['images']=$listImage!==''?[$listImage]:[];
+        $product['images_count']=$listImage!==''?1:0;
+        $allowed=['key','title','name','final_price','price','price_unit','image','images','images_count',
+            'bsl_category_id','bslCategoryId','category_id','category','stock','in_stock','link','orig_price','originalPrice'];
+        foreach(array_keys($product)as$key)if(!in_array((string)$key,$allowed,true))unset($product[$key]);
+    }
+    unset($product);
+    return $products;
+}
 function bslClassifyProfileLane(string $profileKey,array $profiles=[]): string {
     /* v10.565: detail selectors never classify a send. Every old/unlabelled
        profile belongs to no-detail Lane 1; Lane 2 is chosen explicitly in UI. */
@@ -78843,38 +78891,45 @@ $d=@json_decode(@file_get_contents(BSL_QUEUE_FILE)?:'',true);
 if(!is_array($d)||!isset($d['entries'])||!is_array($d['entries'])) return ['entries'=>[]];
 $fixed=false;
 
-/* v10.518: چند کلیک/dispatch همزمان نباید چند اجرای فعال برای یک پروفایل
-   بسازد. ردیف running مالک است؛ در نبود آن، جدیدترین waiting نگه داشته می‌شود
-   (snapshot تازه‌تر) و بقیه به‌طور شفاف superseded می‌شوند. done/failed/paused
-   دست‌نخورده می‌مانند تا تاریخچه و ادامهٔ دستی از بین نرود. */
+/* v10.569: a profile has one active lane owner, while same-lane sibling rows
+   (for example one job per selected shop) remain intact. Paused rows retain
+   lane ownership. Prefer running, then paused, then the newest waiting lane. */
 $activeByProfile=[];
 foreach($d['entries'] as $idx=>$row){
     if(!is_array($row))continue;
     $st=(string)($row['status']??'');
-    if(!in_array($st,['running','waiting'],true))continue;
+    if(!in_array($st,['running','waiting','paused'],true))continue;
     $pk=trim((string)($row['profile_key']??''));
     if($pk==='')continue;
-    $activeByProfile[$pk][]=$idx;
+    $lane=bslRowLane($row);
+    $activeByProfile[$pk][$lane][]=$idx;
 }
-foreach($activeByProfile as $pk=>$idxs){
-    if(count($idxs)<2)continue;
-    $keeper=null;
-    foreach($idxs as $idx){if((string)($d['entries'][$idx]['status']??'')==='running'){$keeper=$idx;break;}}
-    if($keeper===null){
-        usort($idxs,static function($a,$b)use($d){
-            $ta=(int)($d['entries'][$a]['created_at']??0);$tb=(int)($d['entries'][$b]['created_at']??0);
-            return $tb<=>$ta;
-        });
-        $keeper=$idxs[0];
+foreach($activeByProfile as $pk=>$laneGroups){
+    if(count($laneGroups)<2)continue;
+    $ownerLane=null;$ownerIdx=null;
+    foreach(['running','paused','waiting'] as $__ownerStatus){
+        $__ownerCandidates=[];
+        foreach($laneGroups as $__lane=> $__laneIdxs){
+            foreach($__laneIdxs as $__idx){
+                if((string)($d['entries'][$__idx]['status']??'')===$__ownerStatus)$__ownerCandidates[]=$__idx;
+            }
+        }
+        if($__ownerCandidates){
+            usort($__ownerCandidates,static function($a,$b)use($d){$ta=(int)($d['entries'][$a]['created_at']??0);$tb=(int)($d['entries'][$b]['created_at']??0);return $tb<=>$ta;});
+            $ownerIdx=$__ownerCandidates[0];$ownerLane=bslRowLane($d['entries'][$ownerIdx]);break;
+        }
     }
-    $keepId=(string)($d['entries'][$keeper]['id']??'');
-    foreach($idxs as $idx){
-        if($idx===$keeper)continue;
-        $d['entries'][$idx]['status']='cancelled';
-        $d['entries'][$idx]['done_at']=time();
-        $d['entries'][$idx]['superseded_by']=$keepId;
-        $d['entries'][$idx]['cancel_reason']='duplicate_active_profile';
-        $fixed=true;
+    if($ownerLane===null)continue;
+    $keepId=(string)($d['entries'][$ownerIdx]['id']??'');
+    foreach($laneGroups as $__lane=>$__laneIdxs){
+        if($__lane===$ownerLane)continue;
+        foreach($__laneIdxs as $__idx){
+            $d['entries'][$__idx]['status']='cancelled';
+            $d['entries'][$__idx]['done_at']=time();
+            $d['entries'][$__idx]['superseded_by']=$keepId;
+            $d['entries'][$__idx]['cancel_reason']='duplicate_active_profile';
+            $fixed=true;
+        }
     }
 }
 foreach($d['entries'] as &$re){
@@ -79463,7 +79518,15 @@ if(empty($_bslActualItems)){
 echo json_encode(['ok'=>false,'code'=>!empty($_POST['from_profile'])?'fallback_upload_needed':'products_empty','error'=>'محصولی برای ارسال در این پروفایل یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
 }
 if($total<=0&&count($_bslActualItems)>0)$total=count($_bslActualItems);
-/* v10.567: one profile may own only one send lane. Serialize the complete
+if($_bslLane==='fast'){
+    $_bslActualItems=bslQueueProductsForLane($_bslActualItems,$_bslLane);
+    $_bslLaneJson=json_encode($_bslActualItems,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
+    $_bslLaneBytes=$_bslLaneJson!==false?@file_put_contents($qFile,$_bslLaneJson,LOCK_EX):false;
+    if($_bslLaneJson===false||$_bslLaneBytes!==strlen($_bslLaneJson)){
+        @unlink($qFile);echo json_encode(['ok'=>false,'code'=>'lane_projection_write_failed','error'=>'ساخت فهرست سبکِ لین ۱ ناموفق بود؛ هیچ محصولی وارد صف نشد'],JSON_UNESCAPED_UNICODE);exit;
+    }
+}
+/* v10.569: only one active/paused lane may own a profile. Serialize the complete
    read/check/add decision, not just the final JSON rename, so simultaneous
    clicks in Lane 1 and Lane 2 cannot both pass a stale queue snapshot. */
 $_bslProfileClaimFp=@fopen(BSL_PROFILE_LANE_CLAIM_FILE,'c');$_bslProfileClaimOk=false;
@@ -79474,10 +79537,10 @@ $queue=bslReadQueue();
 $_claimProfileKey=$_bslResolvedKey?:$pKeyIn;
 if($_claimProfileKey!==''){
     foreach((array)($queue['entries']??[]) as $_claimRow){
-        if(!is_array($_claimRow)||!in_array((string)($_claimRow['status']??''),['running','waiting'],true))continue;
+        if(!is_array($_claimRow)||!in_array((string)($_claimRow['status']??''),['running','waiting','paused'],true))continue;
         if(!s4QueueProfileMatchesKey((string)($_claimRow['profile_key']??''),$_claimProfileKey,$__pf))continue;
         $_ownerLane=bslRowLane($_claimRow);
-        if($_ownerLane!==$_bslLane){@unlink($qFile);echo json_encode(['ok'=>false,'duplicate'=>true,'code'=>'profile_owned_by_other_lane','queue_id'=>(string)($_claimRow['id']??''),'owner_lane'=>bslPublicLaneName($_ownerLane),'requested_lane'=>bslPublicLaneName($_bslLane),'error'=>'این پروفایل هم‌اکنون در لین دیگر قرار دارد؛ ابتدا همان وظیفه را کامل یا حذف کنید'],JSON_UNESCAPED_UNICODE);exit;}
+        if($_ownerLane!==$_bslLane){@unlink($qFile);echo json_encode(['ok'=>false,'duplicate'=>true,'code'=>'profile_owned_by_other_lane','queue_id'=>(string)($_claimRow['id']??''),'owner_lane'=>bslPublicLaneName($_ownerLane),'requested_lane'=>bslPublicLaneName($_bslLane),'error'=>'این پروفایل در صف/توقفِ لین دیگر مالکیت دارد؛ ابتدا همان وظیفه را کامل یا حذف کنید'],JSON_UNESCAPED_UNICODE);exit;}
     }
 }
 $startImm=!empty($_POST['start_immediately']);
@@ -80424,6 +80487,21 @@ exit;
 }
 
 $bslQueueId=$nextEntry['id'];
+if($_bslLane==='detail'){
+    $__runtimeProfileKey=trim((string)($nextEntry['profile_key']??''));$__runtimeProfiles=loadProfiles();
+    $__runtimeResolved=$__runtimeProfileKey!==''?profileResolveKey($__runtimeProfileKey,$__runtimeProfiles):null;
+    $__runtimeProfile=is_array($__runtimeProfiles[$__runtimeResolved??'']??null)?$__runtimeProfiles[$__runtimeResolved]:null;
+    $__runtimeSummary=$__runtimeProfile?extractProfileDetailSummary($__runtimeProfile):['enabled'=>false,'total'=>0,'detailed'=>0];
+    if(empty($__runtimeSummary['enabled'])||(int)($__runtimeSummary['total']??0)<=0||(int)($__runtimeSummary['detailed']??0)<(int)($__runtimeSummary['total']??0)){
+        $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
+        $queue['entries'][$nextIdx]['fail_reason']='detail_coverage_incomplete';$queue['entries'][$nextIdx]['detail_summary']=$__runtimeSummary;
+        bslWriteQueue($queue);
+        $__failedTotal=max(0,(int)($nextEntry['total']??0)-(int)($nextEntry['current']??0));
+        writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>(int)($nextEntry['sent']??0),'updated'=>(int)($nextEntry['updated']??0),'skipped'=>(int)($nextEntry['skipped']??0),'failed'=>(int)($nextEntry['failed']??0)+$__failedTotal,'total'=>(int)($nextEntry['total']??0),'current'=>(int)($nextEntry['current']??0),'queue_id'=>$bslQueueId,'last_progress_ts'=>time(),'recent_log'=>['❌ لین ۲ متوقف شد: پوشش واقعی جزئیات پروفایل کامل نیست'],'total_log_count'=>1]);
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode(['ok'=>false,'code'=>'detail_coverage_incomplete','queue_id'=>$bslQueueId,'detail_summary'=>$__runtimeSummary,'error'=>'پروفایل این وظیفه دیگر جزئیات کاملِ واقعی ندارد؛ ارسال لین ۲ انجام نشد'],JSON_UNESCAPED_UNICODE);exit;
+    }
+}
 
 /* v10.56 (۷۰): چک‌پوینتِ ادامه — فایلِ پیشرفت را پُر از پاک‌کردن می‌خوانیم:
    موقعِ شروعِ درست (شمارهٔ ۱‌مبنا از اولینِ محصولی که باید پردازش شود) و
@@ -80519,6 +80597,7 @@ header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
 }
+if($_bslLane==='fast')$verifyProducts=bslQueueProductsForLane($verifyProducts,$_bslLane);
 if((int)($queue['entries'][$nextIdx]['total']??0)<=0||((int)($queue['entries'][$nextIdx]['total']??0)!==count($verifyProducts)&&count($verifyProducts)>0)){
 $queue['entries'][$nextIdx]['total']=count($verifyProducts);
 $nextEntry['total']=count($verifyProducts);
@@ -92748,7 +92827,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <!-- v10.568: each lane tab shows its own live queue state and progress. -->
 <div id="bslSendLaneTabs" role="tablist" aria-label="مسیرهای ارسال باسلام" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:9px 0 10px;padding:5px;background:#0f172a;border:1px solid #334155;border-radius:11px">
   <button type="button" id="bslLaneTab1" role="tab" aria-selected="true" aria-controls="bslQueueList" class="btn btn-cyan" onclick="setBslSendLane('fast')" style="display:block;min-width:0;padding:9px;text-align:center">
-    <span style="display:block;font-weight:800">🛣️ لین ۱</span><small style="display:block;font-size:9px;margin-top:2px">ارسال بدون جزئیات · همهٔ پروفایل‌ها</small>
+    <span style="display:block;font-weight:800">🛣️ لین ۱</span><small style="display:block;font-size:9px;margin-top:2px">بدون جزئیات · فقط عکس فهرست · همهٔ پروفایل‌ها</small>
     <span id="bslLaneState1" style="display:block;margin-top:5px;color:#94a3b8;font-size:9px;font-weight:700">آماده · صف خالی</span>
     <span role="progressbar" aria-label="پیشرفت لین ۱" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:block;height:4px;margin-top:5px;background:#1e293b;border-radius:99px;overflow:hidden"><i id="bslLaneProgress1" style="display:block;width:0;height:100%;background:#22d3ee;transition:width .25s"></i></span>
   </button>
@@ -92758,7 +92837,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
     <span role="progressbar" aria-label="پیشرفت لین ۲" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:block;height:4px;margin-top:5px;background:#1e293b;border-radius:99px;overflow:hidden"><i id="bslLaneProgress2" style="display:block;width:0;height:100%;background:#a78bfa;transition:width .25s"></i></span>
   </button>
 </div>
-<div id="bslLaneSelectedHint" style="margin:-4px 0 8px;color:#93c5fd;font-size:10px;text-align:center">لین ۱ برای ارسال بدون جزئیات است؛ لین ۲ فقط پروفایل‌هایی را می‌پذیرد که جزئیات همهٔ محصولاتشان استخراج شده باشد.</div>
+<div id="bslLaneSelectedHint" style="margin:-4px 0 8px;color:#93c5fd;font-size:10px;text-align:center">لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ لین ۲ فقط پروفایل‌هایی را می‌پذیرد که جزئیات واقعی همهٔ محصولاتشان کامل باشد.</div>
 <!-- v10.415: active Basalam task belongs here in the Send tab, directly below
      Catalog Cache—not only inside Task Manager or the collapsed queue panel. -->
 <div id="bslActiveSendTask" style="display:none;margin-bottom:8px"></div>
@@ -99933,6 +100012,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.569', t:'🛣️ جداسازی واقعی ارسال دو لین', items:[
+    'لین ۱ پیش از صف‌گذاری و هنگام اجرای worker فقط عنوان/قیمت/موجودی و عکس فهرست را نگه می‌دارد؛ توضیحات، مشخصات، تنوع‌ها، وزن، SKU و تصاویر گالری حذف می‌شوند.',
+    'عکس فهرست هنگام استخراج به‌طور جداگانه حفظ می‌شود تا جزئیات صفحهٔ محصول یا گالری نتواند تصویر لین ۱ را جایگزین کند.',
+    'لین ۲ فقط وقتی صف می‌سازد یا ادامه می‌دهد که همهٔ محصولات پروفایل واقعاً دادهٔ جزئیات ذخیره‌شده داشته باشند؛ نشانگر «تلاش شد» به‌تنهایی کافی نیست.',
+    'مالکیت پروفایل در حالت‌های درصف، درحال‌اجرا و متوقف‌شده بین لین‌ها یکتا است؛ تعارض‌های قدیمی بین لین‌ها اصلاح می‌شوند، بدون حذف ردیف‌های هم‌لینِ غرفه‌های چندگانه.'
+  ]},
   {v:'10.568', t:'⚖️ بودجهٔ دقیق و وضعیت زندهٔ دو لین', items:[
     'هنگام اجرای همزمان دو لین، تقسیم ۷۵/۲۵ دیگر ظرفیت همزمانی را از سقف عبور نمی‌دهد؛ برای فعال‌بودن هر دو worker حداقل دو اسلات مؤثر در نظر گرفته می‌شود و دو سهم جمعاً از بودجه فراتر نمی‌روند.',
     'تب‌های لین ۱ و ۲ اکنون تعداد در حال اجرا، در صف، متوقف، تکمیل/خطا و نوار پیشرفت مستقل هر لین را به‌صورت زنده نشان می‌دهند.',
@@ -116808,7 +116893,7 @@ function setBslSendLane(lane){
     const a=$('bslLaneTab1'),b=$('bslLaneTab2');
     if(a){a.classList.toggle('btn-cyan',bslSendLane==='fast');a.classList.toggle('btn-gray',bslSendLane!=='fast');a.setAttribute('aria-selected',bslSendLane==='fast'?'true':'false');}
     if(b){b.classList.toggle('btn-cyan',bslSendLane==='detail');b.classList.toggle('btn-gray',bslSendLane!=='detail');b.setAttribute('aria-selected',bslSendLane==='detail'?'true':'false');}
-    const hint=$('bslLaneSelectedHint');if(hint)hint.textContent=bslSendLane==='detail'?'لین ۲ فقط پروفایل ذخیره‌شده با سلکتور جزئیات و پوشش کامل همهٔ محصولات را می‌پذیرد؛ ابتدا استخراج جزئیات را کامل کنید.':'لین ۱ محصولات را بدون جزئیات می‌فرستد و برای همهٔ پروفایل‌ها مناسب است؛ دو لین می‌توانند همزمان اجرا شوند.';
+    const hint=$('bslLaneSelectedHint');if(hint)hint.textContent=bslSendLane==='detail'?'لین ۲ فقط پروفایل ذخیره‌شده با سلکتور جزئیات و پوشش کامل همهٔ محصولات را می‌پذیرد؛ ابتدا استخراج جزئیات را کامل کنید.':'لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ دو لین می‌توانند همزمان اجرا شوند.';
     if(bslLastQueueSnapshot)bslRenderLaneIndicators(bslLastQueueSnapshot);
     const q=bslLastQueueSnapshot;if(q){const row=(q.entries||[]).find(e=>bslEntryInSelectedLane(e)&&e.status==='running');window._currentBslQueueId=row?String(row.id||''):'';bSend=!!row;renderBslQueue(q);bslApplyQueueActionState(q);if(row)pollBslProgress();}
 }
@@ -117153,7 +117238,7 @@ function renderBslQueue(q){
             __acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه'+(__current>0?' از '+toFa(__current+1):'')+'</button>'
               +'<button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         }else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
-        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',skipLabel:'بدون تغییر',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.with_details?'<div style="margin:5px 0;color:#c4b5fd;font-size:10px;font-weight:800">🧾 لین ۲ · ارسال با جزئیات کامل</div>':'<div style="margin:5px 0;color:#7dd3fc;font-size:10px;font-weight:800">⚡ لین ۱ · ارسال بدون جزئیات</div>')+(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
+        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',skipLabel:'بدون تغییر',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.with_details?'<div style="margin:5px 0;color:#c4b5fd;font-size:10px;font-weight:800">🧾 لین ۲ · ارسال با جزئیات کامل</div>':'<div style="margin:5px 0;color:#7dd3fc;font-size:10px;font-weight:800">⚡ لین ۱ · بدون جزئیات · فقط عکس فهرست</div>')+(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
         return;
         let progText='';
         let progPercent=0;
