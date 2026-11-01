@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.569';
+const APP_VERSION = '10.570';
 
 
 if (!function_exists('str_starts_with')) {
@@ -3711,6 +3711,11 @@ function extractProfileDetailSummary(array $profile): array {
     }
     return ['enabled'=>count($selectors)>0,'selector_count'=>count($selectors),
         'total'=>$total,'detailed'=>$detailed];
+}
+/** Lane 2 needs actual detail data somewhere in the saved profile, but not on
+ * every product; products without detail values remain eligible for basic send. */
+function extractProfileHasAnyDetailData(array $summary): bool {
+    return !empty($summary['enabled'])&&(int)($summary['total']??0)>0&&(int)($summary['detailed']??0)>0;
 }
 
 /* =====================================================================
@@ -48263,7 +48268,7 @@ if (isset($_GET['selftest'])) {
     $__laneDetailSample569=bslQueueProductsForLane([['image'=>'list-thumb.jpg','images'=>['list-thumb.jpg','gallery.jpg'],'long_desc'=>'full detail']],'detail');
     $__strictDetail569=extractProfileDetailSummary(['detailSelectors'=>['longDesc'=>['enabled'=>true,'selector'=>'.desc']],
         'products'=>[['a',['_detail_checked_at'=>123]],['b',['longDesc'=>'saved detail']]]]);
-    $add('10.569','لین ۱ فقط دادهٔ پایه و عکس فهرست می‌فرستد؛ لین ۲ فقط با جزئیات واقعی کامل کار می‌کند و مالکیت پروفایل یکتا می‌ماند',
+    $add('10.569','لین ۱ فقط دادهٔ پایه و عکس فهرست می‌فرستد؛ لین ۲ دادهٔ واقعی جزئیات را می‌شناسد و مالکیت پروفایل یکتا می‌ماند',
         count($__laneFastSample569)===1
         &&($__laneFastSample569[0]['image']??'')==='list-thumb.jpg'
         &&($__laneFastSample569[0]['images']??[])===['list-thumb.jpg']
@@ -48275,6 +48280,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function bslQueueProductsForLane')!==false
         &&strpos($selfSrc,"{v:'10." . "569'")!==false
         &&version_compare(APP_VERSION,'10.569','>='));
+    $__partialDetail570=['enabled'=>true,'total'=>4,'detailed'=>1];
+    $__emptyDetail570=['enabled'=>true,'total'=>4,'detailed'=>0];
+    $add('10.570','لین ۲ با جزئیات واقعیِ بخشی از محصولات هم صف می‌سازد و پروفایلِ کاملاً بی‌جزئیات را رد می‌کند',
+        extractProfileHasAnyDetailData($__partialDetail570)
+        &&!extractProfileHasAnyDetailData($__emptyDetail570)
+        &&strpos($selfSrc,'function extractProfileHasAnyDetailData(array $summary): bool')!==false
+        &&strpos($selfSrc,'بعضی محصولات می‌توانند بدون جزئیات باشند')!==false
+        &&strpos($selfSrc,"{v:'10." . "570'")!==false
+        &&version_compare(APP_VERSION,'10.570','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79478,8 +79492,8 @@ if($_bslLane==='detail'){
     if(!$_detailProfile){echo json_encode(['ok'=>false,'code'=>'detail_profile_required','error'=>'لین ۲ فقط از پروفایل ذخیره‌شده با جزئیات استفاده می‌کند'],JSON_UNESCAPED_UNICODE);exit;}
     $_bslDetailSummary=extractProfileDetailSummary($_detailProfile);
     if(empty($_bslDetailSummary['enabled'])){echo json_encode(['ok'=>false,'code'=>'detail_selectors_missing','error'=>'برای لین ۲ ابتدا سلکتورهای جزئیات این پروفایل را تنظیم کنید'],JSON_UNESCAPED_UNICODE);exit;}
-    if((int)$_bslDetailSummary['total']<=0||(int)$_bslDetailSummary['detailed']<(int)$_bslDetailSummary['total']){
-        echo json_encode(['ok'=>false,'code'=>'detail_coverage_incomplete','error'=>'جزئیات همهٔ محصولات این پروفایل هنوز استخراج نشده است؛ ابتدا استخراج جزئیات را کامل کنید','detail_summary'=>$_bslDetailSummary],JSON_UNESCAPED_UNICODE);exit;
+    if(!extractProfileHasAnyDetailData($_bslDetailSummary)){
+        echo json_encode(['ok'=>false,'code'=>'detail_coverage_incomplete','error'=>'هیچ محصولی دادهٔ جزئیات واقعی ندارد؛ برای لین ۲ ابتدا جزئیات دست‌کم یک محصول را استخراج کنید','detail_summary'=>$_bslDetailSummary],JSON_UNESCAPED_UNICODE);exit;
     }
 }
 // v10.460: همگام‌سازی زندهٔ انتخاب غرفه‌های تب ارسال با connections.json
@@ -80492,14 +80506,14 @@ if($_bslLane==='detail'){
     $__runtimeResolved=$__runtimeProfileKey!==''?profileResolveKey($__runtimeProfileKey,$__runtimeProfiles):null;
     $__runtimeProfile=is_array($__runtimeProfiles[$__runtimeResolved??'']??null)?$__runtimeProfiles[$__runtimeResolved]:null;
     $__runtimeSummary=$__runtimeProfile?extractProfileDetailSummary($__runtimeProfile):['enabled'=>false,'total'=>0,'detailed'=>0];
-    if(empty($__runtimeSummary['enabled'])||(int)($__runtimeSummary['total']??0)<=0||(int)($__runtimeSummary['detailed']??0)<(int)($__runtimeSummary['total']??0)){
+    if(!extractProfileHasAnyDetailData($__runtimeSummary)){
         $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
         $queue['entries'][$nextIdx]['fail_reason']='detail_coverage_incomplete';$queue['entries'][$nextIdx]['detail_summary']=$__runtimeSummary;
         bslWriteQueue($queue);
         $__failedTotal=max(0,(int)($nextEntry['total']??0)-(int)($nextEntry['current']??0));
-        writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>(int)($nextEntry['sent']??0),'updated'=>(int)($nextEntry['updated']??0),'skipped'=>(int)($nextEntry['skipped']??0),'failed'=>(int)($nextEntry['failed']??0)+$__failedTotal,'total'=>(int)($nextEntry['total']??0),'current'=>(int)($nextEntry['current']??0),'queue_id'=>$bslQueueId,'last_progress_ts'=>time(),'recent_log'=>['❌ لین ۲ متوقف شد: پوشش واقعی جزئیات پروفایل کامل نیست'],'total_log_count'=>1]);
+        writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>(int)($nextEntry['sent']??0),'updated'=>(int)($nextEntry['updated']??0),'skipped'=>(int)($nextEntry['skipped']??0),'failed'=>(int)($nextEntry['failed']??0)+$__failedTotal,'total'=>(int)($nextEntry['total']??0),'current'=>(int)($nextEntry['current']??0),'queue_id'=>$bslQueueId,'last_progress_ts'=>time(),'recent_log'=>['❌ لین ۲ متوقف شد: هیچ محصولی دادهٔ جزئیات واقعی ندارد'],'total_log_count'=>1]);
         header('Content-Type: application/json; charset=UTF-8');
-        echo json_encode(['ok'=>false,'code'=>'detail_coverage_incomplete','queue_id'=>$bslQueueId,'detail_summary'=>$__runtimeSummary,'error'=>'پروفایل این وظیفه دیگر جزئیات کاملِ واقعی ندارد؛ ارسال لین ۲ انجام نشد'],JSON_UNESCAPED_UNICODE);exit;
+        echo json_encode(['ok'=>false,'code'=>'detail_coverage_incomplete','queue_id'=>$bslQueueId,'detail_summary'=>$__runtimeSummary,'error'=>'پروفایل این وظیفه دیگر هیچ دادهٔ جزئیات واقعی ندارد؛ ارسال لین ۲ انجام نشد'],JSON_UNESCAPED_UNICODE);exit;
     }
 }
 
@@ -92832,12 +92846,12 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
     <span role="progressbar" aria-label="پیشرفت لین ۱" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:block;height:4px;margin-top:5px;background:#1e293b;border-radius:99px;overflow:hidden"><i id="bslLaneProgress1" style="display:block;width:0;height:100%;background:#22d3ee;transition:width .25s"></i></span>
   </button>
   <button type="button" id="bslLaneTab2" role="tab" aria-selected="false" aria-controls="bslQueueList" class="btn btn-gray" onclick="setBslSendLane('detail')" style="display:block;min-width:0;padding:9px;text-align:center">
-    <span style="display:block;font-weight:800">🛣️ لین ۲</span><small style="display:block;font-size:9px;margin-top:2px">جزئیات کامل · نیازمند پوشش ۱۰۰٪</small>
+    <span style="display:block;font-weight:800">🛣️ لین ۲</span><small style="display:block;font-size:9px;margin-top:2px">جزئیاتِ موجود · بعضی محصولات می‌توانند بدون جزئیات باشند</small>
     <span id="bslLaneState2" style="display:block;margin-top:5px;color:#94a3b8;font-size:9px;font-weight:700">آماده · صف خالی</span>
     <span role="progressbar" aria-label="پیشرفت لین ۲" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:block;height:4px;margin-top:5px;background:#1e293b;border-radius:99px;overflow:hidden"><i id="bslLaneProgress2" style="display:block;width:0;height:100%;background:#a78bfa;transition:width .25s"></i></span>
   </button>
 </div>
-<div id="bslLaneSelectedHint" style="margin:-4px 0 8px;color:#93c5fd;font-size:10px;text-align:center">لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ لین ۲ فقط پروفایل‌هایی را می‌پذیرد که جزئیات واقعی همهٔ محصولاتشان کامل باشد.</div>
+<div id="bslLaneSelectedHint" style="margin:-4px 0 8px;color:#93c5fd;font-size:10px;text-align:center">لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ لین ۲ پروفایلی را می‌پذیرد که دست‌کم یک محصولش جزئیات واقعی داشته باشد؛ نبود جزئیات برای بعضی محصولات مانع نیست.</div>
 <!-- v10.415: active Basalam task belongs here in the Send tab, directly below
      Catalog Cache—not only inside Task Manager or the collapsed queue panel. -->
 <div id="bslActiveSendTask" style="display:none;margin-bottom:8px"></div>
@@ -100012,6 +100026,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.570', t:'🧾 پذیرش جزئیاتِ ناقص در لین ۲', items:[
+    'لین ۲ دیگر پوشش جزئیات ۱۰۰٪ برای همهٔ محصولات را اجباری نمی‌کند؛ کافی است دادهٔ جزئیات واقعی دست‌کم برای یک محصول در پروفایل ذخیره شده باشد.',
+    'محصولاتِ فاقد جزئیات همچنان همراه سایر محصولات در صف می‌مانند؛ پروفایلی که هیچ دادهٔ واقعی جزئیات ندارد همچنان از لین ۲ رد می‌شود.',
+    'شرط شروع هم در زمان ساخت صف و هم هنگام اجرای worker یکسان شد؛ متن راهنما و آزمون خودکار نیز با این رفتار هماهنگ شدند.'
+  ]},
   {v:'10.569', t:'🛣️ جداسازی واقعی ارسال دو لین', items:[
     'لین ۱ پیش از صف‌گذاری و هنگام اجرای worker فقط عنوان/قیمت/موجودی و عکس فهرست را نگه می‌دارد؛ توضیحات، مشخصات، تنوع‌ها، وزن، SKU و تصاویر گالری حذف می‌شوند.',
     'عکس فهرست هنگام استخراج به‌طور جداگانه حفظ می‌شود تا جزئیات صفحهٔ محصول یا گالری نتواند تصویر لین ۱ را جایگزین کند.',
@@ -116893,7 +116912,7 @@ function setBslSendLane(lane){
     const a=$('bslLaneTab1'),b=$('bslLaneTab2');
     if(a){a.classList.toggle('btn-cyan',bslSendLane==='fast');a.classList.toggle('btn-gray',bslSendLane!=='fast');a.setAttribute('aria-selected',bslSendLane==='fast'?'true':'false');}
     if(b){b.classList.toggle('btn-cyan',bslSendLane==='detail');b.classList.toggle('btn-gray',bslSendLane!=='detail');b.setAttribute('aria-selected',bslSendLane==='detail'?'true':'false');}
-    const hint=$('bslLaneSelectedHint');if(hint)hint.textContent=bslSendLane==='detail'?'لین ۲ فقط پروفایل ذخیره‌شده با سلکتور جزئیات و پوشش کامل همهٔ محصولات را می‌پذیرد؛ ابتدا استخراج جزئیات را کامل کنید.':'لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ دو لین می‌توانند همزمان اجرا شوند.';
+    const hint=$('bslLaneSelectedHint');if(hint)hint.textContent=bslSendLane==='detail'?'لین ۲ فقط پروفایل ذخیره‌شده با سلکتور جزئیات و دادهٔ واقعی برای دست‌کم یک محصول را می‌پذیرد؛ خالی‌بودن جزئیات بعضی محصولات مانع نیست.':'لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ دو لین می‌توانند همزمان اجرا شوند.';
     if(bslLastQueueSnapshot)bslRenderLaneIndicators(bslLastQueueSnapshot);
     const q=bslLastQueueSnapshot;if(q){const row=(q.entries||[]).find(e=>bslEntryInSelectedLane(e)&&e.status==='running');window._currentBslQueueId=row?String(row.id||''):'';bSend=!!row;renderBslQueue(q);bslApplyQueueActionState(q);if(row)pollBslProgress();}
 }
