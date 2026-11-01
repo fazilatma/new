@@ -397,7 +397,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.562';
+const APP_VERSION = '10.563';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1062,18 +1062,20 @@ function s4WorkerQueueWriteToHandle($fp, array $q): bool {
     @ftruncate($fp, 0);
     $n = @fwrite($fp, $json);
     @fflush($fp);
-    return $n !== false;
+    return $n !== false && $n === strlen($json);
 }
 
 function s4WorkerQueueMutate(callable $fn): array {
     $fp = @fopen(WORKER_QUEUE_FILE, 'c+');
     if (!$fp) return ['ok' => false, 'error' => 'worker_queue_open'];
-    if (!@flock($fp, LOCK_EX)) { @fclose($fp); return ['ok' => false, 'error' => 'worker_queue_lock']; }
+    $locked=false;for($i=0;$i<100;$i++){if(@flock($fp,LOCK_EX|LOCK_NB)){$locked=true;break;}usleep(50000);}
+    if(!$locked){@fclose($fp);return ['ok'=>false,'error'=>'worker_queue_busy','retryable'=>true];}
     $q = s4WorkerQueueReadFromHandle($fp);
     $ret = $fn($q);
     if (!is_array($ret)) $ret = ['ok' => true];
-    s4WorkerQueueWriteToHandle($fp, $q);
+    $written=s4WorkerQueueWriteToHandle($fp,$q);
     @flock($fp, LOCK_UN); @fclose($fp);
+    if(!$written)return ['ok'=>false,'error'=>'worker_queue_write'];
     return $ret;
 }
 
@@ -1867,8 +1869,10 @@ function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
         if(empty($checkpointGuard['compatible'])){
             /* Clicking Build (not Continue) with a changed checkbox set means
                replace the destination scope, not silently restore old Woo. */
-            $manualFresh=!$resume&&in_array((string)($opts['source']??'manual'),['manual','manual_selected'],true);
-            if(!$manualFresh||empty($checkpointGuard['same_profile']))return ['ok'=>false,'error'=>'unfinished_matrix_checkpoint_scope_conflict',
+            $manualSource=in_array((string)($opts['source']??'manual'),['manual','manual_selected'],true);
+            $manualFresh=!$resume&&$manualSource;
+            $manualExplicit=$manualSource&&!empty($opts['_destinations_explicit']);
+            if((!$manualFresh&&!$manualExplicit)||empty($checkpointGuard['same_profile']))return ['ok'=>false,'error'=>'unfinished_matrix_checkpoint_scope_conflict',
                 'checkpoint_preserved'=>true,'have_destinations'=>$checkpointGuard['have_destinations']??[],
                 'want_destinations'=>$checkpointGuard['want_destinations']??[]];
             $rebased=matrixRebaseCheckpointDestinations((array)$checkpointGuard['checkpoint'],(array)($checkpointGuard['want_destinations']??[]));
@@ -45852,8 +45856,10 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
     header('Content-Type: application/json; charset=UTF-8');
     @set_time_limit(0);
     @ignore_user_abort(true);
+    $__matrixDestExplicit=array_key_exists('selected_destinations',$_GET)||array_key_exists('selected_destinations',$_POST);
     $opts = [
         'profile' => (string)($_GET['profile'] ?? $_POST['profile'] ?? 'all'),
+        '_destinations_explicit'=>$__matrixDestExplicit,
         'source' => (string)($_GET['source'] ?? $_POST['source'] ?? 'manual'),
         'background' => true,
         'run_started_at' => microtime(true),
@@ -45880,7 +45886,8 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         $resumeRequested = !empty($_GET['resume'] ?? $_POST['resume'] ?? null);
         $enq = s4WorkerEnqueueMatrixBuild($opts, $resumeRequested);
         if (empty($enq['ok'])) {
-            echo json_encode(['ok'=>false,'error'=>'ثبت job ماتریس در worker ناموفق بود: '.(string)($enq['error']??'unknown')], JSON_UNESCAPED_UNICODE);
+            $__ee=(string)($enq['error']??'unknown');$__labels=['worker_queue_open'=>'فایل صف worker باز نشد','worker_queue_busy'=>'صف worker بیش از ۵ ثانیه مشغول بود؛ دوباره تلاش کنید','worker_queue_write'=>'نوشتن فایل صف worker کامل نشد','unfinished_matrix_checkpoint_scope_conflict'=>'مقصدهای checkpoint با انتخاب فعلی متفاوت‌اند'];
+            echo json_encode(['ok'=>false,'error'=>(string)($__labels[$__ee]??('ثبت job ماتریس در worker ناموفق بود: '.$__ee)),'error_code'=>$__ee,'retryable'=>!empty($enq['retryable']),'details'=>$enq], JSON_UNESCAPED_UNICODE);
             exit;
         }
         echo json_encode(['ok'=>true,'started'=>true,'queued'=>true,'worker'=>true,
@@ -48179,6 +48186,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'forced_paused_row_missing'")!==false
         &&strpos($selfSrc,"\$__probe=queueBackendLock('bsl')")!==false
         &&strpos($selfSrc,"{v:'10." . "562'")!==false&&version_compare(APP_VERSION,'10.562','>='));
+    $add('10.563','انتخاب صریح مقصد checkpoint را rebase و ثبت job خطای واقعی برمی‌گرداند',
+        strpos($selfSrc,"\$manualExplicit=\$manualSource&&!empty(\$opts['_destinations_explicit'])")!==false
+        &&strpos($selfSrc,"'worker_queue_busy','retryable'=>true")!==false
+        &&strpos($selfSrc,"if(!\$written)return ['ok'=>false,'error'=>'worker_queue_write']")!==false
+        &&strpos($selfSrc,"{v:'10." . "563'")!==false&&version_compare(APP_VERSION,'10.563','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -99700,6 +99712,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.563', t:'🧵 ثبت پایدار job ماتریس و مقصدهای صریح', items:[
+    'ادامهٔ دستی با مقصدهای انتخاب‌شده، checkpoint همان پروفایل را به همان مقصدها rebase می‌کند؛ تفاوت Woo/غرفه‌ها دیگر به‌اشتباه «ثبت job ناموفق» نشان داده نمی‌شود.',
+    'قفل صف worker حداکثر پنج ثانیه با retry کوتاه منتظر می‌ماند، نوشتن ناقص تشخیص داده می‌شود و رابط به‌جای پیام عمومی، کد و علت واقعی open/busy/write را نمایش می‌دهد.'
+  ]},
   {v:'10.562', t:'🔒 تشخیص مستقیم lock صف paused', items:[
     'heartbeat پردازهٔ قدیمی دیگر recycle را خنثی نمی‌کند؛ ردیف paused با queue_id دقیق مستقیماً از صف خوانده و مالکیت flock همان مقصد probe می‌شود.',
     'cursor بزرگ‌ترِ صف و progress حفظ می‌شود و فقط پس از احراز paused بودن همان ردیف، بازیافت مالک و ادامه انجام می‌گیرد.'
