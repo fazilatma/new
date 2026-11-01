@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.575';
+const APP_VERSION = '10.576';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48336,6 +48336,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$__activeGallery['active']?\$__activeGallery:\$__activeList")!==false
         &&strpos($selfSrc,"{v:'10." . "575'")!==false
         &&version_compare(APP_VERSION,'10.575','>='));
+    $add('10.576','ردیف running بدون مالک همان لین فوری بازیابی می‌شود',
+        strpos($selfSrc,"A running row is a dead-worker checkpoint")!==false
+        &&strpos($selfSrc,"in_array((\$e['status']??''),['waiting','running'],true)")!==false
+        &&strpos($selfSrc,"{v:'10." . "576'")!==false
+        &&version_compare(APP_VERSION,'10.576','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79793,7 +79798,10 @@ $laneOrder=[$__requestedNextLane];
 foreach($laneOrder as $wantLane){
     foreach($queue['entries'] as $i=>$e){
         if(!is_array($e)||bslRowLane($e)!==$wantLane)continue;
-        if(($e['status']??'')==='waiting'||(($e['status']??'')==='running'&&(int)($e['current']??0)<=0)){$nextIdx=$i;break 2;}
+        /* Reaching here means this lane's flock was acquired, therefore no
+           worker owns it. A running row is a dead-worker checkpoint and is
+           immediately reclaimable even when the generic watchdog is disabled. */
+        if(in_array(($e['status']??''),['waiting','running'],true)){$nextIdx=$i;break 2;}
     }
 }
 if($nextIdx>=0){
@@ -100108,6 +100116,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.576', t:'♻️ بازیابی فوری worker مردهٔ لین', items:[
+    'وقتی endpoint شروع قفل اختصاصی لین را می‌گیرد، ردیف running همان لین دیگر زنده فرض نمی‌شود؛ نبود مالک flock اثبات مستقیم مرگ worker است.',
+    'ردیف از checkpoint صف فوراً دوباره اجرا می‌شود و این بازیابی به کلید عمومی watchdog یا auto-resume وابسته نیست.'
+  ]},
   {v:'10.575', t:'🖼️ حذف decode پنهان پروفایل‌ها از مرحلهٔ تصویر لین ۲', items:[
     'مرحلهٔ تشخیص ویرایش تصویر قبلاً profiles.json کامل را دوباره decode می‌کرد؛ همین فراخوانی پنهان worker بزرگ را دقیقاً در «آماده‌سازی تصاویر» می‌کشت.',
     'sender اکنون تنظیم list/gallery را مستقیماً از snapshot سبک همان پروفایل فعال می‌خواند و در مسیر تصویر هیچ نسخهٔ دوم از کاتالوگ پروفایل‌ها نمی‌سازد.'
