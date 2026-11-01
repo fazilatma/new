@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.573';
+const APP_VERSION = '10.574';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48314,6 +48314,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$d['memory_peak_mb']")!==false
         &&strpos($selfSrc,"{v:'10." . "573'")!==false
         &&version_compare(APP_VERSION,'10.573','>='));
+    $add('10.574','شروع صریح لین به lock عمومی worker نامرتبط وابسته نیست',
+        strpos($selfSrc,".bsl-lane-dispatch.lock")!==false
+        &&strpos($selfSrc,"$__explicitNextLane?@fopen")!==false
+        &&strpos($selfSrc,"شروع لین دیگری هم‌اکنون در حال ثبت است")!==false
+        &&strpos($selfSrc,"{v:'10." . "574'")!==false
+        &&version_compare(APP_VERSION,'10.574','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79737,8 +79743,15 @@ if(isset($_GET['bsl_queue_start_next'])){
 header('Content-Type: application/json; charset=UTF-8');
 $__explicitNextLane=array_key_exists('lane',$_GET);
 $__requestedNextLane=$__explicitNextLane?bslNormalizeProfileLane($_GET['lane']):(bslParallelProfileLanesEnabled()?'fast':'legacy');
-$__nextLock=queueBackendLock('bsl');
-if(!is_resource($__nextLock)){echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک پردازش صف باسلام هم‌اکنون در حال اجراست'],JSON_UNESCAPED_UNICODE);exit;}
+/* Physical lanes must not be blocked by the legacy/global backend mutex: an
+   unrelated reconciliation/manual worker may hold that mutex while both lane
+   locks are free.  A short dispatch-only mutex serializes the read/modify/write
+   of the shared queue; the lane lock remains the actual worker ownership. */
+$__nextLock=$__explicitNextLane?@fopen(__DIR__.'/.bsl-lane-dispatch.lock','c'):queueBackendLock('bsl');
+if(!is_resource($__nextLock)||($__explicitNextLane&&!@flock($__nextLock,LOCK_EX|LOCK_NB))){
+    if(is_resource($__nextLock))@fclose($__nextLock);
+    echo json_encode(['ok'=>false,'running'=>true,'lane'=>$__requestedNextLane,'retryable'=>true,'error'=>'شروع لین دیگری هم‌اکنون در حال ثبت است'],JSON_UNESCAPED_UNICODE);exit;
+}
 register_shutdown_function(function()use($__nextLock){queueBackendUnlock($__nextLock);});
 $__laneProbe=@fopen(bslLaneLockFile($__requestedNextLane),'c');
 if(!$__laneProbe||!@flock($__laneProbe,LOCK_EX|LOCK_NB)){
@@ -100079,6 +100092,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.574', t:'🔓 شروع مستقل لین از worker عمومی باسلام', items:[
+    'endpoint شروع صریح لین دیگر پشت mutex عمومیِ workerهای همگام‌سازی/قدیمی متوقف نمی‌شود؛ قفل کوتاه مخصوص dispatch، تغییر صف مشترک را اتمیک نگه می‌دارد.',
+    'قفل اختصاصی هر لین همچنان مالکیت یکتا و جلوگیری از worker تکراری را تضمین می‌کند؛ اشغال لحظه‌ای dispatch نیز پاسخ retryable روشن برمی‌گرداند.'
+  ]},
   {v:'10.573', t:'🧠 رفع مرگ worker لین ۲ در پروفایل‌های بزرگ', items:[
     'علت زندهٔ توقف لین ۲، نگه‌داشتن چند نسخهٔ decode‌شده از profiles.json در کنار payload جزئیات و تصاویر بود؛ روی هاست worker در مرحلهٔ آماده‌سازی تصویر بدون fatal قابل ثبت کشته می‌شد.',
     'worker اکنون فقط یک پروفایل را یک‌بار بارگذاری می‌کند، کاتالوگ تکراری محصولات را پس از اعتبارسنجی جزئیات آزاد می‌کند و همان snapshot سبک را در تمام مسیرهای غرفه به اشتراک می‌گذارد.',
