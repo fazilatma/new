@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.576';
+const APP_VERSION = '10.577';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48341,6 +48341,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"in_array((\$e['status']??''),['waiting','running'],true)")!==false
         &&strpos($selfSrc,"{v:'10." . "576'")!==false
         &&version_compare(APP_VERSION,'10.576','>='));
+    $add('10.577','هر لین worker و بازیابی flock مستقل دارد',
+        strpos($selfSrc,'function bslLaneLockOwnerPid')!==false
+        &&strpos($selfSrc,'Start is also the lane-specific recovery control')!==false
+        &&strpos($selfSrc,"bslLaneProgressFile(\$__requestedNextLane)")!==false
+        &&strpos($selfSrc,"'reclaimed_stale_pid'=>\$__reclaimedLanePid")!==false
+        &&strpos($selfSrc,"{v:'10." . "577'")!==false
+        &&version_compare(APP_VERSION,'10.577','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78924,6 +78931,25 @@ function bslLaneProductsFile(string $lane): string {
 function bslLaneLockFile(string $lane): string {
     $lane=bslNormalizeProfileLane($lane);return __DIR__.($lane==='fast'?'/bsl_backend_fast.lock':($lane==='detail'?'/bsl_backend_detail.lock':'/bsl_backend.lock'));
 }
+/** Resolve only the process holding this exact lane flock. Used by an explicit
+ * Start click after a frozen heartbeat, never to stop another lane. */
+function bslLaneLockOwnerPid(string $lane): int {
+    $path=bslLaneLockFile($lane);$st=@stat($path);$ino=(int)($st['ino']??0);$dev=(int)($st['dev']??-1);$pid=0;
+    if(function_exists('exec')){
+        $out=[];$rc=1;@exec('fuser '.escapeshellarg($path).' 2>/dev/null',$out,$rc);
+        foreach($out as $line)foreach((array)preg_split('/\s+/',trim((string)$line)) as $raw){$p=(int)preg_replace('/\D/','',(string)$raw);if($p>1&&$p!==(int)@getmypid()){$pid=$p;break 2;}}
+    }
+    if($pid<=1&&$ino>0&&is_readable('/proc/locks')){
+        foreach((array)@file('/proc/locks',FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES) as $line){
+            if(strpos((string)$line,'FLOCK')===false)continue;$parts=preg_split('/\s+/',trim((string)$line));$p=(int)($parts[4]??0);$di=(string)($parts[5]??'');
+            if($p>1&&$p!==(int)@getmypid()&&preg_match('/(?:^|:)'.preg_quote((string)$ino,'/').'$/',$di)){$pid=$p;break;}
+        }
+    }
+    if($pid<=1&&$ino>0){
+        foreach((array)glob('/proc/[0-9]*/fd/*') as $fd){$fs=@stat($fd);if(!is_array($fs)||(int)($fs['ino']??0)!==$ino||(int)($fs['dev']??-2)!==$dev)continue;if(preg_match('~^/proc/(\d+)/fd/~',$fd,$m)){ $p=(int)$m[1];if($p>1&&$p!==(int)@getmypid()){$pid=$p;break;}}}
+    }
+    return $pid;
+}
 function bslRowLane(array $row): string {
     $lane=bslNormalizeProfileLane($row['lane']??'');
     if($lane!=='legacy')return $lane;
@@ -79775,9 +79801,35 @@ if(!is_resource($__nextLock)||($__explicitNextLane&&!@flock($__nextLock,LOCK_EX|
 }
 register_shutdown_function(function()use($__nextLock){queueBackendUnlock($__nextLock);});
 $__laneProbe=@fopen(bslLaneLockFile($__requestedNextLane),'c');
-if(!$__laneProbe||!@flock($__laneProbe,LOCK_EX|LOCK_NB)){
+$__laneAcquired=is_resource($__laneProbe)&&@flock($__laneProbe,LOCK_EX|LOCK_NB);
+$__reclaimedLanePid=0;
+if(!$__laneAcquired&&$__explicitNextLane){
+    /* Start is also the lane-specific recovery control. If its exact flock is
+       held but both progress and queue heartbeat have frozen for three minutes,
+       retire only that flock owner and resume the same checkpoint. */
+    $__staleProgress=readProgress(bslLaneProgressFile($__requestedNextLane));$__laneBeat=tasksHeartbeat($__staleProgress);
+    $__staleQueue=bslReadQueue();foreach((array)($__staleQueue['entries']??[]) as $__sr){
+        if(!is_array($__sr)||bslRowLane($__sr)!==$__requestedNextLane||!in_array((string)($__sr['status']??''),['running','waiting'],true))continue;
+        $__laneBeat=max($__laneBeat,(int)($__sr['last_progress_ts']??0),(int)($__sr['updated_at']??0),(int)($__sr['started_at']??0));break;
+    }
+    $__laneIdle=$__laneBeat>0?max(0,time()-$__laneBeat):PHP_INT_MAX;
+    if($__laneIdle>=180){
+        $__reclaimedLanePid=bslLaneLockOwnerPid($__requestedNextLane);
+        if($__reclaimedLanePid>1){
+            if(function_exists('posix_kill'))@posix_kill($__reclaimedLanePid,defined('SIGTERM')?SIGTERM:15);
+            elseif(function_exists('exec')){@exec('kill -TERM '.(int)$__reclaimedLanePid.' >/dev/null 2>&1');}
+            usleep(700000);$__laneAcquired=is_resource($__laneProbe)&&@flock($__laneProbe,LOCK_EX|LOCK_NB);
+            if(!$__laneAcquired){
+                if(function_exists('posix_kill'))@posix_kill($__reclaimedLanePid,defined('SIGKILL')?SIGKILL:9);
+                elseif(function_exists('exec')){@exec('kill -KILL '.(int)$__reclaimedLanePid.' >/dev/null 2>&1');}
+                usleep(300000);$__laneAcquired=is_resource($__laneProbe)&&@flock($__laneProbe,LOCK_EX|LOCK_NB);
+            }
+        }
+    }
+}
+if(!$__laneAcquired){
     if(is_resource($__laneProbe))@fclose($__laneProbe);
-    echo json_encode(['ok'=>false,'running'=>true,'lane'=>$__requestedNextLane,'error'=>'worker همین لین هنوز فعال است'],JSON_UNESCAPED_UNICODE);exit;
+    echo json_encode(['ok'=>false,'running'=>true,'lane'=>$__requestedNextLane,'retryable'=>true,'error'=>'worker همین لین هنوز فعال است'],JSON_UNESCAPED_UNICODE);exit;
 }
 register_shutdown_function(function()use($__laneProbe){queueBackendUnlock($__laneProbe);});
 $queue=bslReadQueue();
@@ -79822,7 +79874,7 @@ if($nextIdx>=0){
         ['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1','lane'=>$nextLane]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
     queueBackendUnlock($__laneProbe);
     echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'lane'=>$nextLane,'total'=>$nextEntry['total'],'worker_pid'=>$nextPid,
-        'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'msg'=>'شروع فرآیند بعدی همین لین از صف'],JSON_UNESCAPED_UNICODE);
+        'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'reclaimed_stale_pid'=>$__reclaimedLanePid,'msg'=>'شروع فرآیند بعدی همین لین از صف'],JSON_UNESCAPED_UNICODE);
 }else{
     bslWriteQueue($queue);echo json_encode(['ok'=>true,'next_id'=>null,'lane'=>$__requestedNextLane,'msg'=>'صف این لین خالی است'],JSON_UNESCAPED_UNICODE);
 }
@@ -100116,6 +100168,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.577', t:'⚡ دو جریان موازی و مستقل برای لین‌های ۱ و ۲', items:[
+    'لین ۱ (بدون جزئیات) و لین ۲ (با جزئیات) هرکدام flock، worker، progress و checkpoint مستقل دارند و می‌توانند همزمان برای همان غرفه‌های انتخابی اجرا شوند.',
+    'کلیک Start روی هر لین فقط مالک دقیق همان flock را بررسی می‌کند؛ اگر heartbeat آن بیش از سه دقیقه منجمد باشد، همان PID متوقف و همان checkpoint فوراً بازیابی می‌شود، بدون لمس worker لین دیگر.',
+    'mutex مشترک فقط چند لحظه برای ثبت اتمیک تغییر صف نگه داشته می‌شود؛ فشار API همچنان با بودجهٔ تطبیقی مشترک محدود می‌ماند.'
+  ]},
   {v:'10.576', t:'♻️ بازیابی فوری worker مردهٔ لین', items:[
     'وقتی endpoint شروع قفل اختصاصی لین را می‌گیرد، ردیف running همان لین دیگر زنده فرض نمی‌شود؛ نبود مالک flock اثبات مستقیم مرگ worker است.',
     'ردیف از checkpoint صف فوراً دوباره اجرا می‌شود و این بازیابی به کلید عمومی watchdog یا auto-resume وابسته نیست.'
