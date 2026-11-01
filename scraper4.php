@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.574';
+const APP_VERSION = '10.575';
 
 
 if (!function_exists('str_starts_with')) {
@@ -16144,6 +16144,16 @@ function s4ResolveImageCropForUrl(string $imgUrl, string $productLink = '', stri
     }
     if ($role === '' && !empty($GLOBALS['_s4CurrentImageRole'])) {
         $role = (string)$GLOBALS['_s4CurrentImageRole'];
+    }
+    /* A Basalam sender already owns the exact active profile. Never decode the
+       complete profiles journal again from image preparation: on large Lane 2
+       queues that transient decode is enough to kill the worker before GD. */
+    if (is_array($GLOBALS['_bslActiveProfileSnapshot'] ?? null)) {
+        $__activeImageProfile=$GLOBALS['_bslActiveProfileSnapshot'];
+        $__activeList=s4NormalizeImageEditCfg($__activeImageProfile['listImageEdit'] ?? []);
+        $__activeGallery=s4NormalizeImageEditCfg($__activeImageProfile['gallery'] ?? []);
+        if ($role === 'gallery') return $__activeGallery['active']?$__activeGallery:$__activeList;
+        return $__activeList['active']?$__activeList:$__activeGallery;
     }
     static $cache = null;
     static $cacheMtime = -1;
@@ -48320,6 +48330,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"شروع لین دیگری هم‌اکنون در حال ثبت است")!==false
         &&strpos($selfSrc,"{v:'10." . "574'")!==false
         &&version_compare(APP_VERSION,'10.574','>='));
+    $add('10.575','آماده‌سازی تصویر پروفایل‌های کامل را دوباره decode نمی‌کند',
+        strpos($selfSrc,"A Basalam sender already owns the exact active profile")!==false
+        &&strpos($selfSrc,"is_array(\$GLOBALS['_bslActiveProfileSnapshot'] ?? null)")!==false
+        &&strpos($selfSrc,"\$__activeGallery['active']?\$__activeGallery:\$__activeList")!==false
+        &&strpos($selfSrc,"{v:'10." . "575'")!==false
+        &&version_compare(APP_VERSION,'10.575','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -100092,6 +100108,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.575', t:'🖼️ حذف decode پنهان پروفایل‌ها از مرحلهٔ تصویر لین ۲', items:[
+    'مرحلهٔ تشخیص ویرایش تصویر قبلاً profiles.json کامل را دوباره decode می‌کرد؛ همین فراخوانی پنهان worker بزرگ را دقیقاً در «آماده‌سازی تصاویر» می‌کشت.',
+    'sender اکنون تنظیم list/gallery را مستقیماً از snapshot سبک همان پروفایل فعال می‌خواند و در مسیر تصویر هیچ نسخهٔ دوم از کاتالوگ پروفایل‌ها نمی‌سازد.'
+  ]},
   {v:'10.574', t:'🔓 شروع مستقل لین از worker عمومی باسلام', items:[
     'endpoint شروع صریح لین دیگر پشت mutex عمومیِ workerهای همگام‌سازی/قدیمی متوقف نمی‌شود؛ قفل کوتاه مخصوص dispatch، تغییر صف مشترک را اتمیک نگه می‌دارد.',
     'قفل اختصاصی هر لین همچنان مالکیت یکتا و جلوگیری از worker تکراری را تضمین می‌کند؛ اشغال لحظه‌ای dispatch نیز پاسخ retryable روشن برمی‌گرداند.'
