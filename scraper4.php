@@ -60,7 +60,13 @@ const PROFILE_SUMMARY_CACHE_FILE = __DIR__ . '/.profile_summary_cache.json'; // 
 const PROFILES_DELETED_FILE = __DIR__ . '/profiles_deleted.json';
 const CONNECTIONS_FILE = __DIR__ . '/connections.json';
 const BSL_PROGRESS_FILE = __DIR__ . '/bsl_progress.json';
+const BSL_FAST_PROGRESS_FILE = __DIR__ . '/bsl_progress_fast.json';
+const BSL_DETAIL_PROGRESS_FILE = __DIR__ . '/bsl_progress_detail.json';
+const BSL_QUEUE_MUTEX_FILE = __DIR__ . '/bsl_queue.mutex';
+const BSL_PROFILE_LANE_CLAIM_FILE = __DIR__ . '/bsl_profile_lane_claim.lock';
 const BSL_STOP_FILE = __DIR__ . '/bsl_stop_signal.json';
+const BSL_ADAPTIVE_RATE_FILE = __DIR__ . '/bsl_adaptive_rate.json'; // v10.559
+const BSL_PHOTO_ID_CACHE_FILE = __DIR__ . '/bsl_photo_id_cache.json'; // v10.559
 // v8.57: تا این مدت بعد از فشردن «توقف»، هیچ ارسال تازه‌ای شروع نمی‌شود.
 // بدون این، رابط کاربری بلافاصله بعد از توقف دوباره ارسال را راه می‌انداخت.
 const BSL_STOP_HOLD_SEC = 900;
@@ -70,6 +76,8 @@ const WOO_STOP_FILE = __DIR__ . '/woo_stop_signal.json';
 const WOO_STOP_HOLD_SEC = 900;
 const SYNC_STATE_FILE = __DIR__ . '/sync_state.json';
 const BSL_PRODUCTS_FILE = __DIR__ . '/bsl_products_temp.json';
+const BSL_FAST_PRODUCTS_FILE = __DIR__ . '/bsl_products_fast_temp.json';
+const BSL_DETAIL_PRODUCTS_FILE = __DIR__ . '/bsl_products_detail_temp.json';
 const WOO_QUEUE_FILE = __DIR__ . '/woo_queue.json';
 const WOO_PRODUCTS_FILE = __DIR__ . '/woo_products_temp.json';
 const BSL_QUEUE_FILE = __DIR__ . '/bsl_queue.json';
@@ -390,10 +398,13 @@ const BACKUP_DIR       = __DIR__ . '/_backups';
 const ORDERS_MGR_NOTES_FILE = __DIR__ . '/orders_mgr_notes.json';
 const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10.495: deferred safe checkpoint cleanup
+const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.508: durable stale-row tombstone
 
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
-const APP_VERSION = '10.512';
+
+const APP_VERSION = '10.568';
+
 
 if (!function_exists('str_starts_with')) {
     function str_starts_with($haystack, $needle) {
@@ -416,7 +427,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/09';
+const APP_VERSION_DATE = '1405/08/10';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -1057,18 +1068,20 @@ function s4WorkerQueueWriteToHandle($fp, array $q): bool {
     @ftruncate($fp, 0);
     $n = @fwrite($fp, $json);
     @fflush($fp);
-    return $n !== false;
+    return $n !== false && $n === strlen($json);
 }
 
 function s4WorkerQueueMutate(callable $fn): array {
     $fp = @fopen(WORKER_QUEUE_FILE, 'c+');
     if (!$fp) return ['ok' => false, 'error' => 'worker_queue_open'];
-    if (!@flock($fp, LOCK_EX)) { @fclose($fp); return ['ok' => false, 'error' => 'worker_queue_lock']; }
+    $locked=false;for($i=0;$i<100;$i++){if(@flock($fp,LOCK_EX|LOCK_NB)){$locked=true;break;}usleep(50000);}
+    if(!$locked){@fclose($fp);return ['ok'=>false,'error'=>'worker_queue_busy','retryable'=>true];}
     $q = s4WorkerQueueReadFromHandle($fp);
     $ret = $fn($q);
     if (!is_array($ret)) $ret = ['ok' => true];
-    s4WorkerQueueWriteToHandle($fp, $q);
+    $written=s4WorkerQueueWriteToHandle($fp,$q);
     @flock($fp, LOCK_UN); @fclose($fp);
+    if(!$written)return ['ok'=>false,'error'=>'worker_queue_write'];
     return $ret;
 }
 
@@ -1803,8 +1816,31 @@ function matrixBuildCheckpointGuard(array $opts): array {
     $haveProfile=(string)($cp['profile_filter']??'all');if($haveProfile==='')$haveProfile='all';
     $cn=loadConnections();$want=matrixNormalizeDestinations(array_key_exists('selected_destinations',$opts)?$opts['selected_destinations']:null,$cn);
     $have=matrixNormalizeDestinations($cp['selected_destinations']??null,$cn);sort($want);sort($have);
-    return ['exists'=>true,'compatible'=>$wantProfile===$haveProfile&&$want===$have,'checkpoint'=>$cp,'state'=>$old,
+    return ['exists'=>true,'compatible'=>$wantProfile===$haveProfile&&$want===$have,
+        'same_profile'=>$wantProfile===$haveProfile,'checkpoint'=>$cp,'state'=>$old,
         'have_profile'=>$haveProfile,'want_profile'=>$wantProfile,'have_destinations'=>$have,'want_destinations'=>$want];
+}
+/** A new manual build is authoritative about its checked destinations. Keep the
+ * expensive source-profile checkpoint, but discard destination data/cursors
+ * that belong to the old scope. In particular an unchecked Woo destination can
+ * never be resurrected by Resume or a stale checkpoint. */
+function matrixRebaseCheckpointDestinations(array $cp,array $wanted): array {
+    $wanted=matrixNormalizeDestinations($wanted);$set=array_fill_keys($wanted,true);
+    $cp['selected_destinations']=$wanted;$cp['phase']='profiles_done';
+    if(!isset($set['woo'])){
+        $cp['woo_rows']=[];$cp['woo_done']=true;$cp['woo_page']=0;$cp['woo_complete']=true;
+        if(function_exists('matrixFetchCursorFile'))@unlink(matrixFetchCursorFile());
+    } else {
+        $cp['woo_rows']=[];$cp['woo_done']=false;$cp['woo_page']=0;$cp['woo_complete']=false;
+        if(function_exists('matrixFetchCursorFile'))@unlink(matrixFetchCursorFile());
+    }
+    $keep=[];foreach($wanted as $d)if(str_starts_with($d,'bsl:'))$keep[(string)(int)substr($d,4)]=true;
+    foreach(['shop_rows','shop_pages','shop_done'] as $field){
+        $src=is_array($cp[$field]??null)?$cp[$field]:[];$dst=[];
+        foreach($src as $vid=>$v)if(isset($keep[(string)(int)$vid]))$dst[(string)(int)$vid]=$v;
+        $cp[$field]=$dst;
+    }
+    return $cp;
 }
 
 /** Keep one periodic build→fix chain. v10.336 intentionally gave every tick a
@@ -1836,10 +1872,21 @@ function s4WorkerCoalescePeriodicMatrixChains(): array {
 function s4WorkerEnqueueMatrixBuild(array $opts, bool $resume): array {
     $checkpointGuard=matrixBuildCheckpointGuard($opts);
     if(!empty($checkpointGuard['exists'])){
-        if(empty($checkpointGuard['compatible']))return ['ok'=>false,'error'=>'unfinished_matrix_checkpoint_scope_conflict',
-            'checkpoint_preserved'=>true,'have_destinations'=>$checkpointGuard['have_destinations']??[],
-            'want_destinations'=>$checkpointGuard['want_destinations']??[]];
-        $resume=true;$opts['_resume_promoted']=true;
+        if(empty($checkpointGuard['compatible'])){
+            /* Clicking Build (not Continue) with a changed checkbox set means
+               replace the destination scope, not silently restore old Woo. */
+            $manualSource=in_array((string)($opts['source']??'manual'),['manual','manual_selected'],true);
+            $manualFresh=!$resume&&$manualSource;
+            $manualExplicit=$manualSource&&!empty($opts['_destinations_explicit']);
+            if((!$manualFresh&&!$manualExplicit)||empty($checkpointGuard['same_profile']))return ['ok'=>false,'error'=>'unfinished_matrix_checkpoint_scope_conflict',
+                'checkpoint_preserved'=>true,'have_destinations'=>$checkpointGuard['have_destinations']??[],
+                'want_destinations'=>$checkpointGuard['want_destinations']??[]];
+            $rebased=matrixRebaseCheckpointDestinations((array)$checkpointGuard['checkpoint'],(array)($checkpointGuard['want_destinations']??[]));
+            matrixProgress(['running'=>false,'done'=>false,'yielded'=>true,'phase'=>'scope_rebased','selected_destinations'=>$rebased['selected_destinations'],
+                'checkpoint'=>$rebased,'log_add'=>['🎯 مقصدهای checkpoint با تیک‌های فعلی جایگزین شد؛ مقصد حذف‌شده هیچ واکشی نخواهد داشت']]);
+            $checkpointGuard=matrixBuildCheckpointGuard($opts);$opts['_scope_rebased']=true;
+        }
+        $resume=true;$opts['_resume_promoted']=empty($opts['_scope_rebased']);
     }
     $execDriver=function_exists('matrixExecutionDecision')?matrixExecutionDecision():['accelerated'=>false];
     $requestedSlice=max(2,min(20,(int)($opts['slice_seconds']??8)));
@@ -1886,7 +1933,8 @@ function s4WorkerEnqueueMatrixFix(array $opts, bool $resume): array {
         'resume'=>$resume,'dedup_key'=>(string)($opts['dedup_key']??((string)($opts['source']??'')==='manual_selected'?'matrix_fix_selected|'.substr(sha1(json_encode([$opts['view_filters']??[],$opts['selected_destinations']??[]],JSON_UNESCAPED_UNICODE)),0,16):'matrix_fix')),'requested_at'=>microtime(true)];
     $enq=s4WorkerEnqueue('matrix_fix',$payload,'اصلاح مغایرت‌ها');
     if(!empty($enq['ok'])&&empty($enq['duplicate'])){
-        $old=$resume?matrixFixProgressRead():[];$cp=$resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null;
+        $old=$resume?matrixFixProgressRead():[];
+        $cp=$resume&&is_array($opts['checkpoint']??null)?$opts['checkpoint']:($resume&&is_array($old['checkpoint']??null)?$old['checkpoint']:null);
         /* queued یعنی منتظر build؛ هنوز runner اصلاح نیست و نباید UI ساخت را بپوشاند. */
         matrixFixProgress(['running'=>false,'done'=>false,'queued'=>true,'worker'=>true,'reset_log'=>!$resume,'phase'=>'در صف worker','pct'=>1,
             'source'=>'worker','job'=>'fix','scope'=>$payload['scope'],'selected_destinations'=>$payload['selected_destinations'],'delay_ms'=>$payload['delay_ms'],'job_id'=>(string)($enq['job_id']??''),
@@ -1917,8 +1965,10 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         $segments++;$driver=matrixExecutionDecision();
         /* Accelerated means no intentional handoff pause, not an unbounded child.
            Shared hosts killed the old unlimited correction before checkpoint handoff. */
-        $accelerated=!empty($driver['accelerated']);$payload['max_items']=$accelerated?30:20;
-        $segmentCap=$accelerated?2:8;
+        $accelerated=!empty($driver['accelerated']);$__sendPressure=bslSendResourcePressureActive();
+        $payload['max_items']=$__sendPressure?5:($accelerated?30:20);
+        $segmentCap=$__sendPressure?1:($accelerated?2:8);
+        if($__sendPressure)matrixFixProgress(['log_add'=>['🫁 ارسال باسلام فعال است؛ برش اصلاح برای جلوگیری از OOM به ۵ عملیات محدود شد']]);
         $payload['resume']=$segments>1||!empty($payload['resume']);
         $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
         $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
@@ -1926,7 +1976,19 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
         if(!is_array($decoded))$decoded=['ok'=>false,'error'=>'matrix_fix_child_no_json'];
         $tail=mb_substr(trim(implode("\n",array_slice($out,-20))),-2000);if($tail!=='')$tails[]=$tail;
-        $decoded['child_exit_code']=$rc;if($rc!==0&&empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}
+        $decoded['child_exit_code']=$rc;if($rc!==0){
+            $st=matrixFixProgressRead();$cp=is_array($st['checkpoint']??null)?$st['checkpoint']:null;
+            if($cp){
+                /* SIGKILL/OOM cannot run PHP finally/catch. A durable checkpoint
+                   is proof that this is resumable, so recycle instead of marking
+                   the queue job failed and leaving UI forever running. */
+                $decoded=['ok'=>true,'yielded'=>true,'resume_needed'=>true,'daemon_recycle'=>true,
+                    'recovered_child_exit'=>$rc,'child_exit_code'=>$rc,'error'=>''];
+                matrixFixProgress(['running'=>true,'done'=>false,'queued'=>false,'runner_pid'=>0,
+                    'phase'=>'بازیابی خودکار پردازهٔ اصلاح','checkpoint'=>$cp,
+                    'log_add'=>['🛡 پردازهٔ اصلاح با exit '.$rc.' قطع شد؛ ادامه از checkpoint به worker تازه سپرده شد']]);
+            }elseif(empty($decoded['error'])){$decoded['ok']=false;$decoded['error']='matrix_fix_child_exit_'.$rc;}
+        }
         $last=$decoded;s4WorkerStateWrite(['phase'=>'job','job_type'=>'matrix_fix','job_segment'=>$segments,'heartbeat'=>time()]);
         if(function_exists('s4AutoResumeInterruptedExtractions'))s4AutoResumeInterruptedExtractions('worker_loop',true);
         if($rc!==0||empty($decoded['ok'])||empty($decoded['yielded']))break;
@@ -2039,6 +2101,7 @@ function s4WorkerRunMatrixChild(array $payload): array {
     $segments=0;$retries=0;$resume=!empty($payload['resume']);
     do{
         $segments++;$part=$payload;$part['one_segment']=true;$part['resume']=$resume;
+        if(bslSendResourcePressureActive())$part['slice_seconds']=min(3,max(2,(int)($part['slice_seconds']??3)));
         $raw=json_encode($part,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
         $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
         $cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';
@@ -2495,6 +2558,7 @@ function s4WorkerRunJob(array $job): array {
     if ($type === 'manual_sync') {
         $pk = trim((string)($payload['profile_key'] ?? ''));
         $msResume = !empty($payload['resume']);
+        $msOrigin = extractNormalizeOriginTrigger((string)($payload['origin_trigger'] ?? $payload['trigger'] ?? 'manual_sync'));
         $msSeg = 0;
         $msMaxSeg = max(1, min(200, (int)(loadConnections()['worker_extract_max_segments'] ?? 60)));
         $msLast = ['ok' => false, 'error' => 'manual_sync_not_started'];
@@ -3692,8 +3756,18 @@ function noExtractRefreshOn(array $syncCfg): bool {
    موجودی صفر می‌رود، وگرنه همان موجودیِ پیش‌فرضِ تنظیمات. بدونِ این تابع،
    تشخیصِ ناموجودی فقط روی دیسک می‌نشست و هیچ‌وقت به غرفه/فروشگاه نمی‌رسید. */
 function effectiveStock(array $p, int $defaultStock): int {
-    if (array_key_exists('in_stock', $p) && empty($p['in_stock'])) return 0;
-    return $defaultStock;
+    if (array_key_exists('in_stock', $p) && empty($p['in_stock'])) {
+        /* v10.545: detail/list merges can leave a stale false flag while the
+           same current row still has a valid sellable price. Availability in
+           this extractor is price-based; do not suppress creation in every new
+           shop when price/final_price proves the product is currently sold. */
+        foreach (['price','final_price','orig_price','original_price'] as $priceKey) {
+            if (array_key_exists($priceKey,$p) && extractPriceNum($p[$priceKey])>0)
+                return max(0,$defaultStock);
+        }
+        return 0;
+    }
+    return max(0,$defaultStock);
 }
 
 /* v10.21 (۳۴الف): «ناموجود» از روی قیمتِ صفحهٔ محصول.
@@ -5568,7 +5642,10 @@ function wooTestConnection(array $opts = []): array {
             $api['steps'][] = ['step' => 'validate', 'ok' => false, 'info' => 'کلید ناقص'];
         } else {
             $api['steps'][] = ['step' => 'validate', 'ok' => true, 'info' => 'URL و کلیدها پر است'];
-            $ep = 'system_status';
+            /* Products is the capability the discrepancy builder actually needs.
+               system_status is slower and may be forbidden to an otherwise valid
+               read key, so it must never decide connection success. */
+            $ep = 'products?per_page=1&status=any';
             $full = $url . '/wp-json/wc/v3/' . $ep;
             $api['url'] = $full;
             $t0 = microtime(true);
@@ -5588,16 +5665,12 @@ function wooTestConnection(array $opts = []): array {
                 $api['detail'] = 'HTTP ' . $api['http_code'] . ' · ' . $ms . 'ms · WC ' . $api['version'];
                 if (!empty($envB['home_url'])) $api['home_url'] = $envB['home_url'];
                 if (!empty($envB['site_url'])) $api['site_url'] = $envB['site_url'];
-                $api['steps'][] = ['step' => 'system_status', 'ok' => true, 'info' => $api['detail']];
-                /* products count sample */
-                $t1 = microtime(true);
-                $rp = wooReq($url, $ck, $cs, 'GET', 'products?per_page=1');
-                $api['products_probe'] = [
-                    'ok' => !empty($rp['ok']),
-                    'http_code' => (int)($rp['code'] ?? 0),
-                    'latency_ms' => (int)round((microtime(true) - $t1) * 1000),
-                ];
-                $api['steps'][] = ['step' => 'products', 'ok' => !empty($rp['ok']), 'info' => 'HTTP ' . (int)($rp['code'] ?? 0)];
+                $api['steps'][] = ['step' => 'products', 'ok' => true, 'info' => $api['detail']];
+                /* system_status used to add 10–15 seconds and can reject a valid
+                   read key. Do not call it in the normal connection test. */
+                $api['system_status_probe'] = ['skipped' => true, 'optional' => true];
+                $api['steps'][] = ['step' => 'system_status_optional', 'ok' => true,
+                    'info' => 'رد شد (اختیاری؛ endpoint محصولات معیار اتصال است)'];
             } else {
                 $code = (int)($r['code'] ?? 0);
                 $cerr = (string)($r['error'] ?? '');
@@ -5633,7 +5706,7 @@ function wooTestConnection(array $opts = []): array {
                     $api['message'] = 'پاسخ ناموفق';
                     $api['detail'] = 'HTTP ' . $code . ($msgBody !== '' ? (' — ' . $msgBody) : ($cerr ?: ''));
                 }
-                $api['steps'][] = ['step' => 'system_status', 'ok' => false, 'info' => $api['detail']];
+                $api['steps'][] = ['step' => 'products', 'ok' => false, 'info' => $api['detail']];
                 $api['raw_preview'] = mb_substr($raw, 0, 240);
             }
         }
@@ -5649,8 +5722,9 @@ function wooTestConnection(array $opts = []): array {
         ];
         $dir['steps'][] = ['step' => 'env', 'ok' => $env['in_wp'], 'info' => $env['in_wp'] ? 'داخل وردپرس' : 'خارج از وردپرس'];
         if (!$env['in_wp']) {
-            $dir['message'] = 'همگام مستقیم اینجا در دسترس نیست';
-            $dir['detail'] = 'scraper4.php به‌صورت standalone اجرا می‌شود و کلاس‌های WC لود نیستند.';
+            $dir['not_applicable'] = true;
+            $dir['message'] = 'مسیر مستقیم در اجرای standalone کاربرد ندارد';
+            $dir['detail'] = 'این وضعیت خطای تنظیمات نیست؛ scraper4.php خارج از هستهٔ وردپرس اجرا می‌شود و REST API مسیر صحیح این نصب است.';
             $dir['hint'] = 'اسکرپر را از داخل افزونه وردپرس (منوی ادمین «پنل اسکرپر») باز کنید، یا دکمه «فعال‌سازی اتصال مستقیم از ادمین» را بزنید.';
             $dir['steps'][] = ['step' => 'wc_load', 'ok' => false, 'info' => 'WooCommerce class missing'];
         } elseif (!$env['has_wc']) {
@@ -5725,7 +5799,7 @@ function wooTestConnection(array $opts = []): array {
     $dirOk = is_array($out['direct']) && !empty($out['direct']['ok']);
     $out['ok'] = $apiOk || $dirOk;
     if ($apiOk && $dirOk) $out['message'] = 'API و مستقیم هر دو سالم‌اند';
-    elseif ($apiOk) $out['message'] = 'اتصال API موفق' . ($doDirect && !$dirOk ? ' — مستقیم ناموفق/غیرفعال' : '');
+    elseif ($apiOk) $out['message'] = 'اتصال API موفق' . ($doDirect && !$dirOk && empty($out['direct']['not_applicable']) ? ' — مسیر مستقیم ناموفق' : '');
     elseif ($dirOk) $out['message'] = 'اتصال مستقیم موفق' . ($doApi && !$apiOk ? ' — API ناموفق/بدون کلید' : '');
     else {
         $out['message'] = 'هیچ مسیری متصل نشد';
@@ -11769,6 +11843,12 @@ function bslCurlOpts(string $url, string $tk, string $m, $d, bool $mp, array $ne
         CURLOPT_SSL_VERIFYPEER => 0, CURLOPT_SSL_VERIFYHOST => 0,
         CURLOPT_HTTPHEADER => $h, CURLOPT_CUSTOMREQUEST => $m,
     ];
+    $__deadline=(float)($GLOBALS['_bslProductDeadlineAt']??0);
+    if($__deadline>0){
+        $__remain=max(1,(int)ceil($__deadline-microtime(true)));
+        $opt[CURLOPT_TIMEOUT]=min(30,$__remain);
+        $opt[CURLOPT_CONNECTTIMEOUT]=min(10,$__remain);
+    }
     if ($d !== null) $opt[CURLOPT_POSTFIELDS] = $mp ? $d : json_encode($d, JSON_UNESCAPED_UNICODE);
 
     if ($mode === 'worker' && trim((string)($net['worker_url'] ?? '')) !== '') {
@@ -11801,6 +11881,84 @@ function bslCurlOpts(string $url, string $tk, string $m, $d, bool $mp, array $ne
         $opt[CURLOPT_IPRESOLVE] = CURL_IPRESOLVE_V4;
     }
     return $opt;
+}
+
+/* v10.559: persistent AIMD controller shared by browser, cron and CLI senders.
+   It separates image uploads from reads/writes: a photo 429 no longer causes a
+   blind 20-shop fan-out, while healthy lanes can recover one slot at a time. */
+function bslAdaptiveRequestKind(string $method,string $endpoint,bool $multipart=false): string {
+    $method=strtoupper(trim($method));$endpoint=strtolower($endpoint);
+    if($multipart||str_contains($endpoint,'files'))return 'photo';
+    if($method==='GET')return 'read';
+    return 'write';
+}
+function bslAdaptiveStateRead(): array {
+    $x=is_file(BSL_ADAPTIVE_RATE_FILE)?json_decode((string)@file_get_contents(BSL_ADAPTIVE_RATE_FILE),true):null;
+    return is_array($x)?$x:['version'=>1,'kinds'=>[],'updated_at'=>0];
+}
+function bslAdaptiveStateMutate(callable $fn): array {
+    $lf=@fopen(BSL_ADAPTIVE_RATE_FILE.'.lock','c');
+    if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return bslAdaptiveStateRead();}
+    try{
+        $st=bslAdaptiveStateRead();$next=$fn($st);if(is_array($next))$st=$next;
+        $st['version']=1;$st['updated_at']=time();
+        $tmp=BSL_ADAPTIVE_RATE_FILE.'.tmp.'.getmypid().'.'.bin2hex(random_bytes(3));
+        $raw=json_encode($st,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+        if($raw!==false&&@file_put_contents($tmp,$raw,LOCK_EX)!==false){@chmod($tmp,0644);@rename($tmp,BSL_ADAPTIVE_RATE_FILE);}else @unlink($tmp);
+        return $st;
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+function bslAdaptiveLimit(string $kind,int $requested): int {
+    $requested=max(1,min(8,$requested));$st=bslAdaptiveStateRead();$row=is_array($st['kinds'][$kind]??null)?$st['kinds'][$kind]:[];
+    $learned=max(1,min(8,(int)($row['limit']??$requested)));
+    return min($requested,$learned);
+}
+function bslAdaptiveCooldownLeft(string $kind): int {
+    $st=bslAdaptiveStateRead();$row=is_array($st['kinds'][$kind]??null)?$st['kinds'][$kind]:[];
+    return max(0,(int)($row['cool_until']??0)-time());
+}
+function bslAdaptiveWait(string $kind,bool $skipStop=false): bool {
+    while(($left=bslAdaptiveCooldownLeft($kind))>0){
+        if(bslProductDeadlineExceeded())return false;
+        if(!$skipStop&&bslStopRequestedForQueue())return false;
+        bslLongOperationHeartbeat('adaptive_rate_wait');sleep(min(2,$left));
+    }
+    return !bslProductDeadlineExceeded();
+}
+function bslAdaptiveObserve(string $kind,array $responses,int $ceiling=8): array {
+    $ceiling=max(1,min(8,$ceiling));$codes=[];$retryAfter=0;
+    foreach($responses as $r){if(!is_array($r))continue;$codes[]=(int)($r['code']??0);$retryAfter=max($retryAfter,(int)($r['retry_after']??0));}
+    if(!$codes)return bslAdaptiveStateRead();
+    return bslAdaptiveStateMutate(static function(array $st)use($kind,$codes,$retryAfter,$ceiling):array{
+        $now=time();$row=is_array($st['kinds'][$kind]??null)?$st['kinds'][$kind]:[];
+        $limit=max(1,min($ceiling,(int)($row['limit']??$ceiling)));$has429=in_array(429,$codes,true);
+        $has5xx=false;foreach($codes as $c)if($c>=500||$c===0){$has5xx=true;break;}
+        if($has429){
+            $streak=min(8,(int)($row['rate_streak']??0)+1);$limit=max(1,(int)floor($limit/2));
+            $wait=$retryAfter>0?min(300,$retryAfter):min(120,5*(2**min(5,$streak-1)));
+            $row['rate_streak']=$streak;$row['success_streak']=0;$row['cool_until']=$now+$wait;$row['last_429_at']=$now;
+            $row['total_429']=(int)($row['total_429']??0)+count(array_filter($codes,static fn($c)=>$c===429));
+        }elseif($has5xx){
+            $row['success_streak']=0;$row['error_streak']=min(20,(int)($row['error_streak']??0)+1);
+            if((int)$row['error_streak']>=3)$limit=max(1,$limit-1);
+            $row['cool_until']=max((int)($row['cool_until']??0),$now+min(15,2*(int)$row['error_streak']));
+        }else{
+            $good=count(array_filter($codes,static fn($c)=>$c>=200&&$c<400));
+            $row['error_streak']=0;$row['rate_streak']=0;$row['success_streak']=(int)($row['success_streak']??0)+$good;
+            if((int)$row['success_streak']>=24&&$limit<$ceiling){$limit++;$row['success_streak']=0;$row['last_increase_at']=$now;}
+            if((int)($row['cool_until']??0)<=$now)$row['cool_until']=0;
+        }
+        $row['limit']=$limit;$row['ceiling']=$ceiling;$row['last_codes']=array_slice($codes,-12);$row['updated_at']=$now;
+        $st['kinds'][$kind]=$row;return $st;
+    });
+}
+function bslSendResourcePressureActive(int $freshSec=180): bool {
+    foreach([BSL_PROGRESS_FILE,BSL_FAST_PROGRESS_FILE,BSL_DETAIL_PROGRESS_FILE] as $file){
+        $p=readProgress($file);if(!is_array($p)||empty($p['running']))continue;
+        $beat=max((int)($p['last_progress_ts']??0),(int)($p['heartbeat']??0),(int)($p['started_at']??0));
+        if($beat>0&&(time()-$beat)<max(30,$freshSec))return true;
+    }
+    return false;
 }
 
 function bslReqMode(string $url, string $tk, string $m, $d, bool $mp, array $net, string $mode): array {
@@ -11859,10 +12017,57 @@ function bslStopRequestedForQueue(string $queueId=''): bool {
        it will select another waiting row and re-check after ownership is set. */
     return $target===''||($queueId!==''&&hash_equals($target,$queueId));
 }
+/* v10.554: bounded per-product wall clock. Network helpers consult this shared
+   deadline; timeout is a product result, never a queue stop signal. */
+function bslProductDeadlineStart(int $seconds): void {
+    $seconds=max(30,min(1800,$seconds));
+    $GLOBALS['_bslProductDeadlineAt']=microtime(true)+$seconds;
+    $GLOBALS['_bslProductTimeoutSec']=$seconds;
+    $GLOBALS['_bslProductTimedOut']=false;
+}
+function bslProductDeadlineClear(): void {
+    unset($GLOBALS['_bslProductDeadlineAt'],$GLOBALS['_bslProductTimeoutSec'],$GLOBALS['_bslProductTimedOut']);
+}
+function bslProductDeadlineExceeded(): bool {
+    $at=(float)($GLOBALS['_bslProductDeadlineAt']??0);
+    $hit=$at>0&&microtime(true)>=$at;
+    if($hit)$GLOBALS['_bslProductTimedOut']=true;
+    return $hit;
+}
+function bslProductTimeoutResult(): array {
+    $sec=(int)($GLOBALS['_bslProductTimeoutSec']??180);
+    return ['ok'=>false,'code'=>0,'error'=>'مهلت پردازش محصول پس از '.$sec.' ثانیه تمام شد','body'=>null,'raw'=>'',
+      'reason_kind'=>'product_timeout','error_step'=>'product_timeout','product_timeout'=>true,'timeout_sec'=>$sec];
+}
+/* v10.549: a single multi-shop product can legitimately spend more than the
+   stall threshold in lookup, upload and API retries. Emit a throttled in-flight
+   heartbeat without advancing the durable product cursor, so cron does not
+   repeatedly kill/restart the same product. */
+function bslLongOperationHeartbeat(string $stage = ''): void {
+    $cb=$GLOBALS['_bslLongOperationHeartbeat']??null;
+    if(!is_callable($cb))return;
+    if(str_starts_with($stage,'api_')&&!empty($GLOBALS['_bslLongOperationStage']))$stage=(string)$GLOBALS['_bslLongOperationStage'];
+    $now=time();$last=(int)($GLOBALS['_bslLongOperationHeartbeatAt']??0);
+    $lastStage=(string)($GLOBALS['_bslLongOperationHeartbeatStage']??'');
+    if($last>0&&($now-$last)<10&&$stage===$lastStage)return;
+    $GLOBALS['_bslLongOperationHeartbeatAt']=$now;
+    $GLOBALS['_bslLongOperationHeartbeatStage']=$stage;
+    try{$cb($stage);}catch(Throwable $e){}
+}
+function bslLongOperationStage(string $stage,int $step,int $total,string $detail=''): void {
+    $GLOBALS['_bslLongOperationStage']=$stage;
+    $GLOBALS['_bslLongOperationStep']=max(0,$step);
+    $GLOBALS['_bslLongOperationTotal']=max(1,$total);
+    $GLOBALS['_bslLongOperationDetail']=$detail;
+    bslLongOperationHeartbeat($stage);
+}
 function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false): array {
     $out = [];
     if (!$jobs) return $out;
+    if(bslProductDeadlineExceeded()){foreach($jobs as $k=>$_j)$out[$k]=array_merge(bslProductTimeoutResult(),['mode'=>'multi']);return $out;}
     $concurrency = max(1, min(8, $concurrency));
+    $__requestedConcurrency=$concurrency;$__firstJob=reset($jobs);$__multiKind=bslAdaptiveRequestKind((string)($__firstJob['m']??'GET'),(string)($__firstJob['ep']??''),!empty($__firstJob['mp']));
+    $concurrency=bslAdaptiveLimit($__multiKind,$concurrency);
     if (!function_exists('curl_multi_init')) {
         foreach ($jobs as $k => $j) {
             $out[$k] = bslReq((string)($j['tk'] ?? ''), (string)($j['m'] ?? 'GET'), (string)($j['ep'] ?? ''),
@@ -11881,9 +12086,13 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
                 return $out;
             }
         }
+        if(!bslAdaptiveWait($__multiKind,$skipStop)){
+            foreach(array_slice($keys,$off) as $kk)$out[$kk]=bslProductDeadlineExceeded()?array_merge(bslProductTimeoutResult(),['mode'=>'multi']):['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'','mode'=>'multi'];
+            return $out;
+        }
         $slice = array_slice($keys, $off, $concurrency);
         $mh = curl_multi_init();
-        $hs = [];   // شمارندهٔ ساده → [هندل، کلید]  (هندل در PHP 8 شیء است)
+        $hs = [];$__multiHeaders=[];   // شمارندهٔ ساده → [هندل، کلید]  (هندل در PHP 8 شیء است)
         foreach ($slice as $kk) {
             $j   = $jobs[$kk];
             $tk  = (string)($j['tk'] ?? '');
@@ -11899,27 +12108,38 @@ function bslReqMulti(array $jobs, int $concurrency = 4, bool $skipStop = false):
                 $dBody = bslSanitizeProductWritePayload($dBody, (string)($j['ep'] ?? ''));
             }
             $opt = bslCurlOpts($url, $tk, (string)($j['m'] ?? 'GET'), $dBody, !empty($j['mp']), $net, $mmode);
+            $__multiHeaders[$kk]=[];
+            $opt[CURLOPT_HEADERFUNCTION]=static function($ch,string $line)use(&$__multiHeaders,$kk):int{$len=strlen($line);$p=strpos($line,':');if($p!==false){$hk=strtolower(trim(substr($line,0,$p)));if($hk!=='')$__multiHeaders[$kk][$hk]=trim(substr($line,$p+1));}return $len;};
             $ch  = curl_init();
             curl_setopt_array($ch, $opt);
             curl_multi_add_handle($mh, $ch);
             $hs[] = ['h' => $ch, 'k' => $kk];
         }
-        $running = null;
+        $running = null;$__deadlineHit=false;
         do {
             $st = curl_multi_exec($mh, $running);
             if ($running) curl_multi_select($mh, 0.5);
+            bslLongOperationHeartbeat('api_multi');
+            if(bslProductDeadlineExceeded()){$__deadlineHit=true;break;}
         } while ($running > 0 && $st === CURLM_OK);
+        bslLongOperationHeartbeat('api_multi_done');
         foreach ($hs as $row) {
             $ch = $row['h'];
             $b  = curl_multi_getcontent($ch);
             $e  = curl_error($ch);
             $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-            $out[$row['k']] = ['ok' => $code >= 200 && $code < 300, 'code' => $code, 'error' => $e,
-                               'body' => @json_decode((string)$b, true), 'raw' => $b, 'mode' => 'multi'];
+            $__rk=$row['k'];$__rh=(array)($__multiHeaders[$__rk]??[]);$__body=@json_decode((string)$b,true);
+            $__retryAfter=max(0,(int)($__rh['retry-after']??(is_array($__body)?($__body['retry_after']??$__body['retryAfter']??0):0)));
+            $out[$__rk] = $__deadlineHit
+                ? array_merge(bslProductTimeoutResult(),['mode'=>'multi'])
+                : ['ok' => $code >= 200 && $code < 300, 'code' => $code, 'error' => $e,
+                   'body' => $__body, 'raw' => $b, 'mode' => 'multi','response_headers'=>$__rh,'retry_after'=>$__retryAfter];
             curl_multi_remove_handle($mh, $ch);
             curl_close($ch);
         }
         curl_multi_close($mh);
+        $__batchResponses=[];foreach($slice as $__rk)if(isset($out[$__rk]))$__batchResponses[]=$out[$__rk];
+        bslAdaptiveObserve($__multiKind,$__batchResponses,$__requestedConcurrency);
         /* v10.459: در ارسال موازی (bslReqMulti) هم اگر محصولی به خطای ۴۲۲/۴۰۰
            preparation_days برخورد کرد، از طریق bslReq هر بار ۱ روز کم می‌شود تا تایید شود. */
         foreach ($slice as $kk => $j) {
@@ -12194,12 +12414,14 @@ function bslRepairValidationPayload(array $r,array $payload):array{
 }
 
 function bslReq(string $tk, string $m, string $ep, $d=null, bool $mp=false, ?array $net=null, bool $skipStop=false, int $maxAttempts=3): array {
+if(bslProductDeadlineExceeded())return bslProductTimeoutResult();
+$__adaptiveKind=bslAdaptiveRequestKind($m,$ep,$mp);
 if (!$mp && is_array($d) && in_array(strtoupper(trim($m)), ['POST', 'PATCH', 'PUT'], true)
     && function_exists('bslSanitizeProductWritePayload')) {
     $d = bslSanitizeProductWritePayload($d, $ep);
 }
 $url=bslApiBase().ltrim($ep,'/');
-$traceReturn=function(array $response)use($m,$ep,&$d){if(!empty($GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE'])){$GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'http_actual','at'=>microtime(true),'request'=>['destination'=>'basalam','method'=>$m,'endpoint'=>ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d],'response'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($response):$response];}return $response;};
+$traceReturn=function(array $response)use($m,$ep,&$d){bslLongOperationHeartbeat('api_'.strtolower($m));if(!empty($GLOBALS['S4_MATRIX_ROW_TRACE_ACTIVE'])){$GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'http_actual','at'=>microtime(true),'request'=>['destination'=>'basalam','method'=>$m,'endpoint'=>ltrim($ep,'/'),'payload'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($d):$d],'response'=>function_exists('matrixFixTraceSanitize')?matrixFixTraceSanitize($response):$response];}return $response;};
 if($net===null)$net = function_exists('bslNetCfg') ? bslNetCfg() : ['indirect'=>false,'mode'=>'direct','fallback'=>false];
 
 // ترتیب روش‌ها: عادی مستقیم؛ اگر «اتصال غیرمستقیم» روشن باشد، اول روشِ تنظیم‌شده،
@@ -12239,7 +12461,10 @@ for($attempt=1;$attempt<=$maxRetries;$attempt++){
 if(!$skipStop&&bslStopRequestedForQueue()){
 return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 }
+if(!bslAdaptiveWait($__adaptiveKind,$skipStop))return $traceReturn(bslProductDeadlineExceeded()?bslProductTimeoutResult():['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
+bslAdaptiveObserve($__adaptiveKind,[$r],8);
+if(bslProductDeadlineExceeded())return $traceReturn(bslProductTimeoutResult());
 /* v10.459: اگر خطای ۴۲۲/۴۰۰ مربوط به preparation_days (مدت زمان آماده‌سازی) باشد،
    هر بار ۱ روز کم می‌کنیم و دوباره می‌فرستیم تا تایید شود (تا سقف ۰ روز). */
 if(empty($r['ok'])&&!$mp&&is_array($d)&&stripos($ep,'product')!==false&&bslIsPreparationDaysError($r)){
@@ -13905,6 +14130,50 @@ function bslBuildVariantsPayload(array $p, int $defaultPriceRial = 0, int $defau
     return $variants;
 }
 
+function bslIsVariantUpdateMethodError(array $r): bool {
+    if (!in_array((int)($r['code']??0),[400,422],true)) return false;
+    $txt=mb_strtolower(bslErrText($r),'UTF-8');
+    $raw=json_encode($r['body']??[],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    return mb_strpos($txt,'محصولات دارای تنوع')!==false
+        || mb_strpos($txt,'ویرایش قیمت و موجودی')!==false
+        || mb_strpos($txt,'تغییر قیمت یا موجودی محصول دارای تنوع')!==false
+        || (strpos((string)$raw,'variants')!==false&&strpos((string)$raw,'id')!==false&&strpos((string)$raw,'Field required')!==false);
+}
+function bslRemoteVariantRows(array $row): array {
+    $candidates=[
+        $row['variants']??null,$row['product_variants']??null,$row['variations']??null,
+        $row['revision']['data']['variants']??null,$row['data']['variants']??null,
+    ];
+    foreach($candidates as $rows){
+        if(!is_array($rows)||!$rows)continue;$out=[];
+        foreach($rows as $vr){
+            if(!is_array($vr))continue;$id=(int)($vr['id']??$vr['variant_id']??$vr['vendor_product_variant_id']??0);
+            if($id>0)$out[]=['id'=>$id];
+        }
+        if($out)return $out;
+    }
+    return [];
+}
+/** v10.534: Basalam requires destination variant IDs for price/stock updates. */
+function bslRepairExistingVariantUpdate(string $tk,int $vid,int $pid,array $basePayload,array $sourceVariants=[]): array {
+    $row=bslGetProductRow($tk,$vid,$pid,2);
+    $remote=is_array($row)?bslRemoteVariantRows($row):[];
+    if(!$remote)return ['ok'=>false,'code'=>422,'error'=>'destination_variant_ids_not_found'];
+    $fallbackPrice=max(10000,(int)($basePayload['primary_price']??0));
+    $fallbackStock=max(0,(int)($basePayload['stock']??0));
+    $variants=[];
+    foreach($remote as $i=>$rv){
+        $src=is_array($sourceVariants[$i]??null)?$sourceVariants[$i]:[];
+        $variants[]=['id'=>(int)$rv['id'],
+            'primary_price'=>max(10000,(int)($src['primary_price']??$fallbackPrice)),
+            'stock'=>max(0,(int)($src['stock']??$fallbackStock))];
+    }
+    $batch=$basePayload;unset($batch['variants']);$batch['id']=$pid;$batch['variants']=$variants;
+    $r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batch]]);
+    if(!empty($r['ok'])){if(!is_array($r['body']??null))$r['body']=[];$r['body']['id']=$pid;$r['variant_ids_repaired']=count($variants);}
+    return $r;
+}
+
 function bslReqWithVariantsFallback(string $tk, string $method, string $ep, array &$payload): array {
     $r = bslReq($tk, $method, $ep, $payload);
     if (isset($r['preparation_days_adjusted'])) {
@@ -14917,7 +15186,24 @@ function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): 
         return $payload;
     }
     $isCreateEndpoint = (bool)preg_match('~^vendors/\d+/products(?:\?|$)~', $epClean);
+    $isSingleUpdateEndpoint = (bool)preg_match('~(?:^|/)products/\d+(?:\?|$)~', $epClean);
     $hasBarcode = !empty($payload['barcode']) && strlen((string)$payload['barcode']) >= 8;
+
+    /* v10.518: SKUهای مبدأ الزاماً در یک پروفایل یکتا نیستند. باسلام اما SKU
+       را در سطح هر غرفه یکتا می‌خواهد. در ساخت، پسوند پایدارِ عنوان باعث می‌شود
+       SKU تکراریِ مبدأ بدون ساختِ تصادفی/ناپایدار قابل ثبت باشد. در PATCH اصلاً
+       SKU را نمی‌فرستیم: شناسهٔ محصول مقصد قطعی است و بازنویسی SKU نه برای
+       همگام‌سازی لازم است و نه باید آپدیت قیمت را با 422 متوقف کند. */
+    if ($isSingleUpdateEndpoint) {
+        unset($payload['sku']);
+    } elseif ($isCreateEndpoint && isset($payload['sku']) && trim((string)$payload['sku']) !== '') {
+        $rawSku = trim((string)$payload['sku']);
+        $skuSeed = (string)($payload['name'] ?? ($payload['title'] ?? ''));
+        $skuHash = substr(hash('sha256', bslNormalizeTitle($skuSeed) . '|' . $rawSku), 0, 10);
+        $skuBase = trim((string)(preg_replace('~[^\p{L}\p{N}._-]+~u', '-', $rawSku) ?? $rawSku), '-');
+        if ($skuBase === '') $skuBase = 'src';
+        $payload['sku'] = mb_substr($skuBase, 0, 47, 'UTF-8') . '-' . $skuHash;
+    }
 
     if (isset($payload['name']) && is_string($payload['name']) && trim($payload['name']) !== '') {
         $payload['name'] = bslSanitizeModerationTitle($payload['name'], $hasBarcode);
@@ -14970,7 +15256,8 @@ function bslSanitizeProductWritePayload(array $payload, string $endpoint = ''): 
     if (!empty($payload['data']) && is_array($payload['data'])) {
         foreach ($payload['data'] as $idx => $item) {
             if (is_array($item)) {
-                $payload['data'][$idx] = bslSanitizeProductWritePayload($item, 'products');
+                /* batch-updates is an update: apply the same SKU rule as products/{id}. */
+                $payload['data'][$idx] = bslSanitizeProductWritePayload($item, 'products/' . max(1, (int)($item['id'] ?? 1)));
             }
         }
     }
@@ -15141,7 +15428,7 @@ function bslForceUpdateOnDuplicate(string $tk, int $vid, string $title,
 
     if (!empty($p)) bslApplyContent($fields, $p);
     $r = bslReq($tk, 'PATCH', 'products/' . $id, $fields);
-    if ((int)($r['code'] ?? 0) === 404 && $vid > 0) {
+    if (in_array((int)($r['code'] ?? 0), [403, 404], true) && $vid > 0) {
         $r = bslReq($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $id, $fields);
     }
     if (!empty($r['ok'])) {
@@ -15557,7 +15844,7 @@ function bslFindExistingQuick(string $tk, int $vid, string $title): ?array {
     $how='';return findRemoteByTitle($rows,$title,'','title',$how);
 }
 
-function bslFindExisting(string $tk, int $vid, string $title, string $productKey = '', bool $deepScan = true, bool $trustMatrixMiss = true, int $maxPages = 20): ?array {
+function bslFindExisting(string $tk, int $vid, string $title, string $productKey = '', bool $deepScan = true, bool $trustMatrixMiss = true, int $maxPages = 20, bool $skipMatrix = false): ?array {
     /* Keep the legacy flag for callers; an active-only matrix miss is always
        unknown and can never suppress a targeted lookup. */
     $maxPages=max(1,min(RECON_FETCH_MAX_PAGES,$maxPages));
@@ -15603,10 +15890,12 @@ function bslFindExisting(string $tk, int $vid, string $title, string $productKey
     /* Consult the latest reconciliation matrix before any search requests.
        A positive active-row hit is reusable; a miss is unknown and falls
        through to the existing targeted Basalam lookup. */
-    $__matrixRow = bslMatrixLookupRow($tk, $vid, $title, true);
-    if (($__matrixRow['state'] ?? '') === 'hit' && is_array($__matrixRow['row'] ?? null)) {
-        bslMatrixSaved(1);
-        return $__matrixRow['row'];
+    if (!$skipMatrix) {
+        $__matrixRow = bslMatrixLookupRow($tk, $vid, $title, true);
+        if (($__matrixRow['state'] ?? '') === 'hit' && is_array($__matrixRow['row'] ?? null)) {
+            bslMatrixSaved(1);
+            return $__matrixRow['row'];
+        }
     }
 
     /* v8.79: پارامتر درست «title» است نه «search». باسلام پارامتر ناشناخته
@@ -16072,7 +16361,27 @@ function s4ApplyImageEditBytes(string $data, array $cfg): array {
 }
 
 function s4CropImageBottomBytes(string $data, int $cropBottomPct = 0, int $cropBottomPx = 0): array {
-    return s4ApplyImageTransformBytes($data,['transform_mode'=>'crop','crop_bottom_pct'=>$cropBottomPct,'crop_bottom_px'=>$cropBottomPx]);
+    $pct=max(0,min(45,$cropBottomPct));$px=max(0,min(600,$cropBottomPx));
+    if($pct<=0&&$px<=0)return ['ok'=>true,'data'=>$data,'cropped'=>false,'format'=>detectImageFormat($data)?:'jpg'];
+    if(!function_exists('imagecreatefromstring')||!function_exists('imagecreatetruecolor'))return ['ok'=>false,'error'=>'GD not available','data'=>$data,'cropped'=>false];
+    $fmt=detectImageFormat($data);
+    if($fmt==='svg'||$fmt==='gif')return ['ok'=>true,'data'=>$data,'cropped'=>false,'format'=>$fmt];
+    $src=@imagecreatefromstring($data);
+    if(!$src)return ['ok'=>false,'error'=>'imagecreatefromstring failed','data'=>$data,'cropped'=>false];
+    $w=imagesx($src);$h=imagesy($src);$cut=$px>0?$px:(int)round($h*($pct/100));$cut=min($cut,(int)floor($h*.45));$newH=$h-$cut;
+    if($w<20||$h<60||$cut<=0||$newH<40){imagedestroy($src);return ['ok'=>true,'data'=>$data,'cropped'=>false,'format'=>$fmt?:'jpg'];}
+    $dst=imagecreatetruecolor($w,$newH);
+    if(!$dst){imagedestroy($src);return ['ok'=>false,'error'=>'imagecreatetruecolor failed','data'=>$data,'cropped'=>false];}
+    $keepAlpha=($fmt==='png'&&function_exists('imagepng'))||($fmt==='webp'&&function_exists('imagewebp'));
+    if($keepAlpha){imagealphablending($dst,false);imagesavealpha($dst,true);$trans=imagecolorallocatealpha($dst,255,255,255,127);imagefilledrectangle($dst,0,0,$w,$newH,$trans);}
+    else{$white=imagecolorallocate($dst,255,255,255);imagefilledrectangle($dst,0,0,$w,$newH,$white);}
+    imagecopy($dst,$src,0,0,0,0,$w,$newH);imagedestroy($src);ob_start();$outFmt='jpg';
+    if($fmt==='png'&&function_exists('imagepng')){imagepng($dst,null,6);$outFmt='png';}
+    elseif($fmt==='webp'&&function_exists('imagewebp')){imagewebp($dst,null,90);$outFmt='webp';}
+    else imagejpeg($dst,null,92);
+    $outData=(string)ob_get_clean();imagedestroy($dst);
+    if(strlen($outData)>100)return ['ok'=>true,'data'=>$outData,'cropped'=>true,'format'=>$outFmt,'width'=>$w,'old_height'=>$h,'new_height'=>$newH];
+    return ['ok'=>false,'error'=>'encode failed','data'=>$data,'cropped'=>false];
 }
 
 /**
@@ -16236,6 +16545,19 @@ $localPath = UPLOAD_DIR . 'img_' . $cacheKey . '.' . $ext;
 return $localPath;
 }
 
+/* v10.537: Basalam rejects GIF product photos. Convert the first frame once
+   before any upload retry; if this host cannot decode GIF, fail immediately
+   instead of repeating the same 422 three times for every selected shop. */
+function bslGifFirstFrameJpeg(string $data): array {
+    if(detectImageFormat($data)!=='gif')return ['ok'=>true,'data'=>$data,'converted'=>false];
+    if(!function_exists('imagecreatefromstring')||!function_exists('imagejpeg'))
+        return ['ok'=>false,'error'=>'GIF decoder unavailable'];
+    $im=@imagecreatefromstring($data);if(!$im)return ['ok'=>false,'error'=>'GIF decode failed'];
+    ob_start();$ok=@imagejpeg($im,null,88);$jpg=(string)ob_get_clean();@imagedestroy($im);
+    if(!$ok||strlen($jpg)<200)return ['ok'=>false,'error'=>'GIF to JPEG failed'];
+    return ['ok'=>true,'data'=>$jpg,'converted'=>true];
+}
+
 function bslUpload(string $tk, string $imgUrl): array {
 
 $imgUrl=html_entity_decode($imgUrl,ENT_QUOTES|ENT_HTML5,'UTF-8');
@@ -16272,6 +16594,11 @@ if(!$fdata||!isImageData($fdata))return['ok'=>0,'error'=>'not valid image'];
 $realFmt=detectImageFormat($fdata);
 if($realFmt==='')$realFmt='jpg';
 $fmtLog='fmt:'.$realFmt;
+if($realFmt==='gif'){
+$gifNorm=bslGifFirstFrameJpeg($fdata);
+if(empty($gifNorm['ok']))return['ok'=>0,'error'=>(string)($gifNorm['error']??'GIF unsupported'),'error_code'=>422];
+if(!empty($gifNorm['converted'])){$fdata=(string)$gifNorm['data'];$realFmt='jpg';$fmtLog='fmt:gif→jpg';@file_put_contents($filePath,$fdata);}
+}
 
 $convResult=convertToSupportedFormat($fdata);
 if(!empty($convResult['ok'])&&!empty($convResult['converted_from'])){
@@ -20261,8 +20588,8 @@ function vc_defaults(): array {
     return [
         'check_on_load'   => false,
         'repo'            => 'fazilatma/new',
-        'branch'          => 'arena/e868e86a-new',
-        'branches'        => ['arena/e868e86a-new'],
+        'branch'          => 'arena/01a0ebf7-new',
+        'branches'        => ['arena/01a0ebf7-new'],
         'pinned_branch'   => '',
         'pinned_at'       => 0,
         'pinned_max_unix' => 0,
@@ -20276,26 +20603,16 @@ function vc_defaults(): array {
     ];
 }
 
-/** The old session branch is an alias for this chat's fixed updater branch. */
-function vc_canonicalize_branch_alias(string $branch):string{
-    $branch=trim($branch);
-    if($branch==='arena/01a0ebf7-new')return defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
-    return $branch;
-}
-/** The fixed updater branch and its legacy alias remain valid even in stale settings. */
+/** Update branches are compared by their exact configured names. */
 function vc_is_allowed_update_branch(string $branch,array $configured):bool{
-    $target=vc_canonicalize_branch_alias($branch);
-    $fixed=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
-    if($target===$fixed)return true;
-    foreach(vc_normalize_branches($configured) as $saved){
-        if(vc_canonicalize_branch_alias($saved)===$target)return true;
-    }
-    return false;
+    $branch=trim($branch);
+    $fixed=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
+    return $branch!==''&&($branch===$fixed||in_array($branch,vc_normalize_branches($configured),true));
 }
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
-    $legacy='arena/01a0ebf7-new';
-    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';
+    $legacy='arena/e868e86a-new';
+    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
     $branches=vc_normalize_branches((array)($c['branches']??[]));
     $pin=trim((string)($c['pinned_branch']??''));
     $legacyPresent=(string)($c['branch']??'')===$legacy||$pin===$legacy||in_array($legacy,$branches,true);
@@ -20374,10 +20691,10 @@ function vc_normalize_branches(array $branches):array{
     }return $out;
 }
 /** Probe configured branches and order them by their newest path commit time. */
-function vc_probe_branches(array $c,bool $resolveLegacyAlias=true):array{
+function vc_probe_branches(array $c):array{
     $rows=[];$errors=[];$repo=(string)$c['repo'];$path=(string)$c['path'];$token=(string)$c['github_token'];
     foreach(vc_normalize_branches((array)($c['branches']??[])) as $branch){
-        $sourceBranch=$resolveLegacyAlias?vc_canonicalize_branch_alias($branch):$branch;
+        $sourceBranch=$branch;
         $commitUrl='https://api.github.com/repos/'.$repo.'/commits?sha='.rawurlencode($sourceBranch).'&path='.rawurlencode($path).'&per_page=1';
         $cr=vc_get_json_auto($commitUrl,$token,25);
         $metaUrl='https://api.github.com/repos/'.$repo.'/contents/'.implode('/',array_map('rawurlencode',explode('/',$path))).'?ref='.rawurlencode($sourceBranch);
@@ -20492,7 +20809,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/e868e86a-new';
+const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -20581,33 +20898,7 @@ function s4CodeUpdateDownloadVerified(array $picked,string $ghToken=''):array{
     }
     return $lastErr;
 }
-/** Adapt the legacy branch payload so manual installs can use its code while its automatic channel stays canonical. */
-function s4CodeUpdateAdaptManualLegacyPayload(string $code):array{
-    $replacements=[
-        ["const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';","const S4_CODE_UPDATE_BRANCH='arena/e868e86a-new';"],
-        ["if(\$branch==='arena/e868e86a-new')return defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';",
-         "if(\$branch==='arena/01a0ebf7-new')return defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/e868e86a-new';"],
-        ["function vc_probe_branches(array \$c):array{","function vc_probe_branches(array \$c,bool \$resolveLegacyAlias=true):array{"],
-        ["        \$sourceBranch=vc_canonicalize_branch_alias(\$branch);\n","        \$sourceBranch=\$resolveLegacyAlias?vc_canonicalize_branch_alias(\$branch):\$branch;\n"],
-        ["\$requested=vc_canonicalize_branch_alias((string)(\$_POST['branch']??''));",
-         "\$requestedInput=trim((string)(\$_POST['branch']??''));\n        \$manualLegacyBranch=\$requestedInput==='arena/01a0ebf7-new';\n        \$requested=\$manualLegacyBranch?\$requestedInput:vc_canonicalize_branch_alias(\$requestedInput);"],
-        ["if(\$requested!==''&&!in_array(\$requested,\$allowed,true))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];",
-         "if(\$requested!==''&&!in_array(\$requested,\$allowed,true)&&!\$manualLegacyBranch)return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];"],
-        ["\$probe=vc_probe_branches(\$probeCfg);","\$probe=vc_probe_branches(\$probeCfg,!\$manualLegacyBranch);"],
-        ["\$allowDowngrade=!empty(\$_POST['allow_downgrade'])||(!\$trustedAuto&&\$requested!=='');\n        if(\$remoteVersion!=='unknown'&&version_compare(\$remoteVersion,\$diskVersion,'<')&&!\$allowDowngrade){",
-         "\$allowDowngrade=!empty(\$_POST['allow_downgrade'])||(!\$trustedAuto&&\$requested!=='');\n        \$versionOrder=\$remoteVersion!=='unknown'?version_compare(\$remoteVersion,\$diskVersion):1;\n        \$autoEqualVersion=\$trustedAuto&&\$versionOrder===0;\n        if(\$remoteVersion!=='unknown'&&(\$versionOrder<0||\$autoEqualVersion)&&!\$allowDowngrade){"],
-        ["'downgrade_skipped'=>true,'current'=>\$diskVersion","'downgrade_skipped'=>true,'same_version_different_sha'=>\$autoEqualVersion,'current'=>\$diskVersion"],
-        ["return b==='arena/e868e86a-new'?VC_SESSION_UPDATE_BRANCH:b;","return b==='arena/01a0ebf7-new'?VC_SESSION_UPDATE_BRANCH:b;"],
-        ["const installBranch = vcCanonicalUpdateBranch((isExplicitBranch ? String(requestedBranch).trim() : '')\n        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || ''));",
-         "const rawInstallBranch=(isExplicitBranch ? String(requestedBranch).trim() : '')\n        || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || '');\n    const installBranch=isExplicitBranch&&rawInstallBranch==='arena/01a0ebf7-new'\n        ?rawInstallBranch:vcCanonicalUpdateBranch(rawInstallBranch);"],
-        ["S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'","S4_CODE_UPDATE_BRANCH==='arena/e868e86a-new'"]
-    ];
-    foreach($replacements as [$from,$to]){
-        if(substr_count($code,$from)!==1)return ['ok'=>false,'error'=>'legacy_branch_payload_compat_failed','detail'=>'expected one updater marker'];
-        $code=str_replace($from,$to,$code);
-    }
-    return ['ok'=>true,'body'=>$code];
-}
+/** Explicit updates install the selected branch's verified Git blob unchanged. */
 function s4CodeUpdateRun(bool $trustedAuto=false):array{
     $cfg=vc_load();
     if(!$trustedAuto){
@@ -20621,12 +20912,10 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
     try{
         $ghToken=trim((string)($cfg['github_token']??''));
         $allowed=vc_normalize_branches((array)($cfg['branches']??[]));
-        $requestedInput=trim((string)($_POST['branch']??''));
-        $manualLegacyBranch=$requestedInput==='arena/01a0ebf7-new';
-        $requested=$manualLegacyBranch?$requestedInput:vc_canonicalize_branch_alias($requestedInput);
+        $requested=trim((string)($_POST['branch']??''));
         if($requested!==''&&!vc_is_allowed_update_branch($requested,$allowed))return ['ok'=>false,'http'=>403,'error'=>'branch_not_configured'];
         $probeCfg=$cfg;$probeCfg['repo']=S4_CODE_UPDATE_REPO;$probeCfg['path']=S4_CODE_UPDATE_PATH;$probeCfg['branches']=$requested!==''?[$requested]:$allowed;
-        $probe=vc_probe_branches($probeCfg,!$manualLegacyBranch);
+        $probe=vc_probe_branches($probeCfg);
         $picked=($requested!=='')?($probe['rows'][0]??null):vc_pick_target_branch($cfg,$probe['rows']);
         if(!$picked)return ['ok'=>false,'http'=>502,'error'=>'github_metadata_failed','detail'=>json_encode($probe['errors'],JSON_UNESCAPED_UNICODE)];
         $sourceBranch=(string)$picked['branch'];$remoteSha=(string)$picked['sha'];
@@ -20646,11 +20935,6 @@ function s4CodeUpdateRun(bool $trustedAuto=false):array{
         if($size<1000000||strncmp($code,"<?php",5)!==0||strpos($code,'const APP_VERSION')===false||strpos($code,'function matrixBuild')===false)
             return ['ok'=>false,'http'=>422,'error'=>'download_validation_failed','size'=>$size];
         if($remoteSha!==''&&vc_content_id($code)!==$remoteSha)return ['ok'=>false,'http'=>422,'error'=>'git_blob_sha_mismatch'];
-        if($manualLegacyBranch){
-            $adapted=s4CodeUpdateAdaptManualLegacyPayload($code);
-            if(empty($adapted['ok']))return ['ok'=>false,'http'=>422,'error'=>(string)($adapted['error']??'legacy_branch_payload_compat_failed'),'detail'=>(string)($adapted['detail']??'')];
-            $code=(string)$adapted['body'];$size=strlen($code);
-        }
         preg_match("~const APP_VERSION\\s*=\\s*'([^']+)'~",$code,$vm);$remoteVersion=(string)($vm[1]??'unknown');
         $allowDowngrade=!empty($_POST['allow_downgrade'])||(!$trustedAuto&&$requested!=='');
         $versionOrder=$remoteVersion!=='unknown'?version_compare($remoteVersion,$diskVersion):1;
@@ -21023,20 +21307,17 @@ if (isset($_GET['vc_settings'])) {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         if (!empty($_POST['pin_only']) || !empty($_POST['unpin_only'])) {
             if (!empty($_POST['pin_only'])) {
-                $pinInput=trim((string)($_POST['pin_branch'] ?? ''));
-                $pinB = vc_canonicalize_branch_alias($pinInput);
+                $pinB=trim((string)($_POST['pin_branch'] ?? ''));
                 if($pinB===''||!vc_is_allowed_update_branch($pinB,$c['branches'])){
                     http_response_code(422);echo json_encode(['ok'=>false,'error'=>'branch_not_configured'],JSON_UNESCAPED_UNICODE);exit;
                 }
                 $pinBranches=vc_normalize_branches((array)$c['branches']);
-                foreach(array_unique(array_filter([$pinInput==='arena/01a0ebf7-new'?$pinInput:'',$pinB])) as $pinBranch){
-                    if(!in_array($pinBranch,$pinBranches,true)){
-                        if(count($pinBranches)>=20)array_pop($pinBranches);
-                        $pinBranches[]=$pinBranch;
-                    }
+                if(!in_array($pinB,$pinBranches,true)){
+                    if(count($pinBranches)>=20)array_pop($pinBranches);
+                    $pinBranches[]=$pinB;
                 }
                 $c['branches']=$pinBranches;
-                $c['branch']=$pinInput==='arena/01a0ebf7-new'?$pinInput:$pinB;$c['pinned_branch']=$pinB;$c['pinned_at']=time();$c['pinned_max_unix']=time();
+                $c['branch']=$pinB;$c['pinned_branch']=$pinB;$c['pinned_at']=time();$c['pinned_max_unix']=time();
                 if(!vc_save($c)){http_response_code(500);echo json_encode(['ok'=>false,'error'=>'settings_save_failed'],JSON_UNESCAPED_UNICODE);exit;}
                 s4SyncAutoUpdateStateToDisk($pinB,true);
             } else {
@@ -21533,6 +21814,18 @@ echo json_encode(['ok' => false, 'error' => 'Not found', 'key' => $key], JSON_UN
 exit;
 }
 
+/* v10.505: profile settings must acknowledge quickly. Expensive matrix
+ * repricing runs through its own endpoint after the profile write has
+ * completed, so saving a coefficient never keeps the Save button waiting. */
+if (isset($_GET['matrix_reprice'])) {
+    s4SettingsPriorityRequestBegin();
+    header('Content-Type: application/json; charset=UTF-8');
+    $reason = preg_replace('/[^a-z0-9_.:-]+/i', '_', (string)($_GET['reason'] ?? 'profile_price_change'));
+    $result = matrixRefreshExpectedPrices($reason ?: 'profile_price_change');
+    echo json_encode(['ok'=>!empty($result['ok']), 'result'=>$result, 'version'=>APP_VERSION], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
+}
+
 if (($_POST['action'] ?? '') === 'save_profile') {
 s4SettingsPriorityRequestBegin();
 header('Content-Type: application/json; charset=UTF-8');
@@ -21778,9 +22071,12 @@ $_saved = writeJsonFile(PROFILES_FILE, $profiles);
 if ($lfSave) { @flock($lfSave, LOCK_UN); @fclose($lfSave); }
 if ($_saved['ok']) {
 $newProfilePriceSig=json_encode([(string)($profiles[$key]['priceMode']??'none'),(string)($profiles[$key]['priceVal']??0),(string)($profiles[$key]['roundPrice']??0)]);
-$mxRefresh=$oldProfilePriceSig!==$newProfilePriceSig?matrixRefreshExpectedPrices('profile_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
+$priceChanged=$oldProfilePriceSig!==$newProfilePriceSig;
+/* Repricing can scan and rewrite thousands of discrepancy rows. The browser
+   starts it through matrix_reprice only after this fast save response. */
+$mxRefresh=['ok'=>true,'changed'=>false,'deferred'=>$priceChanged,'rows'=>0];
 $savedProdCount = is_array($profiles[$key]['products'] ?? null) ? count($profiles[$key]['products']) : 0;
-echo json_encode(['ok' => true, 'key' => $key, 'url' => (string)($profiles[$key]['url'] ?? $url), 'name' => (string)($profiles[$key]['name'] ?? ''), 'product_count' => $savedProdCount, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'pages'=>(int)($profiles[$key]['pages']??10), 'matrix_repriced'=>$mxRefresh, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+echo json_encode(['ok' => true, 'key' => $key, 'url' => (string)($profiles[$key]['url'] ?? $url), 'name' => (string)($profiles[$key]['name'] ?? ''), 'product_count' => $savedProdCount, 'updated_at'=>(int)($profiles[$key]['updatedAt']??time()), 'message' => 'پروفایل ذخیره شد', 'pages'=>(int)($profiles[$key]['pages']??10), 'matrix_repriced'=>$mxRefresh, 'matrix_refresh_pending'=>$priceChanged, 'selectors' => $profiles[$key]['selectors'] ?? [], 'has_selectors' => !empty($profiles[$key]['selectors']['container'])], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } else {
 // v9.24: علت واقعی را به کاربر بدهیم (ترموکس/استوریج معمولاً قفل یا مجوز است)
 echo json_encode(['ok' => false, 'error' => 'خطا در نوشتن فایل: ' . ($_saved['error'] ?? 'نامشخص')]);
@@ -27123,6 +27419,8 @@ header('Content-Type: application/json; charset=UTF-8');
 $conn = loadConnections();
 $oldMxShopSig = function_exists('shopPricingSignature') ? shopPricingSignature($conn) : '';
 $oldMatrixExecMode=(string)($conn['recon_auto']['execution_mode']??'cron_first');
+$oldReconAuto=is_array($conn['recon_auto']??null)?$conn['recon_auto']:[];
+$_bslShopSelectionChanged=false;
 if (isset($_POST['woocommerce'])) { $w = json_decode($_POST['woocommerce'], true) ?: [];
     $_wMode = strtolower(trim((string)($w['sync_mode'] ?? 'api')));
     if (!in_array($_wMode, ['api', 'direct'], true)) $_wMode = 'api';
@@ -27145,11 +27443,12 @@ if (isset($_POST['basalam'])) {
     }
     $_newSendShopIds = is_array($b['send_shop_ids'] ?? null) ? array_values(array_unique(array_filter(array_map('intval', $b['send_shop_ids']), function($v){ return $v > 0; }))) : null;
     $_oldSendShopIds = is_array($_prevBslCfg['send_shop_ids'] ?? null) ? array_values(array_unique(array_filter(array_map('intval', $_prevBslCfg['send_shop_ids']), function($v){ return $v > 0; }))) : null;
-    $_sendShopIdsAt = ($_newSendShopIds !== $_oldSendShopIds) ? time() : (int)($_prevBslCfg['send_shop_ids_at'] ?? 0);
+    $_bslShopSelectionChanged=($_newSendShopIds !== $_oldSendShopIds);
+    $_sendShopIdsAt = $_bslShopSelectionChanged ? time() : (int)($_prevBslCfg['send_shop_ids_at'] ?? 0);
     $_shopSendMode = in_array(($b['shop_send_mode'] ?? ''), ['serial', 'parallel'], true)
         ? (string)$b['shop_send_mode']
         : (in_array(($_prevBslCfg['shop_send_mode'] ?? ''), ['serial', 'parallel'], true) ? (string)$_prevBslCfg['shop_send_mode'] : 'serial');
-    $conn['basalam'] = ['enabled'=>!empty($b['enabled']),'token'=>trim($b['token']??''),'vendor_id'=>(int)($b['vendor_id']??0),'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>(int)($b['weight']??500),'package_weight'=>(int)($b['package_weight']??0),'stock'=>(int)($b['stock']??10),'net_indirect'=>!empty($b['net_indirect']),'category_id'=>(int)($b['category_id']??0),'auto_category'=>!empty($b['auto_category']),'send_all_shops'=>!empty($b['send_all_shops']),'send_shop_ids'=>$_newSendShopIds,'send_shop_ids_at'=>$_sendShopIdsAt,'shop_send_mode'=>$_shopSendMode,'delay_ms'=>max(0,(int)($b['delay_ms']??500)),'retry_delay_ms'=>max(0,(int)($b['retry_delay_ms']??1000)),'send_parallel_n'=>max(1,min(8,(int)($b['send_parallel_n']??4))),'send_parallel_auto'=>!array_key_exists('send_parallel_auto',$b)||!empty($b['send_parallel_auto']),'fallback_cat_ids'=>$fallbackCats,'vendors'=>$vendors,'price_mode'=>in_array(($b['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$b['price_mode']:'none','price_val'=>(float)($b['price_val']??0),'price_round'=>max(0,(int)($b['price_round']??0))];
+    $conn['basalam'] = ['enabled'=>!empty($b['enabled']),'token'=>trim($b['token']??''),'vendor_id'=>(int)($b['vendor_id']??0),'preparation_days'=>(int)($b['preparation_days']??3),'weight'=>(int)($b['weight']??500),'package_weight'=>(int)($b['package_weight']??0),'stock'=>(int)($b['stock']??10),'net_indirect'=>!empty($b['net_indirect']),'category_id'=>(int)($b['category_id']??0),'auto_category'=>!empty($b['auto_category']),'send_all_shops'=>!empty($b['send_all_shops']),'send_shop_ids'=>$_newSendShopIds,'send_shop_ids_at'=>$_sendShopIdsAt,'shop_send_mode'=>$_shopSendMode,'delay_ms'=>max(0,(int)($b['delay_ms']??500)),'retry_delay_ms'=>max(0,(int)($b['retry_delay_ms']??1000)),'product_timeout_sec'=>max(30,min(1800,(int)($b['product_timeout_sec']??180))),'send_parallel_n'=>max(1,min(8,(int)($b['send_parallel_n']??4))),'send_parallel_auto'=>!array_key_exists('send_parallel_auto',$b)||!empty($b['send_parallel_auto']),'fallback_cat_ids'=>$fallbackCats,'vendors'=>$vendors,'price_mode'=>in_array(($b['price_mode']??'none'),['none','percent','multiplier'],true)?(string)$b['price_mode']:'none','price_val'=>(float)($b['price_val']??0),'price_round'=>max(0,(int)($b['price_round']??0))];
 }
 
 
@@ -27355,24 +27654,29 @@ if (isset($_POST['digest_enabled']))    $conn['digest_enabled']    = !empty($_PO
 if (isset($_POST['digest_hour']))       $conn['digest_hour']       = max(0, min(23, (int)$_POST['digest_hour']));
 if (isset($_POST['digest_hours']))      $conn['digest_hours']      = max(1, min(168, (int)$_POST['digest_hours']));
 if (isset($_POST['digest_tz']))         $conn['digest_tz']         = trim((string)$_POST['digest_tz']);
+$reconAutoChanged=isset($_POST['recon_auto'])&&json_encode($oldReconAuto)!==json_encode((array)($conn['recon_auto']??[]));
 $_savedC = writeJsonFile(CONNECTIONS_FILE, $conn);
 if ($_savedC['ok']) {
-    /* Shop-picker changes are operational controls, not merely settings for a
-       future queue. Apply them now; a live backend rechecks before next item. */
-    $bslShopSelectionApply=isset($_POST['basalam'])?bslReconcileDisabledShopsNow($conn):null;
+    /* v10.547: this scans the potentially multi-megabyte queue. Run it only
+       when the shop picker actually changed, not on every debounced field save. */
+    $bslShopSelectionApply=(isset($_POST['basalam'])&&$_bslShopSelectionChanged)
+        ?bslReconcileDisabledShopsNow($conn):['ok'=>true,'skipped'=>true,'reason'=>'selection_unchanged'];
     $newMxShopSig=function_exists('shopPricingSignature')?shopPricingSignature($conn):'';
-    $mxRefresh=$oldMxShopSig!==$newMxShopSig?matrixRefreshExpectedPrices('destination_price_change'):['ok'=>true,'changed'=>false,'rows'=>0];
+    $destinationPriceChanged=$oldMxShopSig!==$newMxShopSig;
+    /* v10.505: acknowledge the settings write before a potentially large matrix scan. */
+    $mxRefresh=['ok'=>true,'changed'=>false,'deferred'=>$destinationPriceChanged,'rows'=>0];
     $modeTransition=null;
     if(isset($_POST['recon_auto'])){
         $newExecMode=(string)($conn['recon_auto']['execution_mode']??'cron_first');
-        /* Apply even when the name did not change: Save acts as an immediate
-           control pulse and wakes a job paused under an expired lease. */
-        $modeTransition=matrixExecutionApplyMode($newExecMode);
+        /* Applying mode and mutating the worker queue are operational work.
+           A changed mode still applies immediately; unrelated autosaves skip it. */
         if($oldMatrixExecMode!==$newExecMode){
+            $modeTransition=matrixExecutionApplyMode($newExecMode);
             matrixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
             matrixFixProgress(['log_add'=>['⚡ روش اجرا همان لحظه از '.$oldMatrixExecMode.' به '.$newExecMode.' تغییر کرد']]);
         }
-        if(!empty($conn['recon_auto']['build_only'])&&function_exists('s4WorkerQueueMutate')){
+        $buildOnlyJustEnabled=!empty($conn['recon_auto']['build_only'])&&empty($oldReconAuto['build_only']);
+        if($reconAutoChanged&&$buildOnlyJustEnabled&&function_exists('s4WorkerQueueMutate')){
             s4WorkerQueueMutate(static function(&$q){
                 $now=time();
                 foreach((array)($q['entries']??[]) as $idx=>$e){
@@ -27396,7 +27700,7 @@ if ($_savedC['ok']) {
             });
         }
     }
-    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh,'matrix_execution'=>$modeTransition,
+    echo json_encode(['ok'=>true,'message'=>'ذخیره شد','matrix_repriced'=>$mxRefresh,'matrix_refresh_pending'=>$destinationPriceChanged,'matrix_execution'=>$modeTransition,
         'bsl_shop_selection'=>$bslShopSelectionApply], JSON_UNESCAPED_UNICODE);
 } else echo json_encode(['ok'=>false,'error'=>'خطا در ذخیره: '.($_savedC['error']??'نامشخص')], JSON_UNESCAPED_UNICODE);
 exit;
@@ -32134,6 +32438,12 @@ function bslAllShops(array $cn): array {
             $vid = (int)($v['vendor_id'] ?? 0);
             $tok = trim((string)($v['token'] ?? ''));
             if ($vid <= 0 || $tok === '') continue;
+            /* v10.528: The default vendor must win if a stale/duplicate copy is
+               also present in basalam.vendors. Otherwise later normalization
+               keys shops by vendor_id and the duplicate row can overwrite the
+               default token, causing every PATCH to report “ID does not belong
+               to your vendor” and adding several slow fallback requests. */
+            if ($defVid > 0 && $vid === $defVid) continue;
             $name = trim((string)($v['shop_name'] ?? ($v['name'] ?? '')));
             if ($name === '') $name = 'غرفهٔ ' . $vid;
             $vMode = (string)($v['price_mode'] ?? 'none');
@@ -32407,7 +32717,11 @@ function bslShopPriceForProfile(array $profile, $rawPrice, array $shop, int $rou
    دارد (کلید#vشناسهٔ‌غرفه) و شناسه‌ها با هم قاطی نمی‌شوند. */
 function bslShopMapKey(string $productKey, array $shop): string {
     if ($productKey === '') return '';
-    if (!empty($shop['is_default'])) return $productKey;
+    /* v10.529: Always scope ownership by vendor, including the default shop.
+       The serial/default path already passed a shop without is_default and
+       therefore used #v{vendor}; the parallel path passed is_default=true and
+       read the legacy bare key instead. That split let a stale ID from another
+       default/vendor be PATCHed only in parallel mode. */
     $vid = (int)($shop['vendor_id'] ?? 0);
     return $vid > 0 ? $productKey . '#v' . $vid : $productKey;
 }
@@ -32462,12 +32776,20 @@ const BSL_REVERIFY_SEC = 604800;   // ۷ روز
  * و از آخرین تأیید هم خیلی نگذشته باشد.
  */
 function bslSkipUnchanged(string $mapKey, int $exId, int $priceRial, int $stock,
-                          ?array $ledgerRow = null, int $wantWeightG = 0, bool $force = false): bool {
+                          ?array $ledgerRow = null, int $wantWeightG = 0, bool $force = false,
+                          string $expectedTitle = ''): bool {
     if ($mapKey === '' || $exId <= 0) return false;
     if ($force || (defined('BSL_FORCE_SYNC') && BSL_FORCE_SYNC)) return false;
     if ($ledgerRow === null) $ledgerRow = (remoteMapLoad()['bsl'][$mapKey] ?? null);
     if (!is_array($ledgerRow)) return false;
     if ((int)($ledgerRow['id'] ?? 0) !== $exId) return false;
+    /* v10.534: An ID being active in the vendor is not enough if a damaged or
+       collided source key points at another product. Require the title stored
+       with that exact vendor-scoped ledger row to match the current payload. */
+    if ($expectedTitle !== '') {
+        $ledgerTitle=trim((string)($ledgerRow['title']??''));
+        if ($ledgerTitle==='' || reconNormTitle($ledgerTitle)!==reconNormTitle($expectedTitle)) return false;
+    }
     /* نبودِ قیمت در دفترچه یعنی ردیفِ قدیمیِ پیش از v10.33 — دربارهٔ آن
        چیزی نمی‌دانیم، پس محافظه‌کارانه آپدیت می‌کنیم تا ردیف تازه شود. */
     if (!isset($ledgerRow['price_rial'])) return false;
@@ -32501,15 +32823,29 @@ function bslShopsFindExistingMulti(string $title, string $productKey, array $sho
         $vid = (int)($sh['vendor_id'] ?? 0);
         if ($vid <= 0 || trim((string)($sh['token'] ?? '')) === '') continue;
         $mk = bslShopMapKey($productKey, $sh);
-        $known = $mk !== '' ? (int)($map[$mk]['id'] ?? 0) : 0;
+        $knownRow=$mk!==''&&is_array($map[$mk]??null)?$map[$mk]:null;
+        $known = is_array($knownRow) ? (int)($knownRow['id'] ?? 0) : 0;
+        /* v10.534: never let an active but wrongly mapped product suppress a
+           creation. A vendor-scoped ID is trusted only when its stored title
+           belongs to this exact source product; otherwise perform the real
+           vendor title lookup below. */
+        if($known>0){
+            $knownTitle=trim((string)($knownRow['title']??''));
+            if($knownTitle===''||reconNormTitle($knownTitle)!==reconNormTitle($title))$known=0;
+        }
         if ($known > 0) {
             /* An active-only matrix hit confirms presence. A miss stays unknown,
                so it never invalidates a mapped ID across all product statuses. */
             $present = bslShopKnownIdPresence((string)$sh['token'], $vid, $known);
-            if ($present === true || $present === null) { $ids[$vid] = $known; continue; }
+
+            /* Unknown matrix state is not proof that a remembered remote ID
+               still exists. Verify by a real shop-scoped lookup before skip. */
+            if ($present === true) { $ids[$vid] = $known; continue; }
+            if ($present === null) { $need[$vid] = $sh; continue; }
             $hit = bslMatrixLookup((string)$sh['token'], $vid, $title, false);
             if ($hit > 0) { $ids[$vid] = $hit; bslMatrixSaved(1); continue; }
             if ($hit === 0) { bslMatrixSaved(1); continue; }
+
             $need[$vid] = $sh;
             continue;
         }
@@ -32599,6 +32935,11 @@ function s4PrepareLocalPhotosForMultiShop(array $p, int $maxPhotos = 1): array {
         $fdata = @file_get_contents($pickedPath);
         if (!$fdata || !isImageData($fdata)) continue;
         $realFmt = detectImageFormat($fdata) ?: 'jpg';
+        if($realFmt==='gif'){
+            $gifNorm=bslGifFirstFrameJpeg($fdata);
+            if(empty($gifNorm['ok']))continue;
+            if(!empty($gifNorm['converted'])){$fdata=(string)$gifNorm['data'];$realFmt='jpg';@file_put_contents($pickedPath,$fdata);}
+        }
         $conv = convertToSupportedFormat($fdata);
         if (!empty($conv['ok']) && !empty($conv['converted_from'])) {
             $fdata = $conv['data'];
@@ -32614,41 +32955,111 @@ function s4PrepareLocalPhotosForMultiShop(array $p, int $maxPhotos = 1): array {
             if (@file_put_contents($stdPath, $fdata)) $pickedPath = $stdPath;
         }
         $mime = 'image/' . ($realFmt === 'jpg' ? 'jpeg' : $realFmt);
-        $out[] = ['path' => $pickedPath, 'mime' => $mime, 'name' => 'product_' . substr($cacheKey, 0, 12) . '.' . $realFmt];
+        $out[] = ['path' => $pickedPath, 'mime' => $mime, 'name' => 'product_' . substr($cacheKey, 0, 12) . '.' . $realFmt,
+            'content_hash' => hash('sha256', $fdata)];
     }
     if ($prevRole === null) unset($GLOBALS['_s4CurrentImageRole']);
     else $GLOBALS['_s4CurrentImageRole'] = $prevRole;
     return $out;
 }
+function bslPhotoIdCacheRead(): array {
+    $x=is_file(BSL_PHOTO_ID_CACHE_FILE)?json_decode((string)@file_get_contents(BSL_PHOTO_ID_CACHE_FILE),true):null;
+    return is_array($x)?$x:['version'=>1,'entries'=>[],'updated_at'=>0];
+}
+function bslPhotoIdCacheKey(int $vendorId,string $hash): string {return $vendorId.'|'.strtolower(trim($hash));}
+function bslPhotoIdCacheStoreMany(array $rows): void {
+    if(!$rows)return;$lf=@fopen(BSL_PHOTO_ID_CACHE_FILE.'.lock','c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return;}
+    try{
+        $c=bslPhotoIdCacheRead();if(!is_array($c['entries']??null))$c['entries']=[];$now=time();
+        foreach($rows as $r){$vid=(int)($r['vendor_id']??0);$hash=(string)($r['hash']??'');$id=(int)($r['photo_id']??0);if($vid<=0||$hash===''||$id<=0)continue;
+            $c['entries'][bslPhotoIdCacheKey($vid,$hash)]=['id'=>$id,'at'=>$now];}
+        $cut=$now-7776000;foreach($c['entries'] as $k=>$r)if(!is_array($r)||(int)($r['id']??0)<=0||(int)($r['at']??0)<$cut)unset($c['entries'][$k]);
+        if(count($c['entries'])>50000){uasort($c['entries'],static fn($a,$b)=>(int)($a['at']??0)<=>(int)($b['at']??0));$c['entries']=array_slice($c['entries'],-50000,null,true);}
+        $c['version']=1;$c['updated_at']=$now;$tmp=BSL_PHOTO_ID_CACHE_FILE.'.tmp.'.getmypid();$raw=json_encode($c,JSON_UNESCAPED_SLASHES);
+        if($raw!==false&&@file_put_contents($tmp,$raw,LOCK_EX)!==false){@chmod($tmp,0644);@rename($tmp,BSL_PHOTO_ID_CACHE_FILE);}else @unlink($tmp);
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+function bslPhotoIdCacheForget(int $vendorId,string $hash): void {
+    if($vendorId<=0||$hash==='')return;$lf=@fopen(BSL_PHOTO_ID_CACHE_FILE.'.lock','c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);return;}
+    try{$c=bslPhotoIdCacheRead();unset($c['entries'][bslPhotoIdCacheKey($vendorId,$hash)]);$c['updated_at']=time();$tmp=BSL_PHOTO_ID_CACHE_FILE.'.tmp.'.getmypid();$raw=json_encode($c,JSON_UNESCAPED_SLASHES);if($raw!==false&&@file_put_contents($tmp,$raw,LOCK_EX)!==false)@rename($tmp,BSL_PHOTO_ID_CACHE_FILE);else @unlink($tmp);}
+    finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
 function bslUploadPhotosMultiShops(array $localFiles, array $shops, int $conc = 4): array {
-    $perShopIds = [];
-    foreach ($shops as $vid => $_sh) $perShopIds[(int)$vid] = [];
-    foreach ($localFiles as $fileMeta) {
-        $path = (string)($fileMeta['path'] ?? '');
-        if ($path === '' || !is_file($path)) continue;
-        $mime = (string)($fileMeta['mime'] ?? 'image/jpeg');
-        $fname = (string)($fileMeta['name'] ?? 'product.jpg');
-        $jobs = [];
-        foreach ($shops as $vid => $sh) {
-            $vid = (int)$vid;
-            $tk = trim((string)($sh['token'] ?? ''));
-            if ($vid <= 0 || $tk === '') continue;
-            $jobs[$vid] = [
-                'tk' => $tk, 'm' => 'POST', 'ep' => 'files', 'mp' => true,
-                'd' => ['file' => new CURLFile($path, $mime, $fname), 'file_type' => 'product.photo'],
-            ];
-        }
-        if (!$jobs) continue;
-        foreach (bslReqMulti($jobs, $conc) as $vid => $r) {
-            if (!empty($r['ok']) && !empty($r['body']['id'])) {
-                $perShopIds[(int)$vid][] = (int)$r['body']['id'];
+    $perShopIds=[];$cache=bslPhotoIdCacheRead();$entries=is_array($cache['entries']??null)?$cache['entries']:[];$cacheWrites=[];$now=time();
+    foreach($shops as $vid=>$_sh)$perShopIds[(int)$vid]=[];
+    foreach($localFiles as $fileMeta){
+        $path=(string)($fileMeta['path']??'');if($path===''||!is_file($path))continue;
+        $mime=(string)($fileMeta['mime']??'image/jpeg');$fname=(string)($fileMeta['name']??'product.jpg');
+        $hash=trim((string)($fileMeta['content_hash']??''));if($hash==='')$hash=hash_file('sha256',$path)?:'';$jobs=[];
+        foreach($shops as $__vidHash=>$__shHash){$__vidHash=(int)$__vidHash;if($__vidHash>0&&$hash!=='')$GLOBALS['_bslPhotoHashesByVendor'][$__vidHash][$hash]=true;}
+        foreach($shops as $vid=>$sh){
+            $vid=(int)$vid;$tk=trim((string)($sh['token']??''));if($vid<=0||$tk==='')continue;
+            $ck=bslPhotoIdCacheKey($vid,$hash);$hit=is_array($entries[$ck]??null)?$entries[$ck]:null;
+            if($hit&&(int)($hit['id']??0)>0&&($now-(int)($hit['at']??0))<=7776000){
+                $perShopIds[$vid][]=(int)$hit['id'];$GLOBALS['_bslPhotoCacheHits']=(int)($GLOBALS['_bslPhotoCacheHits']??0)+1;continue;
             }
+            $jobs[$vid]=['tk'=>$tk,'m'=>'POST','ep'=>'files','mp'=>true,'d'=>['file'=>new CURLFile($path,$mime,$fname),'file_type'=>'product.photo']];
+        }
+        if(!$jobs)continue;
+        foreach(bslReqMulti($jobs,$conc) as $vid=>$r){
+            if(!empty($r['ok'])&&!empty($r['body']['id'])){$pid=(int)$r['body']['id'];$perShopIds[(int)$vid][]=$pid;
+                $cacheWrites[]=['vendor_id'=>(int)$vid,'hash'=>$hash,'photo_id'=>$pid];$GLOBALS['_bslPhotoCacheMisses']=(int)($GLOBALS['_bslPhotoCacheMisses']??0)+1;}
         }
     }
-    return $perShopIds;
+    bslPhotoIdCacheStoreMany($cacheWrites);return $perShopIds;
+}
+
+/** v10.559: bounded cross-product update window for multi-shop queues.
+ * Existing products with a trusted vendor-scoped ledger ID are grouped into
+ * one official batch request per vendor. New products, variants and every
+ * failed vendor batch stay on the full per-product path. */
+function bslParallelBatchWindow(array $products,int $baseIndex,array $shops,array $opts,int $conc=4): array {
+    $results=[];$jobs=[];$meta=[];$ledger=remoteMapLoad()['bsl']??[];$round=(int)($opts['round']??0);
+    $profile=is_array($opts['profile']??null)?$opts['profile']:null;$eligible=[];
+    foreach($shops as $sh){$vid=(int)($sh['vendor_id']??0);$tk=trim((string)($sh['token']??''));if($vid>0&&$tk!==''&&!empty(bslCheckVendorActiveStatus($tk,$vid)['active']))$eligible[]=$sh;}
+    foreach($products as $off=>$p){
+        if(!is_array($p))continue;$abs=$baseIndex+(int)$off;$rawTitle=trim((string)($p['title']??$p['name']??''));$pKey=(string)($p['key']??'');
+        if($rawTitle===''||$pKey===''||bslBuildVariantsPayload($p,1,1))continue;
+        $barcode=bslExtractValidBarcode($p);$title=bslSanitizeModerationTitle($rawTitle,$barcode!=='');if($title==='')$title=$rawTitle;
+        $stock=effectiveStock($p,(int)($opts['stock']??10));$prep=max(1,(int)($opts['preparation_days']??3));
+        $defW=(int)($opts['weight']??500);$defPkg=(int)($opts['package_weight']??($defW+100));$wr=bslResolveProductWeights($p,$defW,$defPkg);
+        $weight=(int)$wr['weight'];$pkg=max(1,(int)$wr['package_weight']);$wantWeight=!empty($wr['overridden'])?$weight:0;
+        foreach($eligible as $sh){
+            $vid=(int)($sh['vendor_id']??0);$tk=trim((string)($sh['token']??''));if($vid<=0||$tk==='')continue;
+            $mk=bslShopMapKey($pKey,$sh);$lr=is_array($ledger[$mk]??null)?$ledger[$mk]:null;$id=(int)($lr['id']??0);
+            if($id<=0||trim((string)($lr['title']??''))===''||reconNormTitle((string)$lr['title'])!==reconNormTitle($title))continue;
+            $rawPrice=extractSourcePrice($p);
+            if($profile&&$rawPrice!==''&&extractPriceNum($rawPrice)>0)$pf=bslShopPriceForProfile($profile,$rawPrice,$sh,$round);
+            else{$base=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));if($base<=0)continue;$pf=bslShopPriceFor($base,$sh,$round);}
+            $price=(int)($pf['price']??0);if($price<=0)continue;if((string)($p['price_unit']??'')!=='rial')$price*=10;
+            if(!bslIsRealisticPriceRial($price))continue;
+            if(bslSkipUnchanged($mk,$id,$price,$stock,$lr,$wantWeight,!empty($opts['force_all']),$title)){
+                bslSkipCount(1);$results[$abs][$vid]=['ok'=>true,'id'=>$id,'action'=>'unchanged','skipped'=>true,'batch_window'=>true];continue;
+            }
+            $row=['id'=>$id,'primary_price'=>$price,'stock'=>$stock,'status'=>$stock>0?2976:3790,'preparation_days'=>$prep,'weight'=>$weight,'package_weight'=>$pkg];
+            bslApplyContent($row,$p);
+            if(!isset($jobs[$vid]))$jobs[$vid]=['tk'=>$tk,'m'=>'PATCH','ep'=>'vendors/'.$vid.'/products/batch-updates','d'=>['data'=>[]]];
+            $jobs[$vid]['d']['data'][]=$row;
+            $meta[$vid][]=['abs'=>$abs,'vid'=>$vid,'id'=>$id,'mk'=>$mk,'title'=>$title,'price'=>$price,'stock'=>$stock,'weight'=>$wantWeight];
+        }
+    }
+    if(!$jobs)return $results;
+    bslLongOperationStage('existing_update',3,9,'آپدیت گروهی پنجرهٔ '.count($products).' محصول در '.count($jobs).' غرفه');
+    $responses=bslReqMulti($jobs,$conc);$mapRows=[];
+    foreach($responses as $vid=>$r){
+        if(empty($r['ok']))continue;
+        foreach((array)($meta[(int)$vid]??[]) as $m){
+            $results[(int)$m['abs']][(int)$vid]=['ok'=>true,'id'=>(int)$m['id'],'action'=>'updated','update_reason'=>'آپدیت گروهی پنجره‌ای','changes_detail'=>'batch-updates چندمحصولی','batch_window'=>true];
+            $mr=['key'=>(string)$m['mk'],'remote_id'=>(int)$m['id'],'title'=>(string)$m['title'],'price_rial'=>(int)$m['price'],'stock'=>(int)$m['stock']];
+            if((int)$m['weight']>0)$mr['weight_g']=(int)$m['weight'];$mapRows[]=$mr;
+        }
+    }
+    if($mapRows)remoteMapRecord('bsl',$mapRows);
+    return $results;
 }
 
 function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4): array {
+    unset($GLOBALS['_bslPhotoHashesByVendor']);
     $out = [];
     $rawTitle = trim((string)($p['title'] ?? ($p['name'] ?? '')));
     $pKey  = (string)($p['key'] ?? '');
@@ -32663,12 +33074,22 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
 
     $round   = (int)($opts['round'] ?? 0);
     $profile = is_array($opts['profile'] ?? null) ? $opts['profile'] : null;
+    bslLongOperationStage('shop_validation',1,9,'بررسی دسترسی، وضعیت و قیمت '.count($shops).' غرفه');
 
     // قیمتِ هر غرفه + بررسی فعال بودن غرفه (پیشگیری از ۷۰۹۴ و ۵۰۱۱/۶۳۸۱)
     $prices = []; $live = [];
     foreach ($shops as $sh) {
         $vid = (int)($sh['vendor_id'] ?? 0); $tk = trim((string)($sh['token'] ?? ''));
         if ($vid <= 0 || $tk === '') continue;
+        /* v10.523: پس از اینکه هر سه endpoint رسمیِ update برای یک غرفه 403
+           قطعی دادند، همان worker هزاران بار همان خطای دائمی را تکرار نمی‌کند.
+           اولین خطا با جزئیات حفظ می‌شود؛ محصولات بعدی آن غرفه شفاف skip می‌شوند
+           و غرفه‌های سالم بدون وقفه ادامه می‌یابند. */
+        if (!empty($GLOBALS['_bslHardForbiddenVendors'][$vid])) {
+            $out[$vid]=['ok'=>true,'skipped'=>true,'action'=>'skipped_shop_forbidden',
+                'reason_kind'=>'auth','note'=>'غرفه پس از 403 قطعی این اجرا متوقف شد؛ توکن/دسترسی vendor_id بازبینی شود'];
+            continue;
+        }
         $vStat = bslCheckVendorActiveStatus($tk, $vid);
         if (empty($vStat['active'])) {
             $out[$vid] = ['ok' => false, 'skipped_inactive_vendor' => true, 'reason_kind' => 'vendor_inactive', 'error' => (string)$vStat['reason']];
@@ -32692,10 +33113,6 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         $prices[$vid] = $pr; $live[$vid] = $sh;
     }
     if (!$live) return $out;
-    $matrixEmptyVids=[];
-    foreach($live as $matrixVid=>$matrixShop){
-        if(!bslMatrixProductsUsable(bslMatrixProductsForVendor((int)$matrixVid)))$matrixEmptyVids[(int)$matrixVid]=true;
-    }
 
     $stock  = effectiveStock($p, (int)($opts['stock'] ?? 10));    // v10.21 (۳۴الف)
     $prepD  = max(1, (int)($opts['preparation_days'] ?? 3));
@@ -32711,6 +33128,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     $cData    = is_array($opts['cdata'] ?? null) ? $opts['cdata'] : [];
 
     // ---- فاز ۱: شناسه‌ها، همزمان (هم با عنوان پاک‌سازی‌شده هم در صورت تغییر با عنوان خام قبلی)
+    bslLongOperationStage('existing_lookup',2,9,'جست‌وجوی محصول موجود در '.count($live).' غرفه');
     $ids = bslShopsFindExistingMulti($title, $pKey, $live, $conc);
     if ($rawTitle !== $title) {
         $missingLive = [];
@@ -32725,16 +33143,20 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     // ---- فاز ۲: آپدیتِ همزمان
     $ledger = [];
     if ($ids) {
-        $jobs = [];
+        $jobs = [];$directDefaultBatch=[];
         /* v10.33 (۴۶): دفترچه یک بار خوانده می‌شود، نه یک بار برای هر غرفه.
            در حلقهٔ چند هزار محصولی، خواندنِ مکررِ همین فایل خودش گران است. */
         $__bslMap = remoteMapLoad()['bsl'] ?? [];
         foreach ($ids as $vid => $exId) {
             if (!isset($live[$vid])) continue;
             $__mk = bslShopMapKey($pKey, $live[$vid]);
+            /* v10.530: ID ownership has already been established by the
+               vendor-scoped matrix/lookup phase above. A temporarily absent
+               matrix must not force three writes per source product; the
+               ledger's exact ID/payload checks and seven-day reverify remain. */
             if (bslSkipUnchanged($__mk, (int)$exId, (int)$prices[$vid], $stock,
                                  $__bslMap[$__mk] ?? null, $_wantWG,
-                                 !empty($opts['force_all'])||!empty($matrixEmptyVids[(int)$vid]))) {
+                                 !empty($opts['force_all']), $title)) {
                 bslSkipCount(1);
                 $out[(int)$vid] = ['ok' => true, 'id' => (int)$exId,
                                    'action' => 'unchanged', 'skipped' => true];
@@ -32747,21 +33169,66 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             bslApplyContent($bu, $p); /* v10.98: توضیح + تنوع */
             $_mvUpd = bslBuildVariantsPayload($p, (int)$prices[$vid], $stock);
             if ($_mvUpd) $bu['variants'] = $_mvUpd;
-            $jobs[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
-                           'ep' => 'products/' . $exId, 'd' => $bu];
+            /* v10.531: The default token consistently rejects generic PATCH
+               and accepts its official vendor batch endpoint. Start there in
+               parallel instead of paying for generic + scoped failures first.
+               Source variants have no destination IDs, so they cannot legally
+               be included in an update batch; phase 4 retains the full fallback
+               if the safe base/content batch itself is rejected. */
+            if (!empty($live[$vid]['is_default'])) {
+                $batchRow=$bu;$batchRow['id']=(int)$exId;unset($batchRow['variants']);
+                $jobs[$vid]=['tk'=>(string)$live[$vid]['token'],'m'=>'PATCH',
+                    'ep'=>'vendors/'.$vid.'/products/batch-updates','d'=>['data'=>[$batchRow]]];
+                $directDefaultBatch[(int)$vid]=true;
+            } else {
+                $jobs[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
+                               'ep' => 'products/' . $exId, 'd' => $bu];
+            }
         }
+        bslLongOperationStage('existing_update',3,9,'ارسال همزمان تغییرات به '.count($jobs).' غرفه');
         $rs = bslReqMulti($jobs, $conc);
-        // موجِ دوم: هرکدام ۴۰۴ گرفت، با مسیرِ غرفه‌ای دوباره امتحان می‌شود
-        $again = [];
+        foreach($directDefaultBatch as $vid=>$_yes){
+            if(!empty($rs[$vid]['ok'])){
+                if(!is_array($rs[$vid]['body']??null))$rs[$vid]['body']=[];
+                $rs[$vid]['body']['id']=(int)$ids[$vid];
+            }
+        }
+        // موجِ دوم: 404 یا 403 در مسیر عمومی، یک‌بار با مسیرِ مالکِ غرفه امتحان می‌شود.
+        // بعضی توکن‌های معتبر فقط vendors/{vendor_id}/products/{id} را مجاز می‌دانند.
+        $again = [];$genericForbidden=[];
         foreach ($rs as $vid => $r) {
-            if ((int)($r['code'] ?? 0) === 404) {
+            if (!empty($directDefaultBatch[(int)$vid])) continue;
+            if ((int)($r['code'] ?? 0) === 403) $genericForbidden[(int)$vid]=true;
+            if (in_array((int)($r['code'] ?? 0), [403, 404], true)) {
                 $again[$vid] = ['tk' => (string)$live[$vid]['token'], 'm' => 'PATCH',
                                 'ep' => 'vendors/' . $vid . '/products/' . $ids[$vid], 'd' => $jobs[$vid]['d']];
             }
         }
         if ($again) foreach (bslReqMulti($again, $conc) as $vid => $r2) $rs[$vid] = $r2;
+        /* v10.521: برخی توکن‌ها هر دو PATCH تکی را 403 می‌کنند ولی endpoint رسمی
+           batch-updates همان غرفه را مجاز می‌دانند. آخرین fallback فقط همان ID و
+           همان vendor است؛ بنابراین امکان ویرایش محصول غرفهٔ دیگر وجود ندارد. */
+        $againBatch = [];
+        foreach ($rs as $vid => $r) {
+            if (!empty($directDefaultBatch[(int)$vid])) continue;
+            /* اگر مسیر عمومی 403 داده، 404 مسیر تکی vendor نباید fallback رسمی
+               batch را حذف کند؛ این دقیقاً الگوی API غرفهٔ پیش‌فرض است. */
+            if (empty($genericForbidden[(int)$vid]) && (int)($r['code'] ?? 0) !== 403) continue;
+            if (empty($jobs[$vid]['d'])) continue;
+            $batchRow = $jobs[$vid]['d']; $batchRow['id'] = (int)$ids[$vid];
+            $againBatch[$vid] = ['tk'=>(string)$live[$vid]['token'],'m'=>'PATCH',
+                'ep'=>'vendors/'.$vid.'/products/batch-updates','d'=>['data'=>[$batchRow]]];
+        }
+        if ($againBatch) foreach (bslReqMulti($againBatch, $conc) as $vid => $rb) {
+            if (!empty($rb['ok'])) {
+                if (!is_array($rb['body'] ?? null)) $rb['body'] = [];
+                $rb['body']['id'] = (int)$ids[$vid];
+            }
+            $rs[$vid] = $rb;
+        }
         $againNoVar = [];
         foreach ($rs as $vid => $r) {
+            if (!empty($directDefaultBatch[(int)$vid])) continue;
             if (empty($r['ok']) && in_array((int)($r['code'] ?? 0), [400, 422], true) && !empty($jobs[$vid]['d']['variants']) && !bslIsCategoryError($r)) {
                 $dNoVar = $jobs[$vid]['d'];
                 unset($dNoVar['variants']);
@@ -32791,6 +33258,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         $toCreate[$vid] = $sh;
     }
     if ($toCreate) {
+        bslLongOperationStage('create_prepare',4,9,'آماده‌سازی دسته، متن و اطلاعات ساخت برای '.count($toCreate).' غرفه');
         $bslCfgIn = is_array($opts['basalam_cfg'] ?? null) ? $opts['basalam_cfg'] : null;
         $fallback = is_array($opts['fallback_cat_ids'] ?? null) ? $opts['fallback_cat_ids'] : [];
         $prodMappedCat = (int)($p['bsl_category_id'] ?? $p['category_id'] ?? 0);
@@ -32806,9 +33274,11 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         $_builtCreate = bslBuildUnifiedDescription($p, $title);
         $brief = $_builtCreate['brief'] !== '' ? $_builtCreate['brief'] : mb_substr(s4HtmlToPlainTextForBsl($title), 0, 250, 'UTF-8');
         $desc  = bslEnsureRichCompliantDescription($_builtCreate['description'], $title, $p, $hasBarcode);
+        bslLongOperationStage('photo_prepare',5,9,'دریافت و آماده‌سازی تصاویر محصول');
         $localPhotos = ($catUsed > 0 && !bslStopRequestedForQueue())
             ? s4PrepareLocalPhotosForMultiShop($p, max(1, min(3, (int)($opts['upload_max_photos'] ?? 1))))
             : [];
+        bslLongOperationStage('photo_upload',6,9,count($localPhotos).' تصویر برای '.count($toCreate).' غرفه');
         $shopPhotoMap = !empty($localPhotos) ? bslUploadPhotosMultiShops($localPhotos, $toCreate, $conc) : [];
         $jobs = [];
         foreach ($toCreate as $vid => $sh) {
@@ -32827,6 +33297,7 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             $jobs[$vid] = ['tk' => (string)$sh['token'], 'm' => 'POST',
                            'ep' => 'vendors/' . $vid . '/products', 'd' => $bp];
         }
+        bslLongOperationStage('product_create',7,9,'ثبت محصول تازه در '.count($jobs).' غرفه');
         $rsCreate = bslReqMulti($jobs, $conc);
         $retryNoVarCreate = [];
         foreach ($rsCreate as $vid => $r) {
@@ -32842,6 +33313,10 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
                 $out[(int)$vid] = ['ok' => true, 'id' => (int)$r['body']['id'], 'action' => 'created', 'used_cat_id' => $catUsed, 'update_reason' => 'ایجاد موازی در غرفه'];
                 $ledger[(int)$vid] = (int)$r['body']['id'];
             } else {
+                $__photoErrText=strtolower((string)($r['raw']??json_encode($r['body']??[])));
+                if(in_array((int)($r['code']??0),[400,404,422],true)&&(str_contains($__photoErrText,'photo')||str_contains($__photoErrText,'تصویر'))){
+                    foreach(array_keys((array)($GLOBALS['_bslPhotoHashesByVendor'][(int)$vid]??[])) as $__badHash)bslPhotoIdCacheForget((int)$vid,(string)$__badHash);
+                }
                 $em = $r['body']['message'] ?? $r['body']['error'] ?? ($r['error'] ?? '؟');
                 if (is_array($em)) $em = json_encode($em, JSON_UNESCAPED_UNICODE);
                 $out[(int)$vid] = array_merge(['ok' => false], bslSendErrorInfo($r, 'multi_shop_create', 'vendors/' . $vid . '/products'));
@@ -32854,17 +33329,24 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
     //      اگر سیگنالِ توقف رسیده باشد این فاز اجرا نمی‌شود، وگرنه هر غرفه
     //      یک 'stopped' می‌گیرد و آن محصول بی‌دلیل «خطا» شمرده می‌شود.
     $__stopNow = bslStopRequestedForQueue();
+    $__fallbackN=0;foreach($live as $__fv=>$__fs){if(empty($out[$__fv]['ok']))$__fallbackN++;}
+    if($__fallbackN>0)bslLongOperationStage('single_shop_fallback',8,9,'ترمیم تک‌غرفه‌ای برای '.$__fallbackN.' غرفه');
     foreach ($live as $vid => $sh) {
         if (!empty($out[$vid]['ok'])) continue;
         if ($__stopNow) { $out[(int)$vid] = ['ok' => false, 'stopped' => true, 'error' => 'stopped']; continue; }
+        bslLongOperationStage('single_shop_fallback',8,9,'ترمیم '.((string)($sh['shop_name']??'غرفهٔ '.$vid)));
         $__oneOpts=$opts;
-        if(!empty($matrixEmptyVids[(int)$vid]))$__oneOpts['force_all']=true;
         $one = bslUpsertToShop($p, $sh, $__oneOpts);
         $out[(int)$vid] = $one;
+        if ((int)($one['error_code'] ?? 0) === 403) {
+            if (!isset($GLOBALS['_bslHardForbiddenVendors']) || !is_array($GLOBALS['_bslHardForbiddenVendors'])) $GLOBALS['_bslHardForbiddenVendors']=[];
+            $GLOBALS['_bslHardForbiddenVendors'][(int)$vid]=['at'=>time(),'shop'=>(string)($sh['shop_name']??$vid)];
+        }
         if (!empty($one['ok']) && (int)($one['id'] ?? 0) > 0) $ledger[(int)$vid] = (int)$one['id'];
     }
 
     // شناسه‌ها را برای دفعهٔ بعد ثبت کن تا جست‌وجو لازم نشود
+    bslLongOperationStage('checkpoint_save',9,9,'ثبت نتیجه و شناسه‌های محصول');
     if ($ledger && $pKey !== '') {
         $rows = [];
         foreach ($ledger as $vid => $rid) {
@@ -32881,6 +33363,11 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             }
         }
         if ($rows) remoteMapRecord('bsl', $rows);
+    }
+    if(!empty($GLOBALS['_bslProductTimedOut'])){
+        return ['__product_timeout'=>array_merge(bslProductTimeoutResult(),[
+            'elapsed_sec'=>max(0,(int)($GLOBALS['_bslProductTimeoutSec']??180)),
+            'partial_shop_results'=>count($out)])];
     }
     return $out;
 }
@@ -32939,8 +33426,10 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     // v10.20 (۳۳الف): دفترچهٔ نگاشتِ همین غرفه، نه شناسهٔ غرفهٔ پیش‌فرض
     $__mk = bslShopMapKey((string)($p['key'] ?? ''), $shop);
     $doDeep = !array_key_exists('find_deep_scan', $opts) || !empty($opts['find_deep_scan']);
-    $existing = !empty($opts['skip_find_existing']) ? null : bslFindExisting($tk, $vid, $title, $__mk, $doDeep);
-    if (!$existing && $rawTitle !== $title && empty($opts['skip_find_existing'])) {
+    $existing = is_array($opts['existing_override'] ?? null)
+        ? $opts['existing_override']
+        : (!empty($opts['skip_find_existing']) ? null : bslFindExisting($tk, $vid, $title, $__mk, $doDeep));
+    if (!$existing && $rawTitle !== $title && empty($opts['skip_find_existing']) && !array_key_exists('existing_override',$opts)) {
         $existing = bslFindExisting($tk, $vid, $rawTitle, $__mk, $doDeep);
     }
     $exId = is_array($existing) ? (int)($existing['id'] ?? 0) : 0;
@@ -32948,7 +33437,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     if ($exId > 0) {
         /* v10.33 (۴۶): اگر قیمت و موجودی همانی است که خودمان آخرین بار
            فرستادیم، این PATCH هیچ کاری نمی‌کند جز مصرفِ یک درخواست. */
-        if (bslSkipUnchanged($__mk, $exId, $priceRial, $stock, null, 0, !empty($opts['force_all']))) {
+        if (bslSkipUnchanged($__mk, $exId, $priceRial, $stock, null, 0, !empty($opts['force_all']), $title)) {
             $_oldSingleLedgerRow = $__mk !== '' ? (remoteMapLoad()['bsl'][$__mk] ?? null) : null;
             if ($_wantShopWG <= 0 || (is_array($_oldSingleLedgerRow) && (int)($_oldSingleLedgerRow['weight_g'] ?? 0) === $_wantShopWG)) {
                 bslSkipCount(1);
@@ -32963,10 +33452,36 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
         $_bslShopVarsUpd = bslBuildVariantsPayload($p, $priceRial, $stock);
         if ($_bslShopVarsUpd) $bu['variants'] = $_bslShopVarsUpd;
         $r = bslReqWithVariantsFallback($tk, 'PATCH', 'products/' . $exId, $bu);
-        if ($r['code'] === 404) $r = bslReqWithVariantsFallback($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
+        $genericUpdateCode=(int)($r['code']??0);
+        if (in_array($genericUpdateCode, [403, 404], true)) {
+            $r = bslReqWithVariantsFallback($tk, 'PATCH', 'vendors/' . $vid . '/products/' . $exId, $bu);
+        }
+        if ($genericUpdateCode === 403 || (int)($r['code'] ?? 0) === 403) {
+            $batchRow=$bu;$batchRow['id']=$exId;
+            $rb=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batchRow]]);
+            if(!empty($rb['ok'])){if(!is_array($rb['body']??null))$rb['body']=[];$rb['body']['id']=$exId;}
+            $r=$rb;
+        }
+        if(empty($r['ok'])&&bslIsVariantUpdateMethodError($r)){
+            $r=bslRepairExistingVariantUpdate($tk,$vid,$exId,$bu,$_bslShopVarsUpd);
+        }
         if (!empty($r['ok']) && !empty($r['body']['id'])) {
             bslShopMapRecord($p, $shop, $exId, $title, $priceRial, $stock);   // v10.20 (۳۳الف) · v10.33 (۴۶)
             return ['ok' => true, 'id' => $exId, 'action' => 'updated', 'update_reason' => 'آپدیت قیمت/موجودی/محتوا', 'changes_detail' => 'PATCH محصول موجود'];
+        }
+        /* v10.524: 404 از هر دو مسیر یعنی ID دفترچه/ماتریس واقعاً قدیمی است.
+           آن را از shard همان غرفه حذف کن، بدون matrix و بدون ledger یک جستجوی
+           واقعی انجام بده، سپس فقط یک بار با ID تازه update یا در نبودش create کن. */
+        if ((int)($r['code'] ?? 0) === 404 && empty($opts['stale_id_recovered'])) {
+            if ($__mk !== '') remoteMapForget('bsl', $__mk);
+            $fresh = bslFindExisting($tk, $vid, $title, '', false, false, 2, true);
+            if (!$fresh && $rawTitle !== $title) $fresh = bslFindExisting($tk, $vid, $rawTitle, '', false, false, 2, true);
+            $retryOpts=$opts;$retryOpts['stale_id_recovered']=1;
+            if (is_array($fresh) && (int)($fresh['id']??0)>0) $retryOpts['existing_override']=$fresh;
+            else {$retryOpts['skip_find_existing']=1;unset($retryOpts['existing_override']);}
+            $recovered=bslUpsertToShop($p,$shop,$retryOpts);
+            if(!empty($recovered['ok']))$recovered['stale_id_recovered']=$exId;
+            return $recovered;
         }
         return array_merge(['ok' => false], bslSendErrorInfo($r, 'shop_update', 'products/' . $exId),
             ['error' => 'آپدیت در این غرفه ناموفق: ' . bslErrText($r)]);
@@ -39823,10 +40338,30 @@ function autoResumeBookSet(string $key, string $sig, int $tries): void {
  */
 function tasksRowsOrdered(int $now): array {
     $reg  = tasksRegistry();
-    $rows = [];
+    $rows = [];$stopAt=0;
+    if(is_file(TASKS_STOP_ALL_LAST_FILE)){
+        $stopMeta=json_decode((string)@file_get_contents(TASKS_STOP_ALL_LAST_FILE),true);
+        if(is_array($stopMeta))$stopAt=max(0,(int)($stopMeta['at']??0));
+    }
     foreach (tasksOrder($reg) as $rank => $key) {
         $row = tasksBuildRow($key, $reg[$key], $now);
-        $row['rank'] = $rank + 1;        // نمایشِ ۱-پایه
+        $stateFile=(string)($reg[$key]['file']??'');
+        /* v10.508: cron could rewrite an old run after the first cleanup.
+           Its heartbeat is new but its original start is not; sweep it again.
+           A genuinely new run has started_at newer than the tombstone. */
+        $rowStarted=(int)($row['started']??0);$rowTs=(int)($row['ts']??0);
+        $predatesStop=$stopAt>0&&(($rowStarted>0&&$rowStarted<=$stopAt)
+            ||($rowStarted<=0&&$rowTs>0&&$rowTs<=$stopAt));
+        if($predatesStop&&$stateFile!==''){
+            if(function_exists('localTaskDbForget'))localTaskDbForget($stateFile);
+            if(is_file($stateFile))@unlink($stateFile);
+            continue;
+        }
+        /* A registry definition is not an activity row. After Stop All removes
+           backing state, idle definitions must not remain as phantom cards. */
+        if((string)($row['state']??'idle')==='idle'
+            &&($stateFile===''||!localTaskStateExists($stateFile)))continue;
+        $row['rank'] = count($rows) + 1;  // نمایشِ ۱-پایه و بدون شکاف
         $rows[] = $row;
     }
     return $rows;
@@ -40135,7 +40670,13 @@ function tasksStopAllClearOperationalQueues(): array {
         foreach([SYNC_MATRIX_CHECKPOINT_FILE,SYNC_MATRIX_FETCH_CURSOR_FILE,
             SYNC_MATRIX_LIVE_FILE,__DIR__.'/recon_fetch_cache.ndjson',DEDUP_FETCH_CURSOR_FILE,
             CATFIX_FETCH_CURSOR_FILE] as $f)$taskFiles[(string)$f]=true;
-        $progressFiles=0;foreach(array_keys($taskFiles) as $f){
+        $progressFiles=0;$taskDbRows=0;foreach(array_keys($taskFiles) as $f){
+            /* writeJsonFile mirrors progress into SQLite. Unlinking only the
+               JSON made readProgress resurrect the deleted row immediately. */
+            if(function_exists('localTaskDbRead')&&localTaskDbRead($f)!==null)$taskDbRows++;
+            if(function_exists('localTaskDbForget'))localTaskDbForget($f);
+            if(function_exists('localTaskDbRead')&&localTaskDbRead($f)!==null)
+                return ['ok'=>false,'pending'=>true,'error'=>'task_state_db_delete_failed','count'=>0];
             if(is_file($f)){if(!@unlink($f))return ['ok'=>false,'pending'=>true,'error'=>'task_state_unlink_failed','count'=>0];$progressFiles++;}
         }
         $matrixTemps=0;foreach((array)glob(SYNC_MATRIX_CHECKPOINT_FILE.'.tmp.*') as $f){
@@ -40145,9 +40686,9 @@ function tasksStopAllClearOperationalQueues(): array {
             'extract_rows'=>$extractRows,'sync_rows'=>$syncRows,'queue_files'=>$queueFiles,
             'duplicate_rows'=>$dupRows,'ai_category_rows'=>$aiRows,'payload_files'=>$removed,
             'activity_state_files'=>$stateFiles,'staging_files'=>$stagingFiles,
-            'progress_files'=>$progressFiles,'matrix_temps'=>$matrixTemps,'scheduled_jobs'=>$scheduledJobs,
+            'progress_files'=>$progressFiles,'task_db_rows'=>$taskDbRows,'matrix_temps'=>$matrixTemps,'scheduled_jobs'=>$scheduledJobs,
             'count'=>$sendRows+$extractRows+$syncRows+$queueFiles+$dupRows+$aiRows+$workerRows+$scheduledJobs+
-                $removed+$stateFiles+$stagingFiles+$progressFiles+$matrixTemps];
+                $removed+$stateFiles+$stagingFiles+$progressFiles+$taskDbRows+$matrixTemps];
     }finally{
         foreach(array_reverse($held) as $h){if($h['backend'])queueBackendUnlock($h['fp']);else{@flock($h['fp'],LOCK_UN);@fclose($h['fp']);}}
     }
@@ -40163,9 +40704,13 @@ function tasksStopAllClearCheckpoints(): array {
         'error'=>(string)($activityCleanup['error']??'activity_queue_busy'),
         'busy'=>(string)($activityCleanup['busy']??''),'count'=>0];
 
+    $marker=(array)json_decode((string)@file_get_contents(TASKS_STOP_ALL_CLEAR_FILE),true);
+    $stopAt=max(1,(int)($marker['at']??time()));
+    if(@file_put_contents(TASKS_STOP_ALL_LAST_FILE,json_encode(['at'=>$stopAt,'completed_at'=>time()],JSON_UNESCAPED_UNICODE),LOCK_EX)===false)
+        return ['cleared'=>false,'pending'=>true,'error'=>'cleanup_tombstone_write_failed','count'=>0];
     if(is_file(TASKS_STOP_ALL_CLEAR_FILE)&&!@unlink(TASKS_STOP_ALL_CLEAR_FILE))
         return ['cleared'=>false,'pending'=>true,'error'=>'cleanup_marker_unlink_failed','count'=>0];
-    return ['cleared'=>true,'pending'=>false,'count'=>(int)($activityCleanup['count']??0),
+    return ['cleared'=>true,'pending'=>false,'stop_at'=>$stopAt,'count'=>(int)($activityCleanup['count']??0),
         'activity_queues'=>$activityCleanup,'profiles_cleared'=>true];
 }
 
@@ -40539,22 +41084,37 @@ if (isset($_GET['tasks_order'])) {
     exit;
 }
 
+/** v10.538: Task state has two durable copies: JSON and SQLite. Deleting only
+ * the JSON lets localTaskStateRead() immediately resurrect the finished card
+ * from SQLite, which made the cleanup button appear ineffective. */
+function tasksClearPersistedState(string $file): bool {
+    if ($file === '') return false;
+    if (function_exists('localTaskDbForget')) localTaskDbForget($file);
+    $fileOk = !is_file($file) || @unlink($file);
+    $dbOk = !function_exists('localTaskDbRead') || localTaskDbRead($file) === null;
+    return $fileOk && $dbOk;
+}
+
 /** پاک‌کردنِ ردِ یک کارِ تمام‌شده یا رهاشده.
- *  فایلِ پیشرفت حذف می‌شود تا کار از «تمام‌شده» به «بی‌کار» برگردد و
- *  قفلِ احتمالی‌اش هم برداشته شود — همان کاری که تا حالا باید دستی با
- *  حذفِ فایل روی هاست انجام می‌شد. */
+ *  فایلِ پیشرفت و نسخهٔ SQLite آن حذف می‌شوند تا کار از «تمام‌شده» به
+ *  «بی‌کار» برگردد؛ کار زنده دست‌نخورده می‌ماند. */
 if (isset($_GET['tasks_clear'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $key = (string)($_GET['key'] ?? '');
     $reg = tasksRegistry();
     if ($key === 'all') {
-        $n = 0; $now = time();
+        $n = 0; $failed = []; $now = time();
         foreach ($reg as $k => $def) {
             $row = tasksBuildRow($k, $def, $now);
             if ($row['state'] === 'running') continue;   // کارِ زنده دست نمی‌خورد
-            if (@unlink((string)$def['file'])) $n++;
+            $stateFile=(string)($def['file']??'');
+            $hadActivity=(string)($row['state']??'idle')!=='idle';
+            $hadPersisted=$stateFile!==''&&localTaskStateExists($stateFile);
+            if (!$hadActivity&&!$hadPersisted) continue;
+            if (tasksClearPersistedState($stateFile)) $n++; else $failed[]=(string)$k;
         }
-        echo json_encode(['ok' => true, 'cleared' => $n], JSON_UNESCAPED_UNICODE); exit;
+        echo json_encode(['ok' => !$failed, 'cleared' => $n, 'failed' => $failed,
+            'error' => $failed ? 'پاک‌سازی بعضی وضعیت‌ها از فایل/SQLite ناموفق بود' : ''], JSON_UNESCAPED_UNICODE); exit;
     }
     if (!isset($reg[$key])) { echo json_encode(['ok' => false, 'error' => 'کارِ ناشناخته'], JSON_UNESCAPED_UNICODE); exit; }
     $now = time();
@@ -40570,8 +41130,9 @@ if (isset($_GET['tasks_clear'])) {
         }
         /* lock مسیرش را حفظ می‌کند؛ فقط فایلِ progress پاک می‌شود. */
     }
-    @unlink((string)$reg[$key]['file']);
-    echo json_encode(['ok' => true, 'cleared' => 1], JSON_UNESCAPED_UNICODE);
+    $cleared=tasksClearPersistedState((string)$reg[$key]['file']);
+    echo json_encode(['ok' => $cleared, 'cleared' => $cleared ? 1 : 0,
+        'error' => $cleared ? '' : 'پاک‌سازی وضعیت از فایل/SQLite ناموفق بود'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -42699,7 +43260,7 @@ function matrixBuild(array $opts = []): array {
     if ($parallelDest) {
         $parallelShops = $shopList;
         matrixProgress(['phase'=>'parallel_fetch','pct'=>30,
-            'log_add'=>['⚡ حالت موازی: ووکامرس + '.count($parallelShops).' غرفه هم‌زمان']]);
+            'log_add'=>['⚡ حالت موازی: '.($includeWoo?'ووکامرس + ':'').count($parallelShops).' غرفه هم‌زمان']]);
         $pr = matrixFetchDestinationsParallel($cn, $parallelShops, $matrixWooCp, $matrixWooDone,
             $matrixWooPage, $matrixWooComplete, $matrixShopCp, $matrixShopPages, $matrixShopDone, $includeWoo);
         matrixProgress(['checkpoint'=>$matrixCp('parallel_fetch',$rowsByKey,$profilesDone,$matrixWooCp,$matrixShopCp,$startedAt,$matrixWooDone)]);
@@ -42723,10 +43284,11 @@ function matrixBuild(array $opts = []): array {
     $wooErr = '';
     $wooRows = array_values(array_filter($matrixWooCp, 'is_array'));
     $w = $cn['woocommerce'] ?? [];
-    matrixProgress(['phase' => 'woo_fetch', 'pct' => 32, 'log_add' => [
-            $matrixWooDone ? '↻ ووکامرس از checkpoint خوانده شد' : ('📥 دریافت محصولات ووکامرس…'
+    matrixProgress(['phase' => $includeWoo ? 'woo_fetch' : 'woo_skipped', 'pct' => 32, 'log_add' => [
+            !$includeWoo ? '⏭ ووکامرس تیک نخورده است — بدون هیچ درخواست شبکه رد شد'
+            : ($matrixWooDone ? '↻ ووکامرس از checkpoint خوانده شد' : ('📥 دریافت محصولات ووکامرس…'
             . ((function_exists('wooDirectAvailable') && wooDirectAvailable())
-                ? ' (مسیر ⚡ مستقیم DB — سریع)' : ' (مسیر 🌐 REST API — کندتر)')),
+                ? ' (مسیر ⚡ مستقیم DB — سریع)' : ' (مسیر 🌐 REST API — کندتر)'))),
         ]]);
     if (!$matrixWooDone) {
         $wooMeta = [];
@@ -42775,8 +43337,10 @@ function matrixBuild(array $opts = []): array {
     }
     $wooCount=count($wooRows);if($wooCount===0&&$matrixWooDone)foreach($rowsByKey as $wcRow)if(!empty($wcRow['woo']))$wooCount++;
     matrixProgress([
-        'phase' => 'woo_map', 'pct' => 48,
-        'log_add' => ['✅ ووکامرس: ' . $wooCount . ' محصول' . ($wooErr !== '' ? (' — ' . $wooErr) : '')],
+        'phase' => $includeWoo ? 'woo_map' : 'woo_skipped', 'pct' => 48,
+        'log_add' => [$includeWoo
+            ? ('✅ ووکامرس: ' . $wooCount . ' محصول' . ($wooErr !== '' ? (' — ' . $wooErr) : ''))
+            : '✅ ووکامرس خارج از محدودهٔ این جدول باقی ماند'],
     ]);
     foreach ($wooRows as $wr) {
         if ($codedOnly && !matrixTitleHasCode((string)($wr['title'] ?? ''))) continue;
@@ -42850,7 +43414,7 @@ function matrixBuild(array $opts = []): array {
             if (!$shopDone) {
                 /* v10.510: the reconciliation matrix owns its six-hour source data;
                    do not consult or persist a separate per-shop catalog snapshot. */
-                $remote = reconFetchResumable('bsl', [], $tok, $vid, $shopMeta, true);
+                $remote = reconFetchResumable('bsl', [], $tok, $vid, $shopMeta, true, 'matrix');
             }
         } catch (Throwable $e) {
             $bslErr .= $sname . ': ' . $e->getMessage() . '; ';
@@ -43463,8 +44027,19 @@ function matrixFixTraceExchange(array $job,array $response): void {
     $GLOBALS['S4_MATRIX_ROW_TRACE'][]=['layer'=>'operation_summary','at'=>microtime(true),'request'=>$req,'response'=>matrixFixTraceSanitize($response)];
 }
 
-function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest'): array {
-    $jobs = [];
+function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFilters = [], string $duplicateKeep = 'newest', array $skipJobSet = [], int $limit = 0, array $selectedDestinations = [], ?array &$collectMeta = null): array {
+    $jobs = []; $allCount=0; $kindCounts=[]; $selectedSet=array_fill_keys(array_map('strval',$selectedDestinations),true);
+    $emit=static function(array $job)use(&$jobs,&$allCount,&$kindCounts,$skipJobSet,$limit,$selectedSet):void{
+        $kind=(string)($job['kind']??'');
+        if($selectedSet){
+            if(str_ends_with($kind,'_woo')&&!isset($selectedSet['woo']))return;
+            if(str_ends_with($kind,'_bsl')&&!isset($selectedSet['bsl:'.(int)($job['vendor_id']??0)]))return;
+        }
+        $allCount++;$kindCounts[$kind]=(int)($kindCounts[$kind]??0)+1;
+        $key=$kind.'|'.(string)($job['bare']??'').'|'.(int)($job['id']??0).'|'.(int)($job['vendor_id']??0);
+        if(isset($skipJobSet[$key])||($limit>0&&count($jobs)>=$limit))return;
+        $jobs[]=$job;
+    };
     $errorHolds=matrixFixErrorsLoad();
     $exactRetry=trim((string)($viewFilters['exact_bare']??''));
     if($exactRetry!=='')matrixFixClearRowError($exactRetry);
@@ -43482,7 +44057,8 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         $vid = (int)($sh['vendor_id'] ?? 0);
         if ($vid > 0) $shopsMeta[$vid] = $sh;
     }
-    $orderedRows=array_values((array)($data['rows']??[]));
+    /* Keep copy-on-write sharing unless an explicit sort really needs mutation. */
+    $orderedRows=(array)($data['rows']??[]);
     /* Match the visible table order, including a user-selected server-side sort. */
     $rowSort=trim((string)($viewFilters['sort']??''));$rowSortDir=strtolower((string)($viewFilters['sort_dir']??'asc'))==='desc'?'desc':'asc';
     $validRowSort=['title','profile','src_price','profile_price','woo_expect','woo_actual','status'];
@@ -43529,12 +44105,12 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         $woo = is_array($wooPick['keep'] ?? null) ? $wooPick['keep'] : null;
         if (($scope === 'all' || $scope === 'woo') && count($wooItems) > 1) {
             if ($hasProf) {
-                foreach ((array)$wooPick['drop'] as $drop) $jobs[] = $base + [
+                foreach ((array)$wooPick['drop'] as $drop) $emit($base + [
                     'kind' => 'dedup_woo', 'id' => (int)$drop['id'], 'keeper' => $woo,
                     'duplicate_keep' => $duplicateKeep, 'prefer_coded_duplicate'=>$preferCodedDuplicate,
-                ];
+                ]);
             } else {
-                foreach ($wooItems as $drop) $jobs[] = $base + ['kind' => 'del_woo', 'id' => (int)$drop['id']];
+                foreach ($wooItems as $drop) $emit($base + ['kind' => 'del_woo', 'id' => (int)$drop['id']]);
                 $woo = null; // all destination-only copies are removed
             }
         }
@@ -43542,13 +44118,13 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
         if ($scope === 'all' || $scope === 'woo') {
             if ($hasProf && $woo) {
                 $exp = $wooExpectedNow>0?$wooExpectedNow:(int)($r['woo_expect'] ?? 0); $got = (int)($woo['price'] ?? 0);
-                if ($exp > 0 && $got > 0 && $exp !== $got) $jobs[] = $base + [
+                if ($exp > 0 && $got > 0 && $exp !== $got) $emit($base + [
                     'kind' => 'price_woo', 'id' => (int)($woo['id'] ?? 0), 'from' => $got, 'to' => $exp,
-                ];
+                ]);
             } elseif ($hasProf && !$woo && ($wooExpectedNow>0||(int)($r['woo_expect']??0)>0)) {
-                $jobs[] = $base + ['kind' => 'send_woo', 'expect' => $wooExpectedNow>0?$wooExpectedNow:(int)$r['woo_expect']];
+                $emit($base + ['kind' => 'send_woo', 'expect' => $wooExpectedNow>0?$wooExpectedNow:(int)$r['woo_expect']]);
             } elseif (!$hasProf && $woo) {
-                $jobs[] = $base + ['kind' => 'del_woo', 'id' => (int)($woo['id'] ?? 0)];
+                $emit($base + ['kind' => 'del_woo', 'id' => (int)($woo['id'] ?? 0)]);
             }
         }
 
@@ -43566,15 +44142,15 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
             $sname = (string)($cell['shop_name'] ?? $sh['name'] ?? $sh['shop_name'] ?? ('غرفه ' . $vid));
             if (($scope === 'all' || $scope === 'bsl') && count($cellItems) > 1) {
                 if ($hasProf) {
-                    foreach ((array)$pick['drop'] as $drop) $jobs[] = $base + [
+                    foreach ((array)$pick['drop'] as $drop) $emit($base + [
                         'kind' => 'dedup_bsl', 'id' => (int)$drop['id'], 'vendor_id' => $vid,
                         'shop_name' => $sname, 'keeper' => $cell, 'duplicate_keep' => $duplicateKeep,
                         'prefer_coded_duplicate'=>$preferCodedDuplicate,
-                    ];
+                    ]);
                 } else {
-                    foreach ($cellItems as $drop) $jobs[] = $base + [
+                    foreach ($cellItems as $drop) $emit($base + [
                         'kind' => 'del_bsl', 'id' => (int)$drop['id'], 'vendor_id' => $vid, 'shop_name' => $sname,
-                    ];
+                    ]);
                     $cell = null;
                 }
             }
@@ -43584,18 +44160,19 @@ function matrixFixCollectJobs(array $data, string $scope = 'all', array $viewFil
             if($hasProf&&$memberProfile&&isset($shopNow[$vid])&&extractPriceNum($memberRaw)>0){$curAdj=bslShopPriceForProfile($memberProfile,$memberRaw,$shopNow[$vid],(int)($bslCfgNow['round']??0));if((int)($curAdj['price']??0)>0)$exp=(int)$curAdj['price'];}
             if ($hasProf && $cell) {
                 $got = (int)($cell['price'] ?? 0);
-                if ($exp > 0 && $got > 0 && $exp !== $got) $jobs[] = $base + [
+                if ($exp > 0 && $got > 0 && $exp !== $got) $emit($base + [
                     'kind' => 'price_bsl', 'id' => (int)($cell['id'] ?? 0), 'vendor_id' => $vid,
                     'shop_name' => $sname, 'from' => $got, 'to' => $exp,
-                ];
+                ]);
             } elseif ($hasProf && !$cell && $exp > 0) {
-                $jobs[] = $base + ['kind' => 'send_bsl', 'vendor_id' => $vid, 'shop_name' => $sname, 'expect' => $exp];
+                $emit($base + ['kind' => 'send_bsl', 'vendor_id' => $vid, 'shop_name' => $sname, 'expect' => $exp]);
             } elseif (!$hasProf && $cell) {
-                $jobs[] = $base + ['kind' => 'del_bsl', 'id' => (int)($cell['id'] ?? 0),
-                    'vendor_id' => $vid, 'shop_name' => $sname];
+                $emit($base + ['kind' => 'del_bsl', 'id' => (int)($cell['id'] ?? 0),
+                    'vendor_id' => $vid, 'shop_name' => $sname]);
             }
         }
     }
+    $collectMeta=['total'=>$allCount,'kind_counts'=>$kindCounts,'returned'=>count($jobs),'truncated'=>$limit>0&&count($jobs)<$allCount];
     return $jobs;
 }
 
@@ -44001,25 +44578,23 @@ function matrixFixRun(array $opts = []): array {
 
     $viewFilters=is_array($opts['view_filters']??null)?$opts['view_filters']:[];
     if(is_array($fixCp['view_filters']??null))$viewFilters=$fixCp['view_filters'];
-    $jobs = matrixFixCollectJobs($data, $scope, $viewFilters, $duplicateKeep);
-    /* مقصد خاموش اصلاً job و log اصلاح تولید نمی‌کند؛ نتیجهٔ قدیمی ماتریس
-       نباید ووکامرس خاموش را دوباره وارد صف کند. */
+    /* Build only a small executable window. The old code materialised all
+       66k+ operations beside the 32k-row matrix and profile membership map;
+       shared hosting killed that child for OOM before its first handoff. */
     $cn = loadConnections();
     $requestedDest=array_key_exists('selected_destinations',$opts)&&is_array($opts['selected_destinations'])?$opts['selected_destinations']:($data['selected_destinations']??null);
-    $selectedFix=array_fill_keys(matrixNormalizeDestinations($requestedDest,$cn),true);
-    if (empty($cn['woocommerce']['enabled']) || !isset($selectedFix['woo'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_woo')));
-    if (empty($cn['basalam']['enabled'])) $jobs = array_values(array_filter($jobs, static fn($j) => !str_ends_with((string)($j['kind'] ?? ''), '_bsl')));
-    $jobs=array_values(array_filter($jobs,static function($j)use($selectedFix){return !str_ends_with((string)($j['kind']??''),'_bsl')||isset($selectedFix['bsl:'.(int)($j['vendor_id']??0)]);}));
-    /* v10.333: matrixFixCollectJobs already emits every operation of row 1, then
-       every operation of row 2, etc. Never regroup globally by operation type. */
-    $total = count($jobs);
-    $nPrice = $nSend = $nDel = $nOnlyDestDel = 0;
-    foreach ($jobs as $j) {
-        $k = (string)($j['kind'] ?? '');
-        if (str_starts_with($k, 'price_')) $nPrice++;
-        elseif (str_starts_with($k, 'send_')) $nSend++;
-        elseif (str_starts_with($k, 'del_') || str_starts_with($k, 'dedup_')) { $nDel++; if(!empty($j['only_dest'])&&str_starts_with($k,'del_'))$nOnlyDestDel++; }
-    }
+    $selectedList=matrixNormalizeDestinations($requestedDest,$cn);
+    if(empty($cn['woocommerce']['enabled']))$selectedList=array_values(array_filter($selectedList,static fn($d)=>(string)$d!=='woo'));
+    if(empty($cn['basalam']['enabled']))$selectedList=array_values(array_filter($selectedList,static fn($d)=>!str_starts_with((string)$d,'bsl:')));
+    $consumedSet=$doneJobSet+$attemptedJobSet;
+    $requestedMax=max(1,(int)($opts['max_items']??30));$collectLimit=max(40,min(120,$requestedMax*2));$collectMeta=[];
+    $jobs = matrixFixCollectJobs($data, $scope, $viewFilters, $duplicateKeep, $consumedSet, $collectLimit, $selectedList, $collectMeta);
+    /* v10.333: collector emits every operation of row 1, then row 2. The
+       bounded window preserves that order without retaining the full queue. */
+    $total=max((int)($fixCp['total']??0),(int)($collectMeta['total']??0),count($consumedSet)+count($jobs));
+    $kindCounts=(array)($collectMeta['kind_counts']??[]);$nPrice=$nSend=$nDel=0;
+    foreach($kindCounts as $k=>$count){if(str_starts_with((string)$k,'price_'))$nPrice+=(int)$count;elseif(str_starts_with((string)$k,'send_'))$nSend+=(int)$count;elseif(str_starts_with((string)$k,'del_')||str_starts_with((string)$k,'dedup_'))$nDel+=(int)$count;}
+    $nOnlyDestDel=0; /* exact value is intentionally omitted in bounded mode */
     matrixFixProgress([
         'running' => true, 'done' => false, 'error' => '', 'pct' => 1,
         'phase' => 'start', 'started_at' => $fixStartedAt, 'source' => $source,
@@ -44086,8 +44661,11 @@ function matrixFixRun(array $opts = []): array {
     $periodicBuildOnlyStop = false;
     $details = [];
     $rateLimited=false;$rateRetryAfter=0;
-    $maxItems = max(0, (int)($opts['max_items'] ?? 0)); $segmentItems = 0;
-    $continuousCronRun = $maxItems === 0 && !empty(matrixExecutionDecision()['accelerated']);
+    /* A hard per-child item cap is also a memory/process-lifetime boundary.
+       Cron acceleration removes artificial sleep between children, not this
+       safety handoff. */
+    $maxItems = $rowMode ? 50 : max(1, (int)($opts['max_items'] ?? 30)); $segmentItems = 0;
+    $continuousCronRun = false;
 
     foreach ($jobs as $ji => $job) {
         $jk = $jobKey($job);
@@ -44109,7 +44687,7 @@ function matrixFixRun(array $opts = []): array {
             matrixFixProgress(['log_add' => ['⏹ توقف توسط کاربر']]);
             break;
         }
-        $n = $ji + 1;
+        $n = count($doneJobSet) + count($attemptedJobSet) + 1;
         $jobOk = false; $err = '';
         $pct = 5 + (int)round(90 * $n / max(1, $total));
         $title = mb_substr((string)$job['title'], 0, 48);
@@ -44475,11 +45053,9 @@ function matrixFixRun(array $opts = []): array {
         $effectiveDelayMs=str_ends_with($kind,'_bsl')?max(1000,$delayMs):$delayMs;
         usleep($effectiveDelayMs * 1000);
         $segmentItems++;
-        /* Re-read the mode after every corrected row. Entering cron mode removes
-           the old item cap now; leaving cron mode checkpoints now. */
+        /* Re-read scheduling mode, while retaining the hard child boundary. */
         $liveDriver=matrixExecutionDecision();
-        if($maxItems>0&&$segmentItems>=$maxItems&&!empty($liveDriver['accelerated'])){$maxItems=0;$continuousCronRun=true;}
-        $driverHandoff=$continuousCronRun&&empty($liveDriver['accelerated']);
+        $driverHandoff=false;
         if (($driverHandoff || ($maxItems > 0 && $segmentItems >= $maxItems)) && $n < $total) {
             $waitCron=empty($liveDriver['can_run']);
             matrixFixProgress(['running'=>true,'done'=>false,'worker'=>true,
@@ -45289,8 +45865,10 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
     header('Content-Type: application/json; charset=UTF-8');
     @set_time_limit(0);
     @ignore_user_abort(true);
+    $__matrixDestExplicit=array_key_exists('selected_destinations',$_GET)||array_key_exists('selected_destinations',$_POST);
     $opts = [
         'profile' => (string)($_GET['profile'] ?? $_POST['profile'] ?? 'all'),
+        '_destinations_explicit'=>$__matrixDestExplicit,
         'source' => (string)($_GET['source'] ?? $_POST['source'] ?? 'manual'),
         'background' => true,
         'run_started_at' => microtime(true),
@@ -45317,7 +45895,8 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
         $resumeRequested = !empty($_GET['resume'] ?? $_POST['resume'] ?? null);
         $enq = s4WorkerEnqueueMatrixBuild($opts, $resumeRequested);
         if (empty($enq['ok'])) {
-            echo json_encode(['ok'=>false,'error'=>'ثبت job ماتریس در worker ناموفق بود: '.(string)($enq['error']??'unknown')], JSON_UNESCAPED_UNICODE);
+            $__ee=(string)($enq['error']??'unknown');$__labels=['worker_queue_open'=>'فایل صف worker باز نشد','worker_queue_busy'=>'صف worker بیش از ۵ ثانیه مشغول بود؛ دوباره تلاش کنید','worker_queue_write'=>'نوشتن فایل صف worker کامل نشد','unfinished_matrix_checkpoint_scope_conflict'=>'مقصدهای checkpoint با انتخاب فعلی متفاوت‌اند'];
+            echo json_encode(['ok'=>false,'error'=>(string)($__labels[$__ee]??('ثبت job ماتریس در worker ناموفق بود: '.$__ee)),'error_code'=>$__ee,'retryable'=>!empty($enq['retryable']),'details'=>$enq], JSON_UNESCAPED_UNICODE);
             exit;
         }
         echo json_encode(['ok'=>true,'started'=>true,'queued'=>true,'worker'=>true,
@@ -45613,6 +46192,16 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
             && is_array($oldFixCp['done_jobs'] ?? null)) $matrixFixCp = $oldFixCp;
     }
     $opts['checkpoint'] = $matrixFixCp;
+    /* Resume means the exact durable operation, not a new request populated by
+       empty/default form fields. Restore scope, filters, keeper and destinations
+       before compatibility and queue decisions. */
+    if($matrixFixCp&& !empty($_GET['resume'])){
+        $opts['scope']=(string)($matrixFixCp['scope']??$opts['scope']);
+        $opts['duplicate_keep']=(string)($matrixFixCp['duplicate_keep']??$opts['duplicate_keep']);
+        if(is_array($matrixFixCp['view_filters']??null))$opts['view_filters']=$matrixFixCp['view_filters'];
+        $resumeDest=(array)($oldFix['selected_destinations']??[]);
+        if($resumeDest)$opts['selected_destinations']=matrixNormalizeDestinations($resumeDest);
+    }
     matrixFixStopClear();
     /* اصلاح دستی روی snapshot تازه اجرا می‌شود، اما snapshot همین چند دقیقهٔ
        اخیر تازه است و checkpoint ناتمام همیشه باید قبل از هر rebuild ادامه یابد. */
@@ -45710,7 +46299,8 @@ if (isset($_GET['sync_matrix_fix_start']) || (($_POST['action'] ?? '') === 'sync
         $oldCp = is_array($oldFix['checkpoint'] ?? null) ? $oldFix['checkpoint'] : null;
         $sameFilters = $oldCp && json_encode($oldCp['view_filters'] ?? []) === json_encode($opts['view_filters']);
         $sameDestinations = !$oldCp || json_encode(array_values((array)($oldFix['selected_destinations']??[]))) === json_encode($opts['selected_destinations']);
-        $resumeWorker = $oldCp && ((int)($oldCp['cur'] ?? 0) > 0 || !empty($oldCp['done_jobs']))
+        $resumeWorker = $matrixFixCp && !empty($_GET['resume']);
+        if(!$resumeWorker)$resumeWorker=$oldCp && ((int)($oldCp['cur'] ?? 0) > 0 || !empty($oldCp['done_jobs']))
             && (string)($oldCp['scope'] ?? 'all') === $opts['scope']
             && (string)($oldCp['duplicate_keep'] ?? 'newest') === $opts['duplicate_keep'] && $sameFilters && $sameDestinations;
         matrixFixStopClear();
@@ -47219,14 +47809,14 @@ if (isset($_GET['selftest'])) {
     $stopUiStart=strrpos($selfSrc,'function tmStopAll(){');
     $stopUiEnd=$stopUiStart===false?false:strpos($selfSrc,'function tmStop(key)', $stopUiStart);
     $stopUi=$stopUiStart!==false&&$stopUiEnd!==false?substr($selfSrc,$stopUiStart,$stopUiEnd-$stopUiStart):'';
-    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new',
-        'branches'=>['arena/01a0ebf7-new'],'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $legacyBranchTest=vc_migrate_legacy_branch_config(['branch'=>'arena/e868e86a-new',
+        'branches'=>['arena/e868e86a-new'],'pinned_branch'=>'arena/e868e86a-new','pinned_at'=>123,'pinned_max_unix'=>456]);
     $legacyBranchCfg=(array)($legacyBranchTest['config']??[]);
-    $add('10.500','تنظیمِ قدیمیِ updater شاخهٔ قدیمی را نگه می‌دارد و مقصد فعلی را هم می‌افزاید',
-        !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')==='arena/01a0ebf7-new'
-        &&in_array('arena/01a0ebf7-new',(array)($legacyBranchCfg['branches']??[]),true)
+    $add('10.500','تنظیمِ قدیمیِ updater شاخهٔ منبع را نگه می‌دارد و مقصد فعلی را هم می‌افزاید',
+        !empty($legacyBranchTest['changed'])&&($legacyBranchCfg['branch']??'')==='arena/e868e86a-new'
+        &&in_array('arena/e868e86a-new',(array)($legacyBranchCfg['branches']??[]),true)
         &&in_array(S4_CODE_UPDATE_BRANCH,(array)($legacyBranchCfg['branches']??[]),true)
-        &&(string)($legacyBranchCfg['pinned_branch']??'')==='arena/01a0ebf7-new'
+        &&(string)($legacyBranchCfg['pinned_branch']??'')==='arena/e868e86a-new'
         &&strpos($selfSrc,"{v:'10." . "500'")!==false&&version_compare(APP_VERSION,'10.' . '500','>='));
     $_stopLocksStart501=strpos($selfSrc,'function tasksStopAllLocksBusy(): array {');
     $_stopLocksEnd501=strpos($selfSrc,'function tasksStripWorkerCheckpointFields(',($_stopLocksStart501===false?0:$_stopLocksStart501));
@@ -47242,7 +47832,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"isset(\$_GET['tasks_stop_all_status'])")!==false
         &&strpos($selfSrc,"fetch('?tasks_stop_all_status=1&_v='")!==false
         &&strpos($selfSrc,"['auto_resume_all_cron']=false")!==false
-        &&S4_CODE_UPDATE_BRANCH==='arena/e868e86a-new'
+        &&S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'
         &&strpos($selfSrc,"{v:'10." . "501'")!==false&&version_compare(APP_VERSION,'10.501','>='));
     $add('10.502','پاسخ غیر JSON نصب‌کننده با HTTP، نوع محتوا و پیش‌نمایش امن گزارش می‌شود',
         strpos($selfSrc,'function vcParseInstallerReply(response, source)')!==false
@@ -47283,40 +47873,381 @@ if (isset($_GET['selftest'])) {
         &&extractNormalizeOriginTrigger('periodic','worker_child')==='periodic'
         &&extractNormalizeOriginTrigger('','worker')==='background'
         &&strpos($selfSrc,"{v:'10." . "504'")!==false&&version_compare(APP_VERSION,'10.' . '504','>='));
-    $add('10.505','درخواست‌های قدیمیِ arena/01a0ebf7-new به برنچ همین نشست هدایت می‌شوند، نه اینکه branch_not_configured بدهند',
-        vc_canonicalize_branch_alias('arena/01a0ebf7-new')===S4_CODE_UPDATE_BRANCH
-        &&strpos($selfSrc,"\$requestedInput=trim((string)(\$_POST['branch']??''));")!==false
-        &&strpos($selfSrc,'$requested=vc_canonicalize_branch_alias($requestedInput);')!==false
-        &&strpos($selfSrc,"\$pinInput=trim((string)(\$_POST['pin_branch'] ?? ''));")!==false
-        &&strpos($selfSrc,'$pinB = vc_canonicalize_branch_alias($pinInput);')!==false
-        &&strpos($selfSrc,'function vcCanonicalUpdateBranch(branch)')!==false
-        &&strpos($selfSrc,"{v:'10." . "505'")!==false&&version_compare(APP_VERSION,'10.' . '505','>='));
-    $_keptLegacyBranch=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new','branches'=>['arena/01a0ebf7-new'],
-        'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+
+    $saveProfile505Start=strpos($selfSrc,"if ((\$_POST['action'] ?? '') === 'save_profile')");
+    $saveProfile505End=$saveProfile505Start===false?false:strpos($selfSrc,"if ((\$_POST['action'] ?? '') === 'duplicate_profile')",$saveProfile505Start);
+    $saveProfile505Body=$saveProfile505Start!==false&&$saveProfile505End!==false?substr($selfSrc,$saveProfile505Start,$saveProfile505End-$saveProfile505Start):'';
+    $add('10.505','ذخیرهٔ تنظیمات بدون آپلود محصولات ثابت پاسخ می‌دهد و بازقیمت‌گذاری endpoint جدا دارد',
+        $saveProfile505Body!==''
+        &&strpos($saveProfile505Body,"matrixRefreshExpectedPrices('profile_price_change')")===false
+        &&strpos($saveProfile505Body,"'matrix_refresh_pending'=>\$priceChanged")!==false
+        &&strpos($selfSrc,"'matrix_refresh_pending'=>\$destinationPriceChanged")!==false
+        &&strpos($selfSrc,"d.ok&&d.matrix_refresh_pending)requestProfileMatrixRefresh()")!==false
+        &&strpos($selfSrc,"isset(\$_GET['matrix_reprice'])")!==false
+        &&strpos($selfSrc,'function collectProfileData(includeProducts)')!==false
+        &&strpos($selfSrc,'if(includeProducts){data.products=prodsArr;data.productsOrder=[...order];}')!==false
+        &&strpos($selfSrc,'profileProductsNeedSave(forceProducts,hasActiveKey)')!==false
+        &&strpos($selfSrc,"fetch('?matrix_reprice=1&reason='+encodeURIComponent(reason)+'&_v='")!==false
+        &&strpos($selfSrc,"{v:'10." . "505'")!==false&&version_compare(APP_VERSION,'10.505','>='));
+    $_keptLegacyBranch=vc_migrate_legacy_branch_config(['branch'=>'arena/e868e86a-new','branches'=>['arena/e868e86a-new'],
+        'pinned_branch'=>'arena/e868e86a-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+
     $_keptLegacyCfg=(array)($_keptLegacyBranch['config']??[]);
-    $add('10.506','افزودن alias قدیمی در فهرست برنچ‌ها حفظ می‌شود و برای GitHub به شاخهٔ canonical می‌خواند',
-        in_array('arena/01a0ebf7-new',(array)($_keptLegacyCfg['branches']??[]),true)
+    $add('10.506','نام برنچ قدیمی در تنظیمات حفظ می‌شود',
+        in_array('arena/e868e86a-new',(array)($_keptLegacyCfg['branches']??[]),true)
         &&in_array(S4_CODE_UPDATE_BRANCH,(array)($_keptLegacyCfg['branches']??[]),true)
-        &&($_keptLegacyCfg['branch']??'')==='arena/01a0ebf7-new'
-        &&($_keptLegacyCfg['pinned_branch']??'')==='arena/01a0ebf7-new'
-        &&strpos($selfSrc,'$sourceBranch=$resolveLegacyAlias?vc_canonicalize_branch_alias($branch):$branch;')!==false
-        &&strpos($selfSrc,"\$c['branches']=vc_normalize_branches((array)\$decoded);")!==false
-        &&strpos($selfSrc,"{v:'10." . "506'")!==false&&version_compare(APP_VERSION,'10.' . '506','>='));
-    $add('10.507','نام قدیمی و برنچ ثابت updater حتی با تنظیمات قدیمیِ ناقص به‌عنوان مقصد مجاز پذیرفته می‌شوند',
-        vc_is_allowed_update_branch('arena/01a0ebf7-new',[])
-        &&vc_is_allowed_update_branch(S4_CODE_UPDATE_BRANCH,[])
-        &&!vc_is_allowed_update_branch('arena/not-configured',[])
-        &&strpos($selfSrc,'!vc_is_allowed_update_branch($requested,$allowed)')!==false
-        &&strpos($selfSrc,'function vc_is_allowed_update_branch(string $branch,array $configured):bool')!==false
-        &&strpos($selfSrc,"{v:'10." . "507'")!==false&&version_compare(APP_VERSION,'10.' . '507','>='));
-    $add('10.508','کلیک دستی روی alias از خود شاخه دریافت می‌کند و خودآپدیت همچنان به شاخهٔ canonical می‌رود',
-        strpos($selfSrc,'function vc_probe_branches(array $c,bool $resolveLegacyAlias=true):array')!==false
-        &&strpos($selfSrc,'$manualLegacyBranch=$requestedInput===\'arena/01a0ebf7-new\';')!==false
-        &&strpos($selfSrc,'$probe=vc_probe_branches($probeCfg,!$manualLegacyBranch);')!==false
-        &&strpos($selfSrc,'s4CodeUpdateAdaptManualLegacyPayload($code)')!==false
-        &&strpos($selfSrc,'$autoEqualVersion=$trustedAuto&&$versionOrder===0;')!==false
-        &&strpos($selfSrc,"const rawInstallBranch=(isExplicitBranch ? String(requestedBranch).trim() : '')")!==false
-        &&strpos($selfSrc,"{v:'10." . "508'")!==false&&version_compare(APP_VERSION,'10.' . '508','>='));
+        &&($_keptLegacyCfg['branch']??'')==='arena/e868e86a-new'
+        &&($_keptLegacyCfg['pinned_branch']??'')==='arena/e868e86a-new'
+        &&strpos($selfSrc,"{v:'10." . "506'")!==false&&version_compare(APP_VERSION,'10.506','>='));
+    $add('10.507','شناسهٔ تاییدنشدهٔ remote-map در غرفهٔ خالی باعث skip نمی‌شود',
+        strpos($selfSrc,'if ($present === true) { $ids[$vid] = $known; continue; }')!==false
+        &&strpos($selfSrc,'if ($present === null) { $need[$vid] = $sh; continue; }')!==false
+        &&strpos($selfSrc,"{v:'10." . "507'")!==false&&version_compare(APP_VERSION,'10.507','>='));
+    $add('10.508','توقف همه JSON و نسخهٔ SQLite را پاک و ردیف قدیمی بازسازی‌شده را دوباره جمع می‌کند',
+        defined('TASKS_STOP_ALL_LAST_FILE')
+        &&strpos($_stopClearBody501,'localTaskDbForget($f)')!==false
+        &&strpos($_stopClearBody501,"'task_db_rows'=>\$taskDbRows")!==false
+        &&strpos($selfSrc,'$predatesStop=$stopAt>0')!==false
+        &&strpos($selfSrc,"(string)(\$row['state']??'idle')==='idle'")!==false
+        &&strpos($selfSrc,"{v:'10." . "508'")!==false&&version_compare(APP_VERSION,'10.508','>='));
+    $add('10.509','نسخهٔ برنامه با deploy.php v3.2 دانلود API-first و lint کم‌حافظه هماهنگ است',
+        strpos($selfSrc,"{v:'10." . "509'")!==false&&version_compare(APP_VERSION,'10.509','>='));
+    $add('10.510','deploy.php v3.3 درخواست POST را بدون multipart و مقاوم در برابر خطای WAF 406 می‌فرستد',
+        strpos($selfSrc,"{v:'10." . "510'")!==false&&version_compare(APP_VERSION,'10.510','>='));
+    $add('10.511','deploy.php v3.4 آپدیتر داخلی GET با بکاپ، syntax، hash و جایگزینی اتمیک دارد',
+        strpos($selfSrc,"{v:'10." . "511'")!==false&&version_compare(APP_VERSION,'10.511','>='));
+    $add('10.512','deploy.php v3.5 همهٔ تغییرات را با GET رمز‌شده حمل می‌کند و HTTP POST را کاملاً حذف کرده است',
+        strpos($selfSrc,"{v:'10." . "512'")!==false&&version_compare(APP_VERSION,'10.512','>='));
+    $add('10.513','deploy.php v3.6 کش HTML و JavaScript قدیمیِ POSTفرست را کاملاً غیرفعال می‌کند',
+        strpos($selfSrc,"{v:'10." . "513'")!==false&&version_compare(APP_VERSION,'10.513','>='));
+    $add('10.514','deploy.php v3.7 cache CDN منبع updater را برای API و raw دور می‌زند',
+        strpos($selfSrc,"{v:'10." . "514'")!==false&&version_compare(APP_VERSION,'10.514','>='));
+    $add('10.515','دکمهٔ هر برنچ دقیقاً همان نام را تا probe، دانلود، pin و نصب حفظ می‌کند',
+        strpos($selfSrc,'$requested=trim((string)($_POST[\'branch\']??\'\'));')!==false
+        &&strpos($selfSrc,'$sourceBranch=$branch;')!==false
+        &&strpos($selfSrc,'$pinB=trim((string)($_POST[\'pin_branch\'] ?? \'\'));')!==false
+        &&strpos($selfSrc,"const installBranch=String(rawInstallBranch||'').trim();")!==false
+        &&strpos($selfSrc,'vcCanonicalUpdate'.'Branch')===false
+        &&strpos($selfSrc,'s4CodeUpdateAdapt'.'ManualLegacyPayload')===false
+        &&strpos($selfSrc,'$requested=vc_canonicalize'.'_branch_alias')===false
+        &&strpos($selfSrc,'$sourceBranch=vc_canonicalize'.'_branch_alias')===false
+        &&strpos($selfSrc,"{v:'10." . "515'")!==false&&version_compare(APP_VERSION,'10.515','>='));
+    $add('10.516','برش پایین تصویر تابع حذف‌شده را صدا نمی‌زند و selftest کامل fatal نمی‌شود',
+        strpos($selfSrc,'function s4CropImageBottomBytes(')!==false
+        &&strpos($selfSrc,'s4ApplyImageTransform'.'Bytes($data')===false
+        &&strpos($selfSrc,'$dst=imagecreatetruecolor($w,$newH);')!==false
+        &&strpos($selfSrc,"{v:'10." . "516'")!==false&&version_compare(APP_VERSION,'10.516','>='));
+    $add('10.517','stop قدیمی recon واکشی مقصدهای ساخت جدول را در حلقهٔ شروع worker متوقف نمی‌کند',
+        reconFetchShouldStop('matrix',true,false,false)===false
+        &&reconFetchShouldStop('recon',true,false,false)===true
+        &&reconFetchShouldStop('matrix',false,true,false)===true
+        &&strpos($selfSrc,"reconFetchResumable('bsl', [], \$tok, \$vid, \$shopMeta, true, 'matrix')")!==false
+        &&strpos($selfSrc,'if (reconFetchStopRequested($stopScope))')!==false
+        &&strpos($selfSrc,"{v:'10." . "517'")!==false&&version_compare(APP_VERSION,'10.517','>='));
+    $__skuCreateA=bslSanitizeProductWritePayload(['name'=>'محصول الف','sku'=>'DUP-1'],'vendors/710223/products');
+    $__skuCreateB=bslSanitizeProductWritePayload(['name'=>'محصول ب','sku'=>'DUP-1'],'vendors/710223/products');
+    $__skuPatch=bslSanitizeProductWritePayload(['sku'=>'DUP-1','stock'=>2],'products/123');
+    $add('10.518','SKU تکراری مبدأ برای ساخت پایدار و محصول‌ویژه می‌شود و در PATCH حذف می‌شود',
+        !empty($__skuCreateA['sku'])&&!empty($__skuCreateB['sku'])
+        &&$__skuCreateA['sku']!==$__skuCreateB['sku']&&!isset($__skuPatch['sku']));
+    $add('10.518','PATCH عمومی 403 یک‌بار از مسیر vendor-scoped تکرار و صف فعال پروفایل یکتا می‌شود',
+        strpos($selfSrc,"[403, 404], true")!==false
+        &&strpos($selfSrc,"'cancel_reason'=>'duplicate_active_profile'")!==false
+        &&strpos($selfSrc,"{v:'10." . "518'")!==false&&version_compare(APP_VERSION,'10.518','>='));
+    $add('10.519','ارسال پایان‌یافته پس از نصب اصلاح از ابتدای همان snapshot و با شمارندهٔ پاک بازیابی می‌شود',
+        strpos($selfSrc,"isset(\$_GET['bsl_queue_retry'])")!==false
+        &&strpos($selfSrc,"['done','failed','cancelled']")!==false
+        &&strpos($selfSrc,"'start_index'=>'0'")!==false
+        &&strpos($selfSrc,"{v:'10." . "519'")!==false&&version_compare(APP_VERSION,'10.519','>='));
+    $add('10.520','اگر worker قدیمی lock را دیر آزاد کند بازیابی waiting می‌شود تا اولین cron بردارد',
+        strpos($selfSrc,"'retry_queued_at'")!==false
+        &&strpos($selfSrc,"'queued'=>true")!==false
+        &&strpos($selfSrc,"{v:'10." . "520'")!==false&&version_compare(APP_VERSION,'10.520','>='));
+    $__batchSku=bslSanitizeProductWritePayload(['data'=>[['id'=>9,'sku'=>'DUP','stock'=>3]]],'vendors/735703/products/batch-updates');
+    $add('10.521','403 هر دو PATCH تکی به batch-updates همان vendor می‌رود و SKU از batch حذف می‌شود',
+        !isset($__batchSku['data'][0]['sku'])
+        &&strpos($selfSrc,"'ep'=>'vendors/'.\$vid.'/products/batch-updates'")!==false
+        &&strpos($selfSrc,"{v:'10." . "521'")!==false&&version_compare(APP_VERSION,'10.521','>='));
+    $add('10.522','retry علاوه بر شمارندهٔ صف progress و local task قدیمی را پاک می‌کند',
+        substr_count($selfSrc,'localTaskDbForget(BSL_PROGRESS_FILE);@unlink(BSL_PROGRESS_FILE)')>=2
+        &&strpos($selfSrc,"{v:'10." . "522'")!==false&&version_compare(APP_VERSION,'10.522','>='));
+    $add('10.523','403 قطعی هر vendor در همان worker فقط یک خطای actionable می‌سازد و سپس skip می‌شود',
+        strpos($selfSrc,"_bslHardForbiddenVendors")!==false
+        &&strpos($selfSrc,"'action'=>'skipped_shop_forbidden'")!==false
+        &&strpos($selfSrc,"{v:'10." . "523'")!==false&&version_compare(APP_VERSION,'10.523','>='));
+    $add('10.524','404 شناسهٔ قدیمی map را حذف و بدون matrix همان غرفه را دوباره resolve می‌کند',
+        function_exists('remoteMapForget')
+        &&strpos($selfSrc,"\$retryOpts['stale_id_recovered']=1")!==false
+        &&strpos($selfSrc,"int \$maxPages = 20, bool \$skipMatrix = false")!==false
+        &&strpos($selfSrc,"{v:'10." . "524'")!==false&&version_compare(APP_VERSION,'10.524','>='));
+    $add('10.525','403 عمومی حتی اگر vendor-scoped 404 شود fallback رسمی batch را اجرا می‌کند',
+        strpos($selfSrc,'$genericForbidden[(int)$vid]=true')!==false
+        &&strpos($selfSrc,'$genericUpdateCode === 403 ||')!==false
+        &&strpos($selfSrc,"{v:'10." . "525'")!==false&&version_compare(APP_VERSION,'10.525','>='));
+    $add('10.526','جزئیات کارت‌ها سقف دارد و delay مردهٔ 100ms ارسال موازی حذف شده است',
+        strpos($selfSrc,'array_slice($bslSentList,-400)')!==false
+        &&strpos($selfSrc,'array_slice($bslFailedList,-2000)')!==false
+        &&strpos($selfSrc,'usleep(max(0,$bslDelayMs-100)*1000)')!==false
+        &&strpos($selfSrc,"{v:'10." . "526'")!==false&&version_compare(APP_VERSION,'10.526','>='));
+    $add('10.527','نتیجهٔ skipped باسلام در رابط، کارت‌ها و گزارش‌ها «بدون تغییر» است نه «تکراری»',
+        strpos($selfSrc,"skipLabel:'بدون تغییر'")!==false
+        &&strpos($selfSrc,"result_label:'⏭ بدون تغییر'")!==false
+        &&strpos($selfSrc,"skipped:'⏭ بدون تغییر'")!==false
+        &&strpos($selfSrc,"id=\"bK\"")!==false
+        &&strpos($selfSrc,"{v:'10." . "527'")!==false&&version_compare(APP_VERSION,'10.527','>='));
+    $__shops528=bslAllShops(['basalam'=>[
+        'vendor_id'=>735703,'token'=>'default-token','shop_name'=>'default',
+        'vendors'=>[
+            ['vendor_id'=>735703,'token'=>'stale-wrong-token','shop_name'=>'duplicate default'],
+            ['vendor_id'=>710223,'token'=>'extra-token','shop_name'=>'extra'],
+        ],
+    ]]);
+    $add('10.528','شناسهٔ تکراری غرفهٔ پیش‌فرض در vendors هرگز توکن اصلی را بازنویسی نمی‌کند',
+        count($__shops528)===2
+        &&(int)($__shops528[0]['vendor_id']??0)===735703
+        &&(string)($__shops528[0]['token']??'')==='default-token'
+        &&!empty($__shops528[0]['is_default'])
+        &&(int)($__shops528[1]['vendor_id']??0)===710223
+        &&strpos($selfSrc,'if ($defVid > 0 && $vid === $defVid) continue;')!==false
+        &&strpos($selfSrc,"{v:'10." . "528'")!==false&&version_compare(APP_VERSION,'10.528','>='));
+    $add('10.529','کلید مالکیت غرفهٔ پیش‌فرض در ارسال موازی دقیقاً به vendor_id همان غرفه محدود است',
+        bslShopMapKey('product-key',['vendor_id'=>735703,'is_default'=>true])==='product-key#v735703'
+        &&bslShopMapKey('product-key',['vendor_id'=>710223,'is_default'=>false])==='product-key#v710223'
+        &&bslShopMapKey('product-key',['vendor_id'=>735703])==='product-key#v735703'
+        &&strpos($selfSrc,'Always scope ownership by vendor, including the default shop')!==false
+        &&strpos($selfSrc,"{v:'10." . "529'")!==false&&version_compare(APP_VERSION,'10.529','>='));
+    $__multiStart530=strpos($selfSrc,'function bslUpsertManyShops(');
+    $__multiEnd530=$__multiStart530===false?false:strpos($selfSrc,'function bslUpsertToShop(',$__multiStart530);
+    $__multiBlock530=$__multiStart530!==false&&$__multiEnd530!==false?substr($selfSrc,$__multiStart530,$__multiEnd530-$__multiStart530):'';
+    $add('10.530','نبود موقت matrix در ارسال موازی، ledger تاییدشده را به سه PATCH اجباری تبدیل نمی‌کند',
+        $__multiBlock530!==''
+        &&strpos($__multiBlock530,'A temporarily absent')!==false
+        &&strpos($__multiBlock530,'matrixEmptyVids')===false
+        &&strpos($__multiBlock530,"!empty(\$opts['force_all'])")!==false
+        &&strpos($selfSrc,"{v:'10." . "530'")!==false&&version_compare(APP_VERSION,'10.530','>='));
+    $add('10.531','غرفهٔ پیش‌فرض در ارسال موازی مستقیم از batch رسمی شروع می‌کند',
+        strpos($selfSrc,'$directDefaultBatch=[]')!==false
+        &&strpos($selfSrc,"unset(\$batchRow['variants'])")!==false
+        &&strpos($selfSrc,"'ep'=>'vendors/'.\$vid.'/products/batch-updates'")!==false
+        &&substr_count($selfSrc,'if (!empty($directDefaultBatch[(int)$vid])) continue;')>=3
+        &&strpos($selfSrc,"{v:'10." . "531'")!==false&&version_compare(APP_VERSION,'10.531','>='));
+    $add('10.532','ترمیم checkpoint فقط روی صف paused انجام می‌شود و با worker مسابقه ندارد',
+        strpos($selfSrc,"isset(\$_GET['bsl_queue_set_checkpoint'])")!==false
+        &&strpos($selfSrc,"'queue_must_be_paused'")!==false
+        &&strpos($selfSrc,"\$e['checkpoint_repaired_version']=APP_VERSION")!==false
+        &&strpos($selfSrc,"{v:'10." . "532'")!==false&&version_compare(APP_VERSION,'10.532','>='));
+    $add('10.533','آزمون checkpoint بدون needle خودارجاع اجرا می‌شود',
+        strpos($selfSrc,"{v:'10." . "533'")!==false&&version_compare(APP_VERSION,'10.533','>='));
+    $__skip534=bslSkipUnchanged('k#v735703',55,100000,10,
+        ['id'=>55,'title'=>'محصول دیگر','price_rial'=>100000,'stock'=>10,'at'=>time(),'plain_desc_v1'=>1],0,false,'محصول اصلی');
+    $__vars534=bslRemoteVariantRows(['variants'=>[['id'=>91],['variant_id'=>92]]]);
+    $add('10.534','skip فقط با عنوان دقیق همان vendor مجاز است و variant ID مقصد استخراج می‌شود',
+        $__skip534===false
+        &&array_column($__vars534,'id')===[91,92]
+        &&strpos($selfSrc,'destination_variant_ids_not_found')!==false
+        &&strpos($selfSrc,'bslRepairExistingVariantUpdate($tk,$vid,$exId,$bu,$_bslShopVarsUpd)')!==false
+        &&strpos($selfSrc,"{v:'10." . "534'")!==false&&version_compare(APP_VERSION,'10.534','>='));
+    $add('10.535','هر دو متن 422 رسمی باسلام برای محصول تنوع‌دار وارد repair می‌شوند',
+        bslIsVariantUpdateMethodError(['code'=>422,'body'=>['message'=>'قادر به تغییر قیمت یا موجودی محصول دارای تنوع به صورت مستقیم نمی باشید']])
+        &&strpos($selfSrc,"{v:'10." . "535'")!==false&&version_compare(APP_VERSION,'10.535','>='));
+    $add('10.536','checkpoint محصولات همگام در پنجرهٔ محدود batch می‌شود و نتیجه‌های واقعی فوری می‌مانند',
+        strpos($selfSrc,'$__parFastCheckpointN=max(2,min(12')!==false
+        &&strpos($selfSrc,'$__mustCheckpoint=!$__allParSkipped')!==false
+        &&strpos($selfSrc,'if($__parDeferredCheckpoint>0)bslBackendProgress')!==false
+        &&strpos($selfSrc,"{v:'10." . "536'")!==false&&version_compare(APP_VERSION,'10.536','>='));
+    $add('10.537','GIF یک‌بار پیش از آپلود چندغرفه‌ای به JPEG تبدیل می‌شود و 422 تکراری نمی‌سازد',
+        strpos($selfSrc,'function bslGifFirstFrameJpeg')!==false
+        &&substr_count($selfSrc,"if(\$realFmt==='gif')")>=2
+        &&strpos($selfSrc,'GIF decoder unavailable')!==false
+        &&strpos($selfSrc,"{v:'10." . "537'")!==false&&version_compare(APP_VERSION,'10.537','>='));
+    $__taskClear538=strpos($selfSrc,'function tasksClearPersistedState');
+    $__taskClearEnd538=$__taskClear538===false?false:strpos($selfSrc,"if (isset(\$_GET['tasks_reorder']))",$__taskClear538);
+    $__taskClearBlock538=$__taskClear538!==false&&$__taskClearEnd538!==false?substr($selfSrc,$__taskClear538,$__taskClearEnd538-$__taskClear538):'';
+    $add('10.538','پاک‌سازی مدیر وظیفه هر دو نسخهٔ JSON و SQLite کارهای تمام‌شده را حذف می‌کند',
+        $__taskClearBlock538!==''
+        &&strpos($__taskClearBlock538,'localTaskDbForget($file)')!==false
+        &&substr_count($__taskClearBlock538,'tasksClearPersistedState(')>=3
+        &&strpos($__taskClearBlock538,"'failed' => \$failed")!==false
+        &&strpos($selfSrc,"{v:'10." . "538'")!==false&&version_compare(APP_VERSION,'10.538','>='));
+    $add('10.539','شمارندهٔ پاک‌سازی بر اساس کارت فعالیت قبل از حذف محاسبه می‌شود',
+        strpos($__taskClearBlock538,"\$hadActivity=(string)(\$row['state']??'idle')!=='idle'")!==false
+        &&strpos($__taskClearBlock538,'if (!$hadActivity&&!$hadPersisted) continue;')!==false
+        &&strpos($selfSrc,"{v:'10." . "539'")!==false&&version_compare(APP_VERSION,'10.539','>='));
+    $add('10.540','مالک CLI قفل‌شده پس از سه بازیابی و ۹۰ ثانیه سکون محدود بازنشسته می‌شود',
+        strpos($selfSrc,'$ownerTries>=3&&$idleSec>=90')!==false
+        &&strpos($selfSrc,"'stale_owner_terminating'")!==false
+        &&strpos($selfSrc,'$probe=queueBackendLock($which)')!==false
+        &&strpos($selfSrc,"{v:'10." . "540'")!==false&&version_compare(APP_VERSION,'10.540','>='));
+    $add('10.541','اگر PID launcher مرده باشد مالک واقعی همان flock از kernel شناسایی می‌شود',
+        strpos($selfSrc,"@exec('fuser '.escapeshellarg(\$lockPath)")!==false
+        &&strpos($selfSrc,"strpos(\$cmd,'queue_backend')!==false")!==false
+        &&strpos($selfSrc,"{v:'10." . "541'")!==false&&version_compare(APP_VERSION,'10.541','>='));
+    $add('10.542','مالک دقیق flock در PHP-FPM حتی بدون آرگومان command line قابل بازنشستگی است',
+        strpos($selfSrc,'Holding this destination-specific flock is itself the ownership')!==false
+        &&strpos($selfSrc,'$ownerPid=$fpId;')!==false
+        &&strpos($selfSrc,"{v:'10." . "542'")!==false&&version_compare(APP_VERSION,'10.542','>='));
+    $add('10.543','مالک flock بدون وابستگی به fuser از proc locks و inode پیدا می‌شود',
+        strpos($selfSrc,"is_readable('/proc/locks')")!==false
+        &&strpos($selfSrc,"strpos((string)\$ll,'FLOCK')")!==false
+        &&strpos($selfSrc,"{v:'10." . "543'")!==false&&version_compare(APP_VERSION,'10.543','>='));
+    $add('10.544','در محیط مخفی‌شده proc locks، مالک از fd با device و inode دقیق پیدا می‌شود',
+        strpos($selfSrc,"glob('/proc/[0-9]*/fd/*')")!==false
+        &&strpos($selfSrc,"(int)(\$fs['dev']??-1)!==\$dev")!==false
+        &&strpos($selfSrc,"{v:'10." . "544'")!==false&&version_compare(APP_VERSION,'10.544','>='));
+    $add('10.545','پرچم ناموجودی کهنه با قیمت معتبر، ساخت در غرفهٔ تازه را مسدود نمی‌کند',
+        effectiveStock(['in_stock'=>false,'price'=>'125,000'],7)===7
+        &&effectiveStock(['in_stock'=>false,'price'=>'0','final_price'=>''],7)===0
+        &&effectiveStock(['in_stock'=>true,'price'=>''],7)===7
+        &&strpos($selfSrc,"{v:'10." . "545'")!==false&&version_compare(APP_VERSION,'10.545','>='));
+    $add('10.546','قفل دقیقاً شناسایی‌شده پس از ۱۸۰ ثانیه سکون بدون نیاز به سه تلاش آزاد می‌شود',
+        strpos($selfSrc,'$ownerRecoveryDue=($ownerTries>=3&&$idleSec>=90)||$idleSec>=180')!==false
+        &&substr_count($selfSrc,'if($ownerRecoveryDue&&')>=2
+        &&strpos($selfSrc,"{v:'10." . "546'")!==false&&version_compare(APP_VERSION,'10.546','>='));
+    $add('10.547','ذخیرهٔ تنظیمات بدون تغییر غرفه یا روش اجرا عملیات سنگین صف را اجرا نمی‌کند',
+        strpos($selfSrc,'&&$_bslShopSelectionChanged)')!==false
+        &&strpos($selfSrc,'if($oldMatrixExecMode!==$newExecMode)')!==false
+        &&strpos($selfSrc,'$buildOnlyJustEnabled=')!==false
+        &&strpos($selfSrc,"{v:'10." . "547'")!==false&&version_compare(APP_VERSION,'10.547','>='));
+    $add('10.548','پس‌زمینهٔ باکس پالسر وضعیت ذخیره را رنگی و چراغ را دقیقاً وسط نشان می‌دهد',
+        strpos($selfSrc,'.runtime-pulse.save-pending')!==false
+        &&strpos($selfSrc,'@keyframes runtimePulseCentered')!==false
+        &&strpos($selfSrc,"pulse.classList.add(cls)")!==false
+        &&strpos($selfSrc,"{v:'10." . "548'")!==false&&version_compare(APP_VERSION,'10.548','>='));
+    $add('10.549','عملیات طولانی یک محصول ضربان زنده دارد و دکمهٔ ارسال از وضعیت واقعی صف خوانده می‌شود',
+        strpos($selfSrc,'function bslLongOperationHeartbeat')!==false
+        &&strpos($selfSrc,"'inflight_product'=>")!==false
+        &&strpos($selfSrc,'function bslApplyQueueActionState')!==false
+        &&strpos($selfSrc,"btn.textContent='🚀 + افزودن به صف'")!==false
+        &&strpos($selfSrc,"{v:'10." . "549'")!==false&&version_compare(APP_VERSION,'10.549','>='));
+    $add('10.550','پردازش هر محصول مرحله و جزئیات زنده دارد و رنگ ذخیرهٔ پالسر با اولویت قطعی اعمال می‌شود',
+        strpos($selfSrc,'function bslLongOperationStage')!==false
+        &&strpos($selfSrc,"'inflight_stage_label'=>")!==false
+        &&strpos($selfSrc,"progText='📦 محصول '")!==false
+        &&strpos($selfSrc,"pulse.style.setProperty('background',saveBg,'important')")!==false
+        &&strpos($selfSrc,"{v:'10." . "550'")!==false&&version_compare(APP_VERSION,'10.550','>='));
+    $add('10.551','ارسال پایان‌یافتهٔ بدون snapshot از پروفایل و تنظیمات همان ردیف قابل بازسازی است',
+        strpos($selfSrc,"isset(\$_GET['bsl_queue_requeue_profile'])")!==false
+        &&strpos($selfSrc,"\$_GET['bsl_queue_add']=1")!==false
+        &&strpos($selfSrc,"{v:'10." . "551'")!==false&&version_compare(APP_VERSION,'10.551','>='));
+    $add('10.552','وضعیت زندهٔ بالای شمارنده‌های باسلام به جدول واکنش‌گرا و شهودی تبدیل شده است',
+        strpos($selfSrc,'id="bslSendStatusGrid"')!==false
+        &&strpos($selfSrc,'function bslRenderSendStatusGrid')!==false
+        &&strpos($selfSrc,'.bsl-send-status-grid')!==false
+        &&strpos($selfSrc,"{v:'10." . "552'")!==false&&version_compare(APP_VERSION,'10.552','>='));
+    $add('10.553','سرعت واقعی محصول در دقیقه و زمان پایان بر پایهٔ حرکت اخیر checkpoint محاسبه می‌شود',
+        strpos($selfSrc,'id="bsgRate"')!==false
+        &&strpos($selfSrc,'function bslQueueRateMetric')!==false
+        &&strpos($selfSrc,"'s4_bsl_rate_'")!==false
+        &&strpos($selfSrc,"{v:'10." . "553'")!==false&&version_compare(APP_VERSION,'10.553','>='));
+    $add('10.554','سقف قابل تنظیم برای زمان هر محصول، محصول زمان‌بر را رد و صف را ادامه می‌دهد',
+        strpos($selfSrc,'id="bsProductTimeout"')!==false
+        &&strpos($selfSrc,'function bslProductDeadlineExceeded')!==false
+        &&strpos($selfSrc,"'__product_timeout'")!==false
+        &&strpos($selfSrc,"{v:'10." . "554'")!==false&&version_compare(APP_VERSION,'10.554','>='));
+    $add('10.555','کران سقف محصول را مستقل از heartbeat اجرا و مالک دقیق محصول زمان‌بر را تعویض می‌کند',
+        strpos($selfSrc,"'beat_from'=>'product_deadline'")!==false
+        &&strpos($selfSrc,"!empty(\$chk['product_timeout'])")!==false
+        &&strpos($selfSrc,"'product-timeout-'")!==false
+        &&strpos($selfSrc,"{v:'10." . "555'")!==false&&version_compare(APP_VERSION,'10.555','>='));
+    $add('10.556','ساخت تازه مقصدهای تیک‌خورده را بر checkpoint مقدم می‌کند و Woo بدون تیک هیچ درخواست یا گزارش واکشی ندارد',
+        function_exists('matrixRebaseCheckpointDestinations')
+        &&strpos($selfSrc,"!\$includeWoo ? '⏭ ووکامرس تیک نخورده است")!==false
+        &&strpos($selfSrc,"\$manualFresh=!\$resume")!==false
+        &&strpos($selfSrc,"{v:'10." . "556'")!==false&&version_compare(APP_VERSION,'10.556','>='));
+    $add('10.556','تست اتصال ووکامرس محصولات را معیار اصلی و system_status را عیب‌یابی اختیاری می‌داند',
+        strpos($selfSrc,"\$ep = 'products?per_page=1&status=any'")!==false
+        &&strpos($selfSrc,"'system_status_optional'")!==false
+        &&strpos($selfSrc,"'not_applicable' => true")!==false);
+    $add('10.557','اصلاح انبوه فقط پنجرهٔ محدود jobها را نگه می‌دارد و سقف child در حالت کران نیز حذف نمی‌شود',
+        strpos($selfSrc,'int $limit = 0, array $selectedDestinations')!==false
+        &&strpos($selfSrc,'$collectLimit=max(40,min(120,$requestedMax*2))')!==false
+        &&strpos($selfSrc,'A hard per-child item cap')!==false);
+    $add('10.557','خروج اجباری child اصلاح از checkpoint بازیابی و origin همگام‌سازی همیشه رشته می‌شود',
+        strpos($selfSrc,"'recovered_child_exit'=>\$rc")!==false
+        &&strpos($selfSrc,"\$msOrigin = extractNormalizeOriginTrigger")!==false
+        &&strpos($selfSrc,"{v:'10." . "557'")!==false&&version_compare(APP_VERSION,'10.557','>='));
+    $add('10.558','ادامهٔ اصلاح checkpoint صریح را با همان فیلتر و مقصد به enqueue منتقل می‌کند',
+        strpos($selfSrc,"is_array(\$opts['checkpoint']??null)?\$opts['checkpoint']")!==false
+        &&strpos($selfSrc,'Resume means the exact durable operation')!==false
+        &&strpos($selfSrc,"\$resumeWorker = \$matrixFixCp && !empty(\$_GET['resume'])")!==false
+        &&strpos($selfSrc,"{v:'10." . "558'")!==false&&version_compare(APP_VERSION,'10.558','>='));
+    $add('10.559','کنترل تطبیقی نرخ، کش شناسه تصویر و کاهش فشار همزمان فعال است',
+        bslAdaptiveRequestKind('POST','files',true)==='photo'
+        &&bslAdaptiveRequestKind('GET','vendors/1/products',false)==='read'
+        &&bslAdaptiveRequestKind('PATCH','products/1',false)==='write'
+        &&strpos($selfSrc,'function bslPhotoIdCacheStoreMany')!==false
+        &&strpos($selfSrc,'function bslParallelBatchWindow')!==false
+        &&strpos($selfSrc,'batch-updates چندمحصولی')!==false
+        &&strpos($selfSrc,"\$payload['max_items']=\$__sendPressure?5")!==false
+        &&strpos($selfSrc,"{v:'10." . "559'")!==false&&version_compare(APP_VERSION,'10.559','>='));
+    $add('10.560','بازیافت مالک دقیق صف paused از checkpoint همان queue انجام می‌شود',
+        strpos($selfSrc,"isset(\$_GET['bsl_queue_recycle'])")!==false
+        &&strpos($selfSrc,"'queue_must_be_paused'")!==false
+        &&strpos($selfSrc,"queueStallRecover('bsl',1,false,3000,true,true,false)")!==false
+        &&strpos($selfSrc,"{v:'10." . "560'")!==false&&version_compare(APP_VERSION,'10.560','>='));
+    $add('10.561','بازیافت paused سن heartbeat را جعل نمی‌کند و queue_id دقیق را به نگهبان مالک می‌دهد',
+        strpos($selfSrc,"_s4ForcePausedQueueOwner")!==false
+        &&strpos($selfSrc,"'forced_queue_id_mismatch'")!==false
+        &&strpos($selfSrc,"\$ownerRecoveryDue=\$__forcedPausedQid!==''")!==false
+        &&strpos($selfSrc,"{v:'10." . "561'")!==false&&version_compare(APP_VERSION,'10.561','>='));
+    $add('10.562','recycle وضعیت paused دقیق را مستقل از heartbeat پردازهٔ قدیمی می‌سازد',
+        strpos($selfSrc,"'explicit_code_recycle'")!==false
+        &&strpos($selfSrc,"'forced_paused_row_missing'")!==false
+        &&strpos($selfSrc,"\$__probe=queueBackendLock('bsl')")!==false
+        &&strpos($selfSrc,"{v:'10." . "562'")!==false&&version_compare(APP_VERSION,'10.562','>='));
+    $add('10.563','انتخاب صریح مقصد checkpoint را rebase و ثبت job خطای واقعی برمی‌گرداند',
+        strpos($selfSrc,"\$manualExplicit=\$manualSource&&!empty(\$opts['_destinations_explicit'])")!==false
+        &&strpos($selfSrc,"'worker_queue_busy','retryable'=>true")!==false
+        &&strpos($selfSrc,"if(!\$written)return ['ok'=>false,'error'=>'worker_queue_write']")!==false
+        &&strpos($selfSrc,"{v:'10." . "563'")!==false&&version_compare(APP_VERSION,'10.563','>='));
+    $add('10.564','دو صف فیزیکی پروفایل، مالکیت مستقل و بودجهٔ API اولویت‌دار دارند',
+        strpos($selfSrc,'function bslKickParallelProfileLanes')!==false
+        &&strpos($selfSrc,"foreach(['fast','detail'] as \$lane)")!==false
+        &&strpos($selfSrc,"const BSL_FAST_PROGRESS_FILE")!==false
+        &&strpos($selfSrc,"bslLaneLockFile(\$_bslLane)")!==false
+        &&(strpos($selfSrc,'id="bsProfileLanes"')!==false||strpos($selfSrc,'id="bslSendLaneTabs"')!==false)
+        &&version_compare(APP_VERSION,'10.564','>='));
+    $add('10.565','تب ارسال باسلام دو لین مستقلِ بدون جزئیات دارد',
+        strpos($selfSrc,"function bslClassifyProfileLane(string \$profileKey,array \$profiles=[]): string {\n    /* v10.565")!==false
+        &&strpos($selfSrc,"return 'fast';\n}\nfunction bslRequestedProfileLane")!==false
+        &&strpos($selfSrc,"\$_laneRequested=isset(\$_POST['profile_lane'])")!==false
+        &&(strpos($selfSrc,'id="bslSendLaneTab1"')!==false||strpos($selfSrc,'id="bslLaneTab1"')!==false)
+        &&(strpos($selfSrc,'id="bslSendLaneTab2"')!==false||strpos($selfSrc,'id="bslLaneTab2"')!==false)
+        &&strpos($selfSrc,"fd2.append('profile_lane',bslSelectedSendLane())")!==false
+        &&strpos($selfSrc,".filter(bslEntryInSelectedLane)")!==false
+        &&version_compare(APP_VERSION,'10.565','>='));
+    $add('10.566','لین ۲ فقط صف ارسال با جزئیات کامل است',
+        strpos($selfSrc,"'detail_coverage_incomplete'")!==false
+        &&strpos($selfSrc,'extractProfileDetailSummary($_detailProfile)')!==false
+        &&strpos($selfSrc,"'with_details'=>\$_bslLane==='detail'")!==false
+        &&strpos($selfSrc,'لین ۲ · ارسال با جزئیات کامل')!==false
+        &&strpos($selfSrc,'function bslParallelLaneBudget')!==false
+        &&strpos($selfSrc,"'priority'=>'lane_1_no_detail'")!==false
+        &&version_compare(APP_VERSION,'10.566','>='));
+    $add('10.567','یک پروفایل هرگز مالک همزمان دو لین ارسال نمی‌شود',
+        strpos($selfSrc,'const BSL_PROFILE_LANE_CLAIM_FILE')!==false
+        &&strpos($selfSrc,"'profile_owned_by_other_lane'")!==false
+        &&strpos($selfSrc,"\$_ownerLane!==\$_bslLane")!==false
+        &&strpos($selfSrc,"'owner_lane'=>bslPublicLaneName(\$_ownerLane)")!==false
+        &&strpos($selfSrc,'$claimedProfiles=[];')!==false
+        &&version_compare(APP_VERSION,'10.567','>='));
+    $__laneBudgetOk568=true;
+    for($__budgetTest568=2;$__budgetTest568<=8;$__budgetTest568++){
+        $__fastShare568=bslParallelLaneBudget($__budgetTest568,'fast',true);
+        $__detailShare568=bslParallelLaneBudget($__budgetTest568,'detail',true);
+        if($__fastShare568<1||$__detailShare568<1||($__fastShare568+$__detailShare568)!==$__budgetTest568){$__laneBudgetOk568=false;break;}
+    }
+    $add('10.568','بودجهٔ همزمانی دو لین از سقف عبور نمی‌کند و هر تب وضعیت زنده دارد',
+        $__laneBudgetOk568
+        &&bslParallelLaneBudget(1,'fast',true)===1
+        &&bslParallelLaneBudget(1,'detail',true)===1
+        &&bslParallelLaneBudget(4,'legacy',true)===4
+        &&strpos($selfSrc,'id="bslLaneState1"')!==false
+        &&strpos($selfSrc,'id="bslLaneState2"')!==false
+        &&strpos($selfSrc,'function bslRenderLaneIndicators')!==false
+        &&strpos($selfSrc,"setAttribute('aria-selected'")!==false
+        &&strpos($selfSrc,"{v:'10." . "568'")!==false
+        &&version_compare(APP_VERSION,'10.568','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -47360,6 +48291,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($__sendMxBlock511,'matrix'.'Build(')===false
         &&strpos($selfSrc,"{v:'10." . "511'")!==false
         &&version_compare(APP_VERSION,'10.' . '511','>='));
+
     $add('10.501','آمادگی پس از رفرش از endpoint سنجیده و بارگذاری پروفایل با retry بازیابی می‌شود',
         strpos($selfSrc,"isset(\$_GET['app_ready'])")!==false
         &&strpos($selfSrc,"fetch('?app_ready=1&_v='")!==false
@@ -56521,7 +57453,7 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
       && strpos($selfSrc, "'POST required'") !== false);
     $add('10.266', 'repo و path updater ثابت‌اند و branch درخواست فقط از allowlist پذیرفته می‌شود',
          strpos($selfSrc, "const S4_CODE_UPDATE_REPO='fazilatma/" . "new'") !== false
-      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "e868e86a-new'") !== false
+      && strpos($selfSrc, "const S4_CODE_UPDATE_BRANCH='arena/" . "01a0ebf7-new'") !== false
       && strpos($selfSrc, "const S4_CODE_UPDATE_PATH='scraper4." . "php'") !== false
       && strpos($selfSrc, "if(\$requested!==''&&!in_array(\$requested,\$allowed,true))") !== false);
     $add('10.266', 'دانلود کامل با SHA، lint، backup و جایگزینی اتمیک نصب می‌شود',
@@ -64432,6 +65364,9 @@ function s4QueueProfileMatchesKey(string $entryKey, string $targetKey, array $pr
 }
 function s4DispatchPendingSendQueue(string $which, string $preferredQueueId = ''): array {
     $isBsl = ($which === 'bsl');
+    if($isBsl&&function_exists('bslParallelProfileLanesEnabled')&&bslParallelProfileLanesEnabled()){
+        $kicks=bslKickParallelProfileLanes();return ['ok'=>!empty($kicks),'which'=>'bsl','profile_lanes'=>$kicks,'already_running'=>empty($kicks)];
+    }
     $fp = queueBackendLock($isBsl ? 'bsl' : 'woo');
     if (!is_resource($fp)) {
         return ['ok' => true, 'already_running' => true, 'which' => $which];
@@ -64748,6 +65683,28 @@ function queueStallCheck(string $which, int $staleAfter = 300, bool $includePaus
            is released. Previously ['lock'=>$now] reset idle to zero forever. */
         $_iwS = queueRowIdle($which, $running, $prog, $now, [], $runningCount);
         $idle = (int)$_iwS['idle'];
+        /* v10.555: product deadline is independent of heartbeat freshness. A
+           wedged fallback can keep emitting heartbeats forever, so cron must
+           compare the persisted in-flight start directly with the live limit. */
+        if($isBsl&&$progressOwned&&(int)($prog['inflight_product']??0)>0&&(int)($prog['inflight_started_at']??0)>0){
+            $__liveCn=loadConnections();
+            $__rowLimit=(int)($running['config']['product_timeout_sec']??180);
+            $__effectiveLimit=(int)($__liveCn['basalam']['product_timeout_sec']??$__rowLimit);
+            if($__effectiveLimit<=0)$__effectiveLimit=180;
+            $__limit=max(30,min(1800,$__effectiveLimit));
+            $__inflightAt=(int)$prog['inflight_started_at'];$__productElapsed=max(0,$now-$__inflightAt);
+            if($__productElapsed>=$__limit){
+                $__inflightNo=max(1,(int)$prog['inflight_product']);
+                $__resume=max((int)($running['current']??0),(int)($prog['current']??0),$__inflightNo)+1;
+                return ['stalled'=>true,'kind'=>'running','product_timeout'=>true,'idle'=>$idle,
+                    'queue_id'=>$running['id']??'','lock_held'=>$lockFresh,
+                    'beat_from'=>'product_deadline','current'=>(int)($prog['current']??0),'resume_from'=>$__resume,
+                    'total'=>(int)($running['total']??0),'product_no'=>$__inflightNo,
+                    'product_title'=>(string)($prog['inflight_title']??$prog['last_title']??''),
+                    'product_stage'=>(string)($prog['inflight_stage_label']??$prog['phase_label']??''),
+                    'product_elapsed'=>$__productElapsed,'product_timeout_sec'=>$__limit];
+            }
+        }
         /* v10.419: an unlocked backend is conclusive evidence that this running
            row has no sender. Do not turn the heartbeat threshold into an extra
            one-minute grace period: hand it to queueStallRecover on this cron.
@@ -65070,10 +66027,23 @@ function queueIdleRetryFailed(string $which): ?array {
 }
 
 function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = false, int $waitMs = 1500, bool $includePaused = false, bool $allowUserStopped = false, bool $resumeAllPaused = false): array {
+    if($which==='bsl'&&!$includePaused&&function_exists('bslParallelProfileLanesEnabled')&&bslParallelProfileLanesEnabled()){
+        $k=$dryRun?[]:bslKickParallelProfileLanes();return ['ok'=>true,'profile_lanes'=>$k,'priority'=>'lane_1_no_detail','dry_run'=>$dryRun];
+    }
     if(!$allowUserStopped&&queueHasExplicitUserStop($which))
         return ['stalled'=>false,'resumed'=>false,'which'=>$which,'user_stopped'=>true,'reason'=>'explicit_user_stop'];
     $chk = queueStallCheck($which, $staleAfter, $includePaused, $allowUserStopped);
     $chk['which'] = $which;
+    $__forcedPausedQid=trim((string)($GLOBALS['_s4ForcePausedQueueOwner']??''));
+    if($__forcedPausedQid!==''&&$which==='bsl'){
+        $__fq=bslReadQueue();$__fr=null;foreach((array)($__fq['entries']??[]) as $__qr)if(is_array($__qr)&&(string)($__qr['id']??'')===$__forcedPausedQid&&(string)($__qr['status']??'')==='paused'){$__fr=$__qr;break;}
+        if(!$__fr)return ['stalled'=>false,'resumed'=>false,'which'=>$which,'reason_defer'=>'forced_paused_row_missing'];
+        $__probe=queueBackendLock('bsl');$__held=!is_resource($__probe);if(is_resource($__probe))queueBackendUnlock($__probe);
+        $__prog=readProgress(BSL_PROGRESS_FILE);$__cur=max((int)($__fr['current']??0),(string)($__prog['queue_id']??'')===$__forcedPausedQid?(int)($__prog['current']??0):0);
+        $chk=['stalled'=>true,'kind'=>'paused','idle'=>max(181,time()-(int)($__fr['paused_at']??0)),'queue_id'=>$__forcedPausedQid,
+            'lock_held'=>$__held,'beat_from'=>'explicit_code_recycle','current'=>$__cur,'resume_from'=>$__cur,'total'=>(int)($__fr['total']??0),'which'=>$which];
+    }
+    if($__forcedPausedQid!==''&&(string)($chk['queue_id']??'')!==$__forcedPausedQid)return $chk+['resumed'=>false,'reason_defer'=>'forced_queue_id_mismatch'];
     if (empty($chk['stalled']) || $dryRun) {
         $chk['resumed'] = false;
         /* v10.103: در بیکاری صف، failedهای قبلی را دوباره تا ۳ بار آزمایش کن */
@@ -65091,21 +66061,71 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
     if(!$allowUserStopped&&queueHasExplicitUserStop($which,$qid)){
         $chk['resumed']=false;$chk['user_stopped']=true;$chk['reason_defer']='explicit_user_stop_row';return $chk;
     }
-    /* flock شاهدِ قوی‌تری از سنِ heartbeat است: یک درخواستِ شبکهٔ طولانی
-       ممکن است بیش از staleAfter طول بکشد، اما تا وقتی قفل در دستِ worker
-       است، نه آن را بکش و نه worker دوم بساز. */
+    /* A fresh flock normally proves a live owner. Bounded exceptions identify
+       a wedged child after either three failed recoveries plus 90 seconds, or
+       one uninterrupted 180-second checkpoint freeze. Retire only the exact
+       PID holding this destination lock, then continue from the persisted
+       cursor after release—never spawn two concurrent senders. */
     if (!empty($chk['lock_held'])) {
-        $chk['resumed'] = false;
-        $chk['deferred'] = true;
-        $chk['cron_pending'] = true;
-        $chk['reason_defer'] = 'lock_held_waiting_next_cron';
-        /* Do not consume a retry while the old process still owns the lock.
-           Every cron heartbeat rechecks it and dispatches from this checkpoint
-           immediately after ownership is released. */
         $pendingBook=queueResumeBook($which,$qid);
-        queueResumeBook($which,$qid,['tries'=>(int)($pendingBook['tries']??0),'at'=>time(),
-            'from'=>max(0,(int)($chk['resume_from']??$chk['current']??0)),'status'=>'awaiting_lock_release']);
-        return $chk;
+        $ownerPid=!empty($chk['product_timeout'])?0:(int)($pendingBook['dispatch_pid']??0);
+        $ownerTries=(int)($pendingBook['tries']??0);
+        $idleSec=(int)($chk['idle']??0);$ownerSignalled=false;$lockReleased=false;
+        /* nohup may report its launcher PID while the surviving PHP child owns
+           flock. If that PID is gone, ask the kernel who holds this exact lock
+           and accept only our own scraper4.php queue_backend command. */
+        $ownerRecoveryDue=$__forcedPausedQid!==''||!empty($chk['product_timeout'])||($ownerTries>=3&&$idleSec>=90)||$idleSec>=180;
+        if($ownerRecoveryDue&&($ownerPid<=1||!function_exists('s4WorkerPidAlive')||!s4WorkerPidAlive($ownerPid))&&function_exists('exec')){
+            $lockPath=__DIR__.($which==='bsl'?'/bsl_backend.lock':'/woo_backend.lock');$fo=[];$frc=1;
+            @exec('fuser '.escapeshellarg($lockPath).' 2>/dev/null',$fo,$frc);
+            foreach($fo as$fl)foreach((array)preg_split('/\s+/',trim((string)$fl))as$fpRaw){
+                $fpId=(int)preg_replace('/\D/','',(string)$fpRaw);if($fpId<=1||$fpId===(int)@getmypid())continue;
+                $cmd=(string)@file_get_contents('/proc/'.$fpId.'/cmdline');
+                /* PHP-FPM/lsphp often hides script arguments in /proc. Holding
+                   this destination-specific flock is itself the ownership
+                   proof; the stale/three-attempt gates above prevent killing
+                   a normal request. Prefer an explicit queue_backend command,
+                   otherwise retain the first exact flock owner. */
+                if($cmd!==''&&strpos($cmd,basename(__FILE__))!==false&&strpos($cmd,'queue_backend')!==false){$ownerPid=$fpId;break 2;}
+                if($ownerPid<=1||!s4WorkerPidAlive($ownerPid))$ownerPid=$fpId;
+            }
+            /* fuser is not installed on every shared host. Linux /proc/locks
+               is authoritative and records FLOCK owner PID plus inode. */
+            $lst=@stat($lockPath);$ino=(int)($lst['ino']??0);$dev=(int)($lst['dev']??0);
+            if(($ownerPid<=1||!s4WorkerPidAlive($ownerPid))&&is_readable('/proc/locks')){
+                foreach((array)@file('/proc/locks',FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES)as$ll){
+                    if(strpos((string)$ll,'FLOCK')===false)continue;
+                    $parts=preg_split('/\s+/',trim((string)$ll));$lp=(int)($parts[4]??0);$devIno=(string)($parts[5]??'');
+                    if($lp>1&&$lp!==(int)@getmypid()&&$ino>0&&preg_match('/(?:^|:)'.preg_quote((string)$ino,'/').'$/',$devIno)){$ownerPid=$lp;break;}
+                }
+            }
+            /* Some containerized LiteSpeed hosts hide flock rows. File
+               descriptors for same-account processes remain visible: match
+               the exact device+inode instead of trusting command arguments. */
+            if(($ownerPid<=1||!s4WorkerPidAlive($ownerPid))&&$ino>0){
+                foreach((array)glob('/proc/[0-9]*/fd/*')as$fdPath){$fs=@stat($fdPath);if(!is_array($fs)||(int)($fs['ino']??0)!==$ino||(int)($fs['dev']??-1)!==$dev)continue;
+                    if(preg_match('~^/proc/(\d+)/fd/~',$fdPath,$pm)){$lp=(int)$pm[1];if($lp>1&&$lp!==(int)@getmypid()){$ownerPid=$lp;break;}}
+                }
+            }
+        }
+        if($ownerRecoveryDue&&$ownerPid>1&&$ownerPid!==(int)@getmypid()
+            &&function_exists('s4WorkerPidAlive')&&s4WorkerPidAlive($ownerPid)){
+            if(function_exists('posix_kill'))$ownerSignalled=(bool)@posix_kill($ownerPid,defined('SIGTERM')?SIGTERM:15);
+            elseif(function_exists('exec')){$ko=[];$krc=1;@exec('kill -TERM '.(int)$ownerPid.' >/dev/null 2>&1',$ko,$krc);$ownerSignalled=$krc===0;}
+            if($ownerSignalled){usleep(400000);$probe=queueBackendLock($which);if(is_resource($probe)){queueBackendUnlock($probe);$lockReleased=true;$chk['lock_held']=false;}}
+        }
+        if(!$lockReleased){
+            $chk['resumed'] = false;
+            $chk['deferred'] = true;
+            $chk['cron_pending'] = true;
+            $chk['stale_owner_pid']=$ownerPid;$chk['stale_owner_signalled']=$ownerSignalled;
+            $chk['reason_defer'] = $ownerSignalled?'stale_owner_terminating':'lock_held_waiting_next_cron';
+            queueResumeBook($which,$qid,['tries'=>$ownerTries,'at'=>time(),
+                'from'=>max(0,(int)($chk['resume_from']??$chk['current']??0)),
+                'status'=>$ownerSignalled?'terminating_stale_owner':'awaiting_lock_release']);
+            return $chk;
+        }
+        $chk['stale_owner_pid']=$ownerPid;$chk['stale_owner_signalled']=true;
     }
     /* v10.56 (۷۰): resume_from = چک‌پوینتِ واقعی */
     $start = max(0, (int)($chk['resume_from'] ?? $chk['current'] ?? 0));
@@ -65195,6 +66215,22 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
             @flock($resumeFp,LOCK_UN);@fclose($resumeFp);$resumeFp=null;
             $chk['resumed']=false;$chk['deferred']=false;$chk['reason_defer']='products_file_missing';return $chk;
         }
+        if($which==='bsl'&&!empty($chk['product_timeout'])){
+            $__tp=readProgress(BSL_PROGRESS_FILE);
+            $__newFailed=max((int)($rentry['failed']??0),(int)($__tp['failed']??0))+1;
+            $__timeoutDetail=['title'=>(string)($chk['product_title']??''),'key'=>'product-timeout-'.(int)($chk['product_no']??0),
+              'error'=>'⏳ سقف '.(int)($chk['product_timeout_sec']??180).' ثانیه گذشت؛ محصول رد و صف ادامه داده شد',
+              'error_code'=>0,'error_step'=>'product_timeout','reason_kind'=>'product_timeout',
+              'timeout_sec'=>(int)($chk['product_timeout_sec']??180),'elapsed_sec'=>(int)($chk['product_elapsed']??0)];
+            $rq['entries'][$ridx]['failed']=$__newFailed;
+            $rq['entries'][$ridx]['current']=$start;
+            $__fd=is_array($rq['entries'][$ridx]['failed_details']??null)?$rq['entries'][$ridx]['failed_details']:[];
+            $__fd[]=$__timeoutDetail;$rq['entries'][$ridx]['failed_details']=array_slice($__fd,-2000);
+            $__rl=is_array($rq['entries'][$ridx]['recent_log']??null)?$rq['entries'][$ridx]['recent_log']:[];
+            $__rl[]='⏳ محصول #'.(int)($chk['product_no']??0).' پس از '.(int)($chk['product_elapsed']??0).' ثانیه رد شد؛ ادامه از #'.$start;
+            $rq['entries'][$ridx]['recent_log']=array_slice($__rl,-200);
+            $rentry=$rq['entries'][$ridx];
+        }
         /* A free destination flock proves every old running owner is dead.
            Mirror the manual Continue transaction: demote ambiguous stale
            owners, make the selected row the sole owner, and publish a fresh
@@ -65222,7 +66258,14 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
         $priorQid=trim((string)($prior['queue_id']??''));
         $priorOwned=$priorQid!==''&&hash_equals($qid,$priorQid);
         $snapshot=$priorOwned?array_merge($rentry,$prior):$rentry;
+        if($which==='bsl'&&!empty($chk['product_timeout'])){
+            $snapshot['failed']=(int)($rentry['failed']??$snapshot['failed']??0);
+            $snapshot['failed_details']=$rentry['failed_details']??($snapshot['failed_details']??[]);
+            $snapshot['current']=$start;
+        }
         $resumeLog=is_array($snapshot['recent_log']??null)?$snapshot['recent_log']:[];
+        if($which==='bsl'&&!empty($chk['product_timeout']))
+            $resumeLog[]='⏳ سقف محصول #'.(int)($chk['product_no']??0).' تمام شد؛ از صف رد و از محصول #'.$start.' ادامه داده شد';
         $resumeLog[]='🔄 ادامهٔ کران با همان مالکیت دکمهٔ ادامه از محصول #'.($start+1);
         $progressRow=['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$qid,
             'sent'=>(int)($snapshot['sent']??0),'updated'=>(int)($snapshot['updated']??0),
@@ -65339,6 +66382,9 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
  */
 function sendAutoRecover(string $which): ?array {
     try {
+        if($which==='bsl'&&function_exists('bslParallelProfileLanesEnabled')&&bslParallelProfileLanesEnabled()){
+            $k=bslKickParallelProfileLanes();return $k?['profile_lanes'=>$k,'priority'=>'lane_1_no_detail']:null;
+        }
         $cnA  = loadConnections();
         $stallA = max(120, (int)($cnA['stall_after'] ?? 300));
         $chkA = queueStallCheck($which, $stallA);
@@ -67063,6 +68109,17 @@ function remoteMapLoad(): array {
  * shardهایی که در ورودی ردیفی ندارند صریحاً خالی نوشته (یا حذف) می‌شوند،
  * وگرنه «پاک‌کردنِ دفترچه» فقط فایلِ اصلی را پاک می‌کرد.
  */
+function remoteMapForget(string $target, string $key): bool {
+    if (!in_array($target, ['woo','bsl'], true) || trim($key) === '') return false;
+    $sh = remoteMapShardOf($key);
+    $m = remoteMapReadShard($sh);
+    if (!isset($m[$target][$key])) { remoteMapCacheClear(); return true; }
+    unset($m[$target][$key]);
+    $ok = remoteMapWriteShard($sh, $m);
+    remoteMapCacheClear();
+    return $ok;
+}
+
 function remoteMapSave(array $m): bool {
     $byShard = [];
     foreach (remoteMapShards() as $sh) $byShard[$sh] = ['woo' => [], 'bsl' => []];
@@ -69213,8 +70270,20 @@ function reconFetchCursorAppend(string $target, int $vid, int $page, array $rows
     @file_put_contents(reconFetchCursorFile(), json_encode(['target' => $target, 'vid' => $vid, 'page' => $page, 'rows' => $rows], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND | LOCK_EX);
 }
 
+/** A legacy recon stop belongs only to the legacy recon owner. Matrix builds
+ * have their own stop file; sharing RECON_STOP_FILE made every matrix child
+ * yield before its first destination request when an old recon stop remained. */
+function reconFetchShouldStop(string $scope, bool $legacyReconStop, bool $matrixStop, bool $sliceExpired): bool {
+    return $scope === 'matrix' ? ($matrixStop || $sliceExpired) : ($legacyReconStop || $matrixStop || $sliceExpired);
+}
+function reconFetchStopRequested(string $scope = 'recon'): bool {
+    return reconFetchShouldStop($scope, is_file(RECON_STOP_FILE),
+        function_exists('matrixStopRequested') && matrixStopRequested(),
+        function_exists('matrixSliceExpired') && matrixSliceExpired());
+}
+
 /** واکشیِ محصولاتِ مقصد، با ادامه از چک‌پوینتِ صفحه‌ایِ موجود */
-function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?array &$meta = null, bool $customerVisibleOnly = false): array {
+function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?array &$meta = null, bool $customerVisibleOnly = false, string $stopScope = 'recon'): array {
     $meta = ['complete' => false, 'partial' => false, 'stopped' => false, 'reason' => '', 'page' => 0];
     $maxPages = (int)RECON_FETCH_MAX_PAGES;
     $cursorTarget = ($target === 'bsl' && $customerVisibleOnly) ? 'bsl_active' : $target;
@@ -69224,7 +70293,7 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
     if ($rows) reconProgress(['log_add' => ['↻ ادامهٔ واکشی از صفحهٔ ' . $startPage . ' — ' . count($rows) . ' محصولِ قبلاً خوانده‌شده']]);
     $limit = $startPage + max(1, $maxPages);
     for ($page = $startPage; $page < $limit; $page++) {
-        if (reconStopRequested()) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
+        if (reconFetchStopRequested($stopScope)) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
         if ($target === 'woo') {
             $r = wooReq((string)($w['store_url'] ?? ''), (string)($w['consumer_key'] ?? ''), (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=100&status=any&page=' . $page);
             if (empty($r['ok']) || !is_array($r['body'])) { $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = $page; break; }
@@ -76204,44 +77273,19 @@ exit;
 
 if(isset($_GET['bsl_stop'])){
 header('Content-Type: application/json; charset=UTF-8');
-@file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'time'=>time()],LOCK_EX));
-
-$prevProgress=readProgress(BSL_PROGRESS_FILE);
-taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true,
-    'last_title'=>'','recent_log'=>array_merge((array)($prevProgress['recent_log']??[]), ['❌ ارسال توسط کاربر متوقف شد']),
-    'total_log_count'=>(int)($prevProgress['total_log_count']??0)+1],
-    ['queue_id'=>(string)($prevProgress['queue_id']??''), 'current'=>(int)($prevProgress['current']??0), 'total'=>(int)($prevProgress['total']??0),
-     'sent'=>(int)($prevProgress['sent']??0), 'updated'=>(int)($prevProgress['updated']??0), 'skipped'=>(int)($prevProgress['skipped']??0), 'failed'=>(int)($prevProgress['failed']??0)]);
-
-// v8.57: «توقف» یعنی همه چیز بایستد. قبلاً فقط ردیف در حال اجرا بسته
-// می‌شد و ردیف‌های منتظر سر جایشان می‌ماندند، پس اولین پینگ بعدی صف را
-// دوباره راه می‌انداخت و کاربر می‌دید ارسال متوقف نشده.
-/* workerِ زنده خودش ردیف را هنگام دیدنِ stop می‌بندد؛ اگر lock آزاد است
-   این درخواستِ توقف می‌تواند ردیف‌های باقی‌مانده را اتمیکاً paused کند. */
-$bslStopFp=queueBackendLock('bsl');
-if(is_resource($bslStopFp)){
-register_shutdown_function(function() use ($bslStopFp){queueBackendUnlock($bslStopFp);});
-$queue=bslReadQueue();
-$stopPaused=0;$stopQid=(string)($prevProgress['queue_id']??'');
-foreach($queue['entries'] as &$e){
-if($e['status']==='running' && ($stopQid==='' || (string)($e['id']??'')===$stopQid)){
-$e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;$e['paused_at']=time();
-$e['sent']=$prevProgress['sent']??0;$e['updated']=$prevProgress['updated']??0;$e['skipped']=$prevProgress['skipped']??0;$e['failed']=$prevProgress['failed']??0;$e['current']=$prevProgress['current']??0;
-$stopPaused++;
-}elseif($e['status']==='waiting'||$e['status']==='paused'){
-$e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;
-$e['paused_at']=time();
-$stopPaused++;
-}
-}
-unset($e);
-bslWriteQueue($queue);
-} else { $stopPaused=0; }
-echo json_encode(['ok'=>true,'paused'=>$stopPaused,
-'msg'=>$stopPaused>0
-?('فرآیند متوقف شد — '.$stopPaused.' ردیف صف هم موقتاً نگه داشته شد')
-:'فرآیند متوقف شد'],JSON_UNESCAPED_UNICODE);
-exit;
+$queue=bslReadQueue();$stopQid=trim((string)($_GET['queue_id']??''));
+$stopLane=$stopQid!==''?bslLaneForQueueId($stopQid,$queue):'legacy';$progressFile=bslLaneProgressFile($stopLane);
+$prevProgress=readProgress($progressFile);if($stopQid==='')$stopQid=(string)($prevProgress['queue_id']??'');
+@file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'time'=>time(),'queue_id'=>$stopQid,'lane'=>$stopLane]),LOCK_EX);
+taskMarkPartial($progressFile,['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true,
+ 'last_title'=>'','recent_log'=>array_merge((array)($prevProgress['recent_log']??[]),['❌ ارسال توسط کاربر متوقف شد']),'total_log_count'=>(int)($prevProgress['total_log_count']??0)+1],
+ ['queue_id'=>$stopQid,'current'=>(int)($prevProgress['current']??0),'total'=>(int)($prevProgress['total']??0),'sent'=>(int)($prevProgress['sent']??0),'updated'=>(int)($prevProgress['updated']??0),'skipped'=>(int)($prevProgress['skipped']??0),'failed'=>(int)($prevProgress['failed']??0)]);
+$stopPaused=0;$GLOBALS['_bslWorkerLane']=$stopLane;
+foreach($queue['entries'] as &$e){if((string)($e['id']??'')===$stopQid&&in_array((string)($e['status']??''),['running','waiting','paused'],true)){
+ $e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;$e['paused_at']=time();
+ foreach(['sent','updated','skipped','failed','current'] as $k)if(array_key_exists($k,$prevProgress))$e[$k]=$prevProgress[$k];$stopPaused++;break;
+}}unset($e);bslWriteQueue($queue);
+echo json_encode(['ok'=>true,'paused'=>$stopPaused,'queue_id'=>$stopQid,'lane'=>$stopLane,'msg'=>'فرآیند انتخاب‌شده متوقف شد؛ صف دیگر ادامه دارد'],JSON_UNESCAPED_UNICODE);exit;
 }
 
 /* v10.127: جمعِ محصولاتِ حذف/بایگانی‌شده از ردیف‌هایِ بازنشستگیِ صفِ ارسال.
@@ -76266,9 +77310,11 @@ function sendQueueRetireAgg(array $queue): array {
 
 if (isset($_GET['poll_bsl'])) {
 header('Content-Type: application/json; charset=UTF-8');
-$p = readProgress(BSL_PROGRESS_FILE);
-
 $queue = bslReadQueue();
+$_pollQid=trim((string)($_GET['queue_id']??''));$_pollLane=$_pollQid!==''?bslLaneForQueueId($_pollQid,$queue):'legacy';
+if($_pollQid===''){foreach(['fast','detail'] as $__ln){$__pp=readProgress(bslLaneProgressFile($__ln));if(!empty($__pp['running'])){$_pollLane=$__ln;break;}}}
+$p = readProgress(bslLaneProgressFile($_pollLane));$p['lane']=$_pollLane;
+
 $hasMore = false;
 foreach ($queue['entries'] as $e) {
 if ($e['status'] === 'waiting') { $hasMore = true; break; }
@@ -77710,12 +78756,127 @@ function bslQueueCatInfo(array $cfg): array {
     ];
 }
 
+/* v10.564: optional two-profile scheduler. Queue rows stay in one durable,
+ * atomically-written journal, while each physical worker owns an independent
+ * lock/progress/products lane. Unlabelled legacy rows remain on the legacy lane. */
+function bslParallelProfileLanesEnabled(?array $cn=null): bool {
+    if($cn===null)$cn=loadConnections();
+    return !empty($cn['basalam']['parallel_profile_lanes']);
+}
+/** Return one lane's share of the bounded cross-lane concurrency budget. */
+function bslParallelLaneBudget(int $configured,string $lane,bool $bothActive): int {
+    $budget=max(1,min(8,$configured));
+    $lane=bslNormalizeProfileLane($lane);
+    if(!$bothActive||$lane==='legacy')return $budget;
+    /* Two workers need one slot each; distribute the remaining capacity 75/25
+       while guaranteeing that the lane shares sum to this effective budget. */
+    $budget=max(2,$budget);
+    $detail=max(1,(int)floor($budget/4));
+    return $lane==='detail'?$detail:max(1,$budget-$detail);
+}
+function bslNormalizeProfileLane($lane): string {
+    $lane=strtolower(trim((string)$lane));return in_array($lane,['fast','detail'],true)?$lane:'legacy';
+}
+function bslClassifyProfileLane(string $profileKey,array $profiles=[]): string {
+    /* v10.565: detail selectors never classify a send. Every old/unlabelled
+       profile belongs to no-detail Lane 1; Lane 2 is chosen explicitly in UI. */
+    return 'fast';
+}
+function bslRequestedProfileLane($value): string {
+    $v=strtolower(trim((string)$value));
+    return in_array($v,['2','lane2','lane_2','detail'],true)?'detail':'fast';
+}
+function bslPublicLaneName(string $lane): string {return bslNormalizeProfileLane($lane)==='detail'?'lane_2':'lane_1';}
+function bslLaneProgressFile(string $lane): string {
+    $lane=bslNormalizeProfileLane($lane);return $lane==='fast'?BSL_FAST_PROGRESS_FILE:($lane==='detail'?BSL_DETAIL_PROGRESS_FILE:BSL_PROGRESS_FILE);
+}
+function bslLaneProductsFile(string $lane): string {
+    $lane=bslNormalizeProfileLane($lane);return $lane==='fast'?BSL_FAST_PRODUCTS_FILE:($lane==='detail'?BSL_DETAIL_PRODUCTS_FILE:BSL_PRODUCTS_FILE);
+}
+function bslLaneLockFile(string $lane): string {
+    $lane=bslNormalizeProfileLane($lane);return __DIR__.($lane==='fast'?'/bsl_backend_fast.lock':($lane==='detail'?'/bsl_backend_detail.lock':'/bsl_backend.lock'));
+}
+function bslRowLane(array $row): string {
+    $lane=bslNormalizeProfileLane($row['lane']??'');
+    if($lane!=='legacy')return $lane;
+    /* A pre-v10.564 active/paused row must finish on the original lock and
+       progress files. Other unlabelled rows migrate to no-detail Lane 1. */
+    if(in_array((string)($row['status']??''),['running','paused'],true))return 'legacy';
+    return bslParallelProfileLanesEnabled()?'fast':'legacy';
+}
+function bslLaneForQueueId(string $queueId,?array $queue=null): string {
+    if($queue===null)$queue=bslReadQueue();foreach((array)($queue['entries']??[]) as $r)if(is_array($r)&&(string)($r['id']??'')===$queueId)return bslRowLane($r);return 'legacy';
+}
+function bslLaneIsLive(string $lane,int $fresh=180): bool {
+    $p=readProgress(bslLaneProgressFile($lane));if(empty($p['running']))return false;
+    $beat=max((int)($p['last_progress_ts']??0),(int)($p['started_at']??0));return $beat>0&&time()-$beat<$fresh;
+}
+function bslKickParallelProfileLanes(?array $queue=null): array {
+    if(!bslParallelProfileLanesEnabled())return [];
+    /* Never overlap newly split workers with a pre-upgrade legacy process: its
+       in-memory code still owns the old whole-queue writer. First cron after it
+       exits starts both selected lanes safely. */
+    $__legacy=@fopen(bslLaneLockFile('legacy'),'c');$__legacyHeld=false;
+    if($__legacy){$__legacyHeld=!@flock($__legacy,LOCK_EX|LOCK_NB);if(!$__legacyHeld)@flock($__legacy,LOCK_UN);@fclose($__legacy);}if($__legacyHeld)return [];
+    if($queue===null)$queue=bslReadQueue();$out=[];
+    /* Lane 1 is dispatched first because no-detail sends are materially faster;
+       both lanes still share one bounded global request budget. */
+    $claimedProfiles=[];
+    foreach(['fast','detail'] as $lane){
+        $probe=@fopen(bslLaneLockFile($lane),'c');$free=false;
+        if($probe){$free=@flock($probe,LOCK_EX|LOCK_NB);if($free)@flock($probe,LOCK_UN);@fclose($probe);}if(!$free)continue;
+        $pick=null;foreach((array)($queue['entries']??[]) as $r){
+            if(!is_array($r)||bslRowLane($r)!==$lane||!in_array((string)($r['status']??''),['running','waiting'],true))continue;
+            $pk=trim((string)($r['profile_key']??''));if($pk!==''&&isset($claimedProfiles[$pk]))continue;$pick=$r;break;
+        }
+        if(!$pick)continue;$qid=(string)($pick['id']??'');$pickPk=trim((string)($pick['profile_key']??''));if($pickPk!=='')$claimedProfiles[$pickPk]=true;
+        $ok=fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
+        if(!$ok)$ok=fireAndForget('action=bsl_backend&lane='.$lane,1800,['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
+        $out[$lane]=['ok'=>$ok,'queue_id'=>$qid,'worker_pid'=>(int)($GLOBALS['_queueDispatchPid']??0)];
+    }
+    return $out;
+}
 function bslReadQueue(): array {
 clearstatcache(true,BSL_QUEUE_FILE);
 if(!file_exists(BSL_QUEUE_FILE)) return ['entries'=>[]];
 $d=@json_decode(@file_get_contents(BSL_QUEUE_FILE)?:'',true);
 if(!is_array($d)||!isset($d['entries'])||!is_array($d['entries'])) return ['entries'=>[]];
 $fixed=false;
+
+/* v10.518: چند کلیک/dispatch همزمان نباید چند اجرای فعال برای یک پروفایل
+   بسازد. ردیف running مالک است؛ در نبود آن، جدیدترین waiting نگه داشته می‌شود
+   (snapshot تازه‌تر) و بقیه به‌طور شفاف superseded می‌شوند. done/failed/paused
+   دست‌نخورده می‌مانند تا تاریخچه و ادامهٔ دستی از بین نرود. */
+$activeByProfile=[];
+foreach($d['entries'] as $idx=>$row){
+    if(!is_array($row))continue;
+    $st=(string)($row['status']??'');
+    if(!in_array($st,['running','waiting'],true))continue;
+    $pk=trim((string)($row['profile_key']??''));
+    if($pk==='')continue;
+    $activeByProfile[$pk][]=$idx;
+}
+foreach($activeByProfile as $pk=>$idxs){
+    if(count($idxs)<2)continue;
+    $keeper=null;
+    foreach($idxs as $idx){if((string)($d['entries'][$idx]['status']??'')==='running'){$keeper=$idx;break;}}
+    if($keeper===null){
+        usort($idxs,static function($a,$b)use($d){
+            $ta=(int)($d['entries'][$a]['created_at']??0);$tb=(int)($d['entries'][$b]['created_at']??0);
+            return $tb<=>$ta;
+        });
+        $keeper=$idxs[0];
+    }
+    $keepId=(string)($d['entries'][$keeper]['id']??'');
+    foreach($idxs as $idx){
+        if($idx===$keeper)continue;
+        $d['entries'][$idx]['status']='cancelled';
+        $d['entries'][$idx]['done_at']=time();
+        $d['entries'][$idx]['superseded_by']=$keepId;
+        $d['entries'][$idx]['cancel_reason']='duplicate_active_profile';
+        $fixed=true;
+    }
+}
 foreach($d['entries'] as &$re){
 if(!is_array($re))continue;
 if((int)($re['total']??0)<=0&&in_array((string)($re['status']??''),['running','waiting','paused'],true)){
@@ -77732,7 +78893,36 @@ if($fixed)bslWriteQueue($d);
 return $d;
 }
 function bslWriteQueue(array $queue): void {
-sendQueueAtomicWrite(BSL_QUEUE_FILE,$queue);
+    /* Serialize cross-lane read/modify/write. A lane worker may hold a stale
+       snapshot of the other worker; preserve that worker's rows from disk. */
+    $lf=@fopen(BSL_QUEUE_MUTEX_FILE,'c');if($lf)@flock($lf,LOCK_EX);
+    try{
+        $lane=bslNormalizeProfileLane($GLOBALS['_bslWorkerLane']??'legacy');
+        if($lane!=='legacy'&&is_file(BSL_QUEUE_FILE)){
+            $disk=json_decode((string)@file_get_contents(BSL_QUEUE_FILE),true);
+            if(is_array($disk['entries']??null)){
+                $incoming=[];foreach((array)($queue['entries']??[]) as $r)if(is_array($r))$incoming[(string)($r['id']??uniqid('row_',true))]=$r;
+                $merged=[];
+                foreach($disk['entries'] as $r){
+                    if(!is_array($r))continue;$id=(string)($r['id']??'');
+                    if(bslRowLane($r)!==$lane){$merged[]=$r;unset($incoming[$id]);continue;}
+                    if(isset($incoming[$id])){
+                        $n=$incoming[$id];
+                        /* Never let an older browser snapshot move a live row
+                           backwards while its lane worker is checkpointing. */
+                        if((int)($r['current']??0)>(int)($n['current']??0)){
+                            foreach(['current','sent','updated','skipped','failed','sent_details','updated_details','skipped_details','failed_details','shop_stats','recent_log','phase','phase_label','phase_current','phase_total','phase_pct','last_progress_ts'] as $k)if(array_key_exists($k,$r))$n[$k]=$r[$k];
+                        }
+                        if(($r['status']??'')==='running'&&in_array((string)($n['status']??''),['waiting','running'],true))$n['status']='running';
+                        $merged[]=$n;unset($incoming[$id]);
+                    }else $merged[]=$r;
+                }
+                foreach($incoming as $r)$merged[]=$r;
+                $queue['entries']=$merged;
+            }
+        }
+        sendQueueAtomicWrite(BSL_QUEUE_FILE,$queue);
+    }finally{if($lf){@flock($lf,LOCK_UN);@fclose($lf);}}
 }
 
 /**
@@ -78102,42 +79292,42 @@ header('Content-Type: application/json; charset=UTF-8');
    «total» رسیده (یا progress کامل است) ولی ردیف هنوز «running» است.
    queueStallCheck دقیقاً همین ردیف را فوراً «done» می‌کند؛ پس قبل از
    رندرِ رابط، یک بار بچکش تا کاربر دیگر وظیفهٔ تمام‌شدهٔ «فعال» نبیند. */
-try { queueStallCheck('bsl', BSL_SEND_STALL_SEC); } catch (Throwable $eB) {}
-$bslStatusFp = queueBackendLock('bsl');
-$bslWorkerLive=!is_resource($bslStatusFp);
-if (is_resource($bslStatusFp)) { queueBackendUnlock($bslStatusFp); $bslStatusFp = null; }
+try { if(!bslParallelProfileLanesEnabled())queueStallCheck('bsl', BSL_SEND_STALL_SEC); } catch (Throwable $eB) {}
 $queue=bslReadQueue();
-
-$progress=readProgress(BSL_PROGRESS_FILE);
-$_bslHasProg=!empty($progress['running'])||!empty($progress['done'])||!empty($progress['paused'])
-    ||trim((string)($progress['queue_id']??''))!==''||(int)($progress['started_at']??0)>0;
+$progressByLane=['legacy'=>readProgress(BSL_PROGRESS_FILE),'fast'=>readProgress(BSL_FAST_PROGRESS_FILE),'detail'=>readProgress(BSL_DETAIL_PROGRESS_FILE)];
+$workerLiveByLane=[];foreach(['legacy','fast','detail'] as $__ln){$__fp=@fopen(bslLaneLockFile($__ln),'c');$__live=true;if($__fp){$__live=!@flock($__fp,LOCK_EX|LOCK_NB);if(!$__live)@flock($__fp,LOCK_UN);@fclose($__fp);}$workerLiveByLane[$__ln]=$__live;}
+$progress=$progressByLane['legacy'];foreach(['fast','detail'] as $__ln)if(!empty($progressByLane[$__ln]['running'])){$progress=$progressByLane[$__ln];break;}
+$bslWorkerLive=in_array(true,$workerLiveByLane,true);
+$_bslHasProg=false;foreach($progressByLane as $__pp)if(!empty($__pp['running'])||!empty($__pp['done'])||!empty($__pp['paused'])||trim((string)($__pp['queue_id']??''))!==''||(int)($__pp['started_at']??0)>0){$_bslHasProg=true;break;}
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running' && $_bslHasProg && queueProgressBelongsToRow($progress,$e,$runningRows)){
-$e['sent']=$progress['sent']??$e['sent']??0;
-$e['updated']=$progress['updated']??$e['updated']??0;
-$e['skipped']=$progress['skipped']??$e['skipped']??0;
-$e['failed']=$progress['failed']??$e['failed']??0;
-$e['current']=max((int)($e['current']??0),(int)($progress['current']??0));
-$e['total']=((int)($progress['total']??0)>0)?(int)$progress['total']:(int)($e['total']??0);
-$e['done']=$progress['done']??false;
-foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$progress))$e[$__pk]=$progress[$__pk];}
+$rowLane=bslRowLane($e);$rowProgress=$progressByLane[$rowLane]??[];$rowWorkerLive=!empty($workerLiveByLane[$rowLane]);$e['lane']=$rowLane;
+if(($e['status']??'')==='running' && $_bslHasProg && queueProgressBelongsToRow($rowProgress,$e,$runningRows)){
+$e['sent']=$rowProgress['sent']??$e['sent']??0;
+$e['updated']=$rowProgress['updated']??$e['updated']??0;
+$e['skipped']=$rowProgress['skipped']??$e['skipped']??0;
+$e['failed']=$rowProgress['failed']??$e['failed']??0;
+$e['current']=max((int)($e['current']??0),(int)($rowProgress['current']??0));
+$e['total']=((int)($rowProgress['total']??0)>0)?(int)$rowProgress['total']:(int)($e['total']??0);
+$e['done']=$rowProgress['done']??false;
+foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$rowProgress))$e[$__pk]=$rowProgress[$__pk];}
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ غرفه‌ها زنده به صف می‌رسند */
-if(is_array($progress['shop_stats']??null))$e['shop_stats']=$progress['shop_stats'];
+if(is_array($rowProgress['shop_stats']??null))$e['shop_stats']=$rowProgress['shop_stats'];
 
-$progressIncomplete=!empty($progress['stopped']) || !empty($progress['partial'])
-    || !empty($progress['cancelled']) || !empty($progress['stale']) || !empty($progress['failed_resume']);
-if(!empty($progress['paused']) || $progressIncomplete){$e['status']='paused';$e['paused_at']=time();}
-else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
+$progressIncomplete=!empty($rowProgress['stopped']) || !empty($rowProgress['partial'])
+    || !empty($rowProgress['cancelled']) || !empty($rowProgress['stale']) || !empty($rowProgress['failed_resume']);
+if(!empty($rowProgress['paused']) || $progressIncomplete){$e['status']='paused';$e['paused_at']=time();}
+else if(!empty($rowProgress['done'])){$e['status']='done';$e['done_at']=time();}
 }
 }
 unset($e);
-if (!$bslWorkerLive && $_bslHasProg) bslWriteQueue($queue);
+if ($_bslHasProg) bslWriteQueue($queue);
 $queue['active_send']=null;
 $_bslStatusFull=!empty($_GET['full']);
 foreach($queue['entries'] as &$e){
-    $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows);
-    $e['_worker_owner']=$owns;$e['_worker_live']=$owns&&$bslWorkerLive;
+    $rowLane=bslRowLane($e);$rowProgress=$progressByLane[$rowLane]??[];
+    $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($rowProgress,$e,$runningRows);
+    $e['lane']=$rowLane;$e['_worker_owner']=$owns;$e['_worker_live']=$owns&&!empty($workerLiveByLane[$rowLane]);
     if($e['_worker_live']&&$queue['active_send']===null)$queue['active_send']=[
         'queue_id'=>(string)($e['id']??''),'profile_key'=>(string)($e['profile_key']??''),'profile_name'=>(string)($e['profile_name']??''),
         'shop_name'=>(string)($e['shop_name']??''),'current'=>(int)($e['current']??0),'total'=>(int)($e['total']??0),'destination'=>'bsl'];
@@ -78145,6 +79335,7 @@ foreach($queue['entries'] as &$e){
         unset($e['sent_details'],$e['updated_details'],$e['skipped_details'],$e['failed_details'],$e['recent_log']);
     }
 }unset($e);
+$queue['profile_lanes']=['enabled'=>bslParallelProfileLanesEnabled(),'priority'=>'lane_1_no_detail','workers'=>$workerLiveByLane,'progress'=>$progressByLane];
 echo json_encode($queue,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
@@ -78171,6 +79362,28 @@ echo json_encode(['ok'=>true,'saved'=>count($pd),'chunk'=>$chunkIndex,'total_sav
 exit;
 }
 
+/* v10.551: recover a terminal row even when its temporary snapshot was cleaned.
+   Rebuild from the row's saved profile/config, then pass through the canonical
+   queue-add path instead of duplicating queue/worker ownership logic. */
+if(isset($_GET['bsl_queue_requeue_profile'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $__rqId=trim((string)($_GET['queue_id']??''));$__rqRow=null;
+    foreach((array)(bslReadQueue()['entries']??[]) as $__rr){if(is_array($__rr)&&(string)($__rr['id']??'')===$__rqId){$__rqRow=$__rr;break;}}
+    if(!$__rqRow||!in_array((string)($__rqRow['status']??''),['done','failed','cancelled'],true)){
+        echo json_encode(['ok'=>false,'error'=>'ردیف پایان‌یافته یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
+    }
+    $__rqKey=trim((string)($__rqRow['profile_key']??''));
+    if($__rqKey===''){echo json_encode(['ok'=>false,'error'=>'پروفایل ردیف مشخص نیست'],JSON_UNESCAPED_UNICODE);exit;}
+    $__rqCfg=is_array($__rqRow['config']??null)?$__rqRow['config']:[];
+    $_POST=['queue_id'=>'q_'.round(microtime(true)*1000).'_recover','total'=>'0','profile_key'=>$__rqKey,
+      'profile_name'=>(string)($__rqRow['profile_name']??$__rqKey),'from_profile'=>'1','start_immediately'=>'1','force'=>'1',
+      'category_id'=>(string)($__rqCfg['category_id']??0),'auto_category'=>!empty($__rqCfg['auto_category'])?'1':'0',
+      'title_suffix'=>(string)($__rqCfg['title_suffix']??''),'delay_ms'=>(string)($__rqCfg['delay_ms']??500),
+      'retry_delay_ms'=>(string)($__rqCfg['retry_delay_ms']??1000),'product_timeout_sec'=>(string)($__rqCfg['product_timeout_sec']??180),'shop_send_mode'=>(string)($__rqCfg['shop_send_mode']??'parallel'),
+      'send_all_shops'=>'1','selected_shop_vids'=>json_encode(array_values((array)($__rqCfg['parallel_shop_vids']??[]))),
+      'fallback_cat_ids'=>json_encode(array_values((array)($__rqCfg['fallback_cat_ids']??[])))];
+    unset($_GET['bsl_queue_requeue_profile']);$_GET['bsl_queue_add']=1;
+}
 if(isset($_GET['bsl_queue_add'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_POST['queue_id']??'');
@@ -78181,19 +79394,38 @@ $titleSuffix=trim($_POST['title_suffix']??'');
 $cn=loadConnections();
 $delayMs=max(0,(int)($_POST['delay_ms']??500));
 $retryDelayMs=max(0,(int)($_POST['retry_delay_ms']??1000));
+$productTimeoutSec=max(30,min(1800,(int)($_POST['product_timeout_sec']??($cn['basalam']['product_timeout_sec']??180))));
 $parallelN=max(1,min(8,(int)($_POST['send_parallel_n']??($cn['basalam']['send_parallel_n']??4))));
 $parallelAuto=isset($_POST['send_parallel_auto'])
     ? ($_POST['send_parallel_auto']!=='0')
     : (!isset($cn['basalam']['send_parallel_auto']) || !empty($cn['basalam']['send_parallel_auto']));
+if(isset($_POST['parallel_profile_lanes'])){
+    $cn['basalam']['parallel_profile_lanes']=$_POST['parallel_profile_lanes']!=='0';
+    saveConnections($cn);
+}
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $pKeyIn=trim((string)($_POST['profile_key']??''));
 $pNameIn=trim((string)($_POST['profile_name']??''));
 $__pf=loadProfiles();
 $_bslResolvedKey=$pKeyIn!==''?(profileResolveKey($pKeyIn,$__pf)?:profileKey($pKeyIn)):'';
+$_laneRequested=isset($_POST['profile_lane']);
+$_bslLane=$_laneRequested?bslRequestedProfileLane($_POST['profile_lane']):(bslParallelProfileLanesEnabled($cn)?'fast':'legacy');
+if($_laneRequested&&!bslParallelProfileLanesEnabled($cn)){$cn['basalam']['parallel_profile_lanes']=true;saveConnections($cn);}
+$GLOBALS['_bslWorkerLane']=$_bslLane;
 if($_bslResolvedKey!==''&&isset($__pf[$_bslResolvedKey])){
 if($pNameIn==='')$pNameIn=(string)($__pf[$_bslResolvedKey]['name']??$_bslResolvedKey);
 }elseif($pKeyIn!==''&&$pNameIn===''){
 $pNameIn=(string)($__pf[$pKeyIn]['name']??$pKeyIn);
+}
+$_bslDetailSummary=['enabled'=>false,'total'=>0,'detailed'=>0];
+if($_bslLane==='detail'){
+    $_detailProfile=is_array($__pf[$_bslResolvedKey]??null)?$__pf[$_bslResolvedKey]:null;
+    if(!$_detailProfile){echo json_encode(['ok'=>false,'code'=>'detail_profile_required','error'=>'لین ۲ فقط از پروفایل ذخیره‌شده با جزئیات استفاده می‌کند'],JSON_UNESCAPED_UNICODE);exit;}
+    $_bslDetailSummary=extractProfileDetailSummary($_detailProfile);
+    if(empty($_bslDetailSummary['enabled'])){echo json_encode(['ok'=>false,'code'=>'detail_selectors_missing','error'=>'برای لین ۲ ابتدا سلکتورهای جزئیات این پروفایل را تنظیم کنید'],JSON_UNESCAPED_UNICODE);exit;}
+    if((int)$_bslDetailSummary['total']<=0||(int)$_bslDetailSummary['detailed']<(int)$_bslDetailSummary['total']){
+        echo json_encode(['ok'=>false,'code'=>'detail_coverage_incomplete','error'=>'جزئیات همهٔ محصولات این پروفایل هنوز استخراج نشده است؛ ابتدا استخراج جزئیات را کامل کنید','detail_summary'=>$_bslDetailSummary],JSON_UNESCAPED_UNICODE);exit;
+    }
 }
 // v10.460: همگام‌سازی زندهٔ انتخاب غرفه‌های تب ارسال با connections.json
 // تا اگر تیک غرفه‌ای در مرورگر خورده ولی saveShopSelection هنوز کامل نشده یا
@@ -78231,11 +79463,26 @@ if(empty($_bslActualItems)){
 echo json_encode(['ok'=>false,'code'=>!empty($_POST['from_profile'])?'fallback_upload_needed':'products_empty','error'=>'محصولی برای ارسال در این پروفایل یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
 }
 if($total<=0&&count($_bslActualItems)>0)$total=count($_bslActualItems);
+/* v10.567: one profile may own only one send lane. Serialize the complete
+   read/check/add decision, not just the final JSON rename, so simultaneous
+   clicks in Lane 1 and Lane 2 cannot both pass a stale queue snapshot. */
+$_bslProfileClaimFp=@fopen(BSL_PROFILE_LANE_CLAIM_FILE,'c');$_bslProfileClaimOk=false;
+if($_bslProfileClaimFp){for($_pci=0;$_pci<100;$_pci++){if(@flock($_bslProfileClaimFp,LOCK_EX|LOCK_NB)){$_bslProfileClaimOk=true;break;}usleep(50000);}}
+if(!$_bslProfileClaimOk){if($_bslProfileClaimFp)@fclose($_bslProfileClaimFp);@unlink($qFile);echo json_encode(['ok'=>false,'code'=>'profile_lane_claim_busy','retryable'=>true,'error'=>'ثبت لین این پروفایل در حال انجام است؛ چند لحظه دیگر دوباره تلاش کنید'],JSON_UNESCAPED_UNICODE);exit;}
+register_shutdown_function(function()use($_bslProfileClaimFp){@flock($_bslProfileClaimFp,LOCK_UN);@fclose($_bslProfileClaimFp);});
 $queue=bslReadQueue();
+$_claimProfileKey=$_bslResolvedKey?:$pKeyIn;
+if($_claimProfileKey!==''){
+    foreach((array)($queue['entries']??[]) as $_claimRow){
+        if(!is_array($_claimRow)||!in_array((string)($_claimRow['status']??''),['running','waiting'],true))continue;
+        if(!s4QueueProfileMatchesKey((string)($_claimRow['profile_key']??''),$_claimProfileKey,$__pf))continue;
+        $_ownerLane=bslRowLane($_claimRow);
+        if($_ownerLane!==$_bslLane){@unlink($qFile);echo json_encode(['ok'=>false,'duplicate'=>true,'code'=>'profile_owned_by_other_lane','queue_id'=>(string)($_claimRow['id']??''),'owner_lane'=>bslPublicLaneName($_ownerLane),'requested_lane'=>bslPublicLaneName($_bslLane),'error'=>'این پروفایل هم‌اکنون در لین دیگر قرار دارد؛ ابتدا همان وظیفه را کامل یا حذف کنید'],JSON_UNESCAPED_UNICODE);exit;}
+    }
+}
 $startImm=!empty($_POST['start_immediately']);
-$_bslProbeFp=queueBackendLock('bsl');
-$_bslWorkerLive=!is_resource($_bslProbeFp);
-if(is_resource($_bslProbeFp))queueBackendUnlock($_bslProbeFp);
+$_bslProbePath=bslLaneLockFile($_bslLane);$_bslProbeFp=@fopen($_bslProbePath,'c');
+$_bslWorkerLive=true;if(is_resource($_bslProbeFp)){$_bslWorkerLive=!@flock($_bslProbeFp,LOCK_EX|LOCK_NB);if(!$_bslWorkerLive)@flock($_bslProbeFp,LOCK_UN);@fclose($_bslProbeFp);}
 if(!$_bslWorkerLive){
 foreach($queue['entries'] as &$qeOrphB){
 if(($qeOrphB['status']??'')==='running'){
@@ -78283,17 +79530,18 @@ echo json_encode(['ok'=>false,'duplicate'=>true,'queue_id'=>$dupE['id']??'',
 }
 // v8.57: اگر ارسال دیگری واقعاً در جریان است، این یکی باید در صف بماند.
 $bslBusy=false;
-foreach($queue['entries'] as $qe0){if(($qe0['status']??'')==='running'){$bslBusy=true;break;}}
+foreach($queue['entries'] as $qe0){if(($qe0['status']??'')==='running'&&(!bslParallelProfileLanesEnabled($cn)||in_array(bslRowLane($qe0),[$_bslLane,'legacy'],true))){$bslBusy=true;break;}}
 if($bslBusy)$startImm=false;
 $status=$startImm?'running':'waiting';
 
 if($startImm){
-localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);
-@unlink(BSL_PRODUCTS_FILE);
-$copyOk=@copy($qFile,BSL_PRODUCTS_FILE);
-if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل محصولات: '.$qFile.' → '.BSL_PRODUCTS_FILE],JSON_UNESCAPED_UNICODE);exit;}
+$__laneProgress=bslLaneProgressFile($_bslLane);$__laneProducts=bslLaneProductsFile($_bslLane);
+localTaskDbForget($__laneProgress); @unlink($__laneProgress);@unlink(BSL_STOP_FILE);
+@unlink($__laneProducts);
+$copyOk=@copy($qFile,$__laneProducts);
+if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل محصولات: '.$qFile.' → '.$__laneProducts],JSON_UNESCAPED_UNICODE);exit;}
 
-$verifyProducts=json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'',true)?:[];
+$verifyProducts=json_decode(@file_get_contents($__laneProducts)?:'',true)?:[];
 if(empty($verifyProducts)){echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی است بعد از کپی'],JSON_UNESCAPED_UNICODE);exit;}
 }
 // v8.57: دستهٔ پروفایل و دسته‌های جایگزینش هم در خود ردیف صف ذخیره شوند،
@@ -78341,26 +79589,30 @@ $fanStatus=$startImm?'running':'waiting';
 if(count($fanoutShops)>1&&$_reqShopSendMode==='parallel'){
 $__parVids=array_values(array_map(static fn($__x)=>(int)$__x['vendor_id'],$fanoutShops));
 $__parNames=array_values(array_map(static fn($__x)=>(string)$__x['shop_name'],$fanoutShops));
-$queue['entries'][]=['id'=>$queueId,'status'=>$fanStatus,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'shop_name'=>'⚡ موازی ('.count($fanoutShops).' غرفه)','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>0,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'parallel_shop_names'=>$__parNames]];
+$queue['entries'][]=['id'=>$queueId,'status'=>$fanStatus,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'lane'=>$_bslLane,'with_details'=>$_bslLane==='detail','detail_summary'=>$_bslDetailSummary,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'shop_name'=>'⚡ موازی ('.count($fanoutShops).' غرفه)','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>0,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'parallel_shop_names'=>$__parNames]];
 }else{
 $fanFirst=true;
 foreach($fanoutShops as $__fs){
 $__fsVid=(int)$__fs['vendor_id'];
 $__fsId=$fanFirst?$queueId:$queueId.'_s'.$__fsVid;
-$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'shop_send_mode'=>'serial','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
+$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'lane'=>$_bslLane,'with_details'=>$_bslLane==='detail','detail_summary'=>$_bslDetailSummary,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'shop_send_mode'=>'serial','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
 $fanFirst=false;
 }
 }
 bslWriteQueue($queue);
-$_bslFanPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shop_send_mode'=>$_reqShopSendMode,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
+$_bslLaneKicks=bslParallelProfileLanesEnabled($cn)?bslKickParallelProfileLanes($queue):[];
+$_bslFanPid=(int)($_bslLaneKicks[$_bslLane]['worker_pid']??0);
+if(!bslParallelProfileLanesEnabled($cn)&&$startImm&&function_exists('fireAndForgetCliQueueBackend'))$_bslFanPid=fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'lane'=>$_bslLane,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shop_send_mode'=>$_reqShopSendMode,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
-$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
+$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'lane'=>$_bslLane,'with_details'=>$_bslLane==='detail','detail_summary'=>$_bslDetailSummary,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
 $queue['entries'][]=$entry;
 bslWriteQueue($queue);
-$_bslAddPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$status,'total'=>$total,'worker_pid'=>$_bslAddPid,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
+$_bslLaneKicks=bslParallelProfileLanesEnabled($cn)?bslKickParallelProfileLanes($queue):[];
+$_bslAddPid=(int)($_bslLaneKicks[$_bslLane]['worker_pid']??0);
+if(!bslParallelProfileLanesEnabled($cn)&&$startImm&&function_exists('fireAndForgetCliQueueBackend'))$_bslAddPid=fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'lane'=>$_bslLane,'status'=>$status,'total'=>$total,'worker_pid'=>$_bslAddPid,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -78386,21 +79638,21 @@ $e['done_at']=time();
 unset($e);
 
 $nextIdx2=-1;
-foreach($queue['entries'] as $i=>$e){
-if($e['status']==='waiting'||($e['status']==='running'&&($e['current']??0)<=0)){
-$nextIdx2=$i;break;
-}
-}
+$__laneOrder=bslParallelProfileLanesEnabled()?['fast','detail']:['legacy'];
+foreach($__laneOrder as $__wantLane){foreach($queue['entries'] as $i=>$e){
+if(bslRowLane($e)===$__wantLane&&($e['status']==='waiting'||($e['status']==='running'&&($e['current']??0)<=0))){$nextIdx2=$i;break 2;}
+}}
 if($nextIdx2>=0){
-@unlink(BSL_PRODUCTS_FILE);
-localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);
-@copy($queue['entries'][$nextIdx2]['products_file'],BSL_PRODUCTS_FILE);
+$__nextLane=bslRowLane($queue['entries'][$nextIdx2]);$__nextProducts=bslLaneProductsFile($__nextLane);$__nextProgress=bslLaneProgressFile($__nextLane);
+@unlink($__nextProducts);
+localTaskDbForget($__nextProgress); @unlink($__nextProgress);@unlink(BSL_STOP_FILE);
+@copy($queue['entries'][$nextIdx2]['products_file'],$__nextProducts);
 $queue['entries'][$nextIdx2]['status']='running';
 $queue['entries'][$nextIdx2]['started_at']=time();
 $nextEntry=$queue['entries'][$nextIdx2];
 bslWriteQueue($queue);
 queueBackendUnlock($__bslNextFp);
-$_bslNextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_bslNextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1','lane'=>bslRowLane($nextEntry)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'total'=>$nextEntry['total'],'worker_pid'=>$_bslNextPid,'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'msg'=>'شروع فرآیند بعدی از صف'],JSON_UNESCAPED_UNICODE);
 }else{
 bslWriteQueue($queue);
@@ -78486,6 +79738,30 @@ echo json_encode(['ok'=>true],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
+/* v10.532: maintenance-safe checkpoint repair. Unlike the legacy live
+   progress endpoint, this only accepts a paused row, so no worker can race
+   and overwrite the restored cursor before resume. */
+if(isset($_GET['bsl_queue_set_checkpoint'])){
+header('Content-Type: application/json; charset=UTF-8');
+$queueId=trim((string)($_GET['queue_id']??''));
+$queue=bslReadQueue();$found=false;$result=[];
+foreach($queue['entries'] as &$e){
+if((string)($e['id']??'')!==$queueId)continue;
+$found=true;
+if((string)($e['status']??'')!=='paused'){$result=['ok'=>false,'error'=>'queue_must_be_paused','status'=>(string)($e['status']??'')];break;}
+$total=max(0,(int)($e['total']??0));$current=max(0,min($total,(int)($_GET['current']??$e['current']??0)));
+$e['current']=$current;$e['phase_current']=$current;$e['phase_total']=$total;
+$e['phase_pct']=$total>0?(int)floor($current*100/$total):0;
+foreach(['sent','updated','skipped','failed'] as $f)if(isset($_GET[$f]))$e[$f]=max(0,(int)$_GET[$f]);
+$e['checkpoint_repaired_at']=time();$e['checkpoint_repaired_version']=APP_VERSION;
+$result=['ok'=>true,'queue_id'=>$queueId,'current'=>$current,'total'=>$total];break;
+}
+unset($e);
+if(!$found)$result=['ok'=>false,'error'=>'queue_not_found'];
+if(!empty($result['ok']))bslWriteQueue($queue);
+echo json_encode($result,JSON_UNESCAPED_UNICODE);exit;
+}
+
 if(isset($_GET['bsl_queue_mark_done'])){
 header('Content-Type: application/json; charset=UTF-8');
 $queueId=trim($_GET['queue_id']??'');
@@ -78530,7 +79806,7 @@ $e['paused_by']='user';$e['stopped_by_user']=true;
 $e['paused_at']=time();
 $found=true;
 
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>false,'paused'=>true,'paused_by'=>'user','queue_id'=>$queueId,'sent'=>$e['sent'],'updated'=>$e['updated'],'skipped'=>$e['skipped'],'failed'=>$e['failed'],'total'=>$e['total'],'current'=>$e['current'],'last_title'=>'','started_at'=>$e['started_at'],'last_progress_ts'=>time(),'phase'=>$e['phase']??'send','phase_label'=>$e['phase_label']??'','phase_current'=>$e['phase_current']??0,'phase_total'=>$e['phase_total']??$e['total'],'phase_pct'=>$e['phase_pct']??0,'phase_shop_vendor_id'=>$e['phase_shop_vendor_id']??0,'shop_stats'=>$e['shop_stats']??[],'batch_done_indices'=>$e['batch_done_indices']??[],'recent_log'=>$e['recent_log'],'total_log_count'=>$e['total_log_count'],'sent_details'=>$e['sent_details'],'updated_details'=>$e['updated_details'],'skipped_details'=>$e['skipped_details'],'failed_details'=>$e['failed_details']]);
+writeProgress(bslLaneProgressFile(bslLaneForQueueId($queueId,$queue??null)),['running'=>false,'done'=>false,'paused'=>true,'paused_by'=>'user','queue_id'=>$queueId,'sent'=>$e['sent'],'updated'=>$e['updated'],'skipped'=>$e['skipped'],'failed'=>$e['failed'],'total'=>$e['total'],'current'=>$e['current'],'last_title'=>'','started_at'=>$e['started_at'],'last_progress_ts'=>time(),'phase'=>$e['phase']??'send','phase_label'=>$e['phase_label']??'','phase_current'=>$e['phase_current']??0,'phase_total'=>$e['phase_total']??$e['total'],'phase_pct'=>$e['phase_pct']??0,'phase_shop_vendor_id'=>$e['phase_shop_vendor_id']??0,'shop_stats'=>$e['shop_stats']??[],'batch_done_indices'=>$e['batch_done_indices']??[],'recent_log'=>$e['recent_log'],'total_log_count'=>$e['total_log_count'],'sent_details'=>$e['sent_details'],'updated_details'=>$e['updated_details'],'skipped_details'=>$e['skipped_details'],'failed_details'=>$e['failed_details']]);
 break;
 }
 }
@@ -78538,6 +79814,24 @@ unset($e);
 bslWriteQueue($queue);
 echo json_encode(['ok'=>$found,'queue_id'=>$queueId],JSON_UNESCAPED_UNICODE);
 exit;
+}
+
+/* v10.560: controlled hot-code recycle. The selected row must already be
+   paused, so its durable cursor is authoritative. Recovery then identifies and
+   retires only the process holding Basalam's exact flock before dispatching the
+   same queue from that cursor; unrelated queues/processes are untouched. */
+if(isset($_GET['bsl_queue_recycle'])){
+header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+$queueId=trim((string)($_GET['queue_id']??''));if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+$q=bslReadQueue();$row=null;foreach((array)($q['entries']??[]) as $qr)if(is_array($qr)&&(string)($qr['id']??'')===$queueId){$row=$qr;break;}
+if(!$row){echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+if((string)($row['status']??'')!=='paused'){echo json_encode(['ok'=>false,'error'=>'queue_must_be_paused','status'=>(string)($row['status']??'')],JSON_UNESCAPED_UNICODE);exit;}
+@file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'time'=>time(),'queue_id'=>$queueId,'by'=>'code_recycle'],JSON_UNESCAPED_UNICODE),LOCK_EX);
+/* The exact paused queue id is carried into the established flock-owner
+   verifier. This bypasses only the age gate, never PID/flock ownership checks. */
+$GLOBALS['_s4ForcePausedQueueOwner']=$queueId;
+try{$res=queueStallRecover('bsl',1,false,3000,true,true,false);}finally{unset($GLOBALS['_s4ForcePausedQueueOwner']);}
+echo json_encode(['ok'=>!empty($res['resumed']),'queue_id'=>$queueId,'result'=>$res],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
 if(isset($_GET['bsl_queue_resume'])){
@@ -78556,7 +79850,9 @@ if(!is_resource($resumeFp)){
 $queue=bslReadQueue();if(!is_array($queue['entries']??null))$queue['entries']=[];
 $idx=-1;foreach($queue['entries'] as $i=>$row)if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}
 if($idx<0){queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
-$row=$queue['entries'][$idx];$current=max(0,(int)($row['current']??0));$total=max(0,(int)($row['total']??0));
+$row=$queue['entries'][$idx];$__resumeLane=bslRowLane($row);$GLOBALS['_bslWorkerLane']=$__resumeLane;
+if($__resumeLane!=='legacy'){$__lf=@fopen(bslLaneLockFile($__resumeLane),'c');$__held=true;if($__lf){$__held=!@flock($__lf,LOCK_EX|LOCK_NB);if(!$__held)@flock($__lf,LOCK_UN);@fclose($__lf);}if($__held){queueBackendUnlock($resumeFp);echo json_encode(['ok'=>true,'already_running'=>true,'queue_id'=>$queueId,'lane'=>$__resumeLane],JSON_UNESCAPED_UNICODE);exit;}}
+$current=max(0,(int)($row['current']??0));$total=max(0,(int)($row['total']??0));
 if((string)($row['status']??'')==='done'&&($total===0||$current>=$total)){
     queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'complete'=>true,'error'=>'این ردیف کامل شده است'],JSON_UNESCAPED_UNICODE);exit;
 }
@@ -78570,16 +79866,16 @@ if($total<=0){
 }
 /* A free flock proves every old running owner is dead. Keep their checkpoints
    but return them to waiting so the explicitly selected row is unambiguous. */
-$now=time();foreach($queue['entries'] as $i=>&$other){if(!is_array($other)||$i===$idx)continue;if((string)($other['status']??'')==='running'){$other['status']='waiting';$other['resume_requested_at']=0;$other['updated_at']=$now;}}unset($other);
+$now=time();foreach($queue['entries'] as $i=>&$other){if(!is_array($other)||$i===$idx)continue;if((string)($other['status']??'')==='running'&&bslRowLane($other)===$__resumeLane){$other['status']='waiting';$other['resume_requested_at']=0;$other['updated_at']=$now;}}unset($other);
 $row=&$queue['entries'][$idx];$row['total']=$total;$row['status']='running';$row['started_at']=$now;$row['updated_at']=$now;$row['paused_at']=0;$row['done_at']=0;$row['resume_requested_at']=$now;$row['fail_reason']='';
 unset($row['resume_exhausted'],$row['paused_by'],$row['stopped_by_user'],$row['error']);
-@unlink(BSL_PRODUCTS_FILE);if(!@copy($productsFile,BSL_PRODUCTS_FILE)){
+$__resumeProducts=bslLaneProductsFile($__resumeLane);@unlink($__resumeProducts);if(!@copy($productsFile,$__resumeProducts)){
     $row['status']='paused';$row['paused_by']='system';bslWriteQueue($queue);queueBackendUnlock($resumeFp);
     echo json_encode(['ok'=>false,'error'=>'کپی فایل محصولات برای ادامه ناموفق بود'],JSON_UNESCAPED_UNICODE);exit;
 }
 /* Consume only this row's stop (or a legacy global stop), never another row's. */
 if(bslStopRequestedForQueue($queueId))@unlink(BSL_STOP_FILE);
-writeProgress(BSL_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$queueId,
+writeProgress(bslLaneProgressFile(bslLaneForQueueId($queueId,$queue??null)),['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$queueId,
     'sent'=>(int)($row['sent']??0),'updated'=>(int)($row['updated']??0),'skipped'=>(int)($row['skipped']??0),'failed'=>(int)($row['failed']??0),
     'total'=>$total,'current'=>$current,'last_title'=>'','started_at'=>$now,'last_progress_ts'=>$now,
     'phase'=>(string)($row['phase']??'send'),'phase_label'=>(string)($row['phase_label']??''),
@@ -78589,7 +79885,7 @@ writeProgress(BSL_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'
     'sent_details'=>$row['sent_details']??[],'updated_details'=>$row['updated_details']??[],'skipped_details'=>$row['skipped_details']??[],'failed_details'=>$row['failed_details']??[],
     'checkpoint'=>['queue_id'=>$queueId,'current'=>$current,'total'=>$total,'sent'=>(int)($row['sent']??0),'updated'=>(int)($row['updated']??0),'skipped'=>(int)($row['skipped']??0),'failed'=>(int)($row['failed']??0),'started_at'=>$now]]);
 bslWriteQueue($queue);queueResumeBook('bsl',$queueId,['tries'=>0,'at'=>$now,'from'=>$current,'status'=>'manual_continue']);queueBackendUnlock($resumeFp);
-$_bslResPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_bslResPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 echo json_encode(['ok'=>true,'dispatch_ready'=>true,'worker_pid'=>$_bslResPid,'queue_id'=>$queueId,'current'=>$current,'total'=>$total],JSON_UNESCAPED_UNICODE);exit;
 }
 
@@ -78605,7 +79901,7 @@ if($e['id']===$queueId){$entry=$e;break;}
 if(!$entry){echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 
 if($entry['status']==='running'){
-$progress=readProgress(BSL_PROGRESS_FILE);
+$progress=readProgress(bslLaneProgressFile(bslRowLane($entry)));
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 if(queueProgressBelongsToRow($progress,$entry,$runningRows)){
 $entry['sent']=$progress['sent']??$entry['sent']??0;
@@ -78650,7 +79946,7 @@ foreach($queue['entries'] as $i=>$e){
 if($e['id']===$queueId){
 
 if($e['status']==='running'){
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>$e['total'],'current'=>0,'started_at'=>$e['started_at'],'recent_log'=>['❌ ارسال لغو شد'],'total_log_count'=>1]);
+writeProgress(bslLaneProgressFile(bslLaneForQueueId($queueId,$queue??null)),['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>$e['total'],'current'=>0,'started_at'=>$e['started_at'],'recent_log'=>['❌ ارسال لغو شد'],'total_log_count'=>1]);
 }
 @unlink($e['products_file']);
 array_splice($queue['entries'],$i,1);
@@ -78660,6 +79956,60 @@ $found=true;break;
 bslWriteQueue($queue);
 echo json_encode(['ok'=>$found,'queue_id'=>$queueId],JSON_UNESCAPED_UNICODE);
 exit;
+}
+
+/* v10.519: بازیابی امنِ یک ارسال terminal از ابتدای همان snapshot. این مسیر
+   برای نصب اصلاحی است که بخشی از ردیف قبلی پیش از deploy خطا داده است؛ upsert
+   شناسه‌محور است، پس موفق‌های قبلی تکراری ساخته نمی‌شوند و خطادارها ترمیم می‌شوند. */
+if(isset($_GET['bsl_queue_retry'])){
+header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+$queueId=trim((string)($_GET['queue_id']??''));
+if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
+$retryFp=queueBackendLock('bsl');
+if(!is_resource($retryFp)){
+    /* v10.520: ممکن است worker نسل قبل پس از نوشتن done هنوز چند لحظه lock را
+       نگه داشته باشد. اگر هیچ ردیف running نداریم، بازیابی را waiting ثبت کن؛
+       اولین cron پس از آزاد شدن lock آن را برمی‌دارد، بدون ساخت worker دوم. */
+    $busyQ=bslReadQueue();$hasRunning=false;$busyIdx=-1;
+    foreach((array)($busyQ['entries']??[]) as $i=>$br){
+        if(!is_array($br))continue;
+        if((string)($br['status']??'')==='running')$hasRunning=true;
+        if((string)($br['id']??'')===$queueId)$busyIdx=$i;
+    }
+    if(!$hasRunning&&$busyIdx>=0){
+        $br=&$busyQ['entries'][$busyIdx];$bpf=(string)($br['products_file']??'');
+        $bprod=$bpf!==''&&is_file($bpf)?json_decode((string)@file_get_contents($bpf),true):null;
+        $btotal=is_array($bprod)?count($bprod):0;
+        if($btotal>0&&in_array((string)($br['status']??''),['done','failed','cancelled'],true)){
+            $br['status']='waiting';$br['total']=$btotal;$br['current']=0;$br['sent']=0;$br['updated']=0;$br['skipped']=0;$br['failed']=0;
+            $br['done_at']=0;$br['paused_at']=0;$br['retry_queued_at']=time();
+            unset($br['superseded_by'],$br['cancel_reason'],$br['fail_reason'],$br['error']);
+            localTaskDbForget(BSL_PROGRESS_FILE);@unlink(BSL_PROGRESS_FILE);
+            bslWriteQueue($busyQ);
+            echo json_encode(['ok'=>true,'queued'=>true,'queue_id'=>$queueId,'total'=>$btotal,'message'=>'بازیابی ثبت شد و در اولین کران پس از آزاد شدن worker شروع می‌شود'],JSON_UNESCAPED_UNICODE);exit;
+        }
+    }
+    echo json_encode(['ok'=>false,'running'=>true,'error'=>'یک پردازش صف در حال اجراست'],JSON_UNESCAPED_UNICODE);exit;
+}
+$queue=bslReadQueue();$idx=-1;
+foreach((array)($queue['entries']??[]) as $i=>$row){if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}}
+if($idx<0){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$row=&$queue['entries'][$idx];$st=(string)($row['status']??'');
+if(!in_array($st,['done','failed','cancelled'],true)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'فقط ردیف پایان‌یافته قابل بازیابی است'],JSON_UNESCAPED_UNICODE);exit;}
+$pf=(string)($row['products_file']??'');
+if($pf===''||!is_file($pf)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$products=json_decode((string)@file_get_contents($pf),true);$actual=is_array($products)?count($products):0;
+if($actual<=0){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'snapshot محصولات خالی است'],JSON_UNESCAPED_UNICODE);exit;}
+localTaskDbForget(BSL_PROGRESS_FILE);@unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
+if(!@copy($pf,BSL_PRODUCTS_FILE)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'کپی snapshot ناموفق بود'],JSON_UNESCAPED_UNICODE);exit;}
+$now=time();$row['status']='running';$row['total']=$actual;$row['current']=0;$row['sent']=0;$row['updated']=0;$row['skipped']=0;$row['failed']=0;
+$row['started_at']=$now;$row['updated_at']=$now;$row['done_at']=0;$row['paused_at']=0;$row['retry_of_terminal_at']=$now;
+foreach(['sent_details','updated_details','skipped_details','failed_details','recent_log','batch_done_indices'] as $k)$row[$k]=[];
+foreach((array)($row['shop_stats']??[]) as $si=>$ss){foreach(['sent','updated','skipped','failed'] as $k)$row['shop_stats'][$si][$k]=0;}
+unset($row['superseded_by'],$row['cancel_reason'],$row['fail_reason'],$row['error'],$row['paused_by'],$row['stopped_by_user']);
+bslWriteQueue($queue);queueBackendUnlock($retryFp);
+$pid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>'0','resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$actual,'worker_pid'=>$pid,'restarted_from'=>0],JSON_UNESCAPED_UNICODE);exit;
 }
 
 if(isset($_GET['bsl_queue_start_server'])){
@@ -78689,7 +80039,7 @@ unset($queue['entries'][$entryIdx]['paused_by'],$queue['entries'][$entryIdx]['st
 $queue['entries'][$entryIdx]['resume_requested_at']=0;
 bslWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_bslSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_bslSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود — ارسال‌کننده از config همین ردیف می‌خواند
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslSrvPid],JSON_UNESCAPED_UNICODE);exit;
 }
@@ -78719,7 +80069,7 @@ if((int)($entry['total']??0)<=0&&$_bslRstCnt>0){$entry['total']=$_bslRstCnt;$que
 $queue['entries'][$entryIdx]['status']='running';$queue['entries'][$entryIdx]['started_at']=time();
 bslWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_bslRstPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_bslRstPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslRstPid,'current'=>$current,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$failed],JSON_UNESCAPED_UNICODE);exit;
 }
@@ -78837,7 +80187,14 @@ exit;
 }
 
 if(isset($_GET['action']) && $_GET['action'] === 'bsl_backend'){
-if(!isCliRun()&&function_exists('s4GetActiveCliQueueSpawn')){
+$_bslLane=bslNormalizeProfileLane($_GET['lane']??$_POST['lane']??'');
+if($_bslLane==='legacy'&&bslParallelProfileLanesEnabled()){
+    $_rq=trim((string)($_GET['queue_id']??$_POST['queue_id']??''));
+    if($_rq!==''){foreach((array)(bslReadQueue()['entries']??[]) as $_rr)if((string)($_rr['id']??'')===$_rq){$_bslLane=bslRowLane($_rr);break;}}
+}
+$GLOBALS['_bslWorkerLane']=$_bslLane;
+$bslProgressFile=bslLaneProgressFile($_bslLane);$bslProductsFile=bslLaneProductsFile($_bslLane);
+if($_bslLane==='legacy'&&!isCliRun()&&function_exists('s4GetActiveCliQueueSpawn')){
 $_bslCliHold=s4GetActiveCliQueueSpawn('bsl',10.0);
 if(is_array($_bslCliHold)){
 header('Content-Type: application/json; charset=UTF-8');
@@ -78848,7 +80205,7 @@ exit;
 
 // v8.57: سیگنالِ توقف فقط بعد از گرفتنِ lock بررسی/پاک می‌شود؛
 // probe یا حذفِ زودهنگام نباید با workerِ موازی race بسازد.
-$bslLockFile=__DIR__.'/bsl_backend.lock';
+$bslLockFile=bslLaneLockFile($_bslLane);
 $bslLockFp=fopen($bslLockFile,'c');
 $_bslGotLock=false;
 for($_bslLi=0;$_bslLi<10;$_bslLi++){if(flock($bslLockFp,LOCK_EX|LOCK_NB)){$_bslGotLock=true;break;}usleep(50000);}
@@ -78891,7 +80248,7 @@ if($explicitResume&&$stopMatchesRequested)@unlink(BSL_STOP_FILE);
 $startedAt=time();
 $GLOBALS['startedAt']=$startedAt;
 function bslBackendProgress($s,$u,$sk,$f,$t,$c,$lt,$log=null,$extra=[]){
-global $bslLog,$bslSentList,$bslUpdatedList,$bslSkippedList,$bslFailedList,$bslQueueId;
+global $bslLog,$bslSentList,$bslUpdatedList,$bslSkippedList,$bslFailedList,$bslQueueId,$bslProgressFile;
 /* v10.395: callers may pass one message or a list. Nested arrays rendered as
    blank task logs and caused JS string operations to fail. */
 if($log!==null){foreach((is_array($log)?$log:[$log]) as $__msg){if(is_scalar($__msg)&&trim((string)$__msg)!=='')$bslLog[]=(string)$__msg;}}
@@ -78908,9 +80265,18 @@ $__rc=$GLOBALS['_bslResumeCounters'];
 $__sW=(int)($__rc['sent']??0);$__uW=(int)($__rc['updated']??0);
 $__skW=(int)($__rc['skipped']??0);$__fW=(int)($__rc['failed']??0);
 }
-$d=['running'=>true,'sent'=>$__sW,'updated'=>$__uW,'skipped'=>$__skW,'failed'=>$__fW,'total'=>$t,'last_title'=>$lt,'current'=>$cWrite,'done'=>false,'started_at'=>$GLOBALS['startedAt'],'last_progress_ts'=>time(),'recent_log'=>$recentSlice,'total_log_count'=>$totalLog,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList,
+/* v10.526: نوشتن کل تاریخچهٔ چند هزار کارتی بعد از هر محصول O(n²) بود و روی
+   هاست اشتراکی بیشتر از خود API زمان می‌گرفت. شمارنده‌ها کامل می‌مانند؛ برای
+   UI/عیب‌یابی فقط کارت‌های اخیر نگه داشته می‌شوند (خطاها سقف بزرگ‌تری دارند). */
+$__sentPersist=is_array($bslSentList)?array_slice($bslSentList,-400):[];
+$__updatedPersist=is_array($bslUpdatedList)?array_slice($bslUpdatedList,-400):[];
+$__skippedPersist=is_array($bslSkippedList)?array_slice($bslSkippedList,-400):[];
+$__failedPersist=is_array($bslFailedList)?array_slice($bslFailedList,-2000):[];
+$d=['running'=>true,'sent'=>$__sW,'updated'=>$__uW,'skipped'=>$__skW,'failed'=>$__fW,'total'=>$t,'last_title'=>$lt,'current'=>$cWrite,'done'=>false,'started_at'=>$GLOBALS['startedAt'],'last_progress_ts'=>time(),'recent_log'=>$recentSlice,'total_log_count'=>$totalLog,'sent_details'=>$__sentPersist,'updated_details'=>$__updatedPersist,'skipped_details'=>$__skippedPersist,'failed_details'=>$__failedPersist,
    'checkpoint'=>['queue_id'=>(string)($bslQueueId??''),'current'=>(int)$cWrite,'total'=>(int)$t,'sent'=>(int)$__sW,'updated'=>(int)$__uW,'skipped'=>(int)$__skW,'failed'=>(int)$__fW,'started_at'=>(int)$GLOBALS['startedAt']]];
 if($bslQueueId!='')$d['queue_id']=$bslQueueId;
+$__rate=bslAdaptiveStateRead();$d['adaptive_rate']=is_array($__rate['kinds']??null)?$__rate['kinds']:[];
+$d['photo_cache_hits']=(int)($GLOBALS['_bslPhotoCacheHits']??0);$d['photo_cache_uploads']=(int)($GLOBALS['_bslPhotoCacheMisses']??0);
 /* v10.23 (۳۶ه): شمارنده‌های هر غرفه در هر ضربانِ پیشرفت هم می‌روند تا صف
    بتواند «زنده» نشانشان بدهد، نه فقط در پایانِ کار. */
 $__ss=bslShopStatRows((int)$s,(int)$u,(int)$sk,(int)$f);
@@ -78932,7 +80298,7 @@ $__ph=$GLOBALS['_bslPhaseState'];
 if(($__ph['phase']??'')==='send'&&(int)$c>0){$__sendCursor=min(max(0,(int)$t),(int)$c);$__ph['phase_current']=$__sendCursor;$__ph['phase_total']=$t;$__ph['phase_pct']=(int)floor($__sendCursor*100/max(1,(int)$t));}
 $d=array_merge($d,$__ph);
 }
-writeProgress(BSL_PROGRESS_FILE,$d);
+writeProgress($bslProgressFile,$d);
 clearstatcache();
 /* v10.56/v10.104: current ردیف صف فقط بالا می‌رود (هرگز رگرس به ۰).
    جزئیات کارت‌ها هم در ردیف صف نگه داشته می‌شود تا گزارش پروفایل زنده بماند. */
@@ -78948,10 +80314,8 @@ $__bootZero=((int)$s+(int)$u+(int)$sk+(int)$f)===0 && $__floor>0;
 if(!$__bootZero){
 $__e['sent']=$s;$__e['updated']=$u;$__e['skipped']=$sk;$__e['failed']=$f;
 }
-if(is_array($bslSentList)){$__e['sent_details']=$bslSentList;$__chg=true;}
-if(is_array($bslUpdatedList)){$__e['updated_details']=$bslUpdatedList;$__chg=true;}
-if(is_array($bslSkippedList)){$__e['skipped_details']=$bslSkippedList;$__chg=true;}
-if(is_array($bslFailedList)){$__e['failed_details']=$bslFailedList;$__chg=true;}
+$__e['sent_details']=$__sentPersist;$__e['updated_details']=$__updatedPersist;
+$__e['skipped_details']=$__skippedPersist;$__e['failed_details']=$__failedPersist;$__chg=true;
 if(is_array($d['shop_stats']??null)){$__e['shop_stats']=$d['shop_stats'];$__chg=true;}
 /* Keep Send-tab queue cards synchronized with non-product phases too. */
 foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$d)){$__e[$__pk]=$d[$__pk];$__chg=true;}}
@@ -78973,8 +80337,8 @@ $bslEntriesDoneThisRun = 0;
 for ($bslEntryRound = 0; $bslEntryRound < BSL_MAX_ENTRIES_PER_RUN; $bslEntryRound++) {
 if ($bslEntryRound > 0) {
     if (queueHasFreshUserStop('bsl')) {
-        writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>['⏹ Between rows: stop signal — remaining rows will be sent in the next run'],'total_log_count'=>1]);
-        @unlink(BSL_PRODUCTS_FILE);
+        writeProgress($bslProgressFile,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>['⏹ Between rows: stop signal — remaining rows will be sent in the next run'],'total_log_count'=>1]);
+        @unlink($bslProductsFile);
         exit;
     }
 }
@@ -78996,8 +80360,8 @@ $queue=bslReadQueue();
 $__selectionCn=loadConnections();$__disabledRows=bslQueueApplyCurrentShopSelection($queue,$__selectionCn);
 if($__disabledRows)bslWriteQueue($queue);
 
-$progress=readProgress(BSL_PROGRESS_FILE);
-$runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
+$progress=readProgress($bslProgressFile);
+$runningRows=count(array_filter((array)($queue['entries']??[]),function($row)use($_bslLane){return is_array($row)&&($row['status']??'')==='running'&&bslRowLane($row)===$_bslLane;}));
 foreach($queue['entries'] as &$e){
 if(($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows)&&!empty($progress['done']) && empty($_GET['resume']) && empty($_POST['resume'])){
 $e['status']='done';
@@ -79007,12 +80371,12 @@ $e['current']=$progress['current']??$e['current']??0;$e['done_at']=time();
 }
 }
 unset($e);
-$runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
+$runningRows=count(array_filter((array)($queue['entries']??[]),function($row)use($_bslLane){return is_array($row)&&($row['status']??'')==='running'&&bslRowLane($row)===$_bslLane;}));
 
 $nextEntry=null;$nextIdx=null;
 $now=time();
 $runningCandidates=[];
-foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='running')$runningCandidates[$i]=$e;}
+foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='running'&&bslRowLane($e)===$_bslLane)$runningCandidates[$i]=$e;}
 if($runningCandidates){
     // Never let an earlier waiting row leapfrog a running row. Prefer the exact
     // progress owner; an unnamed legacy file is attributable only when unique.
@@ -79042,7 +80406,7 @@ if($runningCandidates){
         if($nextEntry===null){$nextIdx=(int)array_key_first($runningCandidates);$nextEntry=$runningCandidates[$nextIdx];}
     }
 }else{
-    foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='waiting'){$nextEntry=$e;$nextIdx=$i;break;}}
+    foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='waiting'&&bslRowLane($e)===$_bslLane){$nextEntry=$e;$nextIdx=$i;break;}}
 }
 
 if(!$nextEntry){
@@ -79067,7 +80431,7 @@ $bslQueueId=$nextEntry['id'];
    (یا «ادامه») ما را دوباره راه انداخته باشد. بدونِ این، هر بارِ شروع از
    محصولِ ۱ از نو — ارسالِ بزرگ یا بسیار طولانی می‌شد یا غیرممکن.
    فایلِ پیشرفت فقط وقتی مبنا می‌شود که queue_id مالِ همین ردیف باشد. */
-$bslPrevProg=readProgress(BSL_PROGRESS_FILE);
+$bslPrevProg=readProgress($bslProgressFile);
 $bslPrevQid=trim((string)($bslPrevProg['queue_id']??''));
 $bslProgressMatches=($bslPrevQid!==''&&$bslPrevQid===$bslQueueId);
 $bslEntryCur=max(0,(int)($nextEntry['current']??0));
@@ -79125,32 +80489,32 @@ if($bslResumeStart>0){
     if(!empty($bslResumeSnapshot['skipped_details'])&&is_array($bslResumeSnapshot['skipped_details']))$bslSkippedList=$bslResumeSnapshot['skipped_details'];
     if(!empty($bslResumeSnapshot['failed_details'])&&is_array($bslResumeSnapshot['failed_details']))$bslFailedList=$bslResumeSnapshot['failed_details'];
 }
-localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
+localTaskDbForget($bslProgressFile); @unlink($bslProgressFile);@unlink(BSL_STOP_FILE);@unlink($bslProductsFile);
 if(!file_exists($nextEntry['products_file'])){
 $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل محصولات یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل محصولات یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
-$copyOk=@copy($nextEntry['products_file'],BSL_PRODUCTS_FILE);
+$copyOk=@copy($nextEntry['products_file'],$bslProductsFile);
 if(!$copyOk){
 $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ کپی فایل ناموفک'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ کپی فایل ناموفک'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'کپی فایل محصولات ناموفک','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
-$verifyProducts=json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'',true)?:[];
+$verifyProducts=json_decode(@file_get_contents($bslProductsFile)?:'',true)?:[];
 if(empty($verifyProducts)){
 $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -79177,8 +80541,16 @@ if(isset($qCfg['auto_category'])) $cn['basalam']['auto_category']=!empty($qCfg['
 if(isset($qCfg['title_suffix']))  $cn['basalam']['title_suffix']=(string)$qCfg['title_suffix'];
 if(isset($qCfg['delay_ms']))      $cn['basalam']['delay_ms']=(int)$qCfg['delay_ms'];
 if(isset($qCfg['retry_delay_ms']))$cn['basalam']['retry_delay_ms']=(int)$qCfg['retry_delay_ms'];
+if(isset($qCfg['product_timeout_sec']))$cn['basalam']['product_timeout_sec']=max(30,min(1800,(int)$qCfg['product_timeout_sec']));
 if(isset($qCfg['send_parallel_n']))$cn['basalam']['send_parallel_n']=max(1,min(8,(int)$qCfg['send_parallel_n']));
 if(array_key_exists('send_parallel_auto',$qCfg))$cn['basalam']['send_parallel_auto']=!empty($qCfg['send_parallel_auto']);
+/* One global request budget is divided 75/25 while both lanes are active.
+   Lane 1 gets priority; total 429/image pressure remains bounded. */
+if($_bslLane!=='legacy'&&bslParallelProfileLanesEnabled($cn)){
+    $__other=$_bslLane==='fast'?'detail':'fast';$__both=false;
+    foreach((array)($queue['entries']??[]) as $__lr){if(is_array($__lr)&&bslRowLane($__lr)===$__other&&in_array((string)($__lr['status']??''),['running','waiting'],true)){$__both=true;break;}}
+    if($__both){$cn['basalam']['send_parallel_n']=bslParallelLaneBudget((int)($cn['basalam']['send_parallel_n']??4),$_bslLane,true);}
+}
 if(!empty($qCfg['fallback_cat_ids'])&&is_array($qCfg['fallback_cat_ids'])){
 $cn['basalam']['fallback_cat_ids']=$qCfg['fallback_cat_ids'];
 }
@@ -79224,8 +80596,8 @@ $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
 $queue['entries'][$nextIdx]['fail_reason']='غرفه‌های انتخابی برای ارسال موازی دیگر در تنظیمات نیستند یا توکنشان خالی است';
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه‌های هدف یافت نشدند'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
-@unlink(BSL_PRODUCTS_FILE);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه‌های هدف یافت نشدند'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+@unlink($bslProductsFile);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'غرفه‌های هدف یافت نشدند','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -79241,8 +80613,8 @@ $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
 $queue['entries'][$nextIdx]['fail_reason']='غرفهٔ هدف دیگر در تنظیمات نیست یا توکنش خالی است';
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه هدف یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
-@unlink(BSL_PRODUCTS_FILE);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه هدف یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+@unlink($bslProductsFile);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'غرفهٔ هدف یافت نشد','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -79313,8 +80685,8 @@ $authCheck=bslReq($tk,'GET','users/me');
 if($authCheck['code']===403||$authCheck['code']===401){
 $authErr=$authCheck['code']===401?'توکن نامعتبر (۴۰۱)':'دسترسی ممنوع (۴۰۳)';
 $queue=bslReadQueue();foreach($queue['entries'] as &$qe){if($qe['id']===$bslQueueId&&$qe['status']==='running'){$qe['status']='failed';$qe['done_at']=time();break;}}unset($qe);bslWriteQueue($queue);
-@unlink(BSL_PRODUCTS_FILE);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>count($verifyProducts),'total'=>count($verifyProducts),'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ '.$authErr],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+@unlink($bslProductsFile);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>count($verifyProducts),'total'=>count($verifyProducts),'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ '.$authErr],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>$authErr,'auth_fail'=>true,'queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -79511,11 +80883,11 @@ if(bslStopRequestedForQueue()){
 // بماند وگرنه اولین پینگ بعدی صف را دوباره راه می‌اندازد. دکمه‌های
 // «شروع» و «ادامه» خودشان آن را برمی‌دارند.
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$i,'',['❌ متوقف #'.($i+1)]);
-taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
+taskMarkPartial($bslProgressFile, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
     ['queue_id'=>(string)$bslQueueId, 'current'=>(int)$i, 'total'=>(int)$total,
      'sent'=>(int)$sent, 'updated'=>(int)$updated, 'skipped'=>(int)$skipped, 'failed'=>(int)$fail]);
 queuePauseRowsAfterStop('bsl',(string)$bslQueueId);
-@unlink(BSL_PRODUCTS_FILE);exit;
+@unlink($bslProductsFile);exit;
 }
 $rawPTitle=trim($p['title']??$p['name']??'');$pKey=$p['key']??'';$n=$i+1;$pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
 $_rowBarcodeVal=bslExtractValidBarcode($p);
@@ -79653,7 +81025,7 @@ if(!empty($_wSingleUpd['overridden'])){
 }
 if($bslContentDiff){$needUpdate=true;foreach($bslContentDiff as $_cd)$updateChanges[]=$_cd;}
 
-if(!$needUpdate){$skipped++;bslShopStatBumpDefault('s');$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,'reason'=>'تکرار (قیمت+موجودی+محتوا یکسان)'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ تکرار (یکسان)");continue;}
+if(!$needUpdate){$skipped++;bslShopStatBumpDefault('s');$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,'reason'=>'بدون تغییر (قیمت+موجودی+محتوا یکسان)'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ بدون تغییر (همگام است)");continue;}
 
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ آپدیت: ".implode(',',$updateChanges));
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
@@ -80113,14 +81485,28 @@ foreach($__parallelShops as $__pShInit){
     }
 }
 $__parStop=false;$__parDone=max(0,$bslResumeStart-1);
+/* v10.536: unchanged rows do no network write. Persisting the same large
+   progress/queue JSON after every one of them was the remaining bottleneck.
+   Commit a small bounded window atomically; updates/creates/errors still
+   checkpoint immediately, and stop flushes the last deferred cursor. */
+$__parFastCheckpointN=max(2,min(12,(int)($cn['basalam']['send_parallel_n']??4)));
+$__parDeferredCheckpoint=0;
 $__parStartMsg=$bslResumeStart>0
     ?('⚡ [ارسال موازی به '.count($__parallelShops).' غرفه] ادامه از محصول #'.$bslResumeStart.' — '.$total.' محصول')
     :('⚡ [ارسال موازی به '.count($__parallelShops).' غرفه] شروعِ ارسال همزمان — '.$total.' محصول — فاصله: '.$bslDelayMs.'ms');
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,max($bslResumeStart,0),'',[$__parStartMsg],
     ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__parallelShops).' غرفه','phase_current'=>$__parDone,
      'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+$__parWindowResults=[];$__parWindowSize=20;$__parNextWindow=max(0,$bslResumeStart-1);
 foreach($pd as $__pi=>$p){
 if(($__pi+1)<$bslResumeStart)continue;
+if($__pi===$__parNextWindow){
+    $__windowProducts=array_slice($pd,$__pi,$__parWindowSize);$__windowCn=loadConnections();$__windowShops=[];
+    foreach($__parallelShops as $__windowShop){$__windowVid=(int)($__windowShop['vendor_id']??0);if($__windowVid>0&&!bslRowDisabledByShopPicker($nextEntry,$__windowCn,$__windowVid))$__windowShops[]=$__windowShop;}
+    $__windowRes=$__windowShops?bslParallelBatchWindow($__windowProducts,$__pi,$__windowShops,$__parOpts,bslSendParallelCount($cn,count($__windowProducts),count($__windowShops))):[];
+    foreach($__windowRes as $__wi=>$__wr)$__parWindowResults[(int)$__wi]=(array)$__wr;
+    $__parNextWindow+=$__parWindowSize;
+}
 $__liveParCn=loadConnections();
 $__activeParShops=[];
 foreach($__parallelShops as $__pShChk){
@@ -80133,13 +81519,55 @@ if(empty($__activeParShops)){
     bslFinishDisabledShopRow((string)$bslQueueId,(int)($__parallelShops[0]['vendor_id']??0),'همهٔ غرفه‌های ارسال موازی',$__parDone,$total,$sent,$updated,$skipped,$fail);
 }
 clearstatcache(true,BSL_STOP_FILE);
-if(bslStopRequestedForQueue()){$__parStop=true;break;}
+if(bslStopRequestedForQueue()){
+    if($__parDeferredCheckpoint>0)bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,'',null,
+        ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__activeParShops).' غرفه','phase_current'=>$__parDone,
+         'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+    $__parStop=true;break;
+}
 $__parConc=bslSendParallelCount($cn,$total,count($__activeParShops));
-$__parResAll=bslUpsertManyShops($p,$__activeParShops,$__parOpts,$__parConc);
 $__pTitle=trim((string)($p['title']??$p['name']??''));
+/* Keep the saved cursor on the last fully completed product while exposing a
+   fresh heartbeat and the in-flight product number throughout long API work. */
+$__productTimeoutSec=max(30,min(1800,(int)($__liveParCn['basalam']['product_timeout_sec']??$cn['basalam']['product_timeout_sec']??180)));
+bslProductDeadlineStart($__productTimeoutSec);
+$GLOBALS['_bslLongOperationHeartbeatAt']=0;$GLOBALS['_bslLongOperationHeartbeatStage']='';
+$__inflightStarted=time();
+$GLOBALS['_bslLongOperationHeartbeat']=function(string $__stage='')use(&$sent,&$updated,&$skipped,&$fail,$total,&$__parDone,&$__activeParShops,&$__pTitle,$__inflightStarted){
+    $__labels=['product_start'=>'شروع پردازش محصول','shop_validation'=>'بررسی غرفه‌ها و قیمت‌ها','existing_lookup'=>'جست‌وجوی محصول موجود',
+      'existing_update'=>'به‌روزرسانی محصول موجود','create_prepare'=>'آماده‌سازی ساخت محصول','photo_prepare'=>'آماده‌سازی تصاویر',
+      'photo_upload'=>'آپلود تصاویر','product_create'=>'ثبت محصول تازه','adaptive_rate_wait'=>'مکث تطبیقی محدودیت باسلام','single_shop_fallback'=>'ترمیم تک‌غرفه‌ای','checkpoint_save'=>'ثبت نتیجه و checkpoint'];
+    $__step=(int)($GLOBALS['_bslLongOperationStep']??0);$__stepTotal=(int)($GLOBALS['_bslLongOperationTotal']??9);
+    $__detail=(string)($GLOBALS['_bslLongOperationDetail']??'');$__label=(string)($__labels[$__stage]??'در حال ارتباط با باسلام');
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,60),null,
+        ['phase'=>'parallel_shops','phase_label'=>$__label,
+         'phase_current'=>$__parDone,'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total)),
+         'inflight_product'=>$__parDone+1,'inflight_title'=>$__pTitle,'inflight_stage'=>$__stage,'inflight_stage_label'=>$__label,
+         'inflight_step'=>$__step,'inflight_step_total'=>$__stepTotal,'inflight_detail'=>$__detail,
+         'inflight_started_at'=>$__inflightStarted,'inflight_elapsed'=>max(0,time()-$__inflightStarted)]);
+};
+bslLongOperationHeartbeat('product_start');
+$__preWindow=(array)($__parWindowResults[$__pi]??[]);$__remainingParShops=[];
+foreach($__activeParShops as $__remainShop){$__remainVid=(int)($__remainShop['vendor_id']??0);if(!isset($__preWindow[$__remainVid]))$__remainingParShops[]=$__remainShop;}
+try{$__parResAll=$__preWindow+($__remainingParShops?bslUpsertManyShops($p,$__remainingParShops,$__parOpts,$__parConc):[]);}
+finally{unset($GLOBALS['_bslLongOperationHeartbeat'],$GLOBALS['_bslLongOperationHeartbeatAt'],$GLOBALS['_bslLongOperationHeartbeatStage'],
+    $GLOBALS['_bslLongOperationStage'],$GLOBALS['_bslLongOperationStep'],$GLOBALS['_bslLongOperationTotal'],$GLOBALS['_bslLongOperationDetail']);}
 $__pKey=(string)($p['key']??'');
 $__pRawP=extractSourcePrice($p);
 $__pBasePrice=(int)preg_replace('/[^0-9]/','',(string)($p['final_price']??0));
+if(isset($__parResAll['__product_timeout'])){
+    $__to=$__parResAll['__product_timeout'];$fail++;$__parDone=$__pi+1;
+    $bslFailedList[]=['title'=>$__pTitle,'key'=>$__pKey,
+      'error'=>'⏳ محصول پس از '.(int)($__to['timeout_sec']??$__productTimeoutSec).' ثانیه رد شد؛ ارسال با محصول بعدی ادامه یافت',
+      'error_code'=>0,'error_step'=>'product_timeout','reason_kind'=>'product_timeout','timeout_sec'=>(int)($__to['timeout_sec']??$__productTimeoutSec)];
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,60),
+      '⏳ ['.$__parDone.'/'.$total.'] سقف زمان محصول تمام شد — رد شد و ادامه از محصول بعدی',
+      ['phase'=>'parallel_shops','phase_label'=>'محصول زمان‌بر رد شد؛ ادامهٔ صف','phase_current'=>$__parDone,
+       'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total)),'last_product_timeout'=>true,
+       'product_timeout_sec'=>(int)($__to['timeout_sec']??$__productTimeoutSec)]);
+    continue;
+}
+$__allParSkipped=true;
 foreach($__activeParShops as $__pShOne){
     $__pVid=(int)($__pShOne['vendor_id']??0);
     if(!isset($__parResAll[$__pVid]))continue;
@@ -80153,12 +81581,14 @@ foreach($__activeParShops as $__pShOne){
         'link'=>$p['link']??'','vendor_id'=>$__pVid,'shop_name'=>$__pShopName];
     if(!empty($__pRes['ok'])){
         if(($__pRes['action']??'')==='created'){
+            $__allParSkipped=false;
             $sent++;bslShopStatBump($__pVid,$__pShopName,'c');
             $bslSentList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'remote_id'=>(int)($__pRes['id']??0)],$__pCard);
         }elseif(!empty($__pRes['skipped'])){
             $skipped++;bslShopStatBump($__pVid,$__pShopName,'s');
             $bslSkippedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'reason'=>'بدون تغییر','remote_id'=>(int)($__pRes['id']??0)],$__pCard);
         }else{
+            $__allParSkipped=false;
             $updated++;bslShopStatBump($__pVid,$__pShopName,'u');
             $bslUpdatedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,'remote_id'=>(int)($__pRes['id']??0),
                 'changes'=>(string)($__pRes['update_reason']??'آپدیت موازی غرفه‌ها'),
@@ -80167,6 +81597,7 @@ foreach($__activeParShops as $__pShOne){
                 'action'=>(string)($__pRes['action']??'parallel_shops')],$__pCard);
         }
     }else{
+        $__allParSkipped=false;
         if(!empty($__pRes['stopped'])||($__pRes['error']??'')==='stopped'){$__parStop=true;break;}
         $fail++;bslShopStatBump($__pVid,$__pShopName,'f');
         $bslFailedList[]=array_merge(['title'=>$__pTitle,'key'=>$__pKey,
@@ -80181,12 +81612,20 @@ foreach($__activeParShops as $__pShOne){
 }
 if($__parStop)break;
 $__parDone=$__pi+1;
-bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,30),
-    '⚡ [موازی '.count($__activeParShops).' غرفه] '.$__parDone.'/'.$total.' محصول — '.$sent.'✅ '.$updated.'⚡ '.$skipped.'⏭ '.$fail.'❌',
-    ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__activeParShops).' غرفه','phase_current'=>$__parDone,
-     'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
-usleep($bslDelayMs*1000);
+if($__allParSkipped){$__parDeferredCheckpoint++;}else{$__parDeferredCheckpoint=0;}
+$__mustCheckpoint=!$__allParSkipped||$__parDeferredCheckpoint>=$__parFastCheckpointN||$__parDone>=$total;
+if($__mustCheckpoint){
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,mb_substr($__pTitle,0,30),
+        '⚡ [موازی '.count($__activeParShops).' غرفه] '.$__parDone.'/'.$total.' محصول — '.$sent.'✅ '.$updated.'⚡ '.$skipped.'⏭ '.$fail.'❌',
+        ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__activeParShops).' غرفه','phase_current'=>$__parDone,
+         'phase_total'=>$total,'phase_pct'=>(int)floor($__parDone*100/max(1,$total))]);
+    $__parDeferredCheckpoint=0;
 }
+/* درخواست‌های سه غرفه خودشان rate pacing شبکه را دارند؛ فاصلهٔ 100ms صف
+   موازی فقط زمان مرده بود. مقادیر بالاتر از 100ms همچنان محترم می‌مانند. */
+usleep(max(0,$bslDelayMs-100)*1000);
+}
+bslProductDeadlineClear();
 if($__parStop){
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$__parDone,'',['⏹ ارسال موازی غرفه‌ها با سیگنال توقف متوقف شد'],
     ['phase'=>'parallel_shops','phase_label'=>'ارسال موازی به '.count($__parallelShops).' غرفه','phase_current'=>$__parDone,
@@ -80401,15 +81840,15 @@ elseif(!$__skipImageRetry)bslBackendProgress($sent,$updated,$skipped,$fail,$tota
      'phase_total'=>count($imgFailedEntries),'phase_pct'=>(int)floor(($__imgDone??0)*100/max(1,count($imgFailedEntries))),
      'phase_shop_vendor_id'=>$vid]);
 
-$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped تکراری, $fail خطا | Phase3: $imgRetryFixed تصویر اصلاح";
+$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped بدون تغییر, $fail خطا | Phase3: $imgRetryFixed تصویر اصلاح";
 $bslLog[]=$finalLog;
-@unlink(BSL_PRODUCTS_FILE);
+@unlink($bslProductsFile);
 remoteMapRecord('bsl',array_merge($bslSentList,$bslUpdatedList),(string)($nextEntry['profile_key']??''));
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ غرفه در پیشرفتِ نهایی و در خودِ ردیفِ صف
    می‌نشینند تا بعد از تمام‌شدنِ کار هم — با ریفرشِ صفحه — باقی بمانند. */
 $bslFinalShopStats=bslShopStatRows($sent,$updated,$skipped,$fail);
 $finalProgress=['running'=>false,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'last_title'=>'','current'=>$total,'done'=>true,'started_at'=>$startedAt,'finished_at'=>time(),'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'phase'=>'done','phase_label'=>'ارسال کامل شد','phase_current'=>$total,'phase_total'=>$total,'phase_pct'=>100,'batch_done_indices'=>[],'recent_log'=>$bslLog,'total_log_count'=>count($bslLog),'log'=>$finalLog,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList,'shop_stats'=>$bslFinalShopStats];
-writeProgress(BSL_PROGRESS_FILE,$finalProgress);
+writeProgress($bslProgressFile,$finalProgress);
 
 $queue=bslReadQueue();foreach($queue['entries'] as &$qe){
 if($qe['id']===$bslQueueId&&$qe['status']==='running'){
@@ -80431,14 +81870,14 @@ $bslEntriesDoneThisRun++;
 $queue=bslReadQueue();
 $hasMore=false;
 foreach($queue['entries'] as $e2){
-if($e2['status']==='waiting'){ $hasMore=true; break; }
+if($e2['status']==='waiting'&&bslRowLane($e2)===$_bslLane){ $hasMore=true; break; }
 }
 
 /* v10.53 (۶۷): ردیفِ «در انتظار» دیگری هست → همین‌جا ردیفِ بعد را به نوبت شروع کن. */
 if ($hasMore && $bslEntryRound + 1 < BSL_MAX_ENTRIES_PER_RUN) continue;
-if ($hasMore && !queueHasFreshUserStop('bsl') && function_exists('s4DispatchPendingSendQueue')) {
+if ($hasMore && !queueHasFreshUserStop('bsl') && function_exists('fireAndForgetCliQueueBackend')) {
     @flock($bslLockFp, LOCK_UN);
-    s4DispatchPendingSendQueue('bsl');
+    fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$_bslLane],['from_file'=>'1','resume'=>'1','lane'=>$_bslLane]);
 }
 
 header('Content-Type: application/json; charset=UTF-8');
@@ -80540,8 +81979,9 @@ exit;
 
 if (isset($_GET['bsl_send_one'])) {
 header('Content-Type: application/json; charset=UTF-8');
-set_time_limit(30);
 $cn=loadConnections();$bs=$cn['basalam']??[];
+$__oneTimeout=max(30,min(1800,(int)($_POST['product_timeout_sec']??($bs['product_timeout_sec']??180))));
+@set_time_limit($__oneTimeout+15);
 if(empty($bs['token'])||empty($bs['vendor_id'])){echo json_encode(['ok'=>false,'error'=>'تنظیمات باسلام ناقص'],JSON_UNESCAPED_UNICODE);exit;}
 
 $queueCatId=(int)($_POST['queue_category_id']??-1);
@@ -80574,6 +82014,7 @@ $mode=$_POST['mode']??'send';
 $pTitle=trim($p['title']??$p['name']??'');
 $pKey=$p['key']??'';
 $n=$productIndex+1;
+bslProductDeadlineStart($__oneTimeout);
 
 $GLOBALS['_currentProductLink']=$p['link']??'';
 $pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
@@ -80665,7 +82106,7 @@ $changes[]='بازفعال‌سازی از '.($statusLabels[$exStatusVal]??$exSt
 }
 
 if(!$needUpdate){
-echo json_encode(['ok'=>true,'action'=>'skip','key'=>$pKey,'title'=>$pTitle,'remote_id'=>$exId,'reason'=>'تکرار: نام+قیمت+موجودی یکسان','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
+echo json_encode(['ok'=>true,'action'=>'skip','key'=>$pKey,'title'=>$pTitle,'remote_id'=>$exId,'reason'=>'بدون تغییر: نام+قیمت+موجودی یکسان','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink],JSON_UNESCAPED_UNICODE);exit;
 }
 
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>max(1,(int)($bs['preparation_days']??3)),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
@@ -80951,6 +82392,7 @@ if($i<$startIndex){continue;}
 $pTitle=trim($p['title']??$p['name']??'');
 $pKey=$p['key']??'';
 $n=$i+1;
+bslProductDeadlineStart(max(30,min(1800,(int)($bs['product_timeout_sec']??180))));
 
 if($pTitle===''){$fail++;$bslFailedList[]=['title'=>'','key'=>$pKey,'error'=>'عنوان خالی'];bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,'',"[{$n}] ❌ عنوان خالی - محصول رد شد");continue;}
 $titleWords=preg_split('/\s+/u',$pTitle);
@@ -81082,7 +82524,7 @@ if(!empty($_wCliChk['overridden'])){
     if($_knownCliW!==(int)$_wCliChk['weight']){$needUpdate=true;$updateLog.=' وزن '.(int)$_wCliChk['weight'].'g';}
 }
 if(!$needUpdate){
-$skipped++;$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'reason'=>'تکرار: نام+قیمت+موجودی یکسان','remote_id'=>$exId??0],$card);bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ تکرار: نام+قیمت+موجودی");
+$skipped++;$bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'reason'=>'بدون تغییر: نام+قیمت+موجودی یکسان','remote_id'=>$exId??0],$card);bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ بدون تغییر: نام+قیمت+موجودی");
 usleep(100000);continue;
 }
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ آپدیت ID#$exId".$updateLog);
@@ -81402,6 +82844,7 @@ bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30
 usleep($bslDelayMs*1000);
 }
 
+bslProductDeadlineClear();
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$total,'',['🔄 Phase 2: بررسی محصولات رد شده (دسته نامعتبر)...']);
 $catFixed=0;$catRetryFailed=0;
 
@@ -81511,7 +82954,7 @@ bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$total,'','Phase 2: '.$ca
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$total,'','Phase 2: هیچ محصول رد‌شده دسته‌بندی یافت نشد');
 }
 
-$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped تکراری, $fail خطا | Phase2: $catFixed دسته اصلاح, $catRetryFailed خطا";
+$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped بدون تغییر, $fail خطا | Phase2: $catFixed دسته اصلاح, $catRetryFailed خطا";
 $bslLog[]=$finalLog;
 
 if($fromFile)@unlink(BSL_PRODUCTS_FILE);
@@ -81578,6 +83021,7 @@ foreach($pd as $i=>$p){
 $n=$i+1;
 $pTitle=trim($p['title']??$p['name']??'');
 $pKey=$p['key']??'';
+bslProductDeadlineStart(max(30,min(1800,(int)($bs['product_timeout_sec']??180))));
 $pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
 $_bslSseCfg=destPriceCfg($cn,'basalam');
 if(($_bslSseCfg['mode']??'none')!=='none'&&$pn>0)$pn=destAdjustPrice($pn,$_bslSseCfg);
@@ -81656,7 +83100,7 @@ $statusLabels=[3790=>'غیرفعال',3568=>'در انتظار',4184=>'بایگ�
 $updateLog.=' بازفعال‌سازی از '.($statusLabels[$exStatusVal]??$exStatusVal);
 }
 
-if(!$needUpdate){$skipped++;send_sse('send_skip',['key'=>$pKey,'title'=>$pTitle,'reason'=>'تکرار','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink]);continue;}
+if(!$needUpdate){$skipped++;send_sse('send_skip',['key'=>$pKey,'title'=>$pTitle,'reason'=>'بدون تغییر','image'=>$cardImg,'price'=>$cardPrice,'price_unit'=>$priceUnit,'category_id'=>$cardCatId,'category'=>$cardCatName,'link'=>$cardLink]);continue;}
 
 send_sse('send_info',['msg'=>'['.$n.'] آپدیت ID#'.$exId.$updateLog]);
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'preparation_days'=>max(1,(int)($bs['preparation_days']??3)),'weight'=>(int)($bs['weight']??500),'package_weight'=>(int)($bs['package_weight']??((int)($bs['weight']??500)+100))];
@@ -86874,6 +88318,21 @@ app_theme_ob_start();   // v9.94: رنگ‌بندیِ انتخابیِ کارب�
 .runtime-pulse.cron-pulse-external .runtime-pulse-core{background:#a78bfa!important;box-shadow:0 0 5px #a78bfa,0 0 14px #a78bfa!important}
 .runtime-pulse.cron-pulse-external .runtime-pulse-ring{background:#a78bfa80!important;animation-duration:.85s!important}
 .runtime-pulse.cron-pulse-external .runtime-pulse-tag{color:#ddd6fe!important}
+/* v10.548: the lamp itself is geometrically centered; the tiny label is an
+   overlay and no longer shifts the light. Save state colors the whole sticky
+   pulser box so feedback stays visible even when the settings panel is closed. */
+.runtime-pulse{position:relative!important;display:flex!important;align-items:center!important;justify-content:center!important;grid-template-columns:none!important;gap:0!important;transition:background .22s,border-color .22s,box-shadow .22s}
+.runtime-pulse .runtime-pulse-core,.runtime-pulse .runtime-pulse-ring{position:absolute!important;left:50%!important;top:50%!important;margin:0!important;justify-self:auto!important;transform:translate(-50%,-50%)}
+.runtime-pulse .runtime-pulse-ring{animation-name:runtimePulseCentered!important}
+.runtime-pulse .runtime-pulse-tag{position:absolute;right:3px;bottom:2px;line-height:1;min-width:10px;pointer-events:none}
+.runtime-pulse.save-pending{background:#78350f!important;border-color:#f59e0b!important;box-shadow:inset 0 0 14px #f59e0b55}
+.runtime-pulse.save-ok{background:#14532d!important;border-color:#22c55e!important;box-shadow:inset 0 0 14px #22c55e55}
+.runtime-pulse.save-error{background:#7f1d1d!important;border-color:#ef4444!important;box-shadow:inset 0 0 14px #ef444466}
+@keyframes runtimePulseCentered{0%{transform:translate(-50%,-50%) scale(.8);opacity:.9}75%,100%{transform:translate(-50%,-50%) scale(2.7);opacity:0}}
+/* v10.552: readable live Basalam state instead of one dense sentence. */
+.bsl-send-status-grid{display:grid;grid-template-columns:repeat(6,minmax(105px,1fr));gap:1px;margin:7px 0 8px;background:#334155;border:1px solid #334155;border-radius:9px;overflow:hidden;direction:rtl}
+.bsl-send-status-grid.hidden{display:none!important}.bsl-sg-cell{min-width:0;background:#0f172a;padding:7px 9px;display:flex;flex-direction:column;gap:4px;justify-content:center}.bsl-sg-cell>span{font-size:9.5px;color:#94a3b8;white-space:nowrap}.bsl-sg-cell>b{font-size:11.5px;color:#e2e8f0;line-height:1.55;overflow-wrap:anywhere}.bsl-sg-cell:nth-child(1)>b{color:#67e8f9}.bsl-sg-cell:nth-child(2)>b{color:#fbbf24}.bsl-sg-cell:nth-child(3)>b{color:#c4b5fd}.bsl-sg-cell:nth-child(5)>b{color:#86efac}.bsl-sg-cell:nth-child(6)>b{color:#93c5fd}.bsl-sg-title{grid-column:1/-1;display:grid;grid-template-columns:110px 1fr;align-items:center;gap:8px}.bsl-sg-title>span{font-size:10px}.bsl-sg-title>b{color:#f8fafc;font-size:12px}
+@media(max-width:760px){.bsl-send-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.bsl-sg-title{grid-column:1/-1;display:flex;align-items:flex-start}.bsl-sg-title>b{font-size:11px}.bsl-sg-cell{padding:7px}}
 /* v10.19 (۳۲): دکمهٔ مدیر وظیفه — سومین دکمهٔ شناورِ هدر، کنارِ ☰ و ⛶ */
 .tasks-btn{position:fixed;top:10px;left:110px;z-index:10001;width:44px;height:44px;border-radius:12px;background:#1e293b;border:1px solid #475569;color:#e2e8f0;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 12px rgba(0,0,0,.4);transition:background .2s}
 /* v10.82 (96): دکمهٔ چت باسلام در نوارِ هدر — کنارِ مدیرِ وظیفه */
@@ -91245,6 +92704,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div class="crow" style="margin-top:8px"><label>🏷️ دسته خودکار:</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#67e8f9"><input type="checkbox" id="bsAutoCat" style="width:16px;height:16px"><span>تشخیص خودکار</span></label></div>
 <div class="crow"><label>⏱️ فاصله:</label><input type="number" id="bsDelayMs" value="500" min="0" max="10000" step="100" style="max-width:120px" dir="ltr"><small>ms</small></div>
 <div class="crow"><label>🔄 تاخیر:</label><input type="number" id="bsRetryDelayMs" value="1000" min="0" max="30000" step="100" style="max-width:120px" dir="ltr"><small>ms</small></div>
+<div class="crow"><label>⏳ سقف هر محصول:</label><input type="number" id="bsProductTimeout" value="180" min="30" max="1800" step="30" style="max-width:120px" dir="ltr"><small>ثانیه؛ پس از آن محصول رد و صف ادامه می‌یابد</small></div>
 <div class="crow"><label>🚀 همزمانی ارسال:</label><input type="number" id="bsParallelN" value="4" min="1" max="8" step="1" style="max-width:80px" dir="ltr"><label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#93c5fd"><input type="checkbox" id="bsParallelAuto" checked> خودکار</label><small>۱ تا ۸ درخواست امن</small></div>
 </div>
 
@@ -91285,13 +92745,38 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <!-- hidden compat: keep bsSendAllShops for saveConn compatibility -->
 <input type="checkbox" id="bsSendAllShops" style="display:none" onchange="bslToggleAllShops()">
 
+<!-- v10.568: each lane tab shows its own live queue state and progress. -->
+<div id="bslSendLaneTabs" role="tablist" aria-label="مسیرهای ارسال باسلام" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:9px 0 10px;padding:5px;background:#0f172a;border:1px solid #334155;border-radius:11px">
+  <button type="button" id="bslLaneTab1" role="tab" aria-selected="true" aria-controls="bslQueueList" class="btn btn-cyan" onclick="setBslSendLane('fast')" style="display:block;min-width:0;padding:9px;text-align:center">
+    <span style="display:block;font-weight:800">🛣️ لین ۱</span><small style="display:block;font-size:9px;margin-top:2px">ارسال بدون جزئیات · همهٔ پروفایل‌ها</small>
+    <span id="bslLaneState1" style="display:block;margin-top:5px;color:#94a3b8;font-size:9px;font-weight:700">آماده · صف خالی</span>
+    <span role="progressbar" aria-label="پیشرفت لین ۱" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:block;height:4px;margin-top:5px;background:#1e293b;border-radius:99px;overflow:hidden"><i id="bslLaneProgress1" style="display:block;width:0;height:100%;background:#22d3ee;transition:width .25s"></i></span>
+  </button>
+  <button type="button" id="bslLaneTab2" role="tab" aria-selected="false" aria-controls="bslQueueList" class="btn btn-gray" onclick="setBslSendLane('detail')" style="display:block;min-width:0;padding:9px;text-align:center">
+    <span style="display:block;font-weight:800">🛣️ لین ۲</span><small style="display:block;font-size:9px;margin-top:2px">جزئیات کامل · نیازمند پوشش ۱۰۰٪</small>
+    <span id="bslLaneState2" style="display:block;margin-top:5px;color:#94a3b8;font-size:9px;font-weight:700">آماده · صف خالی</span>
+    <span role="progressbar" aria-label="پیشرفت لین ۲" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:block;height:4px;margin-top:5px;background:#1e293b;border-radius:99px;overflow:hidden"><i id="bslLaneProgress2" style="display:block;width:0;height:100%;background:#a78bfa;transition:width .25s"></i></span>
+  </button>
+</div>
+<div id="bslLaneSelectedHint" style="margin:-4px 0 8px;color:#93c5fd;font-size:10px;text-align:center">لین ۱ برای ارسال بدون جزئیات است؛ لین ۲ فقط پروفایل‌هایی را می‌پذیرد که جزئیات همهٔ محصولاتشان استخراج شده باشد.</div>
 <!-- v10.415: active Basalam task belongs here in the Send tab, directly below
      Catalog Cache—not only inside Task Manager or the collapsed queue panel. -->
 <div id="bslActiveSendTask" style="display:none;margin-bottom:8px"></div>
 <div class="cact"><button class="btn btn-cyan" id="bSB" onclick="sendBsl()" style="flex:1">🚀 ارسال باسلام</button><button class="btn btn-green" id="bSBlegacy" onclick="sendBslClient()" style="flex:1">🚀 ارسال فرات</button><button class="btn btn-orange hidden" id="bRB" onclick="sendBsl()" style="flex:1">🔄 تلاش مجدد</button><button class="btn btn-teal" onclick="showBslProductsModal()" style="flex-shrink:0;font-size:12px;padding:6px 10px">🏪 مدیریت جامع محصولات باسلام</button><button class="btn btn-red hidden" id="bST" onclick="stopBslProcess()">⏹ توقف</button></div>
 <div class="progress hidden" id="bP"><div class="progress-bar" id="bPB" style="background:linear-gradient(90deg,#0891b2,#22d3ee)"></div></div>
 <div class="status" id="bSS" style="color:#67e8f9"></div>
-<div class="ssum hidden" id="bSM" style="grid-template-columns:repeat(6,1fr)"><div class="si" style="cursor:pointer" onclick="showBslReport('sent')"><b id="bO" style="color:#4ade80">۰</b><span>جدید</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('updated')"><b id="bU" style="color:#facc15">۰</b><span>آپدیت</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('skipped')"><b id="bK" style="color:#fb923c">۰</b><span>تکراری</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('failed')"><b id="bF" style="color:#f87171">۰</b><span>خطا</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('retired')"><b id="bX" style="color:#fbbf24">۰</b><span>🗂 بایگانی/حذف</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('all')"><b id="bT" style="color:#60a5fa">۰</b><span>کل</span></div></div>
+<!-- v10.552: structured live state above the result counters. bSS remains as
+     the compact/fallback message; this grid is authoritative while polling. -->
+<div id="bslSendStatusGrid" class="bsl-send-status-grid hidden" aria-live="polite">
+  <div class="bsl-sg-cell"><span>📦 پیشرفت محصول</span><b id="bsgProduct">—</b></div>
+  <div class="bsl-sg-cell"><span>⚙️ عملیات جاری</span><b id="bsgStage">—</b></div>
+  <div class="bsl-sg-cell"><span>🧭 مرحله</span><b id="bsgStep">—</b></div>
+  <div class="bsl-sg-cell"><span>🏪 جزئیات</span><b id="bsgDetail">—</b></div>
+  <div class="bsl-sg-cell"><span>⚡ میانگین سرعت</span><b id="bsgRate">در حال محاسبه…</b></div>
+  <div class="bsl-sg-cell"><span>⏱ زمان و برآورد پایان</span><b id="bsgElapsed">—</b></div>
+  <div class="bsl-sg-cell bsl-sg-title"><span>🏷️ محصول جاری</span><b id="bsgTitle">—</b></div>
+</div>
+<div class="ssum hidden" id="bSM" style="grid-template-columns:repeat(6,1fr)"><div class="si" style="cursor:pointer" onclick="showBslReport('sent')"><b id="bO" style="color:#4ade80">۰</b><span>جدید</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('updated')"><b id="bU" style="color:#facc15">۰</b><span>آپدیت</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('skipped')"><b id="bK" style="color:#94a3b8">۰</b><span>بدون تغییر</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('failed')"><b id="bF" style="color:#f87171">۰</b><span>خطا</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('retired')"><b id="bX" style="color:#fbbf24">۰</b><span>🗂 بایگانی/حذف</span></div><div class="si" style="cursor:pointer" onclick="showBslReport('all')"><b id="bT" style="color:#60a5fa">۰</b><span>کل</span></div></div>
 <!-- v10.36 (۴۹ب): تفکیکِ زندهٔ غرفه‌ها حینِ ارسال — تا حالا فقط در کارتِ صف بود -->
 <div id="bslLiveShops" style="margin-top:6px"></div>
 <div class="sres hidden" id="bR"></div>
@@ -93600,6 +95085,8 @@ function newBlankProfile(silentToast) {
     profileFormReady = false;
     isDirty = false;
     window._userClearedProducts = false;
+    window._userPrunedProducts = false;
+    window._profileProductsDirty = false;
     currentProfileKey = null;
     currentProfileUrl = '';
     currentProfileUpdatedAt = 0;
@@ -93916,12 +95403,16 @@ function applyProfile(p, keepTab) {
            سازگاریِ امضای تابع می‌ماند. */
         void keepTab;
         window._userClearedProducts = false;
+        window._userPrunedProducts = false;
+        window._profileProductsDirty = false;
         showToast('✓ پروفایل "' + (p.name || '') + '" بارگذاری شد (' + toFa(products.size) + ' محصول)');
     } else {
         resetResultFilter();
         products.clear();
         order = [];
         window._userClearedProducts = false;
+        window._userPrunedProducts = false;
+        window._profileProductsDirty = false;
         refreshViews();
         try { update(); } catch (e) {}
         showToast('✓ پروفایل "' + (p.name || '') + '" بارگذاری شد');
@@ -94052,11 +95543,14 @@ function syncBackendExtractDetailUi(skipPrefWrite){
 }
 setTimeout(()=>{syncDetailExtractModeUi(true);syncBackendExtractDetailUi(true);},50);
 
-function collectProfileData() {
-    // Serialize current products Map and order array
+function collectProfileData(includeProducts) {
+    /* v10.505: ordinary settings saves must not stringify/upload thousands of
+       unchanged products. Product payloads are opt-in and absent keys are
+       already preserved by the server endpoint. */
+    includeProducts = includeProducts !== false;
     const prodsArr = [];
-    products.forEach((v, k) => prodsArr.push([k, v]));
-    return {
+    if(includeProducts) products.forEach((v, k) => prodsArr.push([k, v]));
+    const data = {
         url: $('url').value.trim(),
         name: $('profileName').value.trim(),
         pages: Math.max(0,parseInt($('pages').value)||0),
@@ -94079,8 +95573,6 @@ function collectProfileData() {
         customColName: $('customColName').value,
         customColVal: $('customColVal').value,
         iframeHeight: parseInt($('iframeSizeSlider').value) || 600,
-        products: prodsArr,
-        productsOrder: [...order],
         // v8.06: Per-profile BaSalam category
         // v8.43: اگر متغیرها هنوز مقدار نگرفته‌اند، از فیلد مخفی بخوان تا
         // ذخیرهٔ خودکار انتخاب قبلی را با صفر جایگزین نکند.
@@ -94100,11 +95592,29 @@ function collectProfileData() {
         net_indirect: (($('profileNetIndirect') && $('profileNetIndirect').checked) ? '1' : '0'),
         productSource: getProductSourceConfig()
     };
+    if(includeProducts){data.products=prodsArr;data.productsOrder=[...order];}
+    return data;
 }
 
-function saveProfileSilent() {
-    const data = collectProfileData();
+let profileMatrixRefreshPromise=null, profileMatrixRefreshQueued=false;
+function requestProfileMatrixRefresh(reason){
+    reason=reason||'profile_price_change';
+    if(profileMatrixRefreshPromise){profileMatrixRefreshQueued=true;return profileMatrixRefreshPromise;}
+    profileMatrixRefreshPromise=fetch('?matrix_reprice=1&reason='+encodeURIComponent(reason)+'&_v='+Date.now(),{cache:'no-store',credentials:'same-origin'})
+      .then(r=>r.json().then(d=>{if(!r.ok||!d.ok)throw new Error((d&&d.error)||('HTTP '+r.status));return d;}))
+      .then(d=>{if(d.result&&d.result.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}return d;})
+      .catch(()=>null)
+      .finally(()=>{profileMatrixRefreshPromise=null;if(profileMatrixRefreshQueued){profileMatrixRefreshQueued=false;requestProfileMatrixRefresh('queued_settings_change');}});
+    return profileMatrixRefreshPromise;
+}
+function profileProductsNeedSave(forceProducts,hasActiveKey){
+    return forceProducts===true || !hasActiveKey || !!window._profileProductsDirty || !!window._userClearedProducts || !!window._userPrunedProducts;
+}
+
+function saveProfileSilent(forceProducts) {
     const hasActiveKey = !!(currentProfileKey && Array.isArray(profiles) && profiles.some(p => p && p.key === currentProfileKey));
+    const sendsProducts=profileProductsNeedSave(forceProducts,hasActiveKey);
+    const data = collectProfileData(sendsProducts);
     const validHttpUrl = /^https?:\/\/[^\s/$.?#].[^\s]*$/i.test(String(data.url || '').trim());
     /* فرمِ بین دو profile، پاسخ دیررس، یا snapshot بی‌نسخه هرگز autosave نشود. */
     if (!data.url || !validHttpUrl || !profileFormReady || (!hasActiveKey && data.url!==currentProfileUrl) || currentProfileUpdatedAt<=0)
@@ -94131,12 +95641,11 @@ function saveProfileSilent() {
         .then(d => {
             if (d.ok) {
                 markClean(d.key);
-                window._userClearedProducts = false;
-                window._userPrunedProducts = false;
+                if(sendsProducts){window._userClearedProducts=false;window._userPrunedProducts=false;window._profileProductsDirty=false;}
                 currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
                 currentProfileUrl=data.url;profileFormReady=true;
                 rememberProfile(data.url, d.key);
-                if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+                if(d.matrix_refresh_pending)requestProfileMatrixRefresh();else if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p && (p.key === d.key || (!hasActiveKey && p.url === data.url)));
                 const oldEntry=existingIdx>=0?profiles[existingIdx]:{};
                 const pCount = (typeof d.product_count === 'number') ? d.product_count : (oldEntry.productCount || products.size || 0);
@@ -94164,14 +95673,14 @@ function parseUrlHost(url) {
 }
 
 function saveProfile() {
-    const data = collectProfileData();
+    const activeEntry = (currentProfileKey && Array.isArray(profiles)) ? profiles.find(p => p && p.key === currentProfileKey) : null;
+    const hasActiveKey = !!activeEntry;
+    const sendsProducts=profileProductsNeedSave(false,hasActiveKey);
+    const data = collectProfileData(sendsProducts);
     if (!data.url) {
         showToast('URL وارد کنید', true);
         return;
     }
-
-    const activeEntry = (currentProfileKey && Array.isArray(profiles)) ? profiles.find(p => p && p.key === currentProfileKey) : null;
-    const hasActiveKey = !!activeEntry;
 
     if (!data.name) {
         data.name = (activeEntry && activeEntry.name) ? activeEntry.name : parseUrlHost(data.url);
@@ -94207,13 +95716,12 @@ function saveProfile() {
             if (d.ok) {
                 const wasPartialOnly = hasActiveKey && !profileFormReady;
                 markClean(d.key);
-                window._userClearedProducts = false;
-                window._userPrunedProducts = false;
+                if(sendsProducts){window._userClearedProducts=false;window._userPrunedProducts=false;window._profileProductsDirty=false;}
                 currentProfileUrl=data.url;
                 currentProfileUpdatedAt=parseInt(d.updated_at||0)||Math.floor(Date.now()/1000);
                 if (!wasPartialOnly) profileFormReady=true;
                 rememberProfile(data.url,d.key);
-                if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+                if(d.matrix_refresh_pending)requestProfileMatrixRefresh();else if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
                 const existingIdx = profiles.findIndex(p => p && (p.key === d.key || (!hasActiveKey && p.url === data.url)));
                 const oldP = existingIdx >= 0 ? profiles[existingIdx] : {};
                 const pCount = (typeof d.product_count === 'number') ? d.product_count : (oldP.productCount || products.size || 0);
@@ -95154,6 +96662,7 @@ function selagAdoptSeeded(d) {
         added++;
     });
     if (!added) return 0;
+    window._profileProductsDirty=true;
     /* سلکتورهای فهرستی که ایجنت در همین زنجیره کشف کرده هم حیف است */
     const ls = sd.list_selectors || {};
     if (ls.container && !sel.container && typeof setSel === 'function') {
@@ -97938,7 +99447,7 @@ function loadBackendExtractResults(key, opts){
             showToast('💾 مرحلهٔ ۱ تمام شد: '+toFa(products.size)+' محصول در تب نتایج ذخیره شد — شروع مرحلهٔ ۲ (استخراج جزئیات)...');
         }
         // Only save back from client if explicitly needed (never overwrite an active Stage 2 worker!)
-        if(!opts.skipSaveBack && $('url').value.trim()&&products.size>0)saveProfileSilent();
+        if(!opts.skipSaveBack && $('url').value.trim()&&products.size>0)saveProfileSilent(true);
     }).catch(()=>{});
 }
 // Helper: profileKey from URL — mirrors PHP profileKey()
@@ -98061,7 +99570,7 @@ function start(useSel=false){
       switchMainTab('results');
       fxPulse(document.querySelector('.main-tab[data-tab="results"]'));   // v10.06
       // Auto-save profile with products after scrape completes
-      if($('url').value.trim() && products.size > 0) saveProfileSilent();
+      if($('url').value.trim() && products.size > 0) saveProfileSilent(true);
   });
   es.addEventListener('error',e=>{
       if(e.data){
@@ -98236,6 +99745,7 @@ function parseSSEEvent(ev) {
                     added++;
                 }
                 products.set(d.key, p);
+                if(added>0)window._profileProductsDirty=true;
                 if (added > 0) {
                     renderCard(p, d.key);
                     renderRow(p, order.indexOf(d.key) + 1, d.key);
@@ -98423,6 +99933,248 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.568', t:'⚖️ بودجهٔ دقیق و وضعیت زندهٔ دو لین', items:[
+    'هنگام اجرای همزمان دو لین، تقسیم ۷۵/۲۵ دیگر ظرفیت همزمانی را از سقف عبور نمی‌دهد؛ برای فعال‌بودن هر دو worker حداقل دو اسلات مؤثر در نظر گرفته می‌شود و دو سهم جمعاً از بودجه فراتر نمی‌روند.',
+    'تب‌های لین ۱ و ۲ اکنون تعداد در حال اجرا، در صف، متوقف، تکمیل/خطا و نوار پیشرفت مستقل هر لین را به‌صورت زنده نشان می‌دهند.',
+    'وضعیت انتخاب‌شده با دسترس‌پذیری بهتر (aria-selected و برچسب‌های وضعیت) اعلام می‌شود و نمای هر لین پس از تازه‌سازی نیز حفظ می‌ماند.'
+  ]},
+  {v:'10.567', t:'🔒 مالکیت یکتای پروفایل بین دو لین', items:[
+    'ثبت صف با قفل اتمیک انجام می‌شود؛ دو کلیک همزمان در لین ۱ و لین ۲ دیگر نمی‌توانند یک پروفایل را در هر دو لین ثبت کنند.',
+    'این محدودیت مستقل از تنظیم عمومی حذف تکراری است و پاسخ خطا، لین مالک و شناسهٔ وظیفهٔ موجود را مشخص می‌کند.',
+    'زمان‌بند نیز به‌صورت دفاعی در یک dispatch هر پروفایل را فقط برای یک worker انتخاب می‌کند.'
+  ]},
+  {v:'10.566', t:'🧾 لین ۲ مخصوص ارسال با جزئیات', items:[
+    'لین ۱ همچنان صف ارسال بدون جزئیات برای همهٔ پروفایل‌هاست؛ لین ۲ اکنون صریحاً صف ارسال با جزئیات کامل است.',
+    'لین ۲ فقط پروفایل ذخیره‌شده با selector جزئیات و پوشش کامل جزئیات همهٔ محصولات را می‌پذیرد؛ در غیر این صورت خطای راهنمای دقیق برمی‌گرداند.',
+    'کارت‌های صف نوع ارسال را نشان می‌دهند و اولویت ۷۵٪ بودجهٔ مشترک دوباره به لین سریعِ بدون جزئیات داده شد.'
+  ]},
+  {v:'10.565', t:'🛣️ دو تب مستقل برای ارسال باسلام', items:[
+    'تب ارسال باسلام به لین ۱ و لین ۲ تقسیم شد؛ هر تب صف، worker، progress، توقف و ادامهٔ مستقل خود را نمایش و کنترل می‌کند.',
+    'هر پروفایل، چه selector جزئیات داشته باشد چه نداشته باشد، در هر دو لین فقط به‌صورت ارسال بدون جزئیات ثبت می‌شود؛ انتخاب لین کاملاً دستی است.',
+    'دو لین می‌توانند همزمان کار کنند و سقف همزمانی مشترک به‌طور مساوی بین آن‌ها تقسیم می‌شود تا فشار API و آپلود تصویر دو برابر نشود.',
+    'worker قدیمیِ فعال قبل از مهاجرت ابتدا با lock قبلی تمام می‌شود؛ سپس اولین cron صف‌های دو لین را بدون اجرای تکراری آغاز می‌کند.'
+  ]},
+  {v:'10.564', t:'🛣️ دو صف همزمان پروفایل باسلام', items:[
+    'گزینهٔ اختیاری «دو صف پروفایل» یک worker مستقل برای پروفایل‌های بدون جزئیات و یک worker مستقل برای پروفایل‌های جزئیات‌دار فعال می‌کند.',
+    'هر مسیر lock، فایل محصولات موقت، progress، checkpoint، توقف/ادامه و بازیابی مستقل دارد؛ توقف یک پروفایل صف دیگر را متوقف نمی‌کند.',
+    'صف سریع همیشه اول dispatch می‌شود و هنگام فعالیت هر دو مسیر ۷۵٪ بودجهٔ همزمانی مشترک را می‌گیرد؛ کنترل adaptive مشترک از دوبرابرشدن فشار 429 و تصویر جلوگیری می‌کند.',
+    'ردیف‌های قدیمی بدون برچسب lane به‌صورت سازگار از تنظیمات همان پروفایل طبقه‌بندی می‌شوند و حالت تک‌پروفایل پیش‌فرض باقی مانده است.'
+  ]},
+  {v:'10.563', t:'🧵 ثبت پایدار job ماتریس و مقصدهای صریح', items:[
+    'ادامهٔ دستی با مقصدهای انتخاب‌شده، checkpoint همان پروفایل را به همان مقصدها rebase می‌کند؛ تفاوت Woo/غرفه‌ها دیگر به‌اشتباه «ثبت job ناموفق» نشان داده نمی‌شود.',
+    'قفل صف worker حداکثر پنج ثانیه با retry کوتاه منتظر می‌ماند، نوشتن ناقص تشخیص داده می‌شود و رابط به‌جای پیام عمومی، کد و علت واقعی open/busy/write را نمایش می‌دهد.'
+  ]},
+  {v:'10.562', t:'🔒 تشخیص مستقیم lock صف paused', items:[
+    'heartbeat پردازهٔ قدیمی دیگر recycle را خنثی نمی‌کند؛ ردیف paused با queue_id دقیق مستقیماً از صف خوانده و مالکیت flock همان مقصد probe می‌شود.',
+    'cursor بزرگ‌ترِ صف و progress حفظ می‌شود و فقط پس از احراز paused بودن همان ردیف، بازیافت مالک و ادامه انجام می‌گیرد.'
+  ]},
+  {v:'10.561', t:'🎯 بازیافت فوری مالک صف دقیق', items:[
+    'کنترل recycle دیگر با نوشتن heartbeat تازه، صف را ناخواسته «در حال اجرا» نمی‌کند؛ queue_id انتخاب‌شده مستقیماً به نگهبان مالک flock منتقل می‌شود.',
+    'فقط شرط سن برای همان ردیف paused کنار می‌رود؛ تطابق queue_id، PID و مالکیت flock همچنان اجباری است و پردازهٔ نامرتبط قابل توقف نیست.'
+  ]},
+  {v:'10.560', t:'♻️ بازیافت امن sender پس از نصب کد', items:[
+    'صف انتخاب‌شده فقط در حالت paused و با queue_id دقیق قابل recycle است؛ cursor و شمارنده‌های checkpoint پیش از هر اقدامی حفظ می‌شوند.',
+    'مالک دقیق flock باسلام با نگهبان‌های موجود شناسایی و فقط همان پردازه بازنشسته می‌شود؛ سپس همان ردیف با کد تازه ادامه می‌یابد و صف دیگری لمس نمی‌شود.'
+  ]},
+  {v:'10.559', t:'🚦 ارسال تطبیقی چندغرفه‌ای و استفادهٔ مجدد از تصویر', items:[
+    'کنترل AIMD ماندگار برای خواندن، نوشتن و آپلود تصویر اضافه شد: 429 همزمانی همان مسیر را نصف و Retry-After را رعایت می‌کند؛ پس از ۲۴ پاسخ سالم ظرفیت یک پله برمی‌گردد.',
+    'شناسهٔ فایل آپلودشده بر اساس vendor و SHA-256 تصویر تا ۹۰ روز نگه‌داری می‌شود؛ resume و retry همان تصویر را دوباره آپلود نمی‌کنند و کش نامعتبر پس از خطای photo پاک می‌شود.',
+    'در صف چندغرفه‌ای، محصولات موجودِ دارای ID مطمئن در پنجره‌های ۲۰تایی به batch-updates هر vendor تبدیل می‌شوند؛ درخواست‌های چند محصول همزمان می‌شوند، ولی محصول تازه/تنوع‌دار/خطادار روی مسیر کامل و checkpointدار می‌ماند.',
+    'هنگام ارسال فعال باسلام، childهای ساخت/اصلاح ماتریس به برش‌های کوچک کاهش می‌یابند تا رقابت حافظه و OOM میزبان، sender را متوقف نکند؛ limitهای زنده و hitهای کش در progress ثبت می‌شوند.'
+  ]},
+  {v:'10.558', t:'⏯ ادامهٔ دقیق اصلاح با همان فیلترها', items:[
+    'دکمهٔ ادامه، scope، فیلترها، مقصدها، روش نگه‌داری تکراری و شمارنده‌های همان checkpoint را عیناً به worker بعدی منتقل می‌کند.',
+    'صف‌کردن ادامه دیگر checkpoint را با فرم پیش‌فرض خالی جایگزین نمی‌کند؛ اصلاح موفق قبلی تکرار نمی‌شود.'
+  ]},
+  {v:'10.557', t:'🛡 اصلاح مغایرت کم‌حافظه و بازیابی خودکار', items:[
+    'فهرست ده‌هاهزار عملیات اصلاح دیگر یکجا در حافظه ساخته نمی‌شود؛ هر child فقط پنجرهٔ کوچک مرتب را اجرا و checkpoint می‌کند.',
+    'اگر هاست child اصلاح را با OOM/SIGKILL ببندد، worker آن را ناموفق نهایی نمی‌کند و از checkpoint در daemon تازه ادامه می‌دهد؛ خطای origin همگام‌سازی نیز رفع شد.'
+  ]},
+  {v:'10.556', t:'🎯 اجرای دقیق انتخاب مقصد و تست واقعی ووکامرس', items:[
+    'ساخت تازهٔ جدول، انتخاب فعلی مقصدها را بر checkpoint ناتمام مقدم می‌داند؛ با برداشتن تیک ووکامرس، داده و cursor ووکامرس کنار گذاشته می‌شود و هیچ درخواست Woo ارسال نمی‌گردد.',
+    'مرحله و گزارش Woo برای مقصد بدون تیک صریحاً «رد شد؛ بدون درخواست شبکه» است و تست API با endpoint واقعی محصولات سنجیده می‌شود؛ system_status فقط عیب‌یابی اختیاری است.'
+  ]},
+  {v:'10.555', t:'⏭ اجرای قطعی سقف محصول توسط کران', items:[
+    'سقف محصول دیگر به همکاری همان پردازه وابسته نیست؛ کران سن inflight را حتی با heartbeat تازه مستقیماً با تنظیم زنده مقایسه می‌کند.',
+    'در عبور از سقف، مالک دقیق flock همان ارسال متوقف، خطای timeout یک‌بار ثبت، cursor به محصول بعدی منتقل و صف از اولین کران ادامه داده می‌شود.'
+  ]},
+  {v:'10.554', t:'⏳ سقف قابل تنظیم زمان پردازش هر محصول باسلام', items:[
+    'تنظیم «سقف هر محصول» با پیش‌فرض ۱۸۰ ثانیه و بازهٔ امن ۳۰ تا ۱۸۰۰ ثانیه به تنظیمات ارسال اضافه شد.',
+    'با عبور از سقف، درخواست‌های همان محصول متوقف، یک خطای کوتاه product_timeout ثبت، checkpoint جلو برده و محصول بعدی بدون توقف صف پردازش می‌شود.'
+  ]},
+  {v:'10.553', t:'⚡ سرعت میانگین و زمان پایان واقعی‌تر برای ارسال باسلام', items:[
+    'سلول مستقل سرعت، میانگین واقعی محصولات تکمیل‌شده در دقیقه را از حرکت checkpoint در بازهٔ اخیر نشان می‌دهد.',
+    'زمان باقی‌مانده از سرعت rolling ده‌دقیقه‌ای همان صف محاسبه و میان refresh حفظ می‌شود؛ توقف‌ها، resume و پردازش طولانی در تخمین اثر واقعی دارند.'
+  ]},
+  {v:'10.552', t:'📊 جدول شهودی وضعیت زندهٔ ارسال باسلام', items:[
+    'متن فشردهٔ بالای شمارنده‌ها به جدول زنده با ستون‌های پیشرفت محصول، عملیات، مرحله، جزئیات، زمان و عنوان محصول تبدیل شد.',
+    'جدول در نمایشگر بزرگ یک‌ردیفه و در موبایل دو‌ستونه است؛ پیام قدیمی فقط برای توقف، پایان یا حالت پشتیبان نمایش داده می‌شود.'
+  ]},
+  {v:'10.551', t:'♻️ بازسازی امن صف باسلام از پروفایل', items:[
+    'اگر snapshot موقت یک ردیف پایان‌یافته پاک شده باشد، همان پروفایل و تنظیمات غرفه‌های ردیف از منبع ذخیره‌شده بازسازی و از مسیر استاندارد صف دوباره اجرا می‌شود.'
+  ]},
+  {v:'10.550', t:'🔎 جزئیات مرحله‌ای محصول و رنگ قطعی ذخیره روی پالسر', items:[
+    'هنگام پردازش طولانی، شماره و عنوان محصول، نام عملیات جاری، مرحله از ۹، جزئیات غرفه/تصویر و زمان سپری‌شده به‌صورت زنده نمایش داده می‌شود.',
+    'رنگ کهربایی/سبز/قرمز ذخیره با inline important روی کل باکس پالسر اعمال می‌شود تا رنگ runtime، کران، hover یا CSS کش‌شده نتواند آن را بپوشاند.'
+  ]},
+  {v:'10.549', t:'🚀 جلوگیری از گیر تکراری ارسال و نمایش درست افزودن به صف', items:[
+    'در پردازش طولانی یک محصول برای چند غرفه، هنگام جست‌وجو، آپلود و انتظار API ضربان زنده ثبت می‌شود؛ checkpoint جلو نمی‌رود اما watchdog دیگر همان محصول سالم را بارها قطع و از نو آغاز نمی‌کند.',
+    'متن دکمهٔ باسلام در هر polling مستقیماً از صف سرور تعیین می‌شود: هنگام running یا waiting همیشه «افزودن به صف» نمایش داده می‌شود و ارسال تکی پنهان می‌ماند.'
+  ]},
+  {v:'10.548', t:'🎨 نمایش رنگی ذخیره روی پالسر بالای صفحه', items:[
+    'کل پس‌زمینهٔ باکس پالسر هنگام آماده‌سازی کهربایی، پس از ذخیره سبز و هنگام خطا قرمز می‌شود؛ بنابراین با بسته بودن پنل تنظیمات نیز وضعیت روشن است.',
+    'چراغ و حلقهٔ پالسر مستقل از برچسب H/S دقیقاً در مرکز افقی و عمودی باکس قرار گرفتند و در موبایل نیز جابه‌جا نمی‌شوند.'
+  ]},
+  {v:'10.547', t:'⚡ ذخیرهٔ فوری تنظیمات بدون اسکن سنگین صف', items:[
+    'صف چندمگابایتی باسلام فقط وقتی انتخاب غرفه‌ها واقعاً تغییر کند بررسی می‌شود، نه پس از هر autosave.',
+    'تغییر روش اجرا همچنان همان لحظه اعمال می‌شود؛ mutationهای matrix و worker فقط هنگام تغییر مرتبط اجرا می‌شوند.'
+  ]},
+  {v:'10.546', t:'⏱️ بازیابی قفل گیرکرده بدون انتظار برای سه تلاش', items:[
+    'اگر checkpoint صف ۱۸۰ ثانیه کامل ثابت بماند، مالک دقیق همان flock حتی با tries صفر بازنشسته و صف از cursor ذخیره‌شده ادامه داده می‌شود.'
+  ]},
+  {v:'10.545', t:'📦 ساخت محصولات قیمت‌دار در غرفه‌های تازه', items:[
+    'پرچم in_stock=false که پس از ادغام استخراج کهنه مانده، وقتی همان ردیف قیمت معتبر فعلی دارد دیگر موجودی را صفر نمی‌کند.',
+    'محصول واقعاً بدون قیمت همچنان ناموجود می‌ماند و در غرفهٔ تازه ساخته نمی‌شود؛ شمارندهٔ جدید فقط پس از ایجاد موفق باسلام بالا می‌رود.'
+  ]},
+  {v:'10.544', t:'🧬 یافتن مالک قفل از file descriptor', items:[
+    'در محیط‌هایی که proc locks پنهان است، device و inode دقیق فایل قفل در fd پردازه‌های همان حساب جست‌وجو می‌شود.'
+  ]},
+  {v:'10.543', t:'🧭 یافتن مالک flock از هستهٔ لینوکس', items:[
+    'اگر ابزار fuser روی هاست نصب نباشد، PID مالک قفل از proc locks و inode دقیق فایل پیدا می‌شود تا صف گیرکرده قابل ادامه باشد.'
+  ]},
+  {v:'10.542', t:'🧯 آزادسازی مالک دقیق flock در PHP-FPM', items:[
+    'در هاست‌هایی که lsphp/PHP-FPM آرگومان اسکریپت را در proc پنهان می‌کند، مالک دقیق فایل قفل باسلام پس از احراز سکون و سه تلاش بازیابی همچنان قابل توقف امن است.'
+  ]},
+  {v:'10.541', t:'🔍 شناسایی مالک واقعی قفل صف باسلام', items:[
+    'اگر PID ثبت‌شده فقط launcher بوده و مرده باشد، مالک واقعی همان فایل flock از kernel پیدا می‌شود؛ فقط پردازهٔ scraper4.php queue_backend پذیرفته و متوقف می‌شود.'
+  ]},
+  {v:'10.540', t:'🔓 بازیابی قفل worker گیرکردهٔ ارسال', items:[
+    'اگر یک child CLI پس از سه تلاش بازیابی، حداقل ۹۰ ثانیه هیچ checkpoint تازه‌ای نسازد، فقط همان PID ثبت‌شده برای همان صف متوقف می‌شود.',
+    'پس از آزادشدن قفل، همان cron از cursor ذخیره‌شده ادامه می‌دهد؛ worker دوم همزمان و صف تکراری ساخته نمی‌شود.'
+  ]},
+  {v:'10.539', t:'🔢 شمارش درست پاک‌سازی مدیر وظیفه', items:[
+    'تعداد پاک‌شده‌ها از کارت‌های فعالیت موجود پیش از حذف محاسبه می‌شود؛ پیام موفقیت دیگر پس از حذف واقعی، عدد صفر نشان نمی‌دهد.'
+  ]},
+  {v:'10.538', t:'🧽 پاک‌سازی واقعی کارهای تمام‌شده در مدیر وظیفه', items:[
+    'دکمهٔ پاک‌سازی اکنون وضعیت هر کار تمام‌شده را هم‌زمان از فایل JSON و جدول SQLite حذف می‌کند؛ نسخهٔ دیتابیس دیگر کارت پاک‌شده را برنمی‌گرداند.',
+    'کارهای واقعاً در حال اجرا محفوظ می‌مانند و هر شکست حذف نیز به‌جای موفقیت کاذب، با نام وضعیت‌های حذف‌نشده گزارش می‌شود.'
+  ]},
+  {v:'10.537', t:'🖼️ تبدیل یک‌بارهٔ GIF پیش از ارسال چندغرفه‌ای', items:[
+    'تصویر GIF نامعتبر برای باسلام پیش از اولین درخواست به JPEG تبدیل و همان فایل سازگار برای غرفه‌ها استفاده می‌شود.',
+    'اگر سرور امکان decode نداشته باشد، خطا فوری و روشن ثبت می‌شود و سه تلاش 422 برای هر غرفه تکرار نمی‌شود.'
+  ]},
+  {v:'10.536', t:'⚡ checkpoint گروهی تطبیقی برای محصولات همگام', items:[
+    'محصولاتی که در هر سه غرفه واقعاً بدون تغییرند در پنجرهٔ محدود ۲ تا ۱۲تایی checkpoint می‌شوند و بازنویسی JSON سنگین پس از تک‌تک آن‌ها حذف شد.',
+    'ایجاد، آپدیت و خطا همچنان همان لحظه checkpoint می‌شوند؛ توقف نیز cursor معوق را پیش از خروج flush می‌کند، بنابراین پایداری حفظ می‌شود.',
+    'اندازهٔ پنجره از parallel تنظیم‌شده گرفته می‌شود و منطق pacing/کاهش فشار موجود روی پاسخ‌های محدودیت API همچنان فعال است.'
+  ]},
+  {v:'10.535', t:'🧩 پوشش متن دوم خطای تنوع باسلام', items:[
+    'متن 422 «قادر به تغییر قیمت یا موجودی محصول دارای تنوع…» نیز مانند متن قبلی شناسایی و به repair با ID واقعی تنوع‌های مقصد هدایت می‌شود.',
+    'این خطا دیگر برای محصولات بعدی با همین شکل پاسخ تکرار نمی‌شود.'
+  ]},
+  {v:'10.534', t:'🎯 جلوگیری از skip اشتباه و ترمیم آپدیت تنوع‌ها', items:[
+    'وجود یک ID فعال در غرفه دیگر برای «بدون تغییر» کافی نیست؛ عنوان ثبت‌شده در ledger همان vendor نیز باید دقیقاً با محصول فعلی یکسان باشد، وگرنه جست‌وجوی واقعی عنوان انجام می‌شود و محصول واقعاً ناموجود ساخته خواهد شد.',
+    'خطای 422 محصولات دارای تنوع با دریافت ID واقعی تنوع‌های مقصد و ارسال batch-updates معتبر ترمیم می‌شود؛ variant بدون ID دیگر تکرار نمی‌شود.',
+    'شمارندهٔ جدید فقط پس از پاسخ ایجاد موفق باسلام افزایش می‌یابد و محصولات موجود به‌اشتباه جدید شمرده نمی‌شوند.'
+  ]},
+  {v:'10.533', t:'✅ اصلاح آزمون ترمیم checkpoint', items:[
+    'بررسی ایستای v10.532 از needle خودارجاع پاک شد تا خود متن آزمون باعث شکست کاذب همان آزمون نشود.',
+    'منطق اجرایی checkpoint تغییری نکرده و checkpoint تولیدی روی production با موفقیت ثبت و ادامه داده شد.'
+  ]},
+  {v:'10.532', t:'🧷 ترمیم امن checkpoint صف متوقف', items:[
+    'ابزار نگه‌داری checkpoint فقط ردیف paused را می‌پذیرد تا worker همزمان نتواند cursor ترمیم‌شده را بازنویسی کند.',
+    'cursor، درصد مرحله و شمارنده‌های موفق قبلی به‌صورت اتمیک حفظ می‌شوند و سپس همان صف قابل ادامه است.',
+    'این ابزار برای بازگرداندن صف جاری به آخرین checkpoint معتبر پیش از راه‌اندازی ناخواسته از صفر اضافه شد.'
+  ]},
+  {v:'10.531', t:'🚀 حذف دو درخواست شکست‌خوردهٔ همیشگی غرفهٔ پیش‌فرض', items:[
+    'در ارسال موازی، آپدیت غرفهٔ پیش‌فرض مستقیماً از endpoint رسمی batch-updates همان vendor آغاز می‌شود و دیگر ابتدا PATCH عمومی و vendor-scoped ناموفق اجرا نمی‌شوند.',
+    'تنوع‌های مبدأ بدون ID مقصد وارد batch آپدیت نمی‌شوند؛ در صورت رد batch امن، مسیر کامل قبلی همچنان fallback می‌شود و خطا پنهان نمی‌ماند.',
+    'درخواست batch غرفهٔ پیش‌فرض همزمان با درخواست‌های دو غرفهٔ دیگر اجرا می‌شود تا زمان هر محصول به یک موج شبکه نزدیک شود.'
+  ]},
+  {v:'10.530', t:'⚡ بازگردانی مسیر سریع محصولات همگام در چندغرفه‌ای', items:[
+    'نبود موقت snapshot ماتریس دیگر همهٔ محصولات ارسال موازی را مجبور به PATCH در هر سه غرفه نمی‌کند.',
+    'بعد از تأیید vendor-scoped شناسه، ledger فقط با تطابق دقیق ID، قیمت، موجودی و وزن اجازهٔ «بدون تغییر» می‌دهد و بازبینی اجباری هفت‌روزه همچنان برقرار است.',
+    'محصول واقعاً تغییرکرده همچنان update می‌شود، اما محصول همگام بدون سه درخواست شبکهٔ غیرضروری از checkpoint عبور می‌کند.'
+  ]},
+  {v:'10.529', t:'🧭 جداسازی قطعی شناسه‌های غرفهٔ پیش‌فرض در ارسال موازی', items:[
+    'کلید remote-map غرفهٔ پیش‌فرض نیز مانند همهٔ غرفه‌های دیگر اکنون همیشه vendor_id دارد؛ مسیر موازی دیگر کلید قدیمی و بدون مالک را نمی‌خواند.',
+    'ناهماهنگی مسیر تکی و موازی که می‌توانست ID متعلق به غرفه‌ای دیگر را برای غرفهٔ پیش‌فرض انتخاب کند حذف شد.',
+    'پس از نصب، صف از checkpoint محفوظ ادامه می‌یابد و ID صحیح همان vendor را از ماتریس یا جست‌وجوی vendor-scoped پیدا می‌کند.'
+  ]},
+  {v:'10.528', t:'🔐 تثبیت هویت و سرعت غرفهٔ پیش‌فرض باسلام', items:[
+    'اگر شناسهٔ غرفهٔ پیش‌فرض به‌صورت قدیمی یا تکراری در فهرست غرفه‌های اضافی هم ذخیره شده باشد، نسخهٔ اضافی دیگر نمی‌تواند توکن اصلی غرفه را بازنویسی کند.',
+    'ارسال موازی همیشه توکن و پرچم is_default تنظیمات اصلی را برای همان vendor_id نگه می‌دارد؛ بنابراین خطای «آیدی به غرفه تعلق ندارد» برای همهٔ محصولات غرفهٔ پیش‌فرض ایجاد نمی‌شود.',
+    'با حذف PATCHها و fallbackهای ناموفق تکراری، افت سرعت ناشی از این خطای مالکیت نیز برطرف می‌شود.'
+  ]},
+  {v:'10.527', t:'🏷️ اصلاح معنای شمارندهٔ بدون تغییر باسلام', items:[
+    'شمارندهٔ skipped باسلام دیگر «تکراری» نامیده نمی‌شود؛ این نتیجه یعنی محصول همان غرفه از قبل موجود و از نظر قیمت، موجودی و محتوای بررسی‌شده همگام بوده است.',
+    'عنوان «بدون تغییر» در کارت اصلی، آمار هر غرفه، صف، پنجرهٔ جزئیات، گزارش محصولی، پیام پایان و اعلان‌ها یکسان شد.',
+    'شمارنده‌های ایجاد و آپدیت دستکاری نشده‌اند: محصول واقعاً جدید همچنان «جدید»، محصول تغییرکرده «آپدیت» و خطای واقعی همچنان «خطا» می‌ماند.'
+  ]},
+  {v:'10.526', t:'🚀 کاهش سربار دیسک و فاصلهٔ مردهٔ ارسال باسلام', items:[
+    'شمارنده‌ها کامل می‌مانند اما به‌جای بازنویسی هزاران کارت بعد از هر محصول، فقط ۴۰۰ کارت اخیر هر نتیجه و ۲۰۰۰ خطای اخیر در checkpoint نگه‌داری می‌شود.',
+    'پیچیدگی نوشتن progress/queue از رشد درجه‌دو خارج شد؛ این بخش روی هاست اشتراکی یکی از گلوگاه‌های اصلی صف‌های چند‌هزارمحصولی بود.',
+    'در حالت چندغرفه‌ای، فاصلهٔ مصنوعی ۱۰۰ میلی‌ثانیه حذف شد؛ delayهای تنظیم‌شدهٔ بالاتر از ۱۰۰ میلی‌ثانیه همچنان رعایت می‌شوند.'
+  ]},
+  {v:'10.525', t:'⚡ حذف مسیر کندِ 404 کاذب در ارسال غرفهٔ پیش‌فرض', items:[
+    'اگر PATCH عمومی 403 و مسیر vendor-scoped سپس 404 بدهد، 404 دیگر به‌اشتباه شناسهٔ حذف‌شده تلقی نمی‌شود و fallback رسمی batch-updates حتماً اجرا می‌شود.',
+    'این تغییر از جستجوی چندمرحله‌ای و ساخت دوبارهٔ غیرضروری جلوگیری می‌کند و مسیر رایج محصول موجود را به آپدیت مستقیم و سریع برمی‌گرداند.',
+    'همان رفتار در ارسال تک‌غرفه‌ای و ارسال موازی چندغرفه‌ای اعمال شده و checkpoint هر محصول حفظ می‌شود.'
+  ]},
+  {v:'10.524', t:'🔎 بازیابی واقعی شناسه‌های 404 غرفهٔ پیش‌فرض', items:[
+    '404 از PATCH عمومی و vendor-scoped اکنون به‌عنوان شناسهٔ قدیمی تشخیص داده می‌شود و فقط نگاشت همان محصول/غرفه از shard حذف می‌شود.',
+    'بازیابی، matrix قدیمی را دور می‌زند و همان غرفه را با درخواست واقعی عنوان جستجو می‌کند؛ محصول موجود با ID تازه update و محصول واقعاً حذف‌شده دوباره create می‌شود.',
+    'حلقهٔ بازیابی فقط یک بار اجرا می‌شود و هرگز ID یک غرفه را برای غرفهٔ دیگر استفاده نمی‌کند.'
+  ]},
+  {v:'10.523', t:'🛑 توقف تکرار خطای دسترسی دائمی هر غرفه', items:[
+    'اگر مسیر عمومی، vendor-scoped و batch-updates همگی برای یک غرفه 403 قطعی بدهند، اولین خطای کامل حفظ می‌شود و همان غرفه تا پایان worker circuit-break می‌شود.',
+    'محصولات بعدی آن غرفه با دلیل روشن skipped_shop_forbidden رد می‌شوند؛ غرفه‌های سالم ادامه می‌یابند و هزاران خطای تکراری تولید نمی‌شود.',
+    'این توقف فقط برای همان vendor_id و همان اجرای ارسال است و دسترسی هیچ غرفهٔ دیگری را تغییر نمی‌دهد.'
+  ]},
+  {v:'10.522', t:'🧹 شروع واقعی retry از ردیف نخست', items:[
+    'بازیابی terminal علاوه بر current و شمارنده‌های صف، progress file و local task قدیمی را نیز پاک می‌کند.',
+    'worker جدید دیگر checkpoint پایان‌یافتهٔ اجرای قبل را نمی‌خواند و واقعاً از index صفر همان snapshot آغاز می‌شود.'
+  ]},
+  {v:'10.521', t:'🔐 fallback رسمی برای PATCHهای 403 باسلام', items:[
+    'اگر مسیر عمومی و vendor-scoped هر دو برای محصول موجود 403 بدهند، آپدیت فقط برای همان ID و همان vendor از endpoint رسمی batch-updates تکرار می‌شود.',
+    'پاسخ موفق batch به شناسهٔ همان محصول متصل می‌شود تا remote-map درست ثبت شود و هیچ هویت بین غرفه‌ای جابه‌جا نشود.',
+    'SKU در payloadهای batch update نیز حذف می‌شود تا fallback رسمی دوباره به خطای یکتایی 422 برخورد نکند.'
+  ]},
+  {v:'10.520', t:'⏱️ بازیابی صف در نخستین کران پس از worker قدیمی', items:[
+    'اگر process نسخهٔ قبل پس از ثبت done هنوز lock را نگه داشته باشد، درخواست بازیابی گم یا رد نمی‌شود و همان ردیف با current=0 در waiting ثبت می‌شود.',
+    'تا زمان آزاد شدن lock هیچ worker دوم ساخته نمی‌شود؛ اولین cron همان snapshot اصلاح‌شده را به‌طور خودکار آغاز می‌کند.'
+  ]},
+  {v:'10.519', t:'♻️ بازیابی ارسالهای خطادار پس از نصب اصلاح', items:[
+    'یک ردیف done/failed/cancelled را می‌توان از ابتدای همان snapshot ذخیره‌شده با شمارنده‌های پاک دوباره اجرا کرد.',
+    'بازیابی فقط در نبود worker فعال و با قفل صف انجام می‌شود؛ upsert مقصد باعث می‌شود موفق‌های قبلی duplicate نشوند و فقط وضعیتشان تأیید یا به‌روز شود.',
+    'برای ردیف جاری پس از نصب 10.518، همین بازیابی سروری استفاده می‌شود تا خطاهای پیش از deploy نیز جا نمانند.'
+  ]},
+  {v:'10.518', t:'🛠️ رفع خطاهای جاری ارسال چندغرفه‌ای باسلام', items:[
+    'PATCH محصول موجود اگر در مسیر عمومی 403 یا 404 بگیرد، فقط یک‌بار با مسیر vendor-scoped همان غرفه تکرار می‌شود؛ هویت محصول بین غرفه‌ها جابه‌جا نمی‌شود.',
+    'SKU تکراری مبدأ در ساخت به SKU پایدار و ویژهٔ همان عنوان تبدیل می‌شود و در PATCH ارسال نمی‌شود تا به‌روزرسانی قیمت/موجودی با 422 یکتایی SKU متوقف نشود.',
+    'برای هر profile_key فقط یک ردیف running/waiting فعال می‌ماند و ردیف‌های تکراری با دلیل duplicate_active_profile به‌صورت شفاف superseded می‌شوند.',
+    'خودآزمون‌های متمرکز برای SKU، fallback امن 403 و یکتاسازی صف افزوده شد.'
+  ]},
+  {v:'10.517', t:'🔁 رفع حلقهٔ شروع ساخت جدول مغایرت', items:[
+    'فایل توقف قدیمیِ مغایرت‌گیری legacy دیگر واکشی مقصدهای matrix را پیش از نخستین درخواست متوقف نمی‌کند؛ ساخت جدول فقط از stop اختصاصی خودش پیروی می‌کند.',
+    'حلقهٔ چندثانیه‌ایِ ادامهٔ worker روی همان صفحهٔ اول باسلام برطرف شد و checkpoint موجود بدون شروع دوباره به صفحات بعد ادامه می‌دهد.',
+    'خودآزمون متمرکز جداسازی stop مربوط به recon و matrix افزوده شد.'
+  ]},
+  {v:'10.516', t:'🖼️ رفع خطای fatal در خودآزمون و برش تصویر', items:[
+    'تابع برش پایین تصویر دیگر helper حذف‌شدهٔ نسل قبلی تنظیمات تصویر را صدا نمی‌زند و عملیات GD را مستقیم و با حفظ PNG/WebP انجام می‌دهد.',
+    'خودآزمون متمرکز نبودن فراخوانی قدیمی و وجود مسیر واقعی برش افزوده شد.'
+  ]},
+  {v:'10.515', t:'🎯 نصب دقیق از همان برنچ انتخاب‌شده', items:[
+    'دکمهٔ Update هر ردیف نام همان برنچ را بدون alias، canonicalization یا جایگزینی به PHP می‌فرستد.',
+    'اعتبارسنجی، probe، دانلود Git blob، pin و نصب همگی نام literal برنچ انتخابی را حفظ می‌کنند؛ محتوای SHA-تأییدشده نیز دیگر پیش از نصب بازنویسی نمی‌شود.',
+    'تغییرات تازهٔ برنچ arena/e868e86a-new تا v10.512 شامل ماتریس باسلام، ارسال کامل snapshot خالی و رفع تابع تکراری ادغام شد.'
+  ]},
+
+  {v:'10.514', t:'🔄 جلوگیری از دریافت نسخهٔ کهنه در آپدیتر deploy.php', items:[
+    'دانلود API و raw هر دو cache-buster یکتا دارند؛ در نتیجه self-updater پس از push دیگر نسخهٔ قبلی CDN را به‌اشتباه «به‌روز» تشخیص نمی‌دهد.',
+    'خودآزمون source_cache_busted افزوده شد و حفاظت no-store پنل حفظ شده است.'
+  ]},
+
   {v:'10.512', t:'🩹 رفع خطای lint هنگام نصب به‌روزرسانی', items:[
     'تعریف تکراری تابع تعیین همزمانی باسلام حذف شد؛ اکنون فایل scraper4.php از بررسی PHP syntax عبور می‌کند.'
   ]},
@@ -98450,10 +100202,49 @@ const CHANGELOG = [
   {v:'10.506', t:'📌 حفظ alias قدیمی در فهرست برنچ‌ها', items:[
     'برنچ arena/01a0ebf7-new پس از افزودن در تنظیمات حذف یا بازنویسی نمی‌شود و در فهرست باقی می‌ماند.',
     'برای probe و نصب، alias قدیمی به برنچ فعلی همین نشست resolve می‌شود؛ بنابراین نام قابل‌انتخاب می‌ماند بدون اینکه کد قدیمی نصب شود.'
+
   ]},
-  {v:'10.505', t:'🔀 هدایت برنچ قدیمی نشست به برنچ فعلی', items:[
-    'نام قدیمی arena/01a0ebf7-new به برنچ ثابت همین نشست arena/e868e86a-new هدایت می‌شود؛ آپدیت و pin دیگر برای این نام branch_not_configured نمی‌دهند.',
-    'تنظیمات قدیمی و انتخاب‌های ذخیره‌شدهٔ برنچ هم هنگام ثبت به نام فعلی تبدیل می‌شوند.'
+  {v:'10.513', t:'🧹 جلوگیری از اجرای JavaScript کش‌شدهٔ deploy.php', items:[
+    'HTML و اسکریپت داخلی پنل با no-store/no-cache/must-revalidate تحویل می‌شوند تا تب یا cache قدیمی دوباره POST مسدودشده و خطای 406 تولید نکند.',
+    'خودآزمون panel_cache_disabled افزوده شد؛ انتقال رمز‌شدهٔ GET نسخهٔ 3.5 بدون تغییر حفظ شده است.'
+  ]},
+  {v:'10.512', t:'🔐 حذف کامل POST از deploy.php و انتقال رمز‌شده روی GET', items:[
+    'آزمایش تولید ثابت کرد WAF هاست خود متد POST را حتی با text/plain پیش از PHP با HTTP 406 رد می‌کند؛ بنابراین تغییر Content-Type به‌تنهایی کافی نبود.',
+    'deploy.php v3.5 تمام عملیات تغییردهنده را با AES-256-GCM و کلید مشتق‌شده از API token داخل GET حمل می‌کند؛ URL و لاگ پروکسی فقط ciphertext تصادفی می‌بینند.',
+    'راه‌اندازی اولیه نیز بدون POST انجام می‌شود و decoder قدیمی فقط برای سازگاری باقی مانده است.'
+  ]},
+  {v:'10.511', t:'⬆️ آپدیتر داخلی و endpoint زنده برای deploy.php', items:[
+    'deploy.php v3.4 از تب تنظیمات با یک دکمه آخرین نسخه را از برنچ ثابت می‌گیرد؛ این endpoint با GET اجرا می‌شود و درگیر WAF 406 مربوط به POST نیست.',
+    'پیش از جایگزینی، نسخه و ساختار WAF-safe، syntax و SHA-256 بررسی می‌شود؛ سپس بکاپ گرفته و فایل موقت به‌صورت اتمیک rename می‌شود.',
+    'endpoint وضعیت و endpoint نصب توکن‌دار افزوده شد تا اصلاح‌های بعدی deploy.php بدون دانلود و کپی دستی روی هاست نصب شوند.'
+  ]},
+  {v:'10.510', t:'🛡 عبور درخواست‌های deploy.php از خطای 406 هاست', items:[
+    'علت واقعی پاسخ HTML با HTTP 406، رد شدن multipart/form-data توسط ModSecurity/LiteSpeed پیش از اجرای PHP بود.',
+    'deploy.php v3.3 همهٔ عملیات‌های POST را در پاکت Base64URL JSON با Content-Type متنی می‌فرستد و سمت سرور با سقف اندازه و کلیدهای محدود باز می‌کند.',
+    'خودآزمون متمرکز انتقال WAF-safe افزوده شد و پاسخ‌های قدیمی multipart برای سازگاری همچنان پذیرفته می‌شوند.'
+  ]},
+  {v:'10.509', t:'🚀 رفع قطع پاسخ deploy.php هنگام نصب فایل بزرگ', items:[
+    'deploy.php واقعی v3.1 از ریپوی code بازیابی و به v3.2 ارتقا یافت؛ دانلود ابتدا از api.github.com با raw media انجام می‌شود و raw.githubusercontent.com فقط مسیر جایگزین است.',
+    'بررسی نحوی فایل‌های بزرگ مانند scraper4.php با php -l در پردازهٔ کم‌حافظه انجام می‌شود تا token_get_all باعث OOM و پاسخ خالی سرور نشود.',
+    'خطاهای timeout، پاسخ HTML/خالی و قطع fetch اکنون با HTTP و پیش‌نمایش امن گزارش می‌شوند؛ endpoint خودآزمون deploy نیز افزوده شد.'
+  ]},
+  {v:'10.508', t:'🧹 پاک‌سازی واقعی و پایدار مدیر وظیفه با «توقف همه»', items:[
+    'توقف همه اکنون رکورد پشتیبان SQLite هر فایل پیشرفت را همراه JSON حذف می‌کند تا readProgress نتواند ردیف حذف‌شده را زنده کند.',
+    'زمان موفق توقف به‌صورت پایدار ثبت می‌شود؛ اگر کران بعداً پیشرفت اجرای قدیمی را بازنویسی کند، مدیر وظیفه آن را دوباره حذف می‌کند ولی اجرای واقعاً جدید را نشان می‌دهد.',
+    'تعریف‌های بدون فعالیت رجیستری دیگر کارت بیکار خیالی نمی‌سازند، بنابراین پس از پاک‌سازی موفق فهرست واقعاً خالی است.'
+  ]},
+  {v:'10.507', t:'🛍 رفع پرش اشتباه محصولات در غرفهٔ خالی باسلام', items:[
+    'شناسهٔ قدیمی remote-map فقط وقتی بدون درخواست پذیرفته می‌شود که کاتالوگ کامل همان غرفه حضور آن را تایید کند.',
+    'اگر اعتبارسنجی کاتالوگ نامشخص باشد، محصول دیگر «بدون تغییر» شمرده نمی‌شود؛ جست‌وجوی واقعی همان غرفه انجام و در صورت نبودن محصول ساخته می‌شود.',
+    'مشاهدهٔ تولید نشان داد بهترین های بازار در صف فعال بود اما ۴۹۸ از ۴۹۸ محصول را به‌اشتباه skipped کرده بود.'
+  ]},
+  {v:'10.506', t:'📌 حفظ alias برنچ منبع در فهرست updater', items:[
+    'نام arena/e868e86a-new در تنظیمات قدیمی حفظ می‌شود و برای probe و نصب به برنچ ثابت همین نشست resolve می‌گردد.'
+  ]},
+  {v:'10.505', t:'⚡ ذخیرهٔ سریع تنظیمات پروفایل و بازقیمت‌گذاری غیرمسدودکننده', items:[
+    'ذخیرهٔ معمولی تنظیمات دیگر هزاران محصولِ بدون تغییر را در مرورگر stringify و دوباره آپلود نمی‌کند؛ محصولات فقط هنگام استخراج، درون‌ریزی، ویرایش یا حذف واقعی ارسال می‌شوند.',
+    'بازقیمت‌گذاری سنگین جدول مغایرت از پاسخ ذخیرهٔ پروفایل و تنظیمات عمومی جدا شد: ذخیره فوراً تأیید می‌شود و endpoint اختصاصی matrix_reprice در پس‌زمینه جدول را تازه می‌کند.',
+    'آخرین کد برنچ arena/e868e86a-new با توقف همهٔ endpointمحور ادغام و حفظ شد.'
   ]},
   {v:'10.504', t:'🏷️ اصلاح برچسب دستی/خودکار استخراج و همگام‌سازی', items:[
     'برچسب منشأ از trigger واقعیِ کاربر یا زمان‌بندی جدا شد؛ worker و worker_child دیگر به‌اشتباه «دستی» محسوب نمی‌شوند.',
@@ -108578,12 +110369,6 @@ function vcParseInstallerReply(response, source) {
     });
 }
 
-/** Keep a stale link to the transferred session branch working by redirecting it to this checkout. */
-const VC_SESSION_UPDATE_BRANCH=<?=json_encode(S4_CODE_UPDATE_BRANCH)?>;
-function vcCanonicalUpdateBranch(branch){
-    const b=String(branch||'').trim();
-    return b==='arena/01a0ebf7-new'?VC_SESSION_UPDATE_BRANCH:b;
-}
 /**
  * نصب: این تابع خودش چیزی نمی‌نویسد. یک فرم به deploy.php ارسال می‌کند
  * که فایلی مستقل است و کار نصب را با همان زنجیرهٔ ایمنی انجام می‌دهد.
@@ -108592,8 +110377,7 @@ function vcUpdate(skipConfirm, requestedBranch) {
     const isExplicitBranch = !!(requestedBranch && String(requestedBranch).trim());
     const rawInstallBranch=(isExplicitBranch ? String(requestedBranch).trim() : '')
         || VC_PENDING_BRANCH || (VC && VC.branch) || ((VC && VC.branches && VC.branches[0]) || '');
-    const installBranch=isExplicitBranch&&rawInstallBranch==='arena/01a0ebf7-new'
-        ?rawInstallBranch:vcCanonicalUpdateBranch(rawInstallBranch);
+    const installBranch=String(rawInstallBranch||'').trim();
     const busy = vcBusy();
     if (busy && !skipConfirm) {
         if (!confirm('«' + busy + '» در جریان است.\n\n'
@@ -108793,7 +110577,7 @@ try{if(typeof catfixAutoApplyCfg==='function') catfixAutoApplyCfg(cn.catfix_auto
 if(w.store_url&&$('wcUrl'))$('wcUrl').value=w.store_url;if(w.consumer_key&&$('wcCK'))$('wcCK').value=w.consumer_key;if(w.consumer_secret&&$('wcCS'))$('wcCS').value=w.consumer_secret;try{const sm=w.sync_mode||'api';if($('wcModeApi'))$('wcModeApi').checked=(sm!=='direct');if($('wcModeDirect'))$('wcModeDirect').checked=(sm==='direct');if($('wcSyncFallback'))$('wcSyncFallback').value=w.sync_fallback||'api_then_direct';}catch(e){}if(w.default_status&&$('wcSt'))$('wcSt').value=w.default_status;if(w.default_category&&$('wcCat'))$('wcCat').value=w.default_category;if($('wcMS'))$('wcMS').checked=!!w.manage_stock;if(w.stock_quantity&&$('wcSQ'))$('wcSQ').value=w.stock_quantity;if($('wcPMode'))$('wcPMode').value=w.price_mode||'none';if($('wcPVal'))$('wcPVal').value=(w.price_val!==undefined?w.price_val:0);if($('wcPRound'))$('wcPRound').value=String(w.price_round||0);try{syncWcPriceUi('main');}catch(e){}if($('bsPMode'))$('bsPMode').value=b.price_mode||'none';if($('bsPVal'))$('bsPVal').value=(b.price_val!==undefined?b.price_val:0);if($('bsPRound'))$('bsPRound').value=String(b.price_round||0);try{destPricePreview('wc');destPricePreview('bs');}catch(e){}if(b.token&&$('bsTk'))$('bsTk').value=b.token;if(b.vendor_id&&$('bsVid'))$('bsVid').value=b.vendor_id;if(b.preparation_days&&$('bsPD'))$('bsPD').value=b.preparation_days;if(b.weight&&$('bsW'))$('bsW').value=b.weight;if($('bsPW')&&b.package_weight)$('bsPW').value=b.package_weight;if(b.stock&&$('bsSt'))$('bsSt').value=b.stock;// v9.80: سوییچ «اتصال غیرمستقیم» باسلام
 if($('bsIndirect'))$('bsIndirect').checked=!!b.net_indirect;// v7.48: Restore category in searchable dropdown
 if(b.category_id){$('bsCat').value=String(b.category_id);bslSelectedCatId=b.category_id;if(bslAllCats.length>0){renderBslCatDropdown(bslAllCats,b.category_id);}else{loadBslCats();}}else{$('bsCat').value='0';bslSelectedCatId=0;if($('bsCatSearch'))$('bsCatSearch').value='';}
-if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsShopSendMode'))$('bsShopSendMode').value=(b.shop_send_mode==='parallel'?'parallel':'serial');if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);
+if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsShopSendMode'))$('bsShopSendMode').value=(b.shop_send_mode==='parallel'?'parallel':'serial');if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsProductTimeout'))$('bsProductTimeout').value=Math.max(30,Math.min(1800,parseInt(b.product_timeout_sec)||180));if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);
 // v8.17: Restore global fallback categories
 if(b.fallback_cat_ids&&Array.isArray(b.fallback_cat_ids)){renderBslFallbackCats(b.fallback_cat_ids);}
 // v8.17: Restore extra vendors
@@ -109598,7 +111382,7 @@ window.addEventListener('load',()=>setTimeout(syncMatrixAutoLate,6000));
 
 function saveConn(){const fd=new FormData();fd.append('action','save_connections');fd.append('woocommerce',JSON.stringify({enabled:1,store_url:$('wcUrl').value.trim(),consumer_key:$('wcCK').value.trim(),consumer_secret:$('wcCS').value.trim(),default_status:$('wcSt').value,default_category:parseInt($('wcCat').value)||0,manage_stock:$('wcMS').checked,stock_quantity:parseInt($('wcSQ').value)||10,price_mode:($('wcPMode')||{}).value||'none',price_val:parseFloat(($('wcPVal')||{}).value)||0,price_round:parseInt(($('wcPRound')||{}).value)||0,sync_mode:(($('wcModeDirect')&&$('wcModeDirect').checked)?'direct':'api'),sync_fallback:(($('wcSyncFallback')||{}).value||'api_then_direct')}));bslFlushVendors(); /* v10.87: flush price fields before saving */
 
-fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,send_shop_ids:(typeof bslGetSelectedVids==='function'?bslGetSelectedVids():null),shop_send_mode:(typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial'),delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
+fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,send_shop_ids:(typeof bslGetSelectedVids==='function'?bslGetSelectedVids():null),shop_send_mode:(typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial'),delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,product_timeout_sec:Math.max(30,Math.min(1800,parseInt($('bsProductTimeout')?.value)||180)),send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),parallel_profile_lanes:true,fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
 
 // v8.06: Save AI settings
 fd.append('ai_net',JSON.stringify(getAiNet()));
@@ -109619,7 +111403,7 @@ return fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
    cursor. Live pricing already updated cn; manual Save still reloads the
    normalized server copy: if(d.ok){loadConn();try{rvDirty.table=true;if(resultsVisible())rvBuildTable();} */
 if(d.ok){if(!window._connSaveNoToast)loadConn();try{rvMarkDirty();if(resultsVisible())rvEnsure(rvCurView);}catch(e){}}
-if(d.ok&&d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
+if(d.ok&&d.matrix_refresh_pending)requestProfileMatrixRefresh('destination_price_change');else if(d.ok&&d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
 if(!window._connSaveNoToast)showToast(d.ok?(d.matrix_repriced&&d.matrix_repriced.changed?'✓ ذخیره شد؛ جدول مغایرت فوراً به‌روز شد':'✓ ذخیره شد'):'خطا',!d.ok);
 window._connSaveNoToast=false;_connSaveIndicator(d.ok?'ok':'err');
 return d;
@@ -109641,6 +111425,32 @@ function _connSaveIndicator(state){
             el._t=setTimeout(function(){el.textContent='';},2500);}
         else if(state==='err'){el.textContent='⚠';el.title='خطا در ذخیره';el.style.color='#f87171';}
     });
+    var pulse=document.getElementById('runtimePulse');
+    if(pulse){
+        clearTimeout(pulse._saveStateTimer);
+        pulse.classList.remove('save-pending','save-ok','save-error');
+        var cls=state==='pending'?'save-pending':(state==='ok'?'save-ok':'save-error');
+        pulse.classList.add(cls);
+        pulse.dataset.saveState=state;
+        /* v10.550: inline !important is intentional. Runtime health, cron flash,
+           hover and cached theme rules all color this same sticky control. The
+           save result must remain authoritative for its short visible window. */
+        var saveBg=state==='pending'?'#78350f':(state==='ok'?'#14532d':'#7f1d1d');
+        var saveBorder=state==='pending'?'#f59e0b':(state==='ok'?'#22c55e':'#ef4444');
+        var saveGlow=state==='pending'?'#f59e0b66':(state==='ok'?'#22c55e66':'#ef444477');
+        pulse.style.setProperty('background-color',saveBg,'important');
+        pulse.style.setProperty('background',saveBg,'important');
+        pulse.style.setProperty('border-color',saveBorder,'important');
+        pulse.style.setProperty('box-shadow','inset 0 0 18px '+saveGlow+',0 0 8px '+saveGlow,'important');
+        var saveLabel=state==='pending'?'در حال ذخیرهٔ تغییرات':(state==='ok'?'تغییرات ذخیره شد':'خطا در ذخیرهٔ تغییرات');
+        pulse.title=saveLabel;
+        pulse.setAttribute('aria-label',saveLabel);
+        if(state==='ok')pulse._saveStateTimer=setTimeout(function(){
+            pulse.classList.remove('save-ok');delete pulse.dataset.saveState;
+            ['background-color','background','border-color','box-shadow'].forEach(function(p){pulse.style.removeProperty(p);});
+            if(typeof s4RuntimeHealthCheck==='function')s4RuntimeHealthCheck(false);
+        },2500);
+    }
 }
 (function setupConnAutoSave(){
     var SKIP={'rlSearch':1,'bslFallbackCatSearch':1,'aiQueryInput':1,
@@ -109761,7 +111571,7 @@ function renderWooTestReport(d){
   const block=(title,col,x)=>{
     if(!x) return '';
     let b='<div style="margin-top:8px;padding:8px;border-radius:8px;background:#0f172a;border:1px solid #1e293b">';
-    b+='<div style="font-weight:800;color:'+col+';margin-bottom:4px">'+title+' — '+(x.ok?'✓ موفق':'✗ ناموفق')+'</div>';
+    b+='<div style="font-weight:800;color:'+col+';margin-bottom:4px">'+title+' — '+(x.ok?'✓ موفق':(x.not_applicable?'ℹ نامرتبط با این نصب':'✗ ناموفق'))+'</div>';
     if(x.message) b+='<div style="color:#e2e8f0">'+esc(x.message)+'</div>';
     if(x.detail) b+='<div style="color:#94a3b8;font-size:10.5px;margin-top:2px">'+esc(x.detail)+'</div>';
     if(x.hint) b+='<div style="color:#fbbf24;font-size:10.5px;margin-top:4px">💡 '+esc(x.hint)+'</div>';
@@ -113576,9 +115386,60 @@ let bslLastCardCount=0;
 // v8.06: WooCommerce polling state
 let wooLastCardCount=0,wooLastUpdateTime=0,wooLastLogCount=0,wooResumeCount=0;
 
+// v10.553: rolling speed/ETA from real cursor movement, persisted per queue.
+function bslQueueRateMetric(d){
+    const now=Date.now(),qid=String(d&&d.queue_id||''),cur=Math.max(0,parseInt(d&&d.current)||0),total=Math.max(0,parseInt(d&&d.total)||0);
+    if(!qid)return {rate:0,eta:0,ready:false};
+    const key='s4_bsl_rate_'+qid;let samples=[];
+    try{samples=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(samples))samples=[];}catch(_e){samples=[];}
+    samples=samples.filter(s=>s&&Number.isFinite(+s.t)&&Number.isFinite(+s.c)&&now-(+s.t)<15*60*1000);
+    if(samples.length&&cur<Number(samples[samples.length-1].c))samples=[];
+    const last=samples[samples.length-1];
+    if(!last||cur!==Number(last.c)){samples.push({t:now,c:cur});}
+    if(samples.length>120)samples=samples.slice(-120);
+    try{localStorage.setItem(key,JSON.stringify(samples));}catch(_e){}
+    const floor=now-10*60*1000;
+    const anchor=samples.find(s=>Number(s.t)>=floor&&Number(s.c)<cur);
+    if(!anchor)return {rate:0,eta:0,ready:false};
+    const mins=(now-Number(anchor.t))/60000,delta=cur-Number(anchor.c);
+    if(mins<0.12||delta<1)return {rate:0,eta:0,ready:false};
+    const rate=delta/mins,eta=rate>0?Math.max(0,total-cur)/rate*60:0;
+    return {rate:rate,eta:eta,ready:Number.isFinite(rate)&&rate>0};
+}
+function bslHumanDuration(sec){
+    sec=Math.max(0,Math.round(Number(sec)||0));
+    if(sec<60)return toFa(sec)+' ثانیه';
+    const min=Math.floor(sec/60),s=sec%60;if(min<60)return toFa(min)+' دقیقه'+(s?' و '+toFa(s)+' ثانیه':'');
+    const h=Math.floor(min/60),m=min%60;if(h<24)return toFa(h)+' ساعت'+(m?' و '+toFa(m)+' دقیقه':'');
+    const day=Math.floor(h/24),rh=h%24;return toFa(day)+' روز'+(rh?' و '+toFa(rh)+' ساعت':'');
+}
+// v10.552: render the live sender as a compact semantic grid.
+function bslRenderSendStatusGrid(d,rateMetric){
+    const grid=$('bslSendStatusGrid'),fallback=$('bSS');if(!grid)return;
+    if(!d||!d.running||d.done){grid.classList.add('hidden');if(fallback)fallback.classList.remove('hidden');return;}
+    const total=parseInt(d.total)||0,product=parseInt(d.inflight_product)||(parseInt(d.current)||0);
+    const step=parseInt(d.inflight_step)||0,stepTotal=parseInt(d.inflight_step_total)||0;
+    const elapsed=Math.max(0,parseInt(d.inflight_elapsed)||0);
+    const stage=String(d.inflight_stage_label||d.phase_label||'در حال پردازش');
+    let detail=String(d.inflight_detail||'').trim();
+    if(!detail&&Array.isArray(d.shop_stats)&&d.shop_stats.length)detail=toFa(d.shop_stats.length)+' غرفه';
+    const set=(id,val)=>{const el=$(id);if(el)el.textContent=val||'—';};
+    set('bsgProduct',(product>0?toFa(product):'—')+(total>0?' از '+toFa(total):''));
+    set('bsgStage',stage);
+    set('bsgStep',step>0?(toFa(step)+' از '+toFa(stepTotal||9)):'—');
+    set('bsgDetail',detail||'در حال دریافت جزئیات…');
+    rateMetric=rateMetric||bslQueueRateMetric(d);
+    set('bsgRate',rateMetric.ready?(toFa(rateMetric.rate.toFixed(1))+' محصول در دقیقه'):'در حال محاسبه…');
+    const productAge=elapsed>0?bslHumanDuration(elapsed):'تازه شروع شده';
+    const eta=rateMetric.ready?('حدود '+bslHumanDuration(rateMetric.eta)):'پس از چند محصول محاسبه می‌شود';
+    set('bsgElapsed','این محصول: '+productAge+' · تا پایان: '+eta);
+    set('bsgTitle',String(d.inflight_title||d.last_title||'در حال انتخاب محصول…'));
+    grid.classList.remove('hidden');if(fallback)fallback.classList.add('hidden');
+}
 // v7.48: Poll BaSalam send progress — live stats, synced logs, elapsed time, ETA
 function pollBslProgress() {
-    fetch('?poll_bsl=1').then(r=>r.json()).then(d=>{
+    const _pollQid=String(window._currentBslQueueId||'');
+    fetch('?poll_bsl=1'+(_pollQid?'&queue_id='+encodeURIComponent(_pollQid):'')).then(r=>r.json()).then(d=>{
         if(!d) {setTimeout(pollBslProgress,2000);return;}
         const responseQueueId=String(d.queue_id||'');
         const activeQueueId=String(window._currentBslQueueId||'');
@@ -113626,7 +115487,7 @@ function pollBslProgress() {
             const allItems=[];
             bslReportData.sent.forEach(x=>{allItems.push(Object.assign({result:'ok'},x));});
             bslReportData.updated.forEach(x=>{allItems.push(Object.assign({result:'update'},x));});
-            bslReportData.skipped.forEach(x=>{allItems.push(Object.assign({result:'skip'},x));});
+            bslReportData.skipped.forEach(x=>{allItems.push(Object.assign({result:'skip',result_label:'⏭ بدون تغییر'},x));});
             bslReportData.failed.forEach(x=>{allItems.push(Object.assign({result:'fail'},x));});
             (bslReportData.retired||[]).forEach(x=>{allItems.push(Object.assign({result:'retired'},x));});
             const needFull = bslLastCardCount===0 || logDiv.querySelectorAll('.scard').length===0 || totalCards<bslLastCardCount;
@@ -113661,15 +115522,12 @@ function pollBslProgress() {
         if(lsBox) lsBox.innerHTML=bslShopStatsHtml(d.shop_stats);
         // v7.48: Calculate elapsed time and ETA
         let elapsedStr='',etaStr='';
+        const bslRateMetric=bslQueueRateMetric(d);
         if(startedAt>0){
             const elapsedSec=Math.floor(Date.now()/1000-startedAt);
-            elapsedStr=elapsedSec>=60?(Math.floor(elapsedSec/60)+'دقیقه '+elapsedSec%60+'ثانیه'):(elapsedSec+' ثانیه');
-            if(current>0&&total>0&&current>1){
-                const perProduct=elapsedSec/current;
-                const remaining=Math.round(perProduct*(total-current));
-                etaStr=remaining>=60?(Math.floor(remaining/60)+'دقیقه '+remaining%60+'ثانیه'):(remaining+' ثانیه');
-            }
+            elapsedStr=bslHumanDuration(elapsedSec);
         }
+        if(bslRateMetric.ready)etaStr=bslHumanDuration(bslRateMetric.eta);
         // v7.48: Add only NEW log entries using total_log_count for proper sync
         // v10.104b: logDiv بالاتر تعریف شده — redeclare نکن (SyntaxError کل اسکریپت را می‌کشت)
         if(!logDiv){/* bR missing */}
@@ -113712,7 +115570,16 @@ function pollBslProgress() {
             let progText='';
             const phaseCurrent=parseInt(d.phase_current)||0,phaseTotal=parseInt(d.phase_total)||0;
             const phasePct=Math.max(0,Math.min(100,Number.isFinite(Number(d.phase_pct))?Number(d.phase_pct):(phaseTotal?phaseCurrent*100/phaseTotal:0)));
-            if(d.phase_label&&phaseTotal>0){
+            if(running&&parseInt(d.inflight_product)>0){
+                const ip=parseInt(d.inflight_product)||current||1,is=parseInt(d.inflight_step)||0,ist=parseInt(d.inflight_step_total)||9;
+                const il=String(d.inflight_stage_label||d.phase_label||'در حال پردازش محصول');
+                const id=String(d.inflight_detail||'').trim(),ie=Math.max(0,parseInt(d.inflight_elapsed)||0);
+                progText='📦 محصول '+toFa(ip)+' از '+toFa(total)+' · '+il;
+                if(is>0)progText+=' · مرحله '+toFa(is)+' از '+toFa(ist);
+                if(id)progText+=' · '+id;
+                if(ie>0)progText+=' · '+toFa(ie)+' ثانیه';
+                if(d.inflight_title)$('bSS').title='محصول فعلی: '+String(d.inflight_title)+' | '+il+(id?' | '+id:'');
+            }else if(d.phase_label&&phaseTotal>0){
                 progText=String(d.phase_label)+' — '+toFa(phaseCurrent)+'/'+toFa(phaseTotal)+' ('+Math.round(phasePct)+'٪)';
                 if(d.batch_chunks)progText+=' · بسته '+toFa(d.batch_chunk||0)+'/'+toFa(d.batch_chunks);
             }else if(running&&total>0&&current<=0){
@@ -113727,9 +115594,10 @@ function pollBslProgress() {
             $('bSS').textContent=progText;
             $('bPB').style.width=((d.phase_label&&phaseTotal>0)?phasePct:(total>0?current/total*100:0))+'%';
             // v7.48: Show product title being processed
-            if(d.last_title){
+            if(d.last_title&&!d.inflight_product){
                 $('bSS').title='محصول فعلی: '+d.last_title;
             }
+            bslRenderSendStatusGrid(d,bslRateMetric);
         }
         // v7.50: Paused — stop polling, keep UI visible for resume
         if(paused&&!running&&!done) {
@@ -113740,6 +115608,7 @@ function pollBslProgress() {
             return; // Stop polling until resume
         }
         if(done) {
+            bslRenderSendStatusGrid(d);
             bSend=false;
             $('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');
             $('bST').classList.add('hidden');
@@ -113751,14 +115620,14 @@ function pollBslProgress() {
                 return;
             }
             $('bPB').style.width='100%';
-            let finalText='✓ '+toFa(sent)+' جدید | '+toFa(updated)+' آپدیت | '+toFa(skipped)+' تکراری | '+toFa(failed)+' خطا';
+            let finalText='✓ '+toFa(sent)+' جدید | '+toFa(updated)+' آپدیت | '+toFa(skipped)+' بدون تغییر | '+toFa(failed)+' خطا';
             if(elapsedStr) finalText+=' | '+elapsedStr;
             $('bSS').textContent=finalText;
             // Persist completion-toast dedupe across polls and page reloads.
             const thisQueueId=d.queue_id||'';
             if(thisQueueId){window._bslCompletedQueueIds=window._bslCompletedQueueIds||{};window._bslCompletedQueueIds[thisQueueId]=true;}
             bslLastDoneQueueId=thisQueueId;
-            if(rememberBslCompletionToast(d))showToast('✓ '+sent+' جدید, '+updated+' آپدیت, '+skipped+' تکراری, '+failed+' خطا');
+            if(rememberBslCompletionToast(d))showToast('✓ '+sent+' جدید, '+updated+' آپدیت, '+skipped+' بدون تغییر, '+failed+' خطا');
             // v7.38: Auto-run Phase 2 — check for category-rejected products
             setTimeout(bslPhase2Check,2000);
             // v7.48: After process done, check queue and auto-start next entry
@@ -114547,8 +116416,10 @@ function queueBslSend(ps,catId){
         fd2.append('auto_category',autoCat?'1':'0');
         fd2.append('delay_ms',$('bsDelayMs')?($('bsDelayMs').value||'500'):'500');
         fd2.append('retry_delay_ms',$('bsRetryDelayMs')?($('bsRetryDelayMs').value||'1000'):'1000');
+        fd2.append('product_timeout_sec',$('bsProductTimeout')?($('bsProductTimeout').value||'180'):'180');
         fd2.append('send_parallel_n',$('bsParallelN')?($('bsParallelN').value||'4'):'4');
         fd2.append('send_parallel_auto',($('bsParallelAuto')&&!$('bsParallelAuto').checked)?'0':'1');
+        fd2.append('profile_lane',bslSelectedSendLane());
         fd2.append('start_immediately','1');
         fd2.append('profile_key',profKey);
         fd2.append('profile_name',($('profileName')&&$('profileName').value)||'');
@@ -114652,7 +116523,7 @@ function stopBslProcess(){
     bSend=false;
     $('bST').classList.add('hidden');
     $('bSS').textContent='⏹ در حال توقف...';
-    fetch('?bsl_stop=1').then(r=>r.json()).then(d=>{
+    fetch('?bsl_stop=1'+(window._currentBslQueueId?'&queue_id='+encodeURIComponent(window._currentBslQueueId):'')).then(r=>r.json()).then(d=>{
         if(d.ok){
             $('bSS').textContent='⏹ متوقف شد'+(d.paused>0?' — '+toFa(d.paused)+' ردیف صف نگه داشته شد':'');
             showToast('⏹ '+(d.msg||'ارسال متوقف شد'));
@@ -114675,7 +116546,7 @@ function stopBslProcess(){
         bslQueueRunner=null;
     }
 }
-function finB(s,u,k,f,t){$('bSS').textContent='✓ '+toFa(s)+' جدید | '+toFa(u)+' آپدیت | '+toFa(k)+' تکراری | '+toFa(f)+' خطا';showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' تکراری, '+f+' خطا');}
+function finB(s,u,k,f,t){$('bSS').textContent='✓ '+toFa(s)+' جدید | '+toFa(u)+' آپدیت | '+toFa(k)+' بدون تغییر | '+toFa(f)+' خطا';showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' بدون تغییر, '+f+' خطا');}
 
 // v7.48: Client-side BaSalam send — one product at a time, no server timeout
 let bslClientRunning=false;
@@ -114716,6 +116587,7 @@ function sendBslClient(){
         fd.append('mode','send');
         fd.append('delay_ms',$('bsDelayMs')?($('bsDelayMs').value||'500'):'500');
         fd.append('retry_delay_ms',$('bsRetryDelayMs')?($('bsRetryDelayMs').value||'1000'):'1000');
+        fd.append('product_timeout_sec',$('bsProductTimeout')?($('bsProductTimeout').value||'180'):'180');
         fd.append('send_parallel_n',$('bsParallelN')?($('bsParallelN').value||'4'):'4');
         fd.append('send_parallel_auto',($('bsParallelAuto')&&!$('bsParallelAuto').checked)?'0':'1');
         fetch('?bsl_send_one=1',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
@@ -114738,7 +116610,7 @@ function sendBslClient(){
                 bslReportData.updated.push({title:d.title,remote_id:d.remote_id,key:d.key,changes:d.changes,update_reason:d.update_reason||d.changes,image:d.image||p.image,price:d.price,category:d.category});
             }else if(d.action==='skip'){
                 k++;$('bK').textContent=toFa(k);
-                $('bR').insertAdjacentHTML('beforeend',renderSendCard({title:d.title||p.title,image:d.image||p.image,price:d.price,category:d.category,category_id:d.category_id,price_unit:d.price_unit,link:d.link,result:'skip',remote_id:d.remote_id,error:d.reason}));
+                $('bR').insertAdjacentHTML('beforeend',renderSendCard({title:d.title||p.title,image:d.image||p.image,price:d.price,category:d.category,category_id:d.category_id,price_unit:d.price_unit,link:d.link,result:'skip',result_label:'⏭ بدون تغییر',remote_id:d.remote_id,error:d.reason}));
                 bslReportData.skipped.push({title:d.title,remote_id:d.remote_id,key:d.key,reason:d.reason,image:d.image||p.image,price:d.price,category:d.category});
             }else if(d.action==='fail'||!d.ok){
                 f++;$('bF').textContent=toFa(f);
@@ -114765,9 +116637,9 @@ function finishBslClient(s,u,k,f,t){
     bslClientRunning=false;bSend=false;
     $('bSB').classList.remove('hidden');$('bSBlegacy').classList.remove('hidden');$('bST').classList.add('hidden');
     $('bO').textContent=toFa(s);$('bU').textContent=toFa(u);$('bK').textContent=toFa(k);$('bF').textContent=toFa(f);$('bT').textContent=toFa(t);
-    $('bSS').textContent='✓ '+toFa(s)+' جدید | '+toFa(u)+' آپدیت | '+toFa(k)+' تکراری | '+toFa(f)+' خطا';
+    $('bSS').textContent='✓ '+toFa(s)+' جدید | '+toFa(u)+' آپدیت | '+toFa(k)+' بدون تغییر | '+toFa(f)+' خطا';
     $('bPB').style.width='100%';
-    showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' تکراری, '+f+' خطا');
+    showToast('✓ '+s+' جدید, '+u+' آپدیت, '+k+' بدون تغییر, '+f+' خطا');
 }
 
 let s4AppReadyRetry=null;
@@ -114904,14 +116776,71 @@ const vCheck=document.querySelector('h1');if(vCheck&&!vCheck.textContent.include
         checkBslQueue();
     }).catch(()=>{checkBslQueue();});
 })();
+// v10.565: Basalam Send sub-tabs. Internal fast/detail names are stable disk
+// identifiers; Lane 1 is no-detail and Lane 2 requires complete details.
+let bslSendLane=(localStorage.getItem('s4_bsl_send_lane')==='detail'?'detail':'fast');
+let bslLastQueueSnapshot=null;
+function bslSelectedSendLane(){return bslSendLane==='detail'?'detail':'fast';}
+function bslEntryInSelectedLane(e){const l=String((e&&e.lane)||'legacy');return bslSendLane==='detail'?l==='detail':l!=='detail';}
+function bslRenderLaneIndicators(q){
+    const all=Array.isArray(q&&q.entries)?q.entries:[];
+    [['fast',1],['detail',2]].forEach(([lane,n])=>{
+        const rows=all.filter(e=>{if(!e||typeof e!=='object')return false;const l=String(e.lane||'legacy');return lane==='detail'?l==='detail':l!=='detail';});
+        const count={running:0,waiting:0,paused:0,done:0,failed:0};
+        let doneProducts=0,totalProducts=0;
+        rows.forEach(e=>{
+            if(Object.prototype.hasOwnProperty.call(count,e.status))count[e.status]++;
+            const total=Math.max(0,parseInt(e.total,10)||0),current=e.status==='done'?total:Math.min(total,Math.max(0,parseInt(e.current,10)||0));
+            totalProducts+=total;doneProducts+=current;
+        });
+        const badge=$('bslLaneState'+n),bar=$('bslLaneProgress'+n),tab=$('bslLaneTab'+n);
+        const active=count.running+count.waiting+count.paused;
+        let text=active?[...(count.running?['🔄 '+toFa(count.running)+' جاری']:[]),...(count.waiting?['⏳ '+toFa(count.waiting)+' در صف']:[]),...(count.paused?['⏸ '+toFa(count.paused)+' متوقف']:[])].join(' · '):
+            (count.failed?'❌ '+toFa(count.failed)+' خطا':(count.done?'✅ '+toFa(count.done)+' تکمیل‌شده':'آماده · صف خالی'));
+        if(badge){badge.textContent=text;badge.style.color=count.running?'#67e8f9':(count.waiting?'#fbbf24':(count.paused?'#fdba74':(count.failed?'#f87171':(count.done?'#4ade80':'#94a3b8'))));}
+        const pct=totalProducts?Math.max(0,Math.min(100,Math.round(doneProducts*100/totalProducts))):0;
+        if(bar){bar.style.width=pct+'%';const track=bar.parentElement;if(track){track.setAttribute('aria-valuenow',String(pct));track.setAttribute('aria-label','پیشرفت لین '+n+' · '+pct+'٪');}}
+        if(tab){tab.title=text+(totalProducts?' · '+toFa(pct)+'٪ پیشرفت':'');}
+    });
+}
+function setBslSendLane(lane){
+    bslSendLane=lane==='detail'?'detail':'fast';localStorage.setItem('s4_bsl_send_lane',bslSendLane);
+    const a=$('bslLaneTab1'),b=$('bslLaneTab2');
+    if(a){a.classList.toggle('btn-cyan',bslSendLane==='fast');a.classList.toggle('btn-gray',bslSendLane!=='fast');a.setAttribute('aria-selected',bslSendLane==='fast'?'true':'false');}
+    if(b){b.classList.toggle('btn-cyan',bslSendLane==='detail');b.classList.toggle('btn-gray',bslSendLane!=='detail');b.setAttribute('aria-selected',bslSendLane==='detail'?'true':'false');}
+    const hint=$('bslLaneSelectedHint');if(hint)hint.textContent=bslSendLane==='detail'?'لین ۲ فقط پروفایل ذخیره‌شده با سلکتور جزئیات و پوشش کامل همهٔ محصولات را می‌پذیرد؛ ابتدا استخراج جزئیات را کامل کنید.':'لین ۱ محصولات را بدون جزئیات می‌فرستد و برای همهٔ پروفایل‌ها مناسب است؛ دو لین می‌توانند همزمان اجرا شوند.';
+    if(bslLastQueueSnapshot)bslRenderLaneIndicators(bslLastQueueSnapshot);
+    const q=bslLastQueueSnapshot;if(q){const row=(q.entries||[]).find(e=>bslEntryInSelectedLane(e)&&e.status==='running');window._currentBslQueueId=row?String(row.id||''):'';bSend=!!row;renderBslQueue(q);bslApplyQueueActionState(q);if(row)pollBslProgress();}
+}
+setTimeout(()=>setBslSendLane(bslSendLane),0);
 // v7.48: Queue management functions
 let bslQueuePollTimer=null;
+/* v10.549: derive the primary action from the server queue on every poll. The
+   local bSend flag can survive refreshes or race with progress polling and must
+   never make an active server send look like a new direct send. */
+function bslApplyQueueActionState(q){
+    const entries=(Array.isArray(q&&q.entries)?q.entries:[]).filter(bslEntryInSelectedLane);
+    const running=entries.find(e=>e&&e.status==='running');
+    const queued=entries.some(e=>e&&['running','waiting'].includes(e.status));
+    const btn=$('bSB'),legacy=$('bSBlegacy'),stop=$('bST');
+    if(queued){
+        if(btn){btn.textContent='🚀 + افزودن به صف';btn.classList.remove('hidden');btn.dataset.queueActive='1';}
+        if(legacy)legacy.classList.add('hidden');
+        if(stop)stop.classList.toggle('hidden',!running);
+    }else if(btn&&!bslClientRunning){
+        btn.textContent='🚀 ارسال باسلام';delete btn.dataset.queueActive;
+        btn.classList.remove('hidden');
+        if(legacy)legacy.classList.remove('hidden');
+        if(stop)stop.classList.add('hidden');
+    }
+    return running||null;
+}
 function checkBslQueue(){
-    fetch('?bsl_queue_status=1').then(r=>r.json()).then(q=>{
-        renderBslQueue(q);
+    fetch('?bsl_queue_status=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(q=>{
+        bslLastQueueSnapshot=q;renderBslQueue(q);
+        const running=bslApplyQueueActionState(q);
         // v7.66: NEVER start client-driven sendNextQueueProduct — bsl_backend does the work
         // If a 'running' entry is found and no polling is active, just start polling to display progress
-        const running=q.entries?.find(e=>e.status==='running');
         if(running&&!bSend){
             console.log('[v7.81 checkBslQueue] Found running entry, starting pollBslProgress (server-side mode)');
             window._currentBslQueueId=String(running.id||'');
@@ -115008,7 +116937,7 @@ function bslShopStatsHtml(rows,compact){
           +'<span style="display:flex;gap:9px;font-size:10px">'
           + cell(s.sent,'#4ade80','✅','جدید')
           + cell(s.updated,'#facc15','⚡','آپدیت')
-          + cell(s.skipped,'#94a3b8','⏭','تکراری')
+          + cell(s.skipped,'#94a3b8','⏭','بدون تغییر')
           + cell(s.failed,'#f87171','❌','خطا')
           +'</span></div></div>';
     });
@@ -115128,7 +117057,7 @@ function sendQueueVisualCard(e,opt){
     return '<article class="sendq-card is-'+esc(visualStatus||'waiting')+'" style="--sq:'+(opt.accent||'#38bdf8')+'" onclick="'+opt.detailFn+'(\''+e.id+'\')">'
       +'<div class="sendq-head"><div class="sendq-logo">'+(opt.icon||'📦')+'</div><div><div class="sendq-name" title="'+esc(profileKey||profileLabel)+'">👤 پروفایل ارسال: '+esc(profileLabel)+'</div><div class="sendq-context">'+chips+'<span class="sendq-chip">'+toFa(total)+' محصول</span></div></div><span class="sendq-status" style="color:'+colors[visualStatus]+';background:'+colors[visualStatus]+'18;border:1px solid '+colors[visualStatus]+'55">'+status+'</span></div>'
       +'<div class="sendq-progress-head"><b>'+(hasPhase?esc(e.phase_label):toFa(pct)+'٪ انجام شده')+'</b><span>'+(hasPhase?(toFa(phCur)+' از '+toFa(phTotal)+' · '+toFa(pct)+'٪'):(toFa(processed)+' از '+toFa(total)+' · '+toFa(remain)+' باقی‌مانده'))+'</span></div><div class="sendq-track"><div class="sendq-fill" style="width:'+pct+'%"></div></div>'
-      +'<div class="sendq-metrics">'+metric(newSent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(retired,opt.retireLabel||'حذف/بایگانی','#f472b6',true)+metric(e.skipped,isRetire?'یافت‌نشد':'ردشده','#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
+      +'<div class="sendq-metrics">'+metric(newSent,'جدید','#4ade80')+metric(e.updated,'آپدیت','#facc15')+metric(retired,opt.retireLabel||'حذف/بایگانی','#f472b6',true)+metric(e.skipped,isRetire?'یافت‌نشد':(opt.skipLabel||'ردشده'),'#94a3b8')+metric(e.failed,'خطا','#f87171')+metric(processed,'پردازش')+metric(remain,'باقی')+'</div>'
       +(reason?'<div class="sendq-reason">⚠ '+esc(reason)+'</div>':'')+(opt.extra||'')
       +'<div class="sendq-foot"><span class="sendq-hint">مشاهدهٔ گزارش و محصولات ›</span><span class="sendq-actions" onclick="event.stopPropagation()">'+(opt.actions||'')+'</span></div></article>';
 }
@@ -115137,10 +117066,10 @@ function sendQueueVisualCard(e,opt){
    on opening the full queue accordion. */
 function renderBslActiveSendTask(q){
     const box=$('bslActiveSendTask');if(!box)return;
-    const entries=Array.isArray(q&&q.entries)?q.entries:[];
+    const entries=(Array.isArray(q&&q.entries)?q.entries:[]).filter(bslEntryInSelectedLane);
     let row=null;
     if(q&&q.active_send&&q.active_send.queue_id)
-        row=entries.find(e=>e&&String(e.id||'')===String(q.active_send.queue_id||''))||q.active_send;
+        row=entries.find(e=>e&&String(e.id||'')===String(q.active_send.queue_id||''))||null;
     if(!row){
         const rank={running:0,paused:1,waiting:2,failed:3};
         row=entries.filter(e=>e&&rank[e.status]!==undefined&&((parseInt(e.total)||0)<=0||(parseInt(e.current)||0)<(parseInt(e.total)||0)))
@@ -115177,10 +117106,12 @@ function renderBslQueue(q){
     const section=$('bslQueueSection');
     const list=$('bslQueueList');
     if(!section||!list)return;
-    const entries=q.entries||[];
+    bslRenderLaneIndicators(q);
+    const entries=(q.entries||[]).filter(bslEntryInSelectedLane);
 
     renderBslActiveSendTask(q);
-    renderSendQueueProfileSummary('bsl',entries,q.active_send||null);
+    const selectedActive=entries.find(e=>e&&(e._worker_live||e.status==='running'))||null;
+    renderSendQueueProfileSummary('bsl',entries,selectedActive);
 
     try{const bd=$('bslQueueCountBadge');if(bd){const n=(entries||[]).length;const act=(entries||[]).filter(e=>e&&(e.status==='running'||e.status==='waiting'||e.status==='paused')).length;const rag=sendQueueRetireAgg(entries);bd.textContent=n?(toFa(n)+' وظیفه'+(act?' · '+toFa(act)+' فعال':'')+(rag.retired?' · 🗂 '+toFa(rag.retired)+' حذف/بایگانی':'')):'';}}catch(_e){}
     if(entries.length===0){list.innerHTML='<span style="color:#64748b">صف خالی — برای افزودن، دکمه «🚀 ارسال باسلام» را کلیک کنید</span>';return;}
@@ -115188,7 +117119,7 @@ function renderBslQueue(q){
     const statusLabels={waiting:'⏳ در صف',running:'🔄 در حال ارسال',paused:'⏸ متوقف',done:'✅ انجام شد',failed:'❌ خطا'};
     const statusColors={waiting:'#fbbf24',running:'#67e8f9',paused:'#f97316',done:'#4ade80',failed:'#f87171'};
     const statusBg={waiting:'#42200630',running:'#0e749020',paused:'#c2410c20',done:'#14532d20',failed:'#7f1d1d20'};
-    let html='';
+    let html='<div style="margin-bottom:8px;color:#a5f3fc;font-weight:800">🛣️ '+(bslSendLane==='detail'?'لین ۲ — ارسال با جزئیات':'لین ۱ — ارسال بدون جزئیات')+'</div>';
     /* v10.73 (87): نوارِ خلاصهٔ وضعیت — صف حالا وظایفِ متعدد (هر غرفه
        یک وظیفه) است و باید یک نگاه بگوید چندتایش کجاست. */
     const cnt={waiting:0,running:0,paused:0,done:0,failed:0};
@@ -115222,7 +117153,7 @@ function renderBslQueue(q){
             __acts='<button class="btn btn-green" onclick="resumeBslQueue(\''+e.id+'\')">▶ ادامه'+(__current>0?' از '+toFa(__current+1):'')+'</button>'
               +'<button class="btn btn-red" onclick="deleteBslQueue(\''+e.id+'\')">حذف</button>';
         }else __acts='<button class="btn btn-gray" onclick="deleteBslQueue(\''+e.id+'\')">🗑 پاک‌کردن کارت</button>';
-        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
+        html+=sendQueueVisualCard(e,{accent:'#22d3ee',icon:'🛍️',destination:'باسلام',retireLabel:'بایگانی‌شده',skipLabel:'بدون تغییر',detailFn:'showBslQueueDetail',actions:__acts,extra:(e.with_details?'<div style="margin:5px 0;color:#c4b5fd;font-size:10px;font-weight:800">🧾 لین ۲ · ارسال با جزئیات کامل</div>':'<div style="margin:5px 0;color:#7dd3fc;font-size:10px;font-weight:800">⚡ لین ۱ · ارسال بدون جزئیات</div>')+(e.shop_vendor_id?'':bslShopStatsHtml(e.shop_stats))});
         return;
         let progText='';
         let progPercent=0;
@@ -115235,7 +117166,7 @@ function renderBslQueue(q){
             progPercent=Math.round(e.current/e.total*100);
             progText+=' | '+toFa(e.sent)+'✅ '+toFa(e.updated)+'⚡ '+toFa(e.skipped)+'⏭ '+toFa(e.failed)+'❌';
         }else if(e.status==='done'){
-            progText=(e.retire_report||e.kind==='retire'||e.trigger==='retire')?('🗂 '+toFa(e.sent)+' بایگانی/حذف | '+toFa(e.skipped)+' یافت‌نشده | '+toFa(e.failed)+' خطا'):('✓ '+toFa(e.sent)+' جدید | '+toFa(e.updated)+' آپدیت | '+toFa(e.skipped)+' تکراری | '+toFa(e.failed)+' خطا');
+            progText=(e.retire_report||e.kind==='retire'||e.trigger==='retire')?('🗂 '+toFa(e.sent)+' بایگانی/حذف | '+toFa(e.skipped)+' یافت‌نشده | '+toFa(e.failed)+' خطا'):('✓ '+toFa(e.sent)+' جدید | '+toFa(e.updated)+' آپدیت | '+toFa(e.skipped)+' بدون تغییر | '+toFa(e.failed)+' خطا');
             progPercent=100;
         }else if(e.status==='waiting'){
             progText=toFa(e.total)+' محصول — منتظر شروع';
@@ -115656,7 +117587,7 @@ function showBslQueueDetail(qid){
             const _sc=[];
             (e.sent_details||[]).forEach(x=>_sc.push(Object.assign({result:'ok'},x)));
             (e.updated_details||[]).forEach(x=>_sc.push(Object.assign({result:'update'},x)));
-            (e.skipped_details||[]).forEach(x=>_sc.push(Object.assign({result:'skip'},x)));
+            (e.skipped_details||[]).forEach(x=>_sc.push(Object.assign({result:'skip',result_label:'⏭ بدون تغییر'},x)));
             (e.failed_details||[]).forEach(x=>_sc.push(Object.assign({result:'fail'},x)));
             if(_sc.length && typeof renderSendCard==='function'){
                 detailHtml+='<div style="margin-bottom:12px;max-height:340px;overflow-y:auto;padding:6px;background:#0f172a;border:1px solid #334155;border-radius:8px">';
@@ -115692,7 +117623,7 @@ if(e.shop_name)detailHtml+='<div style="color:#94a3b8">غرفهٔ هدف: <b sty
         detailHtml+='<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;padding:10px;background:#0f172a;border-radius:8px">';
         detailHtml+='<div style="text-align:center"><b style="color:#4ade80;font-size:16px">'+toFa(e.sent||0)+'</b><div style="color:#64748b;font-size:10px">✅ جدید</div></div>';
         detailHtml+='<div style="text-align:center"><b style="color:#facc15;font-size:16px">'+toFa(e.updated||0)+'</b><div style="color:#64748b;font-size:10px">⚡ آپدیت</div></div>';
-        detailHtml+='<div style="text-align:center"><b style="color:#94a3b8;font-size:16px">'+toFa(e.skipped||0)+'</b><div style="color:#64748b;font-size:10px">⏭ تکراری</div></div>';
+        detailHtml+='<div style="text-align:center"><b style="color:#94a3b8;font-size:16px">'+toFa(e.skipped||0)+'</b><div style="color:#64748b;font-size:10px">⏭ بدون تغییر</div></div>';
         detailHtml+='<div style="text-align:center"><b style="color:#f87171;font-size:16px">'+toFa(e.failed||0)+'</b><div style="color:#64748b;font-size:10px">❌ خطا</div></div>';
         detailHtml+='</div>';
         /* v10.23 (۳۶ه): همان شمارنده‌های تفکیکیِ غرفه، اینجا با ابعادِ بزرگ‌تر */
@@ -115946,9 +117877,9 @@ function finishQueueEntry(){
         const sec=Math.floor((Date.now()-q.startedAt)/1000);
         elapsed=sec>=60?(Math.floor(sec/60)+' دقیقه '+sec%60+' ثانیه'):(sec+' ثانیه');
     }
-    $('bSS').textContent='✓ '+toFa(q.sent)+' جدید | '+toFa(q.updated)+' آپدیت | '+toFa(q.skipped)+' تکراری | '+toFa(q.failed)+' خطا';
+    $('bSS').textContent='✓ '+toFa(q.sent)+' جدید | '+toFa(q.updated)+' آپدیت | '+toFa(q.skipped)+' بدون تغییر | '+toFa(q.failed)+' خطا';
     if(elapsed)$('bSS').textContent+=' | '+elapsed;
-    showToast('✓ '+q.sent+' جدید, '+q.updated+' آپدیت, '+q.skipped+' تکراری, '+q.failed+' خطا');
+    showToast('✓ '+q.sent+' جدید, '+q.updated+' آپدیت, '+q.skipped+' بدون تغییر, '+q.failed+' خطا');
     markQueueEntryDone(q.id,q);
     bslQueueRunner=null;
     // Auto-start next waiting queue entry after 3 seconds
@@ -116047,7 +117978,7 @@ function finFM(done,found,failed,total){
     $('detailStatus').textContent=msg;
     log('✅ دریافت تصاویر تکمیل: '+found+'/'+total+' ('+cached+' کش‌شده)','ok');
     showToast(msg);
-    if(found>0&&$('url').value.trim())saveProfileSilent();
+    if(found>0&&$('url').value.trim())saveProfileSilent(true);
 }
 
 // ========== Lazy Image Loading with Rate Limit ==========
@@ -117474,6 +119405,7 @@ function importRefreshDetailBox(){
  */
 function importSyncToProducts(){
     let added = 0;
+    if(importProducts.length)window._profileProductsDirty=true;
     importProducts.forEach(p => {
         const key = p.key;
         if(!key) return;
@@ -119547,8 +121479,8 @@ function bslReportDetailHtml(item,type){
 function showBslReport(type){
     // v8.19: 'all' type shows all categories combined
     if(type==='all'){
-        const allList=[...(bslReportData.sent||[]).map(x=>({...x,_cat:'✅ ایجاد'})),...(bslReportData.updated||[]).map(x=>({...x,_cat:'⚡ آپدیت'})),...(bslReportData.skipped||[]).map(x=>({...x,_cat:'⏭ تکراری'})),...(bslReportData.failed||[]).map(x=>({...x,_cat:'❌ خطا'})),...(bslReportData.retired||[]).map(x=>({...x,_cat:'🗂 بایگانی/حذف'}))];
-        const catColors={'✅ ایجاد':'#4ade80','⚡ آپدیت':'#facc15','⏭ تکراری':'#fb923c','❌ خطا':'#f87171','🗂 بایگانی/حذف':'#fbbf24'};
+        const allList=[...(bslReportData.sent||[]).map(x=>({...x,_cat:'✅ ایجاد'})),...(bslReportData.updated||[]).map(x=>({...x,_cat:'⚡ آپدیت'})),...(bslReportData.skipped||[]).map(x=>({...x,_cat:'⏭ بدون تغییر'})),...(bslReportData.failed||[]).map(x=>({...x,_cat:'❌ خطا'})),...(bslReportData.retired||[]).map(x=>({...x,_cat:'🗂 بایگانی/حذف'}))];
+        const catColors={'✅ ایجاد':'#4ade80','⚡ آپدیت':'#facc15','⏭ بدون تغییر':'#fb923c','❌ خطا':'#f87171','🗂 بایگانی/حذف':'#fbbf24'};
         let html='<div class="bsl-modal-overlay" onclick="if(event.target===this)closeReportModal()">';
         html+='<div class="bsl-modal" style="max-width:700px">';
         html+='<div class="bsl-modal-head"><h2 style="color:#60a5fa">📊 گزارش کل باسلام ('+toFa(allList.length)+' محصول)</h2><button class="btn btn-gray" onclick="closeReportModal()">✕</button></div>';
@@ -119571,7 +121503,7 @@ function showBslReport(type){
         document.body.appendChild(div);return;
     }
     const list=bslReportData[type]||[];
-    const labels={sent:'✅ ایجاد شده',updated:'⚡ آپدیت شده',skipped:'⏭ تکراری',failed:'❌ خطا',retired:'🗂 بایگانی/حذف شده'};
+    const labels={sent:'✅ ایجاد شده',updated:'⚡ آپدیت شده',skipped:'⏭ بدون تغییر',failed:'❌ خطا',retired:'🗂 بایگانی/حذف شده'};
     const colors={sent:'#22c55e',updated:'#facc15',skipped:'#94a3b8',failed:'#f87171',retired:'#fbbf24'};
     const title=labels[type]||type;
     let html='<div class="bsl-modal-overlay" onclick="if(event.target===this)closeReportModal()">';
@@ -119673,7 +121605,7 @@ function renderSendCard(d){
     const rc={ok:'scard-ok',update:'scard-up',skip:'scard-skip',fail:'scard-fail',retired:'scard-retired'};
     const ri={ok:'✅ ایجاد شد',update:'⚡ آپدیت شد',skip:'⏭ تکراری',fail:'❌ خطا',retired:'🗂 بایگانی/حذف'};
     const rc2=rc[d.result]||'scard-fail';
-    const ri2=ri[d.result]||d.result;
+    const ri2=d.result_label||(ri[d.result]||d.result);
     let priceStr=d.price?toFa(Number(d.price).toLocaleString('en-US'))+(d.price_unit==='rial'?' ریال':' تومان'):'—';
     let catStr=d.category||'—';
     let errStr=d.error?'<div class="scard-err">⚠️ '+esc(d.error)+'</div>':'';
