@@ -63,6 +63,7 @@ const BSL_PROGRESS_FILE = __DIR__ . '/bsl_progress.json';
 const BSL_FAST_PROGRESS_FILE = __DIR__ . '/bsl_progress_fast.json';
 const BSL_DETAIL_PROGRESS_FILE = __DIR__ . '/bsl_progress_detail.json';
 const BSL_QUEUE_MUTEX_FILE = __DIR__ . '/bsl_queue.mutex';
+const BSL_PROFILE_LANE_CLAIM_FILE = __DIR__ . '/bsl_profile_lane_claim.lock';
 const BSL_STOP_FILE = __DIR__ . '/bsl_stop_signal.json';
 const BSL_ADAPTIVE_RATE_FILE = __DIR__ . '/bsl_adaptive_rate.json'; // v10.559
 const BSL_PHOTO_ID_CACHE_FILE = __DIR__ . '/bsl_photo_id_cache.json'; // v10.559
@@ -402,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.566';
+const APP_VERSION = '10.567';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48223,6 +48224,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$__budget-(int)floor(\$__budget/4)")!==false
         &&strpos($selfSrc,"'priority'=>'lane_1_no_detail'")!==false
         &&version_compare(APP_VERSION,'10.566','>='));
+    $add('10.567','یک پروفایل هرگز مالک همزمان دو لین ارسال نمی‌شود',
+        strpos($selfSrc,'const BSL_PROFILE_LANE_CLAIM_FILE')!==false
+        &&strpos($selfSrc,"'profile_owned_by_other_lane'")!==false
+        &&strpos($selfSrc,"\$_ownerLane!==\$_bslLane")!==false
+        &&strpos($selfSrc,"'owner_lane'=>bslPublicLaneName(\$_ownerLane)")!==false
+        &&strpos($selfSrc,'$claimedProfiles=[];')!==false
+        &&version_compare(APP_VERSION,'10.567','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78785,11 +78793,15 @@ function bslKickParallelProfileLanes(?array $queue=null): array {
     if($queue===null)$queue=bslReadQueue();$out=[];
     /* Lane 1 is dispatched first because no-detail sends are materially faster;
        both lanes still share one bounded global request budget. */
+    $claimedProfiles=[];
     foreach(['fast','detail'] as $lane){
         $probe=@fopen(bslLaneLockFile($lane),'c');$free=false;
         if($probe){$free=@flock($probe,LOCK_EX|LOCK_NB);if($free)@flock($probe,LOCK_UN);@fclose($probe);}if(!$free)continue;
-        $pick=null;foreach((array)($queue['entries']??[]) as $r){if(is_array($r)&&bslRowLane($r)===$lane&&in_array((string)($r['status']??''),['running','waiting'],true)){$pick=$r;break;}}
-        if(!$pick)continue;$qid=(string)($pick['id']??'');
+        $pick=null;foreach((array)($queue['entries']??[]) as $r){
+            if(!is_array($r)||bslRowLane($r)!==$lane||!in_array((string)($r['status']??''),['running','waiting'],true))continue;
+            $pk=trim((string)($r['profile_key']??''));if($pk!==''&&isset($claimedProfiles[$pk]))continue;$pick=$r;break;
+        }
+        if(!$pick)continue;$qid=(string)($pick['id']??'');$pickPk=trim((string)($pick['profile_key']??''));if($pickPk!=='')$claimedProfiles[$pickPk]=true;
         $ok=fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
         if(!$ok)$ok=fireAndForget('action=bsl_backend&lane='.$lane,1800,['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
         $out[$lane]=['ok'=>$ok,'queue_id'=>$qid,'worker_pid'=>(int)($GLOBALS['_queueDispatchPid']??0)];
@@ -79423,7 +79435,23 @@ if(empty($_bslActualItems)){
 echo json_encode(['ok'=>false,'code'=>!empty($_POST['from_profile'])?'fallback_upload_needed':'products_empty','error'=>'محصولی برای ارسال در این پروفایل یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
 }
 if($total<=0&&count($_bslActualItems)>0)$total=count($_bslActualItems);
+/* v10.567: one profile may own only one send lane. Serialize the complete
+   read/check/add decision, not just the final JSON rename, so simultaneous
+   clicks in Lane 1 and Lane 2 cannot both pass a stale queue snapshot. */
+$_bslProfileClaimFp=@fopen(BSL_PROFILE_LANE_CLAIM_FILE,'c');$_bslProfileClaimOk=false;
+if($_bslProfileClaimFp){for($_pci=0;$_pci<100;$_pci++){if(@flock($_bslProfileClaimFp,LOCK_EX|LOCK_NB)){$_bslProfileClaimOk=true;break;}usleep(50000);}}
+if(!$_bslProfileClaimOk){if($_bslProfileClaimFp)@fclose($_bslProfileClaimFp);@unlink($qFile);echo json_encode(['ok'=>false,'code'=>'profile_lane_claim_busy','retryable'=>true,'error'=>'ثبت لین این پروفایل در حال انجام است؛ چند لحظه دیگر دوباره تلاش کنید'],JSON_UNESCAPED_UNICODE);exit;}
+register_shutdown_function(function()use($_bslProfileClaimFp){@flock($_bslProfileClaimFp,LOCK_UN);@fclose($_bslProfileClaimFp);});
 $queue=bslReadQueue();
+$_claimProfileKey=$_bslResolvedKey?:$pKeyIn;
+if($_claimProfileKey!==''){
+    foreach((array)($queue['entries']??[]) as $_claimRow){
+        if(!is_array($_claimRow)||!in_array((string)($_claimRow['status']??''),['running','waiting'],true))continue;
+        if(!s4QueueProfileMatchesKey((string)($_claimRow['profile_key']??''),$_claimProfileKey,$__pf))continue;
+        $_ownerLane=bslRowLane($_claimRow);
+        if($_ownerLane!==$_bslLane){@unlink($qFile);echo json_encode(['ok'=>false,'duplicate'=>true,'code'=>'profile_owned_by_other_lane','queue_id'=>(string)($_claimRow['id']??''),'owner_lane'=>bslPublicLaneName($_ownerLane),'requested_lane'=>bslPublicLaneName($_bslLane),'error'=>'این پروفایل هم‌اکنون در لین دیگر قرار دارد؛ ابتدا همان وظیفه را کامل یا حذف کنید'],JSON_UNESCAPED_UNICODE);exit;}
+    }
+}
 $startImm=!empty($_POST['start_immediately']);
 $_bslProbePath=bslLaneLockFile($_bslLane);$_bslProbeFp=@fopen($_bslProbePath,'c');
 $_bslWorkerLive=true;if(is_resource($_bslProbeFp)){$_bslWorkerLive=!@flock($_bslProbeFp,LOCK_EX|LOCK_NB);if(!$_bslWorkerLive)@flock($_bslProbeFp,LOCK_UN);@fclose($_bslProbeFp);}
@@ -99870,6 +99898,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.567', t:'🔒 مالکیت یکتای پروفایل بین دو لین', items:[
+    'ثبت صف با قفل اتمیک انجام می‌شود؛ دو کلیک همزمان در لین ۱ و لین ۲ دیگر نمی‌توانند یک پروفایل را در هر دو لین ثبت کنند.',
+    'این محدودیت مستقل از تنظیم عمومی حذف تکراری است و پاسخ خطا، لین مالک و شناسهٔ وظیفهٔ موجود را مشخص می‌کند.',
+    'زمان‌بند نیز به‌صورت دفاعی در یک dispatch هر پروفایل را فقط برای یک worker انتخاب می‌کند.'
+  ]},
   {v:'10.566', t:'🧾 لین ۲ مخصوص ارسال با جزئیات', items:[
     'لین ۱ همچنان صف ارسال بدون جزئیات برای همهٔ پروفایل‌هاست؛ لین ۲ اکنون صریحاً صف ارسال با جزئیات کامل است.',
     'لین ۲ فقط پروفایل ذخیره‌شده با selector جزئیات و پوشش کامل جزئیات همهٔ محصولات را می‌پذیرد؛ در غیر این صورت خطای راهنمای دقیق برمی‌گرداند.',
