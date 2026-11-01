@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.577';
+const APP_VERSION = '10.578';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48348,6 +48348,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'reclaimed_stale_pid'=>\$__reclaimedLanePid")!==false
         &&strpos($selfSrc,"{v:'10." . "577'")!==false
         &&version_compare(APP_VERSION,'10.577','>='));
+    $add('10.578','کنترل لین‌ها تب فشرده و متصل به محتواست',
+        strpos($selfSrc,'.bsl-send-lane-tab.is-active')!==false
+        &&strpos($selfSrc,'class="bsl-send-lane-tab is-active"')!==false
+        &&strpos($selfSrc,'id="bslLaneSelectedHint" hidden')!==false
+        &&strpos($selfSrc,"classList.toggle('is-active'")!==false
+        &&strpos($selfSrc,"{v:'10." . "578'")!==false
+        &&version_compare(APP_VERSION,'10.578','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -92980,20 +92987,28 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <!-- hidden compat: keep bsSendAllShops for saveConn compatibility -->
 <input type="checkbox" id="bsSendAllShops" style="display:none" onchange="bslToggleAllShops()">
 
-<!-- v10.571: show live lane state only on the selected tab; keep the other lane private. -->
-<div id="bslSendLaneTabs" role="tablist" aria-label="مسیرهای ارسال باسلام" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:9px 0 10px;padding:5px;background:#0f172a;border:1px solid #334155;border-radius:11px">
-  <button type="button" id="bslLaneTab1" role="tab" aria-selected="true" aria-controls="bslQueueList" class="btn btn-cyan" onclick="setBslSendLane('fast')" style="display:block;min-width:0;padding:9px;text-align:center">
-    <span style="display:block;font-weight:800">🛣️ لین ۱</span><small style="display:block;font-size:9px;margin-top:2px">بدون جزئیات · فقط عکس فهرست · همهٔ پروفایل‌ها</small>
-    <span id="bslLaneState1" style="display:block;margin-top:5px;color:#94a3b8;font-size:9px;font-weight:700">آماده · صف خالی</span>
-    <span role="progressbar" aria-label="پیشرفت لین ۱" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:block;height:4px;margin-top:5px;background:#1e293b;border-radius:99px;overflow:hidden"><i id="bslLaneProgress1" style="display:block;width:0;height:100%;background:#22d3ee;transition:width .25s"></i></span>
+<!-- v10.578: compact, top-attached tabs rather than two action buttons. -->
+<style>
+#bslSendLaneTabs{display:flex;align-items:flex-end;gap:3px;margin:8px 0 0;padding:0 6px;border-bottom:1px solid #475569;background:transparent}
+.bsl-send-lane-tab{position:relative;min-width:82px;margin:0 0 -1px;padding:5px 14px 6px;border:1px solid #334155;border-bottom-color:#475569;border-radius:8px 8px 0 0;background:#172033;color:#94a3b8;font-family:inherit;font-size:11px;font-weight:800;line-height:1.35;cursor:pointer;box-shadow:none;transition:color .15s,border-color .15s,background .15s}
+.bsl-send-lane-tab:hover{color:#e2e8f0;background:#1e293b}
+.bsl-send-lane-tab.is-active{z-index:1;color:#67e8f9;background:#111827;border-color:#475569;border-top-color:#22d3ee;border-bottom-color:#111827}
+.bsl-send-lane-tab:focus-visible{outline:2px solid #22d3ee;outline-offset:2px}
+.bsl-send-lane-tab .lane-tab-state{display:none!important}
+.bsl-send-lane-tab .lane-tab-progress{position:absolute;right:5px;bottom:0;left:5px;height:2px;background:transparent;overflow:hidden}
+@media(max-width:480px){.bsl-send-lane-tab{min-width:72px;padding:5px 10px}}
+</style>
+<div id="bslSendLaneTabs" role="tablist" aria-label="مسیرهای ارسال باسلام">
+  <button type="button" id="bslLaneTab1" role="tab" aria-selected="true" aria-controls="bslQueueList" class="bsl-send-lane-tab is-active" onclick="setBslSendLane('fast')">
+    <span>لین ۱</span><span id="bslLaneState1" class="lane-tab-state">آماده · صف خالی</span>
+    <span class="lane-tab-progress" role="progressbar" aria-label="پیشرفت لین ۱" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bslLaneProgress1" style="display:block;width:0;height:100%;background:#22d3ee;transition:width .25s"></i></span>
   </button>
-  <button type="button" id="bslLaneTab2" role="tab" aria-selected="false" aria-controls="bslQueueList" class="btn btn-gray" onclick="setBslSendLane('detail')" style="display:block;min-width:0;padding:9px;text-align:center">
-    <span style="display:block;font-weight:800">🛣️ لین ۲</span><small style="display:block;font-size:9px;margin-top:2px">جزئیاتِ موجود · بعضی محصولات می‌توانند بدون جزئیات باشند</small>
-    <span id="bslLaneState2" style="display:block;margin-top:5px;color:#94a3b8;font-size:9px;font-weight:700">آماده · صف خالی</span>
-    <span role="progressbar" aria-label="پیشرفت لین ۲" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display:block;height:4px;margin-top:5px;background:#1e293b;border-radius:99px;overflow:hidden"><i id="bslLaneProgress2" style="display:block;width:0;height:100%;background:#a78bfa;transition:width .25s"></i></span>
+  <button type="button" id="bslLaneTab2" role="tab" aria-selected="false" aria-controls="bslQueueList" class="bsl-send-lane-tab" onclick="setBslSendLane('detail')">
+    <span>لین ۲</span><span id="bslLaneState2" class="lane-tab-state">آماده · صف خالی</span>
+    <span class="lane-tab-progress" role="progressbar" aria-label="پیشرفت لین ۲" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bslLaneProgress2" style="display:block;width:0;height:100%;background:#a78bfa;transition:width .25s"></i></span>
   </button>
 </div>
-<div id="bslLaneSelectedHint" style="margin:-4px 0 8px;color:#93c5fd;font-size:10px;text-align:center">لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ لین ۲ پروفایلی را می‌پذیرد که دست‌کم یک محصولش جزئیات واقعی داشته باشد؛ نبود جزئیات برای بعضی محصولات مانع نیست.</div>
+<div id="bslLaneSelectedHint" hidden></div>
 <!-- v10.415: active Basalam task belongs here in the Send tab, directly below
      Catalog Cache—not only inside Task Manager or the collapsed queue panel. -->
 <div id="bslActiveSendTask" style="display:none;margin-bottom:8px"></div>
@@ -100168,6 +100183,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.578', t:'🗂️ تب‌های فشرده و واقعی برای لین‌های ارسال', items:[
+    'دو کنترل بزرگ لین با تب‌های کوتاه و متصل به لبهٔ بالای محتوای ارسال جایگزین شدند؛ تب فعال با لبهٔ فیروزه‌ای و اتصال بصری به پنل مشخص است.',
+    'توضیحات و وضعیت‌های چندخطی از داخل تب‌ها حذف شدند؛ فقط عنوان لین باقی مانده و وضعیت زنده به‌صورت title/ARIA و نوار باریک پیشرفت حفظ شده است.',
+    'فاصله، padding و اندازهٔ موبایل کاهش یافت و انتخاب تب از کلاس مستقل is-active استفاده می‌کند، نه ظاهر دکمه‌های عملیاتی.'
+  ]},
   {v:'10.577', t:'⚡ دو جریان موازی و مستقل برای لین‌های ۱ و ۲', items:[
     'لین ۱ (بدون جزئیات) و لین ۲ (با جزئیات) هرکدام flock، worker، progress و checkpoint مستقل دارند و می‌توانند همزمان برای همان غرفه‌های انتخابی اجرا شوند.',
     'کلیک Start روی هر لین فقط مالک دقیق همان flock را بررسی می‌کند؛ اگر heartbeat آن بیش از سه دقیقه منجمد باشد، همان PID متوقف و همان checkpoint فوراً بازیابی می‌شود، بدون لمس worker لین دیگر.',
@@ -117052,7 +117072,8 @@ function bslRenderLaneIndicators(q){
             if(badge)badge.style.display='none';if(track)track.style.display='none';if(tab)tab.removeAttribute('title');
             return;
         }
-        if(badge)badge.style.display='block';if(track)track.style.display='block';
+        /* Compact tabs expose live state through title/ARIA, not extra lines. */
+        if(badge)badge.style.display='none';if(track)track.style.display='block';
         const active=count.running+count.waiting+count.paused;
         let text=active?[...(count.running?['🔄 '+toFa(count.running)+' جاری']:[]),...(count.waiting?['⏳ '+toFa(count.waiting)+' در صف']:[]),...(count.paused?['⏸ '+toFa(count.paused)+' متوقف']:[])].join(' · '):
             (count.failed?'❌ '+toFa(count.failed)+' خطا':(count.done?'✅ '+toFa(count.done)+' تکمیل‌شده':'آماده · صف خالی'));
@@ -117065,9 +117086,8 @@ function bslRenderLaneIndicators(q){
 function setBslSendLane(lane){
     bslSendLane=lane==='detail'?'detail':'fast';localStorage.setItem('s4_bsl_send_lane',bslSendLane);
     const a=$('bslLaneTab1'),b=$('bslLaneTab2');
-    if(a){a.classList.toggle('btn-cyan',bslSendLane==='fast');a.classList.toggle('btn-gray',bslSendLane!=='fast');a.setAttribute('aria-selected',bslSendLane==='fast'?'true':'false');}
-    if(b){b.classList.toggle('btn-cyan',bslSendLane==='detail');b.classList.toggle('btn-gray',bslSendLane!=='detail');b.setAttribute('aria-selected',bslSendLane==='detail'?'true':'false');}
-    const hint=$('bslLaneSelectedHint');if(hint)hint.textContent=bslSendLane==='detail'?'لین ۲ فقط پروفایل ذخیره‌شده با سلکتور جزئیات و دادهٔ واقعی برای دست‌کم یک محصول را می‌پذیرد؛ خالی‌بودن جزئیات بعضی محصولات مانع نیست.':'لین ۱ بدون جزئیات و فقط با عکس فهرست می‌فرستد؛ دو لین می‌توانند همزمان اجرا شوند.';
+    if(a){a.classList.toggle('is-active',bslSendLane==='fast');a.setAttribute('aria-selected',bslSendLane==='fast'?'true':'false');a.tabIndex=bslSendLane==='fast'?0:-1;}
+    if(b){b.classList.toggle('is-active',bslSendLane==='detail');b.setAttribute('aria-selected',bslSendLane==='detail'?'true':'false');b.tabIndex=bslSendLane==='detail'?0:-1;}
     bslResetLiveProgressView();
     const q=bslLastQueueSnapshot;if(q){
         const row=(q.entries||[]).find(e=>bslEntryInSelectedLane(e)&&e.status==='running');
