@@ -60,6 +60,9 @@ const PROFILE_SUMMARY_CACHE_FILE = __DIR__ . '/.profile_summary_cache.json'; // 
 const PROFILES_DELETED_FILE = __DIR__ . '/profiles_deleted.json';
 const CONNECTIONS_FILE = __DIR__ . '/connections.json';
 const BSL_PROGRESS_FILE = __DIR__ . '/bsl_progress.json';
+const BSL_FAST_PROGRESS_FILE = __DIR__ . '/bsl_progress_fast.json';
+const BSL_DETAIL_PROGRESS_FILE = __DIR__ . '/bsl_progress_detail.json';
+const BSL_QUEUE_MUTEX_FILE = __DIR__ . '/bsl_queue.mutex';
 const BSL_STOP_FILE = __DIR__ . '/bsl_stop_signal.json';
 const BSL_ADAPTIVE_RATE_FILE = __DIR__ . '/bsl_adaptive_rate.json'; // v10.559
 const BSL_PHOTO_ID_CACHE_FILE = __DIR__ . '/bsl_photo_id_cache.json'; // v10.559
@@ -72,6 +75,8 @@ const WOO_STOP_FILE = __DIR__ . '/woo_stop_signal.json';
 const WOO_STOP_HOLD_SEC = 900;
 const SYNC_STATE_FILE = __DIR__ . '/sync_state.json';
 const BSL_PRODUCTS_FILE = __DIR__ . '/bsl_products_temp.json';
+const BSL_FAST_PRODUCTS_FILE = __DIR__ . '/bsl_products_fast_temp.json';
+const BSL_DETAIL_PRODUCTS_FILE = __DIR__ . '/bsl_products_detail_temp.json';
 const WOO_QUEUE_FILE = __DIR__ . '/woo_queue.json';
 const WOO_PRODUCTS_FILE = __DIR__ . '/woo_products_temp.json';
 const BSL_QUEUE_FILE = __DIR__ . '/bsl_queue.json';
@@ -397,7 +402,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.563';
+const APP_VERSION = '10.564';
 
 
 if (!function_exists('str_starts_with')) {
@@ -421,7 +426,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/09';
+const APP_VERSION_DATE = '1405/08/10';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -11947,9 +11952,12 @@ function bslAdaptiveObserve(string $kind,array $responses,int $ceiling=8): array
     });
 }
 function bslSendResourcePressureActive(int $freshSec=180): bool {
-    $p=readProgress(BSL_PROGRESS_FILE);if(!is_array($p)||empty($p['running']))return false;
-    $beat=max((int)($p['last_progress_ts']??0),(int)($p['heartbeat']??0),(int)($p['started_at']??0));
-    return $beat>0&&(time()-$beat)<max(30,$freshSec);
+    foreach([BSL_PROGRESS_FILE,BSL_FAST_PROGRESS_FILE,BSL_DETAIL_PROGRESS_FILE] as $file){
+        $p=readProgress($file);if(!is_array($p)||empty($p['running']))continue;
+        $beat=max((int)($p['last_progress_ts']??0),(int)($p['heartbeat']??0),(int)($p['started_at']??0));
+        if($beat>0&&(time()-$beat)<max(30,$freshSec))return true;
+    }
+    return false;
 }
 
 function bslReqMode(string $url, string $tk, string $m, $d, bool $mp, array $net, string $mode): array {
@@ -48191,6 +48199,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'worker_queue_busy','retryable'=>true")!==false
         &&strpos($selfSrc,"if(!\$written)return ['ok'=>false,'error'=>'worker_queue_write']")!==false
         &&strpos($selfSrc,"{v:'10." . "563'")!==false&&version_compare(APP_VERSION,'10.563','>='));
+    $add('10.564','دو صف فیزیکی پروفایل، مالکیت مستقل و بودجهٔ API اولویت‌دار دارند',
+        strpos($selfSrc,'function bslKickParallelProfileLanes')!==false
+        &&strpos($selfSrc,"foreach(['fast','detail'] as \$lane)")!==false
+        &&strpos($selfSrc,"const BSL_FAST_PROGRESS_FILE")!==false
+        &&strpos($selfSrc,"bslLaneLockFile(\$_bslLane)")!==false
+        &&strpos($selfSrc,"\$__budget-(int)floor(\$__budget/4)")!==false
+        &&strpos($selfSrc,'id="bsProfileLanes"')!==false
+        &&version_compare(APP_VERSION,'10.564','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -65307,6 +65323,9 @@ function s4QueueProfileMatchesKey(string $entryKey, string $targetKey, array $pr
 }
 function s4DispatchPendingSendQueue(string $which, string $preferredQueueId = ''): array {
     $isBsl = ($which === 'bsl');
+    if($isBsl&&function_exists('bslParallelProfileLanesEnabled')&&bslParallelProfileLanesEnabled()){
+        $kicks=bslKickParallelProfileLanes();return ['ok'=>!empty($kicks),'which'=>'bsl','profile_lanes'=>$kicks,'already_running'=>empty($kicks)];
+    }
     $fp = queueBackendLock($isBsl ? 'bsl' : 'woo');
     if (!is_resource($fp)) {
         return ['ok' => true, 'already_running' => true, 'which' => $which];
@@ -65967,6 +65986,9 @@ function queueIdleRetryFailed(string $which): ?array {
 }
 
 function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = false, int $waitMs = 1500, bool $includePaused = false, bool $allowUserStopped = false, bool $resumeAllPaused = false): array {
+    if($which==='bsl'&&!$includePaused&&function_exists('bslParallelProfileLanesEnabled')&&bslParallelProfileLanesEnabled()){
+        $k=$dryRun?[]:bslKickParallelProfileLanes();return ['ok'=>true,'profile_lanes'=>$k,'priority'=>'fast','dry_run'=>$dryRun];
+    }
     if(!$allowUserStopped&&queueHasExplicitUserStop($which))
         return ['stalled'=>false,'resumed'=>false,'which'=>$which,'user_stopped'=>true,'reason'=>'explicit_user_stop'];
     $chk = queueStallCheck($which, $staleAfter, $includePaused, $allowUserStopped);
@@ -66319,6 +66341,9 @@ function queueStallRecover(string $which, int $staleAfter = 300, bool $dryRun = 
  */
 function sendAutoRecover(string $which): ?array {
     try {
+        if($which==='bsl'&&function_exists('bslParallelProfileLanesEnabled')&&bslParallelProfileLanesEnabled()){
+            $k=bslKickParallelProfileLanes();return $k?['profile_lanes'=>$k,'priority'=>'fast']:null;
+        }
         $cnA  = loadConnections();
         $stallA = max(120, (int)($cnA['stall_after'] ?? 300));
         $chkA = queueStallCheck($which, $stallA);
@@ -77207,44 +77232,19 @@ exit;
 
 if(isset($_GET['bsl_stop'])){
 header('Content-Type: application/json; charset=UTF-8');
-@file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'time'=>time()],LOCK_EX));
-
-$prevProgress=readProgress(BSL_PROGRESS_FILE);
-taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true,
-    'last_title'=>'','recent_log'=>array_merge((array)($prevProgress['recent_log']??[]), ['❌ ارسال توسط کاربر متوقف شد']),
-    'total_log_count'=>(int)($prevProgress['total_log_count']??0)+1],
-    ['queue_id'=>(string)($prevProgress['queue_id']??''), 'current'=>(int)($prevProgress['current']??0), 'total'=>(int)($prevProgress['total']??0),
-     'sent'=>(int)($prevProgress['sent']??0), 'updated'=>(int)($prevProgress['updated']??0), 'skipped'=>(int)($prevProgress['skipped']??0), 'failed'=>(int)($prevProgress['failed']??0)]);
-
-// v8.57: «توقف» یعنی همه چیز بایستد. قبلاً فقط ردیف در حال اجرا بسته
-// می‌شد و ردیف‌های منتظر سر جایشان می‌ماندند، پس اولین پینگ بعدی صف را
-// دوباره راه می‌انداخت و کاربر می‌دید ارسال متوقف نشده.
-/* workerِ زنده خودش ردیف را هنگام دیدنِ stop می‌بندد؛ اگر lock آزاد است
-   این درخواستِ توقف می‌تواند ردیف‌های باقی‌مانده را اتمیکاً paused کند. */
-$bslStopFp=queueBackendLock('bsl');
-if(is_resource($bslStopFp)){
-register_shutdown_function(function() use ($bslStopFp){queueBackendUnlock($bslStopFp);});
-$queue=bslReadQueue();
-$stopPaused=0;$stopQid=(string)($prevProgress['queue_id']??'');
-foreach($queue['entries'] as &$e){
-if($e['status']==='running' && ($stopQid==='' || (string)($e['id']??'')===$stopQid)){
-$e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;$e['paused_at']=time();
-$e['sent']=$prevProgress['sent']??0;$e['updated']=$prevProgress['updated']??0;$e['skipped']=$prevProgress['skipped']??0;$e['failed']=$prevProgress['failed']??0;$e['current']=$prevProgress['current']??0;
-$stopPaused++;
-}elseif($e['status']==='waiting'||$e['status']==='paused'){
-$e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;
-$e['paused_at']=time();
-$stopPaused++;
-}
-}
-unset($e);
-bslWriteQueue($queue);
-} else { $stopPaused=0; }
-echo json_encode(['ok'=>true,'paused'=>$stopPaused,
-'msg'=>$stopPaused>0
-?('فرآیند متوقف شد — '.$stopPaused.' ردیف صف هم موقتاً نگه داشته شد')
-:'فرآیند متوقف شد'],JSON_UNESCAPED_UNICODE);
-exit;
+$queue=bslReadQueue();$stopQid=trim((string)($_GET['queue_id']??''));
+$stopLane=$stopQid!==''?bslLaneForQueueId($stopQid,$queue):'legacy';$progressFile=bslLaneProgressFile($stopLane);
+$prevProgress=readProgress($progressFile);if($stopQid==='')$stopQid=(string)($prevProgress['queue_id']??'');
+@file_put_contents(BSL_STOP_FILE,json_encode(['stop'=>true,'time'=>time(),'queue_id'=>$stopQid,'lane'=>$stopLane]),LOCK_EX);
+taskMarkPartial($progressFile,['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true,
+ 'last_title'=>'','recent_log'=>array_merge((array)($prevProgress['recent_log']??[]),['❌ ارسال توسط کاربر متوقف شد']),'total_log_count'=>(int)($prevProgress['total_log_count']??0)+1],
+ ['queue_id'=>$stopQid,'current'=>(int)($prevProgress['current']??0),'total'=>(int)($prevProgress['total']??0),'sent'=>(int)($prevProgress['sent']??0),'updated'=>(int)($prevProgress['updated']??0),'skipped'=>(int)($prevProgress['skipped']??0),'failed'=>(int)($prevProgress['failed']??0)]);
+$stopPaused=0;$GLOBALS['_bslWorkerLane']=$stopLane;
+foreach($queue['entries'] as &$e){if((string)($e['id']??'')===$stopQid&&in_array((string)($e['status']??''),['running','waiting','paused'],true)){
+ $e['status']='paused';$e['paused_by']='user';$e['stopped_by_user']=true;$e['paused_at']=time();
+ foreach(['sent','updated','skipped','failed','current'] as $k)if(array_key_exists($k,$prevProgress))$e[$k]=$prevProgress[$k];$stopPaused++;break;
+}}unset($e);bslWriteQueue($queue);
+echo json_encode(['ok'=>true,'paused'=>$stopPaused,'queue_id'=>$stopQid,'lane'=>$stopLane,'msg'=>'فرآیند انتخاب‌شده متوقف شد؛ صف دیگر ادامه دارد'],JSON_UNESCAPED_UNICODE);exit;
 }
 
 /* v10.127: جمعِ محصولاتِ حذف/بایگانی‌شده از ردیف‌هایِ بازنشستگیِ صفِ ارسال.
@@ -77269,9 +77269,11 @@ function sendQueueRetireAgg(array $queue): array {
 
 if (isset($_GET['poll_bsl'])) {
 header('Content-Type: application/json; charset=UTF-8');
-$p = readProgress(BSL_PROGRESS_FILE);
-
 $queue = bslReadQueue();
+$_pollQid=trim((string)($_GET['queue_id']??''));$_pollLane=$_pollQid!==''?bslLaneForQueueId($_pollQid,$queue):'legacy';
+if($_pollQid===''){foreach(['fast','detail'] as $__ln){$__pp=readProgress(bslLaneProgressFile($__ln));if(!empty($__pp['running'])){$_pollLane=$__ln;break;}}}
+$p = readProgress(bslLaneProgressFile($_pollLane));$p['lane']=$_pollLane;
+
 $hasMore = false;
 foreach ($queue['entries'] as $e) {
 if ($e['status'] === 'waiting') { $hasMore = true; break; }
@@ -78713,6 +78715,62 @@ function bslQueueCatInfo(array $cfg): array {
     ];
 }
 
+/* v10.564: optional two-profile scheduler. Queue rows stay in one durable,
+ * atomically-written journal, while each physical worker owns an independent
+ * lock/progress/products lane. Unlabelled legacy rows remain on the legacy lane. */
+function bslParallelProfileLanesEnabled(?array $cn=null): bool {
+    if($cn===null)$cn=loadConnections();
+    return !empty($cn['basalam']['parallel_profile_lanes']);
+}
+function bslNormalizeProfileLane($lane): string {
+    $lane=strtolower(trim((string)$lane));return in_array($lane,['fast','detail'],true)?$lane:'legacy';
+}
+function bslClassifyProfileLane(string $profileKey,array $profiles=[]): string {
+    if($profileKey==='')return 'fast';
+    if(!$profiles)$profiles=loadProfiles();
+    $rk=profileResolveKey($profileKey,$profiles)?:$profileKey;
+    $p=is_array($profiles[$rk]??null)?$profiles[$rk]:[];
+    if(function_exists('syncProfileHasDetailSelectors'))return syncProfileHasDetailSelectors($p)?'detail':'fast';
+    $ds=$p['detailSelectors']??[];
+    return is_array($ds)&&count(array_filter($ds,static fn($v)=>trim((string)$v)!==''))>0?'detail':'fast';
+}
+function bslLaneProgressFile(string $lane): string {
+    $lane=bslNormalizeProfileLane($lane);return $lane==='fast'?BSL_FAST_PROGRESS_FILE:($lane==='detail'?BSL_DETAIL_PROGRESS_FILE:BSL_PROGRESS_FILE);
+}
+function bslLaneProductsFile(string $lane): string {
+    $lane=bslNormalizeProfileLane($lane);return $lane==='fast'?BSL_FAST_PRODUCTS_FILE:($lane==='detail'?BSL_DETAIL_PRODUCTS_FILE:BSL_PRODUCTS_FILE);
+}
+function bslLaneLockFile(string $lane): string {
+    $lane=bslNormalizeProfileLane($lane);return __DIR__.($lane==='fast'?'/bsl_backend_fast.lock':($lane==='detail'?'/bsl_backend_detail.lock':'/bsl_backend.lock'));
+}
+function bslRowLane(array $row): string {
+    $lane=bslNormalizeProfileLane($row['lane']??'');
+    if($lane!=='legacy')return $lane;
+    return bslParallelProfileLanesEnabled()?bslClassifyProfileLane((string)($row['profile_key']??'')):'legacy';
+}
+function bslLaneForQueueId(string $queueId,?array $queue=null): string {
+    if($queue===null)$queue=bslReadQueue();foreach((array)($queue['entries']??[]) as $r)if(is_array($r)&&(string)($r['id']??'')===$queueId)return bslRowLane($r);return 'legacy';
+}
+function bslLaneIsLive(string $lane,int $fresh=180): bool {
+    $p=readProgress(bslLaneProgressFile($lane));if(empty($p['running']))return false;
+    $beat=max((int)($p['last_progress_ts']??0),(int)($p['started_at']??0));return $beat>0&&time()-$beat<$fresh;
+}
+function bslKickParallelProfileLanes(?array $queue=null): array {
+    if(!bslParallelProfileLanesEnabled())return [];
+    if($queue===null)$queue=bslReadQueue();$out=[];
+    /* Fast is deliberately considered first: detail extraction can be several
+       times slower, so it must never delay a ready no-detail profile. */
+    foreach(['fast','detail'] as $lane){
+        $probe=@fopen(bslLaneLockFile($lane),'c');$free=false;
+        if($probe){$free=@flock($probe,LOCK_EX|LOCK_NB);if($free)@flock($probe,LOCK_UN);@fclose($probe);}if(!$free)continue;
+        $pick=null;foreach((array)($queue['entries']??[]) as $r){if(is_array($r)&&bslRowLane($r)===$lane&&in_array((string)($r['status']??''),['running','waiting'],true)){$pick=$r;break;}}
+        if(!$pick)continue;$qid=(string)($pick['id']??'');
+        $ok=fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
+        if(!$ok)$ok=fireAndForget('action=bsl_backend&lane='.$lane,1800,['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
+        $out[$lane]=['ok'=>$ok,'queue_id'=>$qid,'worker_pid'=>(int)($GLOBALS['_queueDispatchPid']??0)];
+    }
+    return $out;
+}
 function bslReadQueue(): array {
 clearstatcache(true,BSL_QUEUE_FILE);
 if(!file_exists(BSL_QUEUE_FILE)) return ['entries'=>[]];
@@ -78770,7 +78828,36 @@ if($fixed)bslWriteQueue($d);
 return $d;
 }
 function bslWriteQueue(array $queue): void {
-sendQueueAtomicWrite(BSL_QUEUE_FILE,$queue);
+    /* Serialize cross-lane read/modify/write. A lane worker may hold a stale
+       snapshot of the other worker; preserve that worker's rows from disk. */
+    $lf=@fopen(BSL_QUEUE_MUTEX_FILE,'c');if($lf)@flock($lf,LOCK_EX);
+    try{
+        $lane=bslNormalizeProfileLane($GLOBALS['_bslWorkerLane']??'legacy');
+        if($lane!=='legacy'&&is_file(BSL_QUEUE_FILE)){
+            $disk=json_decode((string)@file_get_contents(BSL_QUEUE_FILE),true);
+            if(is_array($disk['entries']??null)){
+                $incoming=[];foreach((array)($queue['entries']??[]) as $r)if(is_array($r))$incoming[(string)($r['id']??uniqid('row_',true))]=$r;
+                $merged=[];
+                foreach($disk['entries'] as $r){
+                    if(!is_array($r))continue;$id=(string)($r['id']??'');
+                    if(bslRowLane($r)!==$lane){$merged[]=$r;unset($incoming[$id]);continue;}
+                    if(isset($incoming[$id])){
+                        $n=$incoming[$id];
+                        /* Never let an older browser snapshot move a live row
+                           backwards while its lane worker is checkpointing. */
+                        if((int)($r['current']??0)>(int)($n['current']??0)){
+                            foreach(['current','sent','updated','skipped','failed','sent_details','updated_details','skipped_details','failed_details','shop_stats','recent_log','phase','phase_label','phase_current','phase_total','phase_pct','last_progress_ts'] as $k)if(array_key_exists($k,$r))$n[$k]=$r[$k];
+                        }
+                        if(($r['status']??'')==='running'&&in_array((string)($n['status']??''),['waiting','running'],true))$n['status']='running';
+                        $merged[]=$n;unset($incoming[$id]);
+                    }else $merged[]=$r;
+                }
+                foreach($incoming as $r)$merged[]=$r;
+                $queue['entries']=$merged;
+            }
+        }
+        sendQueueAtomicWrite(BSL_QUEUE_FILE,$queue);
+    }finally{if($lf){@flock($lf,LOCK_UN);@fclose($lf);}}
 }
 
 /**
@@ -79140,42 +79227,42 @@ header('Content-Type: application/json; charset=UTF-8');
    «total» رسیده (یا progress کامل است) ولی ردیف هنوز «running» است.
    queueStallCheck دقیقاً همین ردیف را فوراً «done» می‌کند؛ پس قبل از
    رندرِ رابط، یک بار بچکش تا کاربر دیگر وظیفهٔ تمام‌شدهٔ «فعال» نبیند. */
-try { queueStallCheck('bsl', BSL_SEND_STALL_SEC); } catch (Throwable $eB) {}
-$bslStatusFp = queueBackendLock('bsl');
-$bslWorkerLive=!is_resource($bslStatusFp);
-if (is_resource($bslStatusFp)) { queueBackendUnlock($bslStatusFp); $bslStatusFp = null; }
+try { if(!bslParallelProfileLanesEnabled())queueStallCheck('bsl', BSL_SEND_STALL_SEC); } catch (Throwable $eB) {}
 $queue=bslReadQueue();
-
-$progress=readProgress(BSL_PROGRESS_FILE);
-$_bslHasProg=!empty($progress['running'])||!empty($progress['done'])||!empty($progress['paused'])
-    ||trim((string)($progress['queue_id']??''))!==''||(int)($progress['started_at']??0)>0;
+$progressByLane=['legacy'=>readProgress(BSL_PROGRESS_FILE),'fast'=>readProgress(BSL_FAST_PROGRESS_FILE),'detail'=>readProgress(BSL_DETAIL_PROGRESS_FILE)];
+$workerLiveByLane=[];foreach(['legacy','fast','detail'] as $__ln){$__fp=@fopen(bslLaneLockFile($__ln),'c');$__live=true;if($__fp){$__live=!@flock($__fp,LOCK_EX|LOCK_NB);if(!$__live)@flock($__fp,LOCK_UN);@fclose($__fp);}$workerLiveByLane[$__ln]=$__live;}
+$progress=$progressByLane['legacy'];foreach(['fast','detail'] as $__ln)if(!empty($progressByLane[$__ln]['running'])){$progress=$progressByLane[$__ln];break;}
+$bslWorkerLive=in_array(true,$workerLiveByLane,true);
+$_bslHasProg=false;foreach($progressByLane as $__pp)if(!empty($__pp['running'])||!empty($__pp['done'])||!empty($__pp['paused'])||trim((string)($__pp['queue_id']??''))!==''||(int)($__pp['started_at']??0)>0){$_bslHasProg=true;break;}
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
-if(($e['status']??'')==='running' && $_bslHasProg && queueProgressBelongsToRow($progress,$e,$runningRows)){
-$e['sent']=$progress['sent']??$e['sent']??0;
-$e['updated']=$progress['updated']??$e['updated']??0;
-$e['skipped']=$progress['skipped']??$e['skipped']??0;
-$e['failed']=$progress['failed']??$e['failed']??0;
-$e['current']=max((int)($e['current']??0),(int)($progress['current']??0));
-$e['total']=((int)($progress['total']??0)>0)?(int)$progress['total']:(int)($e['total']??0);
-$e['done']=$progress['done']??false;
-foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$progress))$e[$__pk]=$progress[$__pk];}
+$rowLane=bslRowLane($e);$rowProgress=$progressByLane[$rowLane]??[];$rowWorkerLive=!empty($workerLiveByLane[$rowLane]);$e['lane']=$rowLane;
+if(($e['status']??'')==='running' && $_bslHasProg && queueProgressBelongsToRow($rowProgress,$e,$runningRows)){
+$e['sent']=$rowProgress['sent']??$e['sent']??0;
+$e['updated']=$rowProgress['updated']??$e['updated']??0;
+$e['skipped']=$rowProgress['skipped']??$e['skipped']??0;
+$e['failed']=$rowProgress['failed']??$e['failed']??0;
+$e['current']=max((int)($e['current']??0),(int)($rowProgress['current']??0));
+$e['total']=((int)($rowProgress['total']??0)>0)?(int)$rowProgress['total']:(int)($e['total']??0);
+$e['done']=$rowProgress['done']??false;
+foreach(['phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','batch_chunk','batch_chunks','batch_stage','last_progress_ts','batch_done_indices'] as $__pk){if(array_key_exists($__pk,$rowProgress))$e[$__pk]=$rowProgress[$__pk];}
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ غرفه‌ها زنده به صف می‌رسند */
-if(is_array($progress['shop_stats']??null))$e['shop_stats']=$progress['shop_stats'];
+if(is_array($rowProgress['shop_stats']??null))$e['shop_stats']=$rowProgress['shop_stats'];
 
-$progressIncomplete=!empty($progress['stopped']) || !empty($progress['partial'])
-    || !empty($progress['cancelled']) || !empty($progress['stale']) || !empty($progress['failed_resume']);
-if(!empty($progress['paused']) || $progressIncomplete){$e['status']='paused';$e['paused_at']=time();}
-else if(!empty($progress['done'])){$e['status']='done';$e['done_at']=time();}
+$progressIncomplete=!empty($rowProgress['stopped']) || !empty($rowProgress['partial'])
+    || !empty($rowProgress['cancelled']) || !empty($rowProgress['stale']) || !empty($rowProgress['failed_resume']);
+if(!empty($rowProgress['paused']) || $progressIncomplete){$e['status']='paused';$e['paused_at']=time();}
+else if(!empty($rowProgress['done'])){$e['status']='done';$e['done_at']=time();}
 }
 }
 unset($e);
-if (!$bslWorkerLive && $_bslHasProg) bslWriteQueue($queue);
+if ($_bslHasProg) bslWriteQueue($queue);
 $queue['active_send']=null;
 $_bslStatusFull=!empty($_GET['full']);
 foreach($queue['entries'] as &$e){
-    $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows);
-    $e['_worker_owner']=$owns;$e['_worker_live']=$owns&&$bslWorkerLive;
+    $rowLane=bslRowLane($e);$rowProgress=$progressByLane[$rowLane]??[];
+    $owns=(string)($e['status']??'')==='running'&&queueProgressBelongsToRow($rowProgress,$e,$runningRows);
+    $e['lane']=$rowLane;$e['_worker_owner']=$owns;$e['_worker_live']=$owns&&!empty($workerLiveByLane[$rowLane]);
     if($e['_worker_live']&&$queue['active_send']===null)$queue['active_send']=[
         'queue_id'=>(string)($e['id']??''),'profile_key'=>(string)($e['profile_key']??''),'profile_name'=>(string)($e['profile_name']??''),
         'shop_name'=>(string)($e['shop_name']??''),'current'=>(int)($e['current']??0),'total'=>(int)($e['total']??0),'destination'=>'bsl'];
@@ -79183,6 +79270,7 @@ foreach($queue['entries'] as &$e){
         unset($e['sent_details'],$e['updated_details'],$e['skipped_details'],$e['failed_details'],$e['recent_log']);
     }
 }unset($e);
+$queue['profile_lanes']=['enabled'=>bslParallelProfileLanesEnabled(),'priority'=>'fast','workers'=>$workerLiveByLane,'progress'=>$progressByLane];
 echo json_encode($queue,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
@@ -79246,11 +79334,17 @@ $parallelN=max(1,min(8,(int)($_POST['send_parallel_n']??($cn['basalam']['send_pa
 $parallelAuto=isset($_POST['send_parallel_auto'])
     ? ($_POST['send_parallel_auto']!=='0')
     : (!isset($cn['basalam']['send_parallel_auto']) || !empty($cn['basalam']['send_parallel_auto']));
+if(isset($_POST['parallel_profile_lanes'])){
+    $cn['basalam']['parallel_profile_lanes']=$_POST['parallel_profile_lanes']!=='0';
+    saveConnections($cn);
+}
 if($queueId===''){echo json_encode(['ok'=>false,'error'=>'queue_id خالی'],JSON_UNESCAPED_UNICODE);exit;}
 $pKeyIn=trim((string)($_POST['profile_key']??''));
 $pNameIn=trim((string)($_POST['profile_name']??''));
 $__pf=loadProfiles();
 $_bslResolvedKey=$pKeyIn!==''?(profileResolveKey($pKeyIn,$__pf)?:profileKey($pKeyIn)):'';
+$_bslLane=bslParallelProfileLanesEnabled($cn)?bslClassifyProfileLane($_bslResolvedKey?:$pKeyIn,$__pf):'legacy';
+$GLOBALS['_bslWorkerLane']=$_bslLane;
 if($_bslResolvedKey!==''&&isset($__pf[$_bslResolvedKey])){
 if($pNameIn==='')$pNameIn=(string)($__pf[$_bslResolvedKey]['name']??$_bslResolvedKey);
 }elseif($pKeyIn!==''&&$pNameIn===''){
@@ -79294,9 +79388,8 @@ echo json_encode(['ok'=>false,'code'=>!empty($_POST['from_profile'])?'fallback_u
 if($total<=0&&count($_bslActualItems)>0)$total=count($_bslActualItems);
 $queue=bslReadQueue();
 $startImm=!empty($_POST['start_immediately']);
-$_bslProbeFp=queueBackendLock('bsl');
-$_bslWorkerLive=!is_resource($_bslProbeFp);
-if(is_resource($_bslProbeFp))queueBackendUnlock($_bslProbeFp);
+$_bslProbePath=bslLaneLockFile($_bslLane);$_bslProbeFp=@fopen($_bslProbePath,'c');
+$_bslWorkerLive=true;if(is_resource($_bslProbeFp)){$_bslWorkerLive=!@flock($_bslProbeFp,LOCK_EX|LOCK_NB);if(!$_bslWorkerLive)@flock($_bslProbeFp,LOCK_UN);@fclose($_bslProbeFp);}
 if(!$_bslWorkerLive){
 foreach($queue['entries'] as &$qeOrphB){
 if(($qeOrphB['status']??'')==='running'){
@@ -79344,17 +79437,18 @@ echo json_encode(['ok'=>false,'duplicate'=>true,'queue_id'=>$dupE['id']??'',
 }
 // v8.57: اگر ارسال دیگری واقعاً در جریان است، این یکی باید در صف بماند.
 $bslBusy=false;
-foreach($queue['entries'] as $qe0){if(($qe0['status']??'')==='running'){$bslBusy=true;break;}}
+foreach($queue['entries'] as $qe0){if(($qe0['status']??'')==='running'&&(!bslParallelProfileLanesEnabled($cn)||bslRowLane($qe0)===$_bslLane)){$bslBusy=true;break;}}
 if($bslBusy)$startImm=false;
 $status=$startImm?'running':'waiting';
 
 if($startImm){
-localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);
-@unlink(BSL_PRODUCTS_FILE);
-$copyOk=@copy($qFile,BSL_PRODUCTS_FILE);
-if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل محصولات: '.$qFile.' → '.BSL_PRODUCTS_FILE],JSON_UNESCAPED_UNICODE);exit;}
+$__laneProgress=bslLaneProgressFile($_bslLane);$__laneProducts=bslLaneProductsFile($_bslLane);
+localTaskDbForget($__laneProgress); @unlink($__laneProgress);@unlink(BSL_STOP_FILE);
+@unlink($__laneProducts);
+$copyOk=@copy($qFile,$__laneProducts);
+if(!$copyOk){echo json_encode(['ok'=>false,'error'=>'خطا در کپی فایل محصولات: '.$qFile.' → '.$__laneProducts],JSON_UNESCAPED_UNICODE);exit;}
 
-$verifyProducts=json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'',true)?:[];
+$verifyProducts=json_decode(@file_get_contents($__laneProducts)?:'',true)?:[];
 if(empty($verifyProducts)){echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی است بعد از کپی'],JSON_UNESCAPED_UNICODE);exit;}
 }
 // v8.57: دستهٔ پروفایل و دسته‌های جایگزینش هم در خود ردیف صف ذخیره شوند،
@@ -79402,26 +79496,30 @@ $fanStatus=$startImm?'running':'waiting';
 if(count($fanoutShops)>1&&$_reqShopSendMode==='parallel'){
 $__parVids=array_values(array_map(static fn($__x)=>(int)$__x['vendor_id'],$fanoutShops));
 $__parNames=array_values(array_map(static fn($__x)=>(string)$__x['shop_name'],$fanoutShops));
-$queue['entries'][]=['id'=>$queueId,'status'=>$fanStatus,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'shop_name'=>'⚡ موازی ('.count($fanoutShops).' غرفه)','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>0,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'parallel_shop_names'=>$__parNames]];
+$queue['entries'][]=['id'=>$queueId,'status'=>$fanStatus,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'lane'=>$_bslLane,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'shop_name'=>'⚡ موازی ('.count($fanoutShops).' غرفه)','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>0,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$__parVids,'parallel_shop_names'=>$__parNames]];
 }else{
 $fanFirst=true;
 foreach($fanoutShops as $__fs){
 $__fsVid=(int)$__fs['vendor_id'];
 $__fsId=$fanFirst?$queueId:$queueId.'_s'.$__fsVid;
-$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'shop_send_mode'=>'serial','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
+$queue['entries'][]=['id'=>$__fsId,'status'=>$fanFirst?$fanStatus:'waiting','products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$fanFirst&&$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'lane'=>$_bslLane,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name'],'shop_is_default'=>!empty($__fs['is_default']),'batch_id'=>$queueId,'shop_send_mode'=>'serial','config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>$__fsVid,'shop_name'=>(string)$__fs['shop_name']]];
 $fanFirst=false;
 }
 }
 bslWriteQueue($queue);
-$_bslFanPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shop_send_mode'=>$_reqShopSendMode,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
+$_bslLaneKicks=bslParallelProfileLanesEnabled($cn)?bslKickParallelProfileLanes($queue):[];
+$_bslFanPid=(int)($_bslLaneKicks[$_bslLane]['worker_pid']??0);
+if(!bslParallelProfileLanesEnabled($cn)&&$startImm&&function_exists('fireAndForgetCliQueueBackend'))$_bslFanPid=fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'lane'=>$_bslLane,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shop_send_mode'=>$_reqShopSendMode,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
-$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
+$entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>$startImm?$_nowCreatedB:0,'created_at'=>$_nowCreatedB,'done_at'=>0,'paused_at'=>0,'lane'=>$_bslLane,'profile_key'=>$_storeProfileKey,'profile_name'=>$pNameIn,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'product_timeout_sec'=>$productTimeoutSec,'send_parallel_n'=>$parallelN,'send_parallel_auto'=>$parallelAuto,'fallback_cat_ids'=>$fbIn,'send_all_shops'=>!empty($_POST['send_all_shops'])]];
 $queue['entries'][]=$entry;
 bslWriteQueue($queue);
-$_bslAddPid=($startImm&&function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$status,'total'=>$total,'worker_pid'=>$_bslAddPid,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
+$_bslLaneKicks=bslParallelProfileLanesEnabled($cn)?bslKickParallelProfileLanes($queue):[];
+$_bslAddPid=(int)($_bslLaneKicks[$_bslLane]['worker_pid']??0);
+if(!bslParallelProfileLanesEnabled($cn)&&$startImm&&function_exists('fireAndForgetCliQueueBackend'))$_bslAddPid=fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])?(int)($GLOBALS['_queueDispatchPid']??0):0;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'lane'=>$_bslLane,'status'=>$status,'total'=>$total,'worker_pid'=>$_bslAddPid,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
@@ -79447,21 +79545,21 @@ $e['done_at']=time();
 unset($e);
 
 $nextIdx2=-1;
-foreach($queue['entries'] as $i=>$e){
-if($e['status']==='waiting'||($e['status']==='running'&&($e['current']??0)<=0)){
-$nextIdx2=$i;break;
-}
-}
+$__laneOrder=bslParallelProfileLanesEnabled()?['fast','detail']:['legacy'];
+foreach($__laneOrder as $__wantLane){foreach($queue['entries'] as $i=>$e){
+if(bslRowLane($e)===$__wantLane&&($e['status']==='waiting'||($e['status']==='running'&&($e['current']??0)<=0))){$nextIdx2=$i;break 2;}
+}}
 if($nextIdx2>=0){
-@unlink(BSL_PRODUCTS_FILE);
-localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);
-@copy($queue['entries'][$nextIdx2]['products_file'],BSL_PRODUCTS_FILE);
+$__nextLane=bslRowLane($queue['entries'][$nextIdx2]);$__nextProducts=bslLaneProductsFile($__nextLane);$__nextProgress=bslLaneProgressFile($__nextLane);
+@unlink($__nextProducts);
+localTaskDbForget($__nextProgress); @unlink($__nextProgress);@unlink(BSL_STOP_FILE);
+@copy($queue['entries'][$nextIdx2]['products_file'],$__nextProducts);
 $queue['entries'][$nextIdx2]['status']='running';
 $queue['entries'][$nextIdx2]['started_at']=time();
 $nextEntry=$queue['entries'][$nextIdx2];
 bslWriteQueue($queue);
 queueBackendUnlock($__bslNextFp);
-$_bslNextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_bslNextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1','lane'=>bslRowLane($nextEntry)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'total'=>$nextEntry['total'],'worker_pid'=>$_bslNextPid,'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'msg'=>'شروع فرآیند بعدی از صف'],JSON_UNESCAPED_UNICODE);
 }else{
 bslWriteQueue($queue);
@@ -79615,7 +79713,7 @@ $e['paused_by']='user';$e['stopped_by_user']=true;
 $e['paused_at']=time();
 $found=true;
 
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>false,'paused'=>true,'paused_by'=>'user','queue_id'=>$queueId,'sent'=>$e['sent'],'updated'=>$e['updated'],'skipped'=>$e['skipped'],'failed'=>$e['failed'],'total'=>$e['total'],'current'=>$e['current'],'last_title'=>'','started_at'=>$e['started_at'],'last_progress_ts'=>time(),'phase'=>$e['phase']??'send','phase_label'=>$e['phase_label']??'','phase_current'=>$e['phase_current']??0,'phase_total'=>$e['phase_total']??$e['total'],'phase_pct'=>$e['phase_pct']??0,'phase_shop_vendor_id'=>$e['phase_shop_vendor_id']??0,'shop_stats'=>$e['shop_stats']??[],'batch_done_indices'=>$e['batch_done_indices']??[],'recent_log'=>$e['recent_log'],'total_log_count'=>$e['total_log_count'],'sent_details'=>$e['sent_details'],'updated_details'=>$e['updated_details'],'skipped_details'=>$e['skipped_details'],'failed_details'=>$e['failed_details']]);
+writeProgress(bslLaneProgressFile(bslLaneForQueueId($queueId,$queue??null)),['running'=>false,'done'=>false,'paused'=>true,'paused_by'=>'user','queue_id'=>$queueId,'sent'=>$e['sent'],'updated'=>$e['updated'],'skipped'=>$e['skipped'],'failed'=>$e['failed'],'total'=>$e['total'],'current'=>$e['current'],'last_title'=>'','started_at'=>$e['started_at'],'last_progress_ts'=>time(),'phase'=>$e['phase']??'send','phase_label'=>$e['phase_label']??'','phase_current'=>$e['phase_current']??0,'phase_total'=>$e['phase_total']??$e['total'],'phase_pct'=>$e['phase_pct']??0,'phase_shop_vendor_id'=>$e['phase_shop_vendor_id']??0,'shop_stats'=>$e['shop_stats']??[],'batch_done_indices'=>$e['batch_done_indices']??[],'recent_log'=>$e['recent_log'],'total_log_count'=>$e['total_log_count'],'sent_details'=>$e['sent_details'],'updated_details'=>$e['updated_details'],'skipped_details'=>$e['skipped_details'],'failed_details'=>$e['failed_details']]);
 break;
 }
 }
@@ -79659,7 +79757,9 @@ if(!is_resource($resumeFp)){
 $queue=bslReadQueue();if(!is_array($queue['entries']??null))$queue['entries']=[];
 $idx=-1;foreach($queue['entries'] as $i=>$row)if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}
 if($idx<0){queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
-$row=$queue['entries'][$idx];$current=max(0,(int)($row['current']??0));$total=max(0,(int)($row['total']??0));
+$row=$queue['entries'][$idx];$__resumeLane=bslRowLane($row);$GLOBALS['_bslWorkerLane']=$__resumeLane;
+if($__resumeLane!=='legacy'){$__lf=@fopen(bslLaneLockFile($__resumeLane),'c');$__held=true;if($__lf){$__held=!@flock($__lf,LOCK_EX|LOCK_NB);if(!$__held)@flock($__lf,LOCK_UN);@fclose($__lf);}if($__held){queueBackendUnlock($resumeFp);echo json_encode(['ok'=>true,'already_running'=>true,'queue_id'=>$queueId,'lane'=>$__resumeLane],JSON_UNESCAPED_UNICODE);exit;}}
+$current=max(0,(int)($row['current']??0));$total=max(0,(int)($row['total']??0));
 if((string)($row['status']??'')==='done'&&($total===0||$current>=$total)){
     queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'complete'=>true,'error'=>'این ردیف کامل شده است'],JSON_UNESCAPED_UNICODE);exit;
 }
@@ -79673,16 +79773,16 @@ if($total<=0){
 }
 /* A free flock proves every old running owner is dead. Keep their checkpoints
    but return them to waiting so the explicitly selected row is unambiguous. */
-$now=time();foreach($queue['entries'] as $i=>&$other){if(!is_array($other)||$i===$idx)continue;if((string)($other['status']??'')==='running'){$other['status']='waiting';$other['resume_requested_at']=0;$other['updated_at']=$now;}}unset($other);
+$now=time();foreach($queue['entries'] as $i=>&$other){if(!is_array($other)||$i===$idx)continue;if((string)($other['status']??'')==='running'&&bslRowLane($other)===$__resumeLane){$other['status']='waiting';$other['resume_requested_at']=0;$other['updated_at']=$now;}}unset($other);
 $row=&$queue['entries'][$idx];$row['total']=$total;$row['status']='running';$row['started_at']=$now;$row['updated_at']=$now;$row['paused_at']=0;$row['done_at']=0;$row['resume_requested_at']=$now;$row['fail_reason']='';
 unset($row['resume_exhausted'],$row['paused_by'],$row['stopped_by_user'],$row['error']);
-@unlink(BSL_PRODUCTS_FILE);if(!@copy($productsFile,BSL_PRODUCTS_FILE)){
+$__resumeProducts=bslLaneProductsFile($__resumeLane);@unlink($__resumeProducts);if(!@copy($productsFile,$__resumeProducts)){
     $row['status']='paused';$row['paused_by']='system';bslWriteQueue($queue);queueBackendUnlock($resumeFp);
     echo json_encode(['ok'=>false,'error'=>'کپی فایل محصولات برای ادامه ناموفق بود'],JSON_UNESCAPED_UNICODE);exit;
 }
 /* Consume only this row's stop (or a legacy global stop), never another row's. */
 if(bslStopRequestedForQueue($queueId))@unlink(BSL_STOP_FILE);
-writeProgress(BSL_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$queueId,
+writeProgress(bslLaneProgressFile(bslLaneForQueueId($queueId,$queue??null)),['running'=>true,'done'=>false,'paused'=>false,'queue_id'=>$queueId,
     'sent'=>(int)($row['sent']??0),'updated'=>(int)($row['updated']??0),'skipped'=>(int)($row['skipped']??0),'failed'=>(int)($row['failed']??0),
     'total'=>$total,'current'=>$current,'last_title'=>'','started_at'=>$now,'last_progress_ts'=>$now,
     'phase'=>(string)($row['phase']??'send'),'phase_label'=>(string)($row['phase_label']??''),
@@ -79692,7 +79792,7 @@ writeProgress(BSL_PROGRESS_FILE,['running'=>true,'done'=>false,'paused'=>false,'
     'sent_details'=>$row['sent_details']??[],'updated_details'=>$row['updated_details']??[],'skipped_details'=>$row['skipped_details']??[],'failed_details'=>$row['failed_details']??[],
     'checkpoint'=>['queue_id'=>$queueId,'current'=>$current,'total'=>$total,'sent'=>(int)($row['sent']??0),'updated'=>(int)($row['updated']??0),'skipped'=>(int)($row['skipped']??0),'failed'=>(int)($row['failed']??0),'started_at'=>$now]]);
 bslWriteQueue($queue);queueResumeBook('bsl',$queueId,['tries'=>0,'at'=>$now,'from'=>$current,'status'=>'manual_continue']);queueBackendUnlock($resumeFp);
-$_bslResPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_bslResPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 echo json_encode(['ok'=>true,'dispatch_ready'=>true,'worker_pid'=>$_bslResPid,'queue_id'=>$queueId,'current'=>$current,'total'=>$total],JSON_UNESCAPED_UNICODE);exit;
 }
 
@@ -79708,7 +79808,7 @@ if($e['id']===$queueId){$entry=$e;break;}
 if(!$entry){echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 
 if($entry['status']==='running'){
-$progress=readProgress(BSL_PROGRESS_FILE);
+$progress=readProgress(bslLaneProgressFile(bslRowLane($entry)));
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 if(queueProgressBelongsToRow($progress,$entry,$runningRows)){
 $entry['sent']=$progress['sent']??$entry['sent']??0;
@@ -79753,7 +79853,7 @@ foreach($queue['entries'] as $i=>$e){
 if($e['id']===$queueId){
 
 if($e['status']==='running'){
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>$e['total'],'current'=>0,'started_at'=>$e['started_at'],'recent_log'=>['❌ ارسال لغو شد'],'total_log_count'=>1]);
+writeProgress(bslLaneProgressFile(bslLaneForQueueId($queueId,$queue??null)),['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>$e['total'],'current'=>0,'started_at'=>$e['started_at'],'recent_log'=>['❌ ارسال لغو شد'],'total_log_count'=>1]);
 }
 @unlink($e['products_file']);
 array_splice($queue['entries'],$i,1);
@@ -79815,7 +79915,7 @@ foreach(['sent_details','updated_details','skipped_details','failed_details','re
 foreach((array)($row['shop_stats']??[]) as $si=>$ss){foreach(['sent','updated','skipped','failed'] as $k)$row['shop_stats'][$si][$k]=0;}
 unset($row['superseded_by'],$row['cancel_reason'],$row['fail_reason'],$row['error'],$row['paused_by'],$row['stopped_by_user']);
 bslWriteQueue($queue);queueBackendUnlock($retryFp);
-$pid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>'0','resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$pid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>'0','resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$actual,'worker_pid'=>$pid,'restarted_from'=>0],JSON_UNESCAPED_UNICODE);exit;
 }
 
@@ -79846,7 +79946,7 @@ unset($queue['entries'][$entryIdx]['paused_by'],$queue['entries'][$entryIdx]['st
 $queue['entries'][$entryIdx]['resume_requested_at']=0;
 bslWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_bslSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_bslSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود — ارسال‌کننده از config همین ردیف می‌خواند
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslSrvPid],JSON_UNESCAPED_UNICODE);exit;
 }
@@ -79876,7 +79976,7 @@ if((int)($entry['total']??0)<=0&&$_bslRstCnt>0){$entry['total']=$_bslRstCnt;$que
 $queue['entries'][$entryIdx]['status']='running';$queue['entries'][$entryIdx]['started_at']=time();
 bslWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_bslRstPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_bslRstPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslRstPid,'current'=>$current,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$failed],JSON_UNESCAPED_UNICODE);exit;
 }
@@ -79994,7 +80094,14 @@ exit;
 }
 
 if(isset($_GET['action']) && $_GET['action'] === 'bsl_backend'){
-if(!isCliRun()&&function_exists('s4GetActiveCliQueueSpawn')){
+$_bslLane=bslNormalizeProfileLane($_GET['lane']??$_POST['lane']??'');
+if($_bslLane==='legacy'&&bslParallelProfileLanesEnabled()){
+    $_rq=trim((string)($_GET['queue_id']??$_POST['queue_id']??''));
+    if($_rq!==''){foreach((array)(bslReadQueue()['entries']??[]) as $_rr)if((string)($_rr['id']??'')===$_rq){$_bslLane=bslRowLane($_rr);break;}}
+}
+$GLOBALS['_bslWorkerLane']=$_bslLane;
+$bslProgressFile=bslLaneProgressFile($_bslLane);$bslProductsFile=bslLaneProductsFile($_bslLane);
+if($_bslLane==='legacy'&&!isCliRun()&&function_exists('s4GetActiveCliQueueSpawn')){
 $_bslCliHold=s4GetActiveCliQueueSpawn('bsl',10.0);
 if(is_array($_bslCliHold)){
 header('Content-Type: application/json; charset=UTF-8');
@@ -80005,7 +80112,7 @@ exit;
 
 // v8.57: سیگنالِ توقف فقط بعد از گرفتنِ lock بررسی/پاک می‌شود؛
 // probe یا حذفِ زودهنگام نباید با workerِ موازی race بسازد.
-$bslLockFile=__DIR__.'/bsl_backend.lock';
+$bslLockFile=bslLaneLockFile($_bslLane);
 $bslLockFp=fopen($bslLockFile,'c');
 $_bslGotLock=false;
 for($_bslLi=0;$_bslLi<10;$_bslLi++){if(flock($bslLockFp,LOCK_EX|LOCK_NB)){$_bslGotLock=true;break;}usleep(50000);}
@@ -80048,7 +80155,7 @@ if($explicitResume&&$stopMatchesRequested)@unlink(BSL_STOP_FILE);
 $startedAt=time();
 $GLOBALS['startedAt']=$startedAt;
 function bslBackendProgress($s,$u,$sk,$f,$t,$c,$lt,$log=null,$extra=[]){
-global $bslLog,$bslSentList,$bslUpdatedList,$bslSkippedList,$bslFailedList,$bslQueueId;
+global $bslLog,$bslSentList,$bslUpdatedList,$bslSkippedList,$bslFailedList,$bslQueueId,$bslProgressFile;
 /* v10.395: callers may pass one message or a list. Nested arrays rendered as
    blank task logs and caused JS string operations to fail. */
 if($log!==null){foreach((is_array($log)?$log:[$log]) as $__msg){if(is_scalar($__msg)&&trim((string)$__msg)!=='')$bslLog[]=(string)$__msg;}}
@@ -80098,7 +80205,7 @@ $__ph=$GLOBALS['_bslPhaseState'];
 if(($__ph['phase']??'')==='send'&&(int)$c>0){$__sendCursor=min(max(0,(int)$t),(int)$c);$__ph['phase_current']=$__sendCursor;$__ph['phase_total']=$t;$__ph['phase_pct']=(int)floor($__sendCursor*100/max(1,(int)$t));}
 $d=array_merge($d,$__ph);
 }
-writeProgress(BSL_PROGRESS_FILE,$d);
+writeProgress($bslProgressFile,$d);
 clearstatcache();
 /* v10.56/v10.104: current ردیف صف فقط بالا می‌رود (هرگز رگرس به ۰).
    جزئیات کارت‌ها هم در ردیف صف نگه داشته می‌شود تا گزارش پروفایل زنده بماند. */
@@ -80137,8 +80244,8 @@ $bslEntriesDoneThisRun = 0;
 for ($bslEntryRound = 0; $bslEntryRound < BSL_MAX_ENTRIES_PER_RUN; $bslEntryRound++) {
 if ($bslEntryRound > 0) {
     if (queueHasFreshUserStop('bsl')) {
-        writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>['⏹ Between rows: stop signal — remaining rows will be sent in the next run'],'total_log_count'=>1]);
-        @unlink(BSL_PRODUCTS_FILE);
+        writeProgress($bslProgressFile,['running'=>false,'done'=>true,'cancelled'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>['⏹ Between rows: stop signal — remaining rows will be sent in the next run'],'total_log_count'=>1]);
+        @unlink($bslProductsFile);
         exit;
     }
 }
@@ -80160,8 +80267,8 @@ $queue=bslReadQueue();
 $__selectionCn=loadConnections();$__disabledRows=bslQueueApplyCurrentShopSelection($queue,$__selectionCn);
 if($__disabledRows)bslWriteQueue($queue);
 
-$progress=readProgress(BSL_PROGRESS_FILE);
-$runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
+$progress=readProgress($bslProgressFile);
+$runningRows=count(array_filter((array)($queue['entries']??[]),function($row)use($_bslLane){return is_array($row)&&($row['status']??'')==='running'&&bslRowLane($row)===$_bslLane;}));
 foreach($queue['entries'] as &$e){
 if(($e['status']??'')==='running'&&queueProgressBelongsToRow($progress,$e,$runningRows)&&!empty($progress['done']) && empty($_GET['resume']) && empty($_POST['resume'])){
 $e['status']='done';
@@ -80171,12 +80278,12 @@ $e['current']=$progress['current']??$e['current']??0;$e['done_at']=time();
 }
 }
 unset($e);
-$runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
+$runningRows=count(array_filter((array)($queue['entries']??[]),function($row)use($_bslLane){return is_array($row)&&($row['status']??'')==='running'&&bslRowLane($row)===$_bslLane;}));
 
 $nextEntry=null;$nextIdx=null;
 $now=time();
 $runningCandidates=[];
-foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='running')$runningCandidates[$i]=$e;}
+foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='running'&&bslRowLane($e)===$_bslLane)$runningCandidates[$i]=$e;}
 if($runningCandidates){
     // Never let an earlier waiting row leapfrog a running row. Prefer the exact
     // progress owner; an unnamed legacy file is attributable only when unique.
@@ -80206,7 +80313,7 @@ if($runningCandidates){
         if($nextEntry===null){$nextIdx=(int)array_key_first($runningCandidates);$nextEntry=$runningCandidates[$nextIdx];}
     }
 }else{
-    foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='waiting'){$nextEntry=$e;$nextIdx=$i;break;}}
+    foreach($queue['entries'] as $i=>$e){if(($e['status']??'')==='waiting'&&bslRowLane($e)===$_bslLane){$nextEntry=$e;$nextIdx=$i;break;}}
 }
 
 if(!$nextEntry){
@@ -80231,7 +80338,7 @@ $bslQueueId=$nextEntry['id'];
    (یا «ادامه») ما را دوباره راه انداخته باشد. بدونِ این، هر بارِ شروع از
    محصولِ ۱ از نو — ارسالِ بزرگ یا بسیار طولانی می‌شد یا غیرممکن.
    فایلِ پیشرفت فقط وقتی مبنا می‌شود که queue_id مالِ همین ردیف باشد. */
-$bslPrevProg=readProgress(BSL_PROGRESS_FILE);
+$bslPrevProg=readProgress($bslProgressFile);
 $bslPrevQid=trim((string)($bslPrevProg['queue_id']??''));
 $bslProgressMatches=($bslPrevQid!==''&&$bslPrevQid===$bslQueueId);
 $bslEntryCur=max(0,(int)($nextEntry['current']??0));
@@ -80289,32 +80396,32 @@ if($bslResumeStart>0){
     if(!empty($bslResumeSnapshot['skipped_details'])&&is_array($bslResumeSnapshot['skipped_details']))$bslSkippedList=$bslResumeSnapshot['skipped_details'];
     if(!empty($bslResumeSnapshot['failed_details'])&&is_array($bslResumeSnapshot['failed_details']))$bslFailedList=$bslResumeSnapshot['failed_details'];
 }
-localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
+localTaskDbForget($bslProgressFile); @unlink($bslProgressFile);@unlink(BSL_STOP_FILE);@unlink($bslProductsFile);
 if(!file_exists($nextEntry['products_file'])){
 $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل محصولات یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل محصولات یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
-$copyOk=@copy($nextEntry['products_file'],BSL_PRODUCTS_FILE);
+$copyOk=@copy($nextEntry['products_file'],$bslProductsFile);
 if(!$copyOk){
 $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ کپی فایل ناموفک'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>$nextEntry['total'],'total'=>$nextEntry['total'],'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ کپی فایل ناموفک'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'کپی فایل محصولات ناموفک','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
 }
 
-$verifyProducts=json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'',true)?:[];
+$verifyProducts=json_decode(@file_get_contents($bslProductsFile)?:'',true)?:[];
 if(empty($verifyProducts)){
 $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'queue_id'=>$bslQueueId,'recent_log'=>['❌ فایل خالی'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'فایل محصولات خالی','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -80344,6 +80451,14 @@ if(isset($qCfg['retry_delay_ms']))$cn['basalam']['retry_delay_ms']=(int)$qCfg['r
 if(isset($qCfg['product_timeout_sec']))$cn['basalam']['product_timeout_sec']=max(30,min(1800,(int)$qCfg['product_timeout_sec']));
 if(isset($qCfg['send_parallel_n']))$cn['basalam']['send_parallel_n']=max(1,min(8,(int)$qCfg['send_parallel_n']));
 if(array_key_exists('send_parallel_auto',$qCfg))$cn['basalam']['send_parallel_auto']=!empty($qCfg['send_parallel_auto']);
+/* One global request budget is divided 75/25 while both physical lanes have
+   active rows. This gives the materially faster no-detail lane priority and
+   prevents two profiles from doubling 429/image pressure. */
+if($_bslLane!=='legacy'&&bslParallelProfileLanesEnabled($cn)){
+    $__other=$_bslLane==='fast'?'detail':'fast';$__both=false;
+    foreach((array)($queue['entries']??[]) as $__lr){if(is_array($__lr)&&bslRowLane($__lr)===$__other&&in_array((string)($__lr['status']??''),['running','waiting'],true)){$__both=true;break;}}
+    if($__both){$__budget=max(2,(int)($cn['basalam']['send_parallel_n']??4));$cn['basalam']['send_parallel_n']=$_bslLane==='fast'?max(1,$__budget-(int)floor($__budget/4)):max(1,(int)floor($__budget/4));}
+}
 if(!empty($qCfg['fallback_cat_ids'])&&is_array($qCfg['fallback_cat_ids'])){
 $cn['basalam']['fallback_cat_ids']=$qCfg['fallback_cat_ids'];
 }
@@ -80389,8 +80504,8 @@ $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
 $queue['entries'][$nextIdx]['fail_reason']='غرفه‌های انتخابی برای ارسال موازی دیگر در تنظیمات نیستند یا توکنشان خالی است';
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه‌های هدف یافت نشدند'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
-@unlink(BSL_PRODUCTS_FILE);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه‌های هدف یافت نشدند'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+@unlink($bslProductsFile);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'غرفه‌های هدف یافت نشدند','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -80406,8 +80521,8 @@ $queue['entries'][$nextIdx]['status']='failed';
 $queue['entries'][$nextIdx]['done_at']=time();
 $queue['entries'][$nextIdx]['fail_reason']='غرفهٔ هدف دیگر در تنظیمات نیست یا توکنش خالی است';
 bslWriteQueue($queue);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه هدف یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
-@unlink(BSL_PRODUCTS_FILE);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'total'=>0,'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ غرفه هدف یافت نشد'],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+@unlink($bslProductsFile);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>'غرفهٔ هدف یافت نشد','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -80478,8 +80593,8 @@ $authCheck=bslReq($tk,'GET','users/me');
 if($authCheck['code']===403||$authCheck['code']===401){
 $authErr=$authCheck['code']===401?'توکن نامعتبر (۴۰۱)':'دسترسی ممنوع (۴۰۳)';
 $queue=bslReadQueue();foreach($queue['entries'] as &$qe){if($qe['id']===$bslQueueId&&$qe['status']==='running'){$qe['status']='failed';$qe['done_at']=time();break;}}unset($qe);bslWriteQueue($queue);
-@unlink(BSL_PRODUCTS_FILE);
-writeProgress(BSL_PROGRESS_FILE,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>count($verifyProducts),'total'=>count($verifyProducts),'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ '.$authErr],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
+@unlink($bslProductsFile);
+writeProgress($bslProgressFile,['running'=>false,'done'=>true,'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>count($verifyProducts),'total'=>count($verifyProducts),'current'=>0,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'recent_log'=>['❌ '.$authErr],'total_log_count'=>1,'sent_details'=>[],'updated_details'=>[],'skipped_details'=>[],'failed_details'=>[]]);
 header('Content-Type: application/json; charset=UTF-8');
 echo json_encode(['ok'=>false,'error'=>$authErr,'auth_fail'=>true,'queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);
 exit;
@@ -80676,11 +80791,11 @@ if(bslStopRequestedForQueue()){
 // بماند وگرنه اولین پینگ بعدی صف را دوباره راه می‌اندازد. دکمه‌های
 // «شروع» و «ادامه» خودشان آن را برمی‌دارند.
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$i,'',['❌ متوقف #'.($i+1)]);
-taskMarkPartial(BSL_PROGRESS_FILE, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
+taskMarkPartial($bslProgressFile, ['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
     ['queue_id'=>(string)$bslQueueId, 'current'=>(int)$i, 'total'=>(int)$total,
      'sent'=>(int)$sent, 'updated'=>(int)$updated, 'skipped'=>(int)$skipped, 'failed'=>(int)$fail]);
 queuePauseRowsAfterStop('bsl',(string)$bslQueueId);
-@unlink(BSL_PRODUCTS_FILE);exit;
+@unlink($bslProductsFile);exit;
 }
 $rawPTitle=trim($p['title']??$p['name']??'');$pKey=$p['key']??'';$n=$i+1;$pn=(int)preg_replace("/[^0-9]/","",(string)($p['final_price']??'0'));
 $_rowBarcodeVal=bslExtractValidBarcode($p);
@@ -81635,13 +81750,13 @@ elseif(!$__skipImageRetry)bslBackendProgress($sent,$updated,$skipped,$fail,$tota
 
 $finalLog="پایان: $sent جدید, $updated آپدیت, $skipped بدون تغییر, $fail خطا | Phase3: $imgRetryFixed تصویر اصلاح";
 $bslLog[]=$finalLog;
-@unlink(BSL_PRODUCTS_FILE);
+@unlink($bslProductsFile);
 remoteMapRecord('bsl',array_merge($bslSentList,$bslUpdatedList),(string)($nextEntry['profile_key']??''));
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ غرفه در پیشرفتِ نهایی و در خودِ ردیفِ صف
    می‌نشینند تا بعد از تمام‌شدنِ کار هم — با ریفرشِ صفحه — باقی بمانند. */
 $bslFinalShopStats=bslShopStatRows($sent,$updated,$skipped,$fail);
 $finalProgress=['running'=>false,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'last_title'=>'','current'=>$total,'done'=>true,'started_at'=>$startedAt,'finished_at'=>time(),'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'phase'=>'done','phase_label'=>'ارسال کامل شد','phase_current'=>$total,'phase_total'=>$total,'phase_pct'=>100,'batch_done_indices'=>[],'recent_log'=>$bslLog,'total_log_count'=>count($bslLog),'log'=>$finalLog,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList,'shop_stats'=>$bslFinalShopStats];
-writeProgress(BSL_PROGRESS_FILE,$finalProgress);
+writeProgress($bslProgressFile,$finalProgress);
 
 $queue=bslReadQueue();foreach($queue['entries'] as &$qe){
 if($qe['id']===$bslQueueId&&$qe['status']==='running'){
@@ -81663,14 +81778,14 @@ $bslEntriesDoneThisRun++;
 $queue=bslReadQueue();
 $hasMore=false;
 foreach($queue['entries'] as $e2){
-if($e2['status']==='waiting'){ $hasMore=true; break; }
+if($e2['status']==='waiting'&&bslRowLane($e2)===$_bslLane){ $hasMore=true; break; }
 }
 
 /* v10.53 (۶۷): ردیفِ «در انتظار» دیگری هست → همین‌جا ردیفِ بعد را به نوبت شروع کن. */
 if ($hasMore && $bslEntryRound + 1 < BSL_MAX_ENTRIES_PER_RUN) continue;
-if ($hasMore && !queueHasFreshUserStop('bsl') && function_exists('s4DispatchPendingSendQueue')) {
+if ($hasMore && !queueHasFreshUserStop('bsl') && function_exists('fireAndForgetCliQueueBackend')) {
     @flock($bslLockFp, LOCK_UN);
-    s4DispatchPendingSendQueue('bsl');
+    fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$_bslLane],['from_file'=>'1','resume'=>'1','lane'=>$_bslLane]);
 }
 
 header('Content-Type: application/json; charset=UTF-8');
@@ -92499,6 +92614,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div class="crow"><label>🔄 تاخیر:</label><input type="number" id="bsRetryDelayMs" value="1000" min="0" max="30000" step="100" style="max-width:120px" dir="ltr"><small>ms</small></div>
 <div class="crow"><label>⏳ سقف هر محصول:</label><input type="number" id="bsProductTimeout" value="180" min="30" max="1800" step="30" style="max-width:120px" dir="ltr"><small>ثانیه؛ پس از آن محصول رد و صف ادامه می‌یابد</small></div>
 <div class="crow"><label>🚀 همزمانی ارسال:</label><input type="number" id="bsParallelN" value="4" min="1" max="8" step="1" style="max-width:80px" dir="ltr"><label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#93c5fd"><input type="checkbox" id="bsParallelAuto" checked> خودکار</label><small>۱ تا ۸ درخواست امن</small></div>
+<div class="crow"><label>🛣️ دو صف پروفایل:</label><label style="display:flex;align-items:center;gap:7px;color:#a7f3d0"><input type="checkbox" id="bsProfileLanes"> ارسال همزمان یک پروفایل سریع و یک پروفایل جزئیات‌دار</label><small>اختیاری؛ صف بدون جزئیات اولویت دارد و فشار API مشترک می‌ماند</small></div>
 </div>
 
 <details class="alert alert-info hint-collapse" style="margin-bottom:8px"><summary><span>💡 <b id="bsN">۰</b> محصول با قیمت از <span id="bsT2">۰</span> کل</span></summary><div class="hint-body" style="font-size:11px">فقط محصولاتِ دارای <b>قیمت</b> به باسلام فرستاده می‌شوند. با تیکِ «ارسال همزمان به همهٔ غرفه‌ها» هر غرفه قیمتِ خودش را می‌گیرد.</div></details>
@@ -99712,6 +99828,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.564', t:'🛣️ دو صف همزمان پروفایل باسلام', items:[
+    'گزینهٔ اختیاری «دو صف پروفایل» یک worker مستقل برای پروفایل‌های بدون جزئیات و یک worker مستقل برای پروفایل‌های جزئیات‌دار فعال می‌کند.',
+    'هر مسیر lock، فایل محصولات موقت، progress، checkpoint، توقف/ادامه و بازیابی مستقل دارد؛ توقف یک پروفایل صف دیگر را متوقف نمی‌کند.',
+    'صف سریع همیشه اول dispatch می‌شود و هنگام فعالیت هر دو مسیر ۷۵٪ بودجهٔ همزمانی مشترک را می‌گیرد؛ کنترل adaptive مشترک از دوبرابرشدن فشار 429 و تصویر جلوگیری می‌کند.',
+    'ردیف‌های قدیمی بدون برچسب lane به‌صورت سازگار از تنظیمات همان پروفایل طبقه‌بندی می‌شوند و حالت تک‌پروفایل پیش‌فرض باقی مانده است.'
+  ]},
   {v:'10.563', t:'🧵 ثبت پایدار job ماتریس و مقصدهای صریح', items:[
     'ادامهٔ دستی با مقصدهای انتخاب‌شده، checkpoint همان پروفایل را به همان مقصدها rebase می‌کند؛ تفاوت Woo/غرفه‌ها دیگر به‌اشتباه «ثبت job ناموفق» نشان داده نمی‌شود.',
     'قفل صف worker حداکثر پنج ثانیه با retry کوتاه منتظر می‌ماند، نوشتن ناقص تشخیص داده می‌شود و رابط به‌جای پیام عمومی، کد و علت واقعی open/busy/write را نمایش می‌دهد.'
@@ -110329,7 +110451,7 @@ try{if(typeof catfixAutoApplyCfg==='function') catfixAutoApplyCfg(cn.catfix_auto
 if(w.store_url&&$('wcUrl'))$('wcUrl').value=w.store_url;if(w.consumer_key&&$('wcCK'))$('wcCK').value=w.consumer_key;if(w.consumer_secret&&$('wcCS'))$('wcCS').value=w.consumer_secret;try{const sm=w.sync_mode||'api';if($('wcModeApi'))$('wcModeApi').checked=(sm!=='direct');if($('wcModeDirect'))$('wcModeDirect').checked=(sm==='direct');if($('wcSyncFallback'))$('wcSyncFallback').value=w.sync_fallback||'api_then_direct';}catch(e){}if(w.default_status&&$('wcSt'))$('wcSt').value=w.default_status;if(w.default_category&&$('wcCat'))$('wcCat').value=w.default_category;if($('wcMS'))$('wcMS').checked=!!w.manage_stock;if(w.stock_quantity&&$('wcSQ'))$('wcSQ').value=w.stock_quantity;if($('wcPMode'))$('wcPMode').value=w.price_mode||'none';if($('wcPVal'))$('wcPVal').value=(w.price_val!==undefined?w.price_val:0);if($('wcPRound'))$('wcPRound').value=String(w.price_round||0);try{syncWcPriceUi('main');}catch(e){}if($('bsPMode'))$('bsPMode').value=b.price_mode||'none';if($('bsPVal'))$('bsPVal').value=(b.price_val!==undefined?b.price_val:0);if($('bsPRound'))$('bsPRound').value=String(b.price_round||0);try{destPricePreview('wc');destPricePreview('bs');}catch(e){}if(b.token&&$('bsTk'))$('bsTk').value=b.token;if(b.vendor_id&&$('bsVid'))$('bsVid').value=b.vendor_id;if(b.preparation_days&&$('bsPD'))$('bsPD').value=b.preparation_days;if(b.weight&&$('bsW'))$('bsW').value=b.weight;if($('bsPW')&&b.package_weight)$('bsPW').value=b.package_weight;if(b.stock&&$('bsSt'))$('bsSt').value=b.stock;// v9.80: سوییچ «اتصال غیرمستقیم» باسلام
 if($('bsIndirect'))$('bsIndirect').checked=!!b.net_indirect;// v7.48: Restore category in searchable dropdown
 if(b.category_id){$('bsCat').value=String(b.category_id);bslSelectedCatId=b.category_id;if(bslAllCats.length>0){renderBslCatDropdown(bslAllCats,b.category_id);}else{loadBslCats();}}else{$('bsCat').value='0';bslSelectedCatId=0;if($('bsCatSearch'))$('bsCatSearch').value='';}
-if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsShopSendMode'))$('bsShopSendMode').value=(b.shop_send_mode==='parallel'?'parallel':'serial');if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsProductTimeout'))$('bsProductTimeout').value=Math.max(30,Math.min(1800,parseInt(b.product_timeout_sec)||180));if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);
+if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsShopSendMode'))$('bsShopSendMode').value=(b.shop_send_mode==='parallel'?'parallel':'serial');if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsProductTimeout'))$('bsProductTimeout').value=Math.max(30,Math.min(1800,parseInt(b.product_timeout_sec)||180));if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);if($('bsProfileLanes'))$('bsProfileLanes').checked=!!b.parallel_profile_lanes;
 // v8.17: Restore global fallback categories
 if(b.fallback_cat_ids&&Array.isArray(b.fallback_cat_ids)){renderBslFallbackCats(b.fallback_cat_ids);}
 // v8.17: Restore extra vendors
@@ -111134,7 +111256,7 @@ window.addEventListener('load',()=>setTimeout(syncMatrixAutoLate,6000));
 
 function saveConn(){const fd=new FormData();fd.append('action','save_connections');fd.append('woocommerce',JSON.stringify({enabled:1,store_url:$('wcUrl').value.trim(),consumer_key:$('wcCK').value.trim(),consumer_secret:$('wcCS').value.trim(),default_status:$('wcSt').value,default_category:parseInt($('wcCat').value)||0,manage_stock:$('wcMS').checked,stock_quantity:parseInt($('wcSQ').value)||10,price_mode:($('wcPMode')||{}).value||'none',price_val:parseFloat(($('wcPVal')||{}).value)||0,price_round:parseInt(($('wcPRound')||{}).value)||0,sync_mode:(($('wcModeDirect')&&$('wcModeDirect').checked)?'direct':'api'),sync_fallback:(($('wcSyncFallback')||{}).value||'api_then_direct')}));bslFlushVendors(); /* v10.87: flush price fields before saving */
 
-fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,send_shop_ids:(typeof bslGetSelectedVids==='function'?bslGetSelectedVids():null),shop_send_mode:(typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial'),delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,product_timeout_sec:Math.max(30,Math.min(1800,parseInt($('bsProductTimeout')?.value)||180)),send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
+fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendor_id:parseInt($('bsVid').value)||0,preparation_days:parseInt($('bsPD').value)||3,weight:parseInt($('bsW').value)||500,package_weight:parseInt($('bsPW')?.value)||0,stock:parseInt($('bsSt').value)||10,net_indirect:$('bsIndirect')?.checked||false,category_id:parseInt($('bsCat').value)||0,auto_category:$('bsAutoCat')?.checked||false,send_all_shops:$('bsSendAllShops')?.checked||false,send_shop_ids:(typeof bslGetSelectedVids==='function'?bslGetSelectedVids():null),shop_send_mode:(typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial'),delay_ms:parseInt($('bsDelayMs')?.value)||500,retry_delay_ms:parseInt($('bsRetryDelayMs')?.value)||1000,product_timeout_sec:Math.max(30,Math.min(1800,parseInt($('bsProductTimeout')?.value)||180)),send_parallel_n:Math.max(1,Math.min(8,parseInt($('bsParallelN')?.value)||4)),send_parallel_auto:($('bsParallelAuto')?$('bsParallelAuto').checked:true),parallel_profile_lanes:!!($('bsProfileLanes')&&$('bsProfileLanes').checked),fallback_cat_ids:getBslFallbackCatIds(),vendors:bslExtraVendors,price_mode:($('bsPMode')||{}).value||'none',price_val:parseFloat(($('bsPVal')||{}).value)||0,price_round:parseInt(($('bsPRound')||{}).value)||0}));
 
 // v8.06: Save AI settings
 fd.append('ai_net',JSON.stringify(getAiNet()));
@@ -115190,7 +115312,8 @@ function bslRenderSendStatusGrid(d,rateMetric){
 }
 // v7.48: Poll BaSalam send progress — live stats, synced logs, elapsed time, ETA
 function pollBslProgress() {
-    fetch('?poll_bsl=1').then(r=>r.json()).then(d=>{
+    const _pollQid=String(window._currentBslQueueId||'');
+    fetch('?poll_bsl=1'+(_pollQid?'&queue_id='+encodeURIComponent(_pollQid):'')).then(r=>r.json()).then(d=>{
         if(!d) {setTimeout(pollBslProgress,2000);return;}
         const responseQueueId=String(d.queue_id||'');
         const activeQueueId=String(window._currentBslQueueId||'');
@@ -116170,6 +116293,7 @@ function queueBslSend(ps,catId){
         fd2.append('product_timeout_sec',$('bsProductTimeout')?($('bsProductTimeout').value||'180'):'180');
         fd2.append('send_parallel_n',$('bsParallelN')?($('bsParallelN').value||'4'):'4');
         fd2.append('send_parallel_auto',($('bsParallelAuto')&&!$('bsParallelAuto').checked)?'0':'1');
+        fd2.append('parallel_profile_lanes',($('bsProfileLanes')&&$('bsProfileLanes').checked)?'1':'0');
         fd2.append('start_immediately','1');
         fd2.append('profile_key',profKey);
         fd2.append('profile_name',($('profileName')&&$('profileName').value)||'');
@@ -116273,7 +116397,7 @@ function stopBslProcess(){
     bSend=false;
     $('bST').classList.add('hidden');
     $('bSS').textContent='⏹ در حال توقف...';
-    fetch('?bsl_stop=1').then(r=>r.json()).then(d=>{
+    fetch('?bsl_stop=1'+(window._currentBslQueueId?'&queue_id='+encodeURIComponent(window._currentBslQueueId):'')).then(r=>r.json()).then(d=>{
         if(d.ok){
             $('bSS').textContent='⏹ متوقف شد'+(d.paused>0?' — '+toFa(d.paused)+' ردیف صف نگه داشته شد':'');
             showToast('⏹ '+(d.msg||'ارسال متوقف شد'));
