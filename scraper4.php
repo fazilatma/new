@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.584';
+const APP_VERSION = '10.585';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48432,6 +48432,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$d['code_version']=APP_VERSION")!==false
         &&strpos($selfSrc,"{v:'10." . "584'")!==false
         &&version_compare(APP_VERSION,'10.584','>='));
+    $add('10.585','نویسندهٔ عمومی صف دیگر worker زنده را waiting نشان نمی‌دهد',
+        strpos($selfSrc,"if(\$lane==='legacy'&&is_file(BSL_QUEUE_FILE))")!==false
+        &&strpos($selfSrc,"\$oldStatus==='running'&&\$newStatus==='waiting'")!==false
+        &&strpos($selfSrc,"['done','failed','cancelled']")!==false
+        &&strpos($selfSrc,"{v:'10." . "585'")!==false
+        &&version_compare(APP_VERSION,'10.585','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79258,7 +79264,22 @@ function bslWriteQueue(array $queue): void {
     $lf=@fopen(BSL_QUEUE_MUTEX_FILE,'c');if($lf)@flock($lf,LOCK_EX);
     try{
         $lane=bslNormalizeProfileLane($GLOBALS['_bslWorkerLane']??'legacy');
-        if($lane!=='legacy'&&is_file(BSL_QUEUE_FILE)){
+        if($lane==='legacy'&&is_file(BSL_QUEUE_FILE)){
+            /* Generic status/watchdog requests can hold a snapshot taken just
+               before a physical-lane worker claimed or completed a row. Never
+               let that stale snapshot demote running->waiting or resurrect a
+               terminal row; explicit paused/user-stop states still win. */
+            $disk=json_decode((string)@file_get_contents(BSL_QUEUE_FILE),true);
+            if(is_array($disk['entries']??null)){
+                $latestById=[];foreach($disk['entries'] as $r)if(is_array($r)&&isset($r['id']))$latestById[(string)$r['id']]=$r;
+                foreach($queue['entries'] as &$r){
+                    if(!is_array($r))continue;$id=(string)($r['id']??'');if($id===''||!isset($latestById[$id]))continue;
+                    $latest=$latestById[$id];$oldStatus=(string)($latest['status']??'');$newStatus=(string)($r['status']??'');
+                    if(in_array($oldStatus,['done','failed','cancelled'],true)&&in_array($newStatus,['running','waiting'],true)){$r=$latest;continue;}
+                    if($oldStatus==='running'&&$newStatus==='waiting')$r['status']='running';
+                }unset($r);
+            }
+        }elseif($lane!=='legacy'&&is_file(BSL_QUEUE_FILE)){
             $disk=json_decode((string)@file_get_contents(BSL_QUEUE_FILE),true);
             if(is_array($disk['entries']??null)){
                 $incoming=[];foreach((array)($queue['entries']??[]) as $r)if(is_array($r))$incoming[(string)($r['id']??uniqid('row_',true))]=$r;
@@ -100391,6 +100412,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.585', t:'🏷️ وضعیت زندهٔ دو لین در برابر snapshot کهنه مقاوم شد', items:[
+    'درخواست‌های عمومی وضعیت و watchdog دیگر نمی‌توانند snapshot قدیمی را پس از claim شدن worker روی صف بنویسند و ردیف running را به‌اشتباه waiting نشان دهند.',
+    'وضعیت‌های نهایی done، failed و cancelled نیز در برابر بازنویسی کهنه محافظت می‌شوند تا ردیف پایان‌یافته دوباره فعال دیده نشود.',
+    'توقف صریح کاربر همچنان با status=paused اولویت دارد؛ این محافظ فقط تنزل ناخواستهٔ running به waiting را مسدود می‌کند.'
+  ]},
   {v:'10.584', t:'🚚 بازیابی و تخلیهٔ کامل صف هر دو لین', items:[
     'هر کران، وقتی flock یک لین آزاد است، همهٔ ردیف‌های running یتیم و pause سیستمی آن لین را در یک sweep به waiting برمی‌گرداند؛ توقف صریح کاربر همچنان دست‌نخورده می‌ماند.',
     'اگر progress نهایی done شده ولی نویسندهٔ کهنه ردیف را waiting جا گذاشته باشد، همان progress به‌عنوان commit پایدار روی صف اعمال می‌شود تا پروفایل دوباره از اول اجرا نشود.',
