@@ -248,6 +248,7 @@ class Scraper_Auto_Shop_Plugin {
 	public static function init() {
 		// Admin menu
 		add_action( 'admin_menu', array( __CLASS__, 'register_admin_menus' ) );
+		add_action( 'rest_api_init', array( __CLASS__, 'register_diagnostic_routes' ) );
 
 		// Shortcodes for modern shop
 		add_shortcode( 'scraped_shop', array( __CLASS__, 'render_shop_shortcode' ) );
@@ -379,6 +380,55 @@ class Scraper_Auto_Shop_Plugin {
 	/**
 	 * Register WordPress Admin Menus.
 	 */
+	/** Private, read-only diagnostics. REST cookie requests require a wp_rest nonce. */
+	public static function register_diagnostic_routes() {
+		foreach ( array( 'dashboard', 'storefront' ) as $kind ) {
+			register_rest_route( 'amphp/v1', '/diagnostics/' . $kind, array(
+				'methods'             => 'GET',
+				'permission_callback' => function () { return current_user_can( 'manage_options' ); },
+				'callback'            => function () use ( $kind ) { return self::diagnostic_result( $kind ); },
+			) );
+		}
+	}
+
+	public static function diagnostic_result( $kind ) {
+		$settings = self::get_settings();
+		if ( 'dashboard' === $kind ) {
+			return rest_ensure_response( array(
+				'ok' => true,
+				'check' => 'wordpress_plugin_runtime',
+				'site_url' => home_url( '/' ),
+				'dashboard_url' => admin_url( 'admin.php?page=scraper-auto-shop' ),
+				'wordpress_version' => get_bloginfo( 'version' ),
+				'php_version' => PHP_VERSION,
+				'note' => 'This verifies authenticated WordPress and plugin execution, not a browser interaction test.',
+			) );
+		}
+		if ( 'storefront' !== $kind ) {
+			return new WP_Error( 'amphp_invalid_diagnostic', 'Unknown diagnostic', array( 'status' => 400 ) );
+		}
+		// Fixed site URL only: do not accept a URL from the request. Never forward cookies.
+		$response = wp_safe_remote_get( home_url( '/' ), array(
+			'timeout' => 15, 'redirection' => 0, 'limit_response_size' => 524288,
+			'headers' => array( 'Cache-Control' => 'no-cache' ),
+		) );
+		$http_error = is_wp_error( $response );
+		$status = $http_error ? 0 : (int) wp_remote_retrieve_response_code( $response );
+		$body = $http_error ? '' : (string) wp_remote_retrieve_body( $response );
+		$marker = strpos( $body, 'amphp-storefront-root' ) !== false || strpos( $body, 'amphp-bare-root' ) !== false;
+		return rest_ensure_response( array(
+			'ok' => ! $http_error && $status >= 200 && $status < 300,
+			'check' => 'homepage_http_loopback',
+			'url' => home_url( '/' ),
+			'http_status' => $status,
+			'error' => $http_error ? $response->get_error_message() : null,
+			'modern_storefront_marker' => $marker,
+			'takeover_enabled' => ! empty( $settings['enable_shop_takeover'] ),
+			'assets_available' => self::has_storefront_assets(),
+			'note' => 'A loopback HTTP check only; it does not execute JavaScript or test checkout. Redirects are reported, not followed.',
+		) );
+	}
+
 	public static function register_admin_menus() {
 		add_menu_page(
 			'فروشگاه و اسکرپر',
@@ -11051,6 +11101,32 @@ public static function get_embedded_storefront_assets() {
 				.scraper-tab-panel.active { display: block; animation: amphpFadeTab .2s ease; }
 				@keyframes amphpFadeTab { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 			</style>
+
+			<section style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:16px;margin:12px 0;">
+				<h3>آزمایش زندهٔ سایت</h3>
+				<p>فقط برای مدیر: بررسی اجرای وردپرس و پاسخ HTTP صفحهٔ اصلی. این آزمایش جایگزین تست مرورگر یا پرداخت نیست.</p>
+				<button type="button" class="button" data-amphp-diagnostic="dashboard">بررسی داشبورد</button>
+				<button type="button" class="button" data-amphp-diagnostic="storefront">بررسی ویترین</button>
+				<pre id="amphp-diagnostic-result" dir="ltr" style="white-space:pre-wrap;overflow-wrap:anywhere;"></pre>
+			</section>
+			<script>
+			(function(){
+			  var endpoints = <?php echo wp_json_encode( array( 'dashboard' => rest_url( 'amphp/v1/diagnostics/dashboard' ), 'storefront' => rest_url( 'amphp/v1/diagnostics/storefront' ) ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT ); ?>;
+			  var nonce = <?php echo wp_json_encode( wp_create_nonce( 'wp_rest' ) ); ?>;
+			  var output = document.getElementById('amphp-diagnostic-result');
+			  document.querySelectorAll('[data-amphp-diagnostic]').forEach(function(button) {
+			    button.addEventListener('click', async function() {
+			      button.disabled = true; output.textContent = 'در حال بررسی…';
+			      try {
+			        var response = await fetch(endpoints[button.dataset.amphpDiagnostic], {credentials:'same-origin',headers:{'X-WP-Nonce':nonce}});
+			        var data = await response.json();
+			        output.textContent = 'HTTP ' + response.status + '\n' + JSON.stringify(data, null, 2);
+			      } catch (error) { output.textContent = 'خطا در ارتباط: ' + error.message; }
+			      finally { button.disabled = false; }
+			    });
+			  });
+			})();
+			</script>
 
 			<form method="post" action="" id="scraperAdminForm">
 				<?php wp_nonce_field( 'scraper_shop_settings_action', 'scraper_shop_settings_nonce' ); ?>
