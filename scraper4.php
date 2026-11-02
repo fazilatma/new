@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.588';
+const APP_VERSION = '10.589';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48456,6 +48456,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'ردیف از checkpoint پشت worker فعال همین لین در صف قرار گرفت')!==false
         &&strpos($selfSrc,"{v:'10." . "588'")!==false
         &&version_compare(APP_VERSION,'10.588','>='));
+    $add('10.589','پایان مرحلهٔ اصلی دیگر پایان کل وظیفه نمایش داده نمی‌شود',
+        strpos($selfSrc,'const hasActivePhase=!!phase&&!phaseTerminal')!==false
+        &&strpos($selfSrc,"checkpoint مرحله")!==false
+        &&strpos($selfSrc,"مرحلهٔ اصلی محصولات")!==false
+        &&strpos($selfSrc,'const liveHasPhase=!!live&&livePhase')!==false
+        &&strpos($selfSrc,"'phase_current'=>(int)(\$e['phase_current']??0)")!==false
+        &&strpos($selfSrc,"{v:'10." . "589'")!==false
+        &&version_compare(APP_VERSION,'10.589','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79735,7 +79743,9 @@ foreach($queue['entries'] as &$e){
     $e['lane']=$rowLane;$e['_worker_owner']=$owns;$e['_worker_live']=$owns&&!empty($workerLiveByLane[$rowLane]);
     if($e['_worker_live']&&$queue['active_send']===null)$queue['active_send']=[
         'queue_id'=>(string)($e['id']??''),'profile_key'=>(string)($e['profile_key']??''),'profile_name'=>(string)($e['profile_name']??''),
-        'shop_name'=>(string)($e['shop_name']??''),'current'=>(int)($e['current']??0),'total'=>(int)($e['total']??0),'destination'=>'bsl'];
+        'shop_name'=>(string)($e['shop_name']??$e['phase_shop_name']??''),'current'=>(int)($e['current']??0),'total'=>(int)($e['total']??0),
+        'phase'=>(string)($e['phase']??''),'phase_label'=>(string)($e['phase_label']??''),
+        'phase_current'=>(int)($e['phase_current']??0),'phase_total'=>(int)($e['phase_total']??0),'destination'=>'bsl'];
     if(!$_bslStatusFull&&empty($e['retire_report'])&&($e['kind']??'')!=='retire'&&($e['trigger']??'')!=='retire'){
         unset($e['sent_details'],$e['updated_details'],$e['skipped_details'],$e['failed_details'],$e['recent_log']);
     }
@@ -100478,6 +100488,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.589', t:'🧭 رفع تناقض پایان محصول و ادامهٔ فازهای ارسال', items:[
+    'کارت فعال و کارت صف وقتی مرحلهٔ اصلی محصولات تمام شده ولی فاز قیمت غرفه، دسته یا تصویر ادامه دارد، درصد و checkpoint همان فاز را نمایش می‌دهند؛ current/total محصول دیگر به‌اشتباه ۱۰۰٪ کل وظیفه نیست.',
+    'ردیف running/waiting/paused با فاز غیرنهایی حتی در current>=total از کارت فعال حذف نمی‌شود و دکمهٔ ادامه صریحاً از checkpoint همان فاز کار می‌کند.',
+    'خلاصهٔ سبز worker نیز phase_label و phase_current/phase_total را از backend می‌گیرد؛ فقط status=done یا phase=done پایان کل ارسال است.'
+  ]},
   {v:'10.588', t:'▶️ ادامهٔ paused پشت worker فعال همان لین', items:[
     'اگر کاربر Continue را برای ردیف paused بزند و worker همان لین مشغول ردیف دیگری باشد، ردیف انتخابی اکنون با همان checkpoint به waiting منتقل می‌شود و پشت کار جاری می‌ماند.',
     'پرچم توقف همان ردیف مصرف و paused_by/stopped_by_user پاک می‌شود؛ worker دوم ساخته نمی‌شود و مالکیت فیزیکی لین همچنان یکتا می‌ماند.'
@@ -117667,7 +117682,9 @@ function renderSendQueueProfileSummary(which,entries,activeSend){
     const live=activeSend&&activeSend.queue_id?activeSend:null;
     const liveName=live?String(live.profile_name||live.profile_key||'پروفایل نامشخص'):'';
     const liveShop=live&&live.shop_name?' · 🏪 '+esc(live.shop_name):'';
-    const liveProgress=live?' · '+toFa(live.current||0)+' از '+toFa(live.total||0):'';
+    const livePhase=live?String(live.phase||''):'';
+    const liveHasPhase=!!live&&livePhase!==''&&livePhase!=='send'&&livePhase!=='done'&&!livePhase.endsWith('_done')&&(parseInt(live.phase_total)||0)>0;
+    const liveProgress=live?' · '+(liveHasPhase?(esc(live.phase_label||livePhase)+' '+toFa(live.phase_current||0)+' از '+toFa(live.phase_total||0)):(toFa(live.current||0)+' از '+toFa(live.total||0))):'';
     const liveHtml=live
       ?'<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:6px;border:1px solid #22c55e88;border-radius:10px;background:#052e164d;color:#dcfce7;box-shadow:0 0 0 2px #22c55e12"><span style="font-size:16px">🟢</span><span style="min-width:0"><b style="display:block;font-size:11px">در حال ارسال واقعی: '+esc(liveName)+'</b><small style="color:#86efac">'+(which==='bsl'?'باسلام':'ووکامرس')+liveShop+liveProgress+'</small></span></div>'
       :'<div style="padding:6px 9px;margin-bottom:6px;border:1px solid #475569;border-radius:9px;background:#0f172a;color:#94a3b8;font-size:10px">⚪ در حال حاضر worker زنده‌ای در حال ارسال نیست</div>';
@@ -117688,12 +117705,13 @@ function renderSendQueueProfileSummary(which,entries,activeSend){
 }
 function sendQueueVisualCard(e,opt){
     opt=opt||{};const total=parseInt(e.total)||0,cur=Math.min(total,parseInt(e.current)||0);
-    const phTotal=parseInt(e.phase_total)||0,phCur=Math.min(phTotal,parseInt(e.phase_current)||0),hasPhase=e.status==='running'&&phTotal>0&&e.phase_label&&e.phase!=='send';
+    const phTotal=parseInt(e.phase_total)||0,phCur=Math.min(phTotal,parseInt(e.phase_current)||0);
+    const phaseKey=String(e.phase||''),hasPhase=e.status!=='done'&&phTotal>0&&e.phase_label&&phaseKey!=='send'&&phaseKey!=='done'&&!phaseKey.endsWith('_done');
     const done=e.status==='done',failed=e.status==='failed',shopDisabled=!!e.shop_disabled;
     const pct=shopDisabled?(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0):(done?100:(hasPhase?Math.max(0,Math.min(100,Math.round(Number(e.phase_pct??(phCur*100/phTotal))))):(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0)));
     const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'نیازمند بررسی'};
     const colors={waiting:'#fbbf24',running:opt.accent||'#38bdf8',paused:'#fb923c',done:'#4ade80',failed:'#f87171'};
-    const processed=shopDisabled?cur:(done?total:cur),remain=Math.max(0,total-processed);
+    const processed=shopDisabled?cur:(done?total:(hasPhase?phCur:cur)),remain=Math.max(0,(hasPhase?phTotal:total)-processed);
     const staleRunning=e.status==='running'&&!e._worker_live,visualStatus=shopDisabled?'paused':(staleRunning?'paused':e.status);
     const status=shopDisabled?'غرفه غیرفعال — ارسال متوقف شد':(staleRunning?'worker متوقف — آمادهٔ ادامه':(labels[e.status]||e.status));
     const isRetire=!!(e.retire_report||e.kind==='retire'||e.trigger==='retire');
@@ -117741,19 +117759,27 @@ function renderBslActiveSendTaskLane(q,lane){
         row=entries.find(e=>e&&String(e.id||'')===String(q.active_send.queue_id||''))||null;
     if(!row){
         const rank={running:0,paused:1,waiting:2,failed:3};
-        row=entries.filter(e=>e&&rank[e.status]!==undefined&&((parseInt(e.total)||0)<=0||(parseInt(e.current)||0)<(parseInt(e.total)||0)))
-            .sort((a,b)=>rank[a.status]-rank[b.status]||Number(b.resume_requested_at||b.started_at||0)-Number(a.resume_requested_at||a.started_at||0))[0]||null;
+        row=entries.filter(e=>{
+            if(!e||rank[e.status]===undefined)return false;
+            const phase=String(e.phase||''),phaseTerminal=phase==='done'||phase.endsWith('_done');
+            const phaseIncomplete=!!phase&&!phaseTerminal&&(parseInt(e.phase_total)||0)>0;
+            return phaseIncomplete||(parseInt(e.total)||0)<=0||(parseInt(e.current)||0)<(parseInt(e.total)||0);
+        }).sort((a,b)=>rank[a.status]-rank[b.status]||Number(b.resume_requested_at||b.started_at||0)-Number(a.resume_requested_at||a.started_at||0))[0]||null;
     }
     if(!row){box.style.display='none';box.innerHTML='';return;}
-    /* Queue rows created before total was known keep total=0; the live phase
-       carries the real scope and must drive checkpoint, percentage and ETA. */
-    const total=Math.max(0,parseInt(row.total)||0,parseInt(row.phase_total)||0);
-    const current=Math.max(0,parseInt(row.current)||0,parseInt(row.phase_current)||0);
-    const incomplete=row.status!=='done'&&(total<=0||current<total);
+    /* Product current/total describes only the primary pass. A non-terminal
+       post-product phase owns the visible checkpoint even when current>=total. */
+    const productTotal=Math.max(0,parseInt(row.total)||0),productCurrent=Math.max(0,parseInt(row.current)||0);
+    const phase=String(row.phase||''),phaseTerminal=phase==='done'||phase.endsWith('_done');
+    const phaseTotal=Math.max(0,parseInt(row.phase_total)||0),phaseCurrent=Math.max(0,Math.min(phaseTotal,parseInt(row.phase_current)||0));
+    const hasActivePhase=!!phase&&!phaseTerminal&&phase!=='send'&&phaseTotal>0;
+    const total=hasActivePhase?phaseTotal:productTotal,current=hasActivePhase?phaseCurrent:Math.min(productTotal,productCurrent);
+    const incomplete=row.status!=='done'&&(hasActivePhase||total<=0||current<total);
     const live=!!row._worker_live||!!(q&&q.active_send&&String(q.active_send.queue_id||'')===String(row.id||''));
     const canContinue=incomplete&&!live&&['running','paused','waiting','failed'].includes(String(row.status||''));
     const profile=String(row.profile_name||row.profile_key||'پروفایل نامشخص');
     const shop=String(row.shop_name||row.phase_shop_name||'غرفهٔ پیش‌فرض');
+    const phaseLabel=hasActivePhase?String(row.phase_label||phase):'';
     const beat=parseInt(row.last_progress_ts||0),age=beat>0?Math.max(0,Math.floor(Date.now()/1000)-beat):null;
     const pct=total>0?Math.max(0,Math.min(100,Math.round(current*100/total))):0;
     const started=parseInt(row.started_at||0),elapsed=started>0?Math.max(1,Math.floor(Date.now()/1000)-started):0;
@@ -117764,10 +117790,12 @@ function renderBslActiveSendTaskLane(q,lane){
     box.style.display=lane===bslSelectedSendLane()?'block':'none';
     box.innerHTML='<div style="padding:10px 12px;background:'+(live?'#052e164d':'#43140755')+';border:1px solid '+(live?'#22c55e88':'#f9731688')+';border-radius:10px">'
       +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="color:'+(live?'#86efac':'#fdba74')+';font-size:12px">'+state+'</b><span style="flex:1"></span>'
-      +(canContinue?'<button class="btn btn-green" style="font-size:11px;padding:5px 12px" onclick="resumeBslQueue(\''+jsAttr(String(row.id||''))+'\')">▶ ادامه از '+toFa(current+1)+'</button>':'')+'</div>'
+      +(canContinue?'<button class="btn btn-green" style="font-size:11px;padding:5px 12px" onclick="resumeBslQueue(\''+jsAttr(String(row.id||''))+'\')">▶ ادامه از checkpoint همین فاز</button>':'')+'</div>'
       +'<div style="margin-top:6px;color:#e2e8f0;font-size:11px;font-weight:700">👤 پروفایل ارسال: '+esc(profile)+'</div>'
-      +'<div style="margin-top:3px;color:#94a3b8;font-size:10px">🏪 '+esc(shop)+' · checkpoint: '+toFa(current)+' از '+toFa(total)
-      +(age===null?'':' · آخرین محصول: '+toFa(age)+' ثانیه پیش')+'</div>'
+      +(phaseLabel?'<div style="margin-top:3px;color:#67e8f9;font-size:10px;font-weight:800">مرحلهٔ جاری: '+esc(phaseLabel)+'</div>':'')
+      +'<div style="margin-top:3px;color:#94a3b8;font-size:10px">🏪 '+esc(shop)+' · '+(hasActivePhase?'checkpoint مرحله':'checkpoint محصول')+': '+toFa(current)+' از '+toFa(total)
+      +(hasActivePhase?' · مرحلهٔ اصلی محصولات '+toFa(Math.min(productCurrent,productTotal))+' از '+toFa(productTotal)+' تمام شده':'')
+      +(age===null?'':' · آخرین ضربان: '+toFa(age)+' ثانیه پیش')+'</div>'
       +(etaLine?'<div style="margin-top:4px;color:#67e8f9;font-size:10px;font-weight:700">'+etaLine+'</div>':'')
       +'<div style="height:5px;background:#0f172a;border-radius:99px;overflow:hidden;margin-top:7px"><i style="display:block;height:100%;width:'+pct+'%;background:'+(live?'#22c55e':'#f97316')+'"></i></div></div>';
 }
