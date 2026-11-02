@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.582';
+const APP_VERSION = '10.583';
 
 
 if (!function_exists('str_starts_with')) {
@@ -37484,6 +37484,13 @@ $pResult['woo']='queued';$pResult['woo_total']=count($wooSend);$pResult['woo_sta
 $syncState[$key]=array_merge(is_array($syncState[$key]??null)?$syncState[$key]:[],['lastRun'=>$now,'status'=>'running_woo','price_sig'=>$priceSig]);
 }
 if ($target === 'bsl' || $target === 'both') {
+/* Periodic enqueue shares the same ownership mutex as manual lane clicks. The
+   complete read/choose/add/write decision is atomic across both lanes. */
+$_periodicBslClaimFp=null;
+if(syncRunOriginTrigger()==='periodic'){
+    $_periodicBslClaimFp=@fopen(BSL_PROFILE_LANE_CLAIM_FILE,'c');
+    if(is_resource($_periodicBslClaimFp))@flock($_periodicBslClaimFp,LOCK_EX);
+}
 // v8.39: با تیک «افزودن/آپدیت باسلام» فقط تغییرات ارسال می‌شود
 $bslSend = $bslOnlyChanged ? $bslChangedProducts : $orderedProducts;
 if (!empty($bslSend)) {
@@ -37501,8 +37508,25 @@ if ($profileCatId > 0) $catId = $profileCatId;
 $profileFallbackCats = $profile['bslFallbackCatIds'] ?? [];
 $allFallbackCats = array_values(array_unique(array_merge($profileFallbackCats, $fallbackCats)));
 $queue = bslReadQueue();
+$_periodicLanePlan=syncRunOriginTrigger()==='periodic'?bslPeriodicBalancedLane($queue,$profile,(string)$key):['lane'=>(bslParallelProfileLanesEnabled($cn)?'fast':'legacy'),'existing'=>null,'eligible_detail'=>false,'detail_summary'=>[],'loads'=>[]];
+$_periodicBslLane=bslNormalizeProfileLane((string)($_periodicLanePlan['lane']??'fast'));
+$_periodicDetailSummary=(array)($_periodicLanePlan['detail_summary']??[]);
+/* Periodic sync is exactly-once across the pair even if the optional generic
+   queue-dedup switch is off. Manual/legacy behavior keeps its existing switch. */
+$bslDup=is_array($_periodicLanePlan['existing']??null)?$_periodicLanePlan['existing']:(queueDedupOn($cn)?queueHasProfile($queue['entries'],$key,queueDedupStale($cn)):null);
+if(syncRunOriginTrigger()==='periodic'&&$bslDup===null){
+    foreach((array)($queue['entries']??[]) as $_pr){
+        if(!is_array($_pr)||!in_array((string)($_pr['status']??''),['running','waiting','paused'],true))continue;
+        $_rk=trim((string)($_pr['profile_key']??''));if($_rk!==''&&($_rk===(string)$key||profileKey($_rk)===profileKey((string)$key))){$bslDup=$_pr;break;}
+    }
+}
+if($_periodicBslLane==='fast'){
+    $bslSend=bslQueueProductsForLane($bslSend,'fast');
+    $_lanePayload=json_encode($bslSend,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
+    if(!is_string($_lanePayload)||@file_put_contents($qFile,$_lanePayload,LOCK_EX)!==strlen($_lanePayload)){$bslDup=['id'=>'','status'=>'failed'];$pResult['bsl']='lane_projection_write_failed';}
+}
+$pResult['bsl_lane']=bslPublicLaneName($_periodicBslLane);$pResult['bsl_lane_loads']=$_periodicLanePlan['loads']??[];
 // v8.55: از ورود دوبارهٔ همین پروفایل به صف باسلام جلوگیری کن
-$bslDup = queueDedupOn($cn) ? queueHasProfile($queue['entries'], $key, queueDedupStale($cn)) : null;
 if ($bslDup !== null) {
     /* v10.51 (۶۵): اگر تنظیماتِ اثرگذار بر ارسال عوض شده باشند — مهم‌تر
        از همهٔ پسوندِ عنوان — ردیفِ قدیمیِ منتظر/توقف‌خورده دیگر معتبر
@@ -37539,27 +37563,32 @@ $_cronShopMode = bslEffectiveShopSendMode($cn);
 if (count($bslFanout) > 1 && $_cronShopMode === 'parallel') {
     $_cronParVids = array_values(array_map(static fn($x) => (int)$x['vendor_id'], $bslFanout));
     $_cronParNames = array_values(array_map(static fn($x) => (string)$x['shop_name'], $bslFanout));
-    $queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'created_at' => $now, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'shop_name' => '⚡ موازی (' . count($bslFanout) . ' غرفه)', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 0, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'parallel_shop_names' => $_cronParNames, 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
+    $queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'created_at' => $now, 'done_at' => 0, 'paused_at' => 0, 'lane' => $_periodicBslLane, 'with_details' => $_periodicBslLane === 'detail', 'detail_summary' => $_periodicDetailSummary, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'shop_name' => '⚡ موازی (' . count($bslFanout) . ' غرفه)', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 0, 'shop_send_mode' => 'parallel', 'parallel_shop_vids' => $_cronParVids, 'parallel_shop_names' => $_cronParNames, 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
 } elseif (count($bslFanout) > 0) {
     $__bfFirst=true;
     foreach ($bslFanout as $__bfSh) {
         $__bfVid=(int)$__bfSh['vendor_id'];
-        $queue['entries'][] = ['id' => $__bfFirst ? $queueId : $queueId . '_s' . $__bfVid, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'serial', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 1, 'shop_send_mode' => 'serial', 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'shop_is_default' => !empty($__bfSh['is_default']), 'batch_id' => $queueId, 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
+        $queue['entries'][] = ['id' => $__bfFirst ? $queueId : $queueId . '_s' . $__bfVid, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'lane' => $_periodicBslLane, 'with_details' => $_periodicBslLane === 'detail', 'detail_summary' => $_periodicDetailSummary, 'only_changed' => $bslOnlyChanged, 'shop_send_mode' => 'serial', 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, 'send_all_shops' => 0, 'fanout' => 1, 'shop_send_mode' => 'serial', 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, 'shop_vendor_id' => $__bfVid, 'shop_name' => (string)$__bfSh['shop_name'], 'shop_is_default' => !empty($__bfSh['is_default']), 'batch_id' => $queueId, 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
         $__bfFirst=false;
     }
 } elseif(!is_array($cn['basalam']['send_shop_ids']??null)) {
-$queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'only_changed' => $bslOnlyChanged, 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, /* v10.21 (۳۴ب): سینکِ خودکار هم باید به همهٔ غرفه‌های فعال بفرستد. تا حالا این کلید فقط از مسیرِ دکمهٔ دستی وارد صف می‌شد، پس ارسالِ چندغرفه‌ای در کران هرگز اجرا نمی‌شد — تیک روشن بود ولی شب‌ها فقط غرفهٔ پیش‌فرض به‌روز می‌شد. v10.73 (87): وقتی چند غرفهٔ فعال است، fan-outِ بالا هرکدام را یک ردیف می‌کند و این شاخه برایِ غرفهٔ تکی می‌ماند. */ 'send_all_shops' => !empty($cn['basalam']['send_all_shops']), /* v10.34 (۴۸ج): تیکِ خاموش ⇒ ارسالِ کامل بدون مقایسه با غرفه */ 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, /* v10.53 (۶۷): منشأِ ردیف (دستی/خودکار) تا در تبِ ارسال هم دیده شود */ 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
+$queue['entries'][] = ['id' => $queueId, 'status' => 'waiting', 'products_file' => $qFile, 'total' => count($bslSend), 'sent' => 0, 'updated' => 0, 'skipped' => 0, 'failed' => 0, 'current' => 0, 'started_at' => 0, 'done_at' => 0, 'paused_at' => 0, 'lane' => $_periodicBslLane, 'with_details' => $_periodicBslLane === 'detail', 'detail_summary' => $_periodicDetailSummary, 'only_changed' => $bslOnlyChanged, 'config' => ['category_id' => $catId, 'auto_category' => $autoCat, 'title_suffix' => $titleSuffix, 'delay_ms' => $delayMs, 'retry_delay_ms' => $retryDelayMs, 'fallback_cat_ids' => $allFallbackCats, /* v10.21 (۳۴ب): سینکِ خودکار هم باید به همهٔ غرفه‌های فعال بفرستد. تا حالا این کلید فقط از مسیرِ دکمهٔ دستی وارد صف می‌شد، پس ارسالِ چندغرفه‌ای در کران هرگز اجرا نمی‌شد — تیک روشن بود ولی شب‌ها فقط غرفهٔ پیش‌فرض به‌روز می‌شد. v10.73 (87): وقتی چند غرفهٔ فعال است، fan-outِ بالا هرکدام را یک ردیف می‌کند و این شاخه برایِ غرفهٔ تکی می‌ماند. */ 'send_all_shops' => !empty($cn['basalam']['send_all_shops']), /* v10.34 (۴۸ج): تیکِ خاموش ⇒ ارسالِ کامل بدون مقایسه با غرفه */ 'force_all' => $bslForceAll], 'profile_key' => $key, 'profile_name' => $profile['name'] ?? $key, /* v10.53 (۶۷): منشأِ ردیف (دستی/خودکار) تا در تبِ ارسال هم دیده شود */ 'trigger' => ((syncRunOriginTrigger()==='manual'?'manual_sync':'cron')), 'origin_trigger'=>syncRunOriginTrigger(), 'auto_sync' => syncRunOriginTrigger()==='periodic'];
 }
 if(is_array($cn['basalam']['send_shop_ids']??null)&&count($bslFanout)===0){
     @unlink($qFile);$pResult['bsl']='no_shop_selected';$pResult['bsl_total']=0;
 }else{
     bslWriteQueue($queue);
+    if(syncRunOriginTrigger()==='periodic'){
+        $_periodicLaneKicks=bslKickParallelProfileLanes($queue);
+        $pResult['bsl_lane_dispatch']=$_periodicLaneKicks[$_periodicBslLane]??null;
+    }
     $syncState[$key] = array_merge(is_array($syncState[$key] ?? null) ? $syncState[$key] : [], ['lastRun' => $now, 'status' => 'queued_bsl', 'price_sig' => $priceSig]);   // v9.11
     $pResult['bsl'] = 'queued'; $pResult['bsl_total'] = count($bslSend);
 }
 }
 } else { $pResult['bsl'] = 'file_save_error'; }
 } else { $pResult['bsl'] = $bslOnlyChanged ? 'no_changes' : 'no_products'; }
+if(is_resource($_periodicBslClaimFp)){@flock($_periodicBslClaimFp,LOCK_UN);@fclose($_periodicBslClaimFp);}
 }
 // v8.44: امضای قیمت را در هر حالت ثبت کن تا ارسال کامل فقط یک بار
 // تکرار شود، نه در هر اجرای بعدی.
@@ -48386,6 +48415,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'bsl_lane_pumps'   => \$GLOBALS['_cronBslLanePumps']")!==false
         &&strpos($selfSrc,"{v:'10." . "582'")!==false
         &&version_compare(APP_VERSION,'10.582','>='));
+    $add('10.583','ارسال دوره‌ای پروفایل‌ها را دقیقاً یک‌بار بین دو لین متعادل می‌کند',
+        strpos($selfSrc,'function bslPeriodicBalancedLane')!==false
+        &&strpos($selfSrc,"\$lane=\$detail<=\$fast?'detail':'fast'")!==false
+        &&strpos($selfSrc,"\$_periodicBslClaimFp=@fopen(BSL_PROFILE_LANE_CLAIM_FILE")!==false
+        &&strpos($selfSrc,"'lane' => \$_periodicBslLane")!==false
+        &&strpos($selfSrc,"\$pResult['bsl_lane']=bslPublicLaneName")!==false
+        &&strpos($selfSrc,"{v:'10." . "583'")!==false
+        &&version_compare(APP_VERSION,'10.583','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79003,6 +79040,22 @@ function bslLaneIsLive(string $lane,int $fresh=180): bool {
     $p=readProgress(bslLaneProgressFile($lane));if(empty($p['running']))return false;
     $beat=max((int)($p['last_progress_ts']??0),(int)($p['started_at']??0));return $beat>0&&time()-$beat<$fresh;
 }
+/** Assign one periodic-sync profile to exactly one physical lane. Lane 2 wins
+ * an equal-load tie; once it owns a profile the next profile fills Lane 1. */
+function bslPeriodicBalancedLane(array $queue,array $profile,string $profileKey): array {
+    $active=['fast'=>[],'detail'=>[]];$existing=null;
+    foreach((array)($queue['entries']??[]) as $row){
+        if(!is_array($row)||!in_array((string)($row['status']??''),['running','waiting','paused'],true))continue;
+        $rk=trim((string)($row['profile_key']??''));$lane=bslRowLane($row);if(!isset($active[$lane]))continue;
+        if($rk!=='')$active[$lane][$rk]=true;
+        if($profileKey!==''&&$rk!==''&&($rk===$profileKey||profileKey($rk)===profileKey($profileKey)))$existing=$row;
+    }
+    if($existing)return ['lane'=>bslRowLane($existing),'existing'=>$existing,'eligible_detail'=>!empty($existing['with_details'])];
+    $summary=extractProfileDetailSummary($profile);$eligible=!empty($summary['enabled'])&&extractProfileHasAnyDetailData($summary);
+    if(!$eligible)return ['lane'=>'fast','existing'=>null,'eligible_detail'=>false,'detail_summary'=>$summary,'loads'=>['fast'=>count($active['fast']),'detail'=>count($active['detail'])]];
+    $fast=count($active['fast']);$detail=count($active['detail']);$lane=$detail<=$fast?'detail':'fast';
+    return ['lane'=>$lane,'existing'=>null,'eligible_detail'=>true,'detail_summary'=>$summary,'loads'=>['fast'=>$fast,'detail'=>$detail]];
+}
 /** Every cron arrival pumps both physical send lanes before the generic cron
  * mutex. This path is deliberately independent of watchdog/auto-resume flags. */
 function bslCronPumpProfileLanes(): array {
@@ -100264,6 +100317,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.583', t:'⚖️ توزیع دقیق ارسال دوره‌ای بین لین ۲ و لین ۱', items:[
+    'صف‌ساز همگام‌سازی دوره‌ای بار فعال هر دو لین را با تعداد پروفایل‌های یکتا می‌سنجد؛ در تساوی لین ۲ اولویت دارد و وقتی لین ۲ مالک یک پروفایل شد، پروفایل بعدی برای پرکردن worker بیکار به لین ۱ می‌رود.',
+    'پروفایل دارای selector و حداقل یک جزئیات واقعی می‌تواند به لین ۲ برود؛ پروفایل فاقد جزئیات معتبر فقط به لین ۱ می‌رود تا معنای دو لین حفظ شود.',
+    'قفل مالکیت مشترک، تصمیم خواندن/انتخاب لین/ثبت صف را اتمیک می‌کند و dedup دوره‌ای مستقل از کلید عمومی حذف تکراری است؛ یک پروفایل هرگز همزمان در هر دو لین ثبت نمی‌شود.',
+    'محصولات لین ۱ هنگام صف‌سازی سبک می‌شوند، ردیف‌های هر سه حالت غرفه lane و with_details صریح دارند و پس از هر ثبت دوره‌ای هر دو worker فوراً pump می‌شوند.'
+  ]},
   {v:'10.582', t:'⏱️ هل‌دادن مستقیم لین‌های ارسال با هر کران', items:[
     'هر ورود cron_run پیش از قفل عمومی و پیش از handoff، لین ۱ و لین ۲ را جداگانه بررسی و ردیف waiting/running ناقص را با queue_id همان checkpoint پمپ می‌کند.',
     'این مسیر به تنظیم‌های generic watchdog و auto-resume وابسته نیست؛ حتی اگر اجرای قبلی کران قفل عمومی را نگه داشته باشد، پمپ اختصاصی لین‌ها انجام می‌شود.',
