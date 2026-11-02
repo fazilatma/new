@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.585';
+const APP_VERSION = '10.586';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48438,6 +48438,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"['done','failed','cancelled']")!==false
         &&strpos($selfSrc,"{v:'10." . "585'")!==false
         &&version_compare(APP_VERSION,'10.585','>='));
+    $add('10.586','مالک زندهٔ دقیق فوراً running نمایش داده و ذخیره می‌شود',
+        strpos($selfSrc,'$__exactLiveOwner=$rowWorkerLive')!==false
+        &&strpos($selfSrc,"if(\$__exactLiveOwner&&(\$e['status']??'')==='waiting')\$e['status']='running'")!==false
+        &&strpos($selfSrc,"{v:'10." . "586'")!==false
+        &&version_compare(APP_VERSION,'10.586','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79684,7 +79689,12 @@ $_bslHasProg=false;foreach($progressByLane as $__pp)if(!empty($__pp['running'])|
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row){return is_array($row)&&($row['status']??'')==='running';}));
 foreach($queue['entries'] as &$e){
 $rowLane=bslRowLane($e);$rowProgress=$progressByLane[$rowLane]??[];$rowWorkerLive=!empty($workerLiveByLane[$rowLane]);$e['lane']=$rowLane;
-if(($e['status']??'')==='running' && $_bslHasProg && queueProgressBelongsToRow($rowProgress,$e,$runningRows)){
+/* A stale generic writer may have labelled an actively owned row waiting.
+   Exact queue_id + running progress + held physical flock is authoritative. */
+$__liveProgressQid=trim((string)($rowProgress['queue_id']??$rowProgress['checkpoint']['queue_id']??''));
+$__exactLiveOwner=$rowWorkerLive&&!empty($rowProgress['running'])&&!empty($e['id'])&&$__liveProgressQid!==''&&hash_equals($__liveProgressQid,(string)$e['id']);
+if($__exactLiveOwner&&($e['status']??'')==='waiting')$e['status']='running';
+if(($e['status']??'')==='running' && $_bslHasProg && ($__exactLiveOwner||queueProgressBelongsToRow($rowProgress,$e,$runningRows))){
 $e['sent']=$rowProgress['sent']??$e['sent']??0;
 $e['updated']=$rowProgress['updated']??$e['updated']??0;
 $e['skipped']=$rowProgress['skipped']??$e['skipped']??0;
@@ -100412,6 +100422,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.586', t:'🟢 مالک زندهٔ لین فوراً running می‌شود', items:[
+    'نمای وضعیت، queue_id دقیق progress زنده را همراه flock فیزیکی همان لین مالک قطعی می‌داند و برچسب waiting کهنه را همان لحظه به running اصلاح و ذخیره می‌کند.',
+    'این اصلاح worker قدیمیِ در حال اجرا را هم بدون توقف یا شروع دوباره پوشش می‌دهد و checkpoint آن دست‌نخورده می‌ماند.'
+  ]},
   {v:'10.585', t:'🏷️ وضعیت زندهٔ دو لین در برابر snapshot کهنه مقاوم شد', items:[
     'درخواست‌های عمومی وضعیت و watchdog دیگر نمی‌توانند snapshot قدیمی را پس از claim شدن worker روی صف بنویسند و ردیف running را به‌اشتباه waiting نشان دهند.',
     'وضعیت‌های نهایی done، failed و cancelled نیز در برابر بازنویسی کهنه محافظت می‌شوند تا ردیف پایان‌یافته دوباره فعال دیده نشود.',
