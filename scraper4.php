@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.587';
+const APP_VERSION = '10.588';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48450,6 +48450,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'reactivate_suppressed'")!==false
         &&strpos($selfSrc,"{v:'10." . "587'")!==false
         &&version_compare(APP_VERSION,'10.587','>='));
+    $add('10.588','ادامهٔ ردیف paused پشت worker فعال همان لین صف می‌شود',
+        strpos($selfSrc,'$__queuedBehindActive=false')!==false
+        &&strpos($selfSrc,"'queued'=>\$__queuedBehindActive")!==false
+        &&strpos($selfSrc,'ردیف از checkpoint پشت worker فعال همین لین در صف قرار گرفت')!==false
+        &&strpos($selfSrc,"{v:'10." . "588'")!==false
+        &&version_compare(APP_VERSION,'10.588','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -80308,7 +80314,20 @@ $queue=bslReadQueue();if(!is_array($queue['entries']??null))$queue['entries']=[]
 $idx=-1;foreach($queue['entries'] as $i=>$row)if(is_array($row)&&(string)($row['id']??'')===$queueId){$idx=$i;break;}
 if($idx<0){queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 $row=$queue['entries'][$idx];$__resumeLane=bslRowLane($row);$GLOBALS['_bslWorkerLane']=$__resumeLane;
-if($__resumeLane!=='legacy'){$__lf=@fopen(bslLaneLockFile($__resumeLane),'c');$__held=true;if($__lf){$__held=!@flock($__lf,LOCK_EX|LOCK_NB);if(!$__held)@flock($__lf,LOCK_UN);@fclose($__lf);}if($__held){queueBackendUnlock($resumeFp);echo json_encode(['ok'=>true,'already_running'=>true,'queue_id'=>$queueId,'lane'=>$__resumeLane],JSON_UNESCAPED_UNICODE);exit;}}
+if($__resumeLane!=='legacy'){$__lf=@fopen(bslLaneLockFile($__resumeLane),'c');$__held=true;if($__lf){$__held=!@flock($__lf,LOCK_EX|LOCK_NB);if(!$__held)@flock($__lf,LOCK_UN);@fclose($__lf);}if($__held){
+    /* Continue on a paused row must still queue it when another row owns the
+       physical lane. Previously this early return left it user-paused forever. */
+    $__queuedBehindActive=false;
+    if((string)($queue['entries'][$idx]['status']??'')==='paused'){
+        $queue['entries'][$idx]['status']='waiting';$queue['entries'][$idx]['paused_at']=0;
+        $queue['entries'][$idx]['resume_requested_at']=time();$queue['entries'][$idx]['updated_at']=time();
+        unset($queue['entries'][$idx]['paused_by'],$queue['entries'][$idx]['stopped_by_user'],$queue['entries'][$idx]['resume_exhausted']);
+        if(bslStopRequestedForQueue($queueId))@unlink(BSL_STOP_FILE);
+        bslWriteQueue($queue);$__queuedBehindActive=true;
+    }
+    queueBackendUnlock($resumeFp);echo json_encode(['ok'=>true,'already_running'=>true,'queued'=>$__queuedBehindActive,'queue_id'=>$queueId,'lane'=>$__resumeLane,
+        'message'=>$__queuedBehindActive?'ردیف از checkpoint پشت worker فعال همین لین در صف قرار گرفت':'worker همین لین فعال است'],JSON_UNESCAPED_UNICODE);exit;
+}}
 $current=max(0,(int)($row['current']??0));$total=max(0,(int)($row['total']??0));
 if((string)($row['status']??'')==='done'&&($total===0||$current>=$total)){
     queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'complete'=>true,'error'=>'این ردیف کامل شده است'],JSON_UNESCAPED_UNICODE);exit;
@@ -100459,6 +100478,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.588', t:'▶️ ادامهٔ paused پشت worker فعال همان لین', items:[
+    'اگر کاربر Continue را برای ردیف paused بزند و worker همان لین مشغول ردیف دیگری باشد، ردیف انتخابی اکنون با همان checkpoint به waiting منتقل می‌شود و پشت کار جاری می‌ماند.',
+    'پرچم توقف همان ردیف مصرف و paused_by/stopped_by_user پاک می‌شود؛ worker دوم ساخته نمی‌شود و مالکیت فیزیکی لین همچنان یکتا می‌ماند.'
+  ]},
   {v:'10.587', t:'🔧 رفع توقف لین ۱ در فاز قیمت غرفه‌های اضافی', items:[
     'جست‌وجوی هر محصول در فاز extra_shop_price دیگر به پیمایش عمیق تا ۲۰ صفحهٔ کاتالوگ وارد نمی‌شود و فقط شناسهٔ شناخته‌شده، ماتریس یا جست‌وجوی هدفمند عنوان را به‌کار می‌برد.',
     'درخواست‌های شبکهٔ همین فاز heartbeat دقیقِ فروشگاه و محصول جاری را حفظ می‌کنند تا watchdog یک درخواست کند را با worker مرده اشتباه نگیرد و checkpoint را تکرار نکند.',
