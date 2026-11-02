@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.583';
+const APP_VERSION = '10.584';
 
 
 if (!function_exists('str_starts_with')) {
@@ -427,7 +427,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/10';
+const APP_VERSION_DATE = '1405/08/11';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -48423,6 +48423,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$pResult['bsl_lane']=bslPublicLaneName")!==false
         &&strpos($selfSrc,"{v:'10." . "583'")!==false
         &&version_compare(APP_VERSION,'10.583','>='));
+    $add('10.584','همهٔ پروفایل‌های یتیم هر دو لین از checkpoint ادامه می‌یابند',
+        strpos($selfSrc,'function bslRecoverOrphanedLaneRows')!==false
+        &&strpos($selfSrc,'Final progress is the durable commit')!==false
+        &&strpos($selfSrc,'Status=done is the')!==false
+        &&strpos($selfSrc,"\$queue['entries'][\$nextIdx]['status']='running'")!==false
+        &&strpos($selfSrc,"['running','waiting'],true")!==false
+        &&strpos($selfSrc,"\$d['code_version']=APP_VERSION")!==false
+        &&strpos($selfSrc,"{v:'10." . "584'")!==false
+        &&version_compare(APP_VERSION,'10.584','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79056,15 +79065,73 @@ function bslPeriodicBalancedLane(array $queue,array $profile,string $profileKey)
     $fast=count($active['fast']);$detail=count($active['detail']);$lane=$detail<=$fast?'detail':'fast';
     return ['lane'=>$lane,'existing'=>null,'eligible_detail'=>true,'detail_summary'=>$summary,'loads'=>['fast'=>$fast,'detail'=>$detail]];
 }
+/** With a free lane flock, no sender can legitimately own a running row.
+ * Recover every orphan (and non-user pause) to waiting in one sweep so the
+ * lane worker can drain the complete backlog in queue order. */
+function bslRecoverOrphanedLaneRows(array &$queue): array {
+    $now=time();$out=['fast'=>0,'detail'=>0];$changed=false;$held=[];$repairs=[];
+    /* Keep every successfully probed flock until the repaired queue is durable.
+       Otherwise a sender could start between the probe and bslWriteQueue(). */
+    foreach(['fast','detail'] as $lane){
+        $probe=@fopen(bslLaneLockFile($lane),'c');
+        if(!is_resource($probe)||!@flock($probe,LOCK_EX|LOCK_NB)){if(is_resource($probe))@fclose($probe);continue;}
+        $held[$lane]=$probe;
+        $progress=readProgress(bslLaneProgressFile($lane));$progressQid=trim((string)($progress['queue_id']??''));
+        foreach($queue['entries'] as &$row){
+            if(!is_array($row)||bslRowLane($row)!==$lane)continue;$st=(string)($row['status']??'');$qid=(string)($row['id']??'');
+            /* A worker may have written final progress and died before changing
+               a stale waiting label. Final progress is the durable commit. */
+            if(in_array($st,['running','waiting','paused'],true)&&$progressQid!==''&&$qid===$progressQid&&!empty($progress['done'])&&empty($progress['paused'])&&empty($progress['stopped'])){
+                $row['status']='done';foreach(['sent','updated','skipped','failed','current','finished_at','phase','phase_label','phase_current','phase_total','phase_pct','shop_stats'] as $k)if(array_key_exists($k,$progress))$row[$k]=$progress[$k];
+                $row['done_at']=(int)($progress['finished_at']??$now);$row['updated_at']=$now;
+                $repairs[$qid]=['kind'=>'done','row'=>$row];$out[$lane]++;$changed=true;continue;
+            }
+            $explicitStop=!empty($row['stopped_by_user'])||queueHasExplicitUserStop('bsl',$qid);
+            $recover=!$explicitStop&&($st==='running'||$st==='paused');
+            if(!$recover)continue;
+            $row['status']='waiting';$row['resume_requested_at']=$now;$row['updated_at']=$now;
+            unset($row['done_at'],$row['fail_reason'],$row['resume_exhausted']);
+            $repairs[$qid]=['kind'=>'waiting','row'=>$row];$out[$lane]++;$changed=true;
+        }unset($row);
+    }
+    if($changed){
+        /* Patch only repaired IDs into the newest disk snapshot. A busy worker
+           in the other lane may have advanced after our initial queue read. */
+        $ql=@fopen(BSL_QUEUE_MUTEX_FILE,'c');if($ql)@flock($ql,LOCK_EX);
+        try{
+            $disk=@json_decode((string)@file_get_contents(BSL_QUEUE_FILE),true);
+            if(!is_array($disk['entries']??null))$disk=$queue;
+            foreach($disk['entries'] as &$latest){
+                if(!is_array($latest))continue;$id=(string)($latest['id']??'');if(!isset($repairs[$id]))continue;
+                $repair=$repairs[$id];
+                if($repair['kind']==='waiting'){
+                    /* A Stop click racing this sweep wins over auto recovery. */
+                    if(!empty($latest['stopped_by_user'])||(string)($latest['paused_by']??'')==='user'||queueHasFreshUserStop('bsl',$id))continue;
+                    if(!in_array((string)($latest['status']??''),['running','paused'],true))continue;
+                }elseif((string)($latest['status']??'')==='done')continue;
+                $latest=$repair['row'];
+            }unset($latest);
+            sendQueueAtomicWrite(BSL_QUEUE_FILE,$disk);$queue=$disk;
+        }finally{if($ql){@flock($ql,LOCK_UN);@fclose($ql);}}
+    }
+    foreach($held as $probe){@flock($probe,LOCK_UN);@fclose($probe);}
+    $out['changed']=$changed;return $out;
+}
 /** Every cron arrival pumps both physical send lanes before the generic cron
  * mutex. This path is deliberately independent of watchdog/auto-resume flags. */
 function bslCronPumpProfileLanes(): array {
     if(!bslParallelProfileLanesEnabled())return ['enabled'=>false];
-    $queue=bslReadQueue();$now=time();$out=['enabled'=>true,'at'=>$now,'lanes'=>[]];
+    $gate=@fopen(__DIR__.'/.bsl-lane-dispatch.lock','c');
+    if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['enabled'=>true,'busy'=>true];}
+    $queue=bslReadQueue();$recovered=bslRecoverOrphanedLaneRows($queue);
+    $now=time();$out=['enabled'=>true,'at'=>$now,'recovered'=>$recovered,'lanes'=>[]];
     foreach(['fast','detail'] as $lane){
         $row=null;foreach((array)($queue['entries']??[]) as $candidate){
             if(!is_array($candidate)||bslRowLane($candidate)!==$lane||!in_array((string)($candidate['status']??''),['running','waiting'],true))continue;
-            $total=max(0,(int)($candidate['total']??0));$cur=max(0,(int)($candidate['current']??0));if($total>0&&$cur>=$total)continue;$row=$candidate;break;
+            /* current may already equal total while post-product phases (extra
+               shops/category/image repair) are incomplete. Status=done is the
+               only completion signal; such rows must remain recoverable. */
+            $row=$candidate;break;
         }
         if(!$row){$out['lanes'][$lane]=['queued'=>false];continue;}
         $qid=(string)($row['id']??'');$progress=readProgress(bslLaneProgressFile($lane));
@@ -79095,7 +79162,7 @@ function bslCronPumpProfileLanes(): array {
         if(!$ok)$ok=fireAndForget('action=bsl_backend&lane='.$lane,1800,$post);
         $out['lanes'][$lane]=array_merge((array)($out['lanes'][$lane]??[]),['queued'=>true,'queue_id'=>$qid,'idle'=>$idle,'dispatched'=>$ok,'worker_pid'=>(int)($GLOBALS['_queueDispatchPid']??0)]);
     }
-    return $out;
+    @flock($gate,LOCK_UN);@fclose($gate);return $out;
 }
 function bslKickParallelProfileLanes(?array $queue=null): array {
     if(!bslParallelProfileLanesEnabled())return [];
@@ -80628,7 +80695,7 @@ $d=['running'=>true,'sent'=>$__sW,'updated'=>$__uW,'skipped'=>$__skW,'failed'=>$
    'checkpoint'=>['queue_id'=>(string)($bslQueueId??''),'current'=>(int)$cWrite,'total'=>(int)$t,'sent'=>(int)$__sW,'updated'=>(int)$__uW,'skipped'=>(int)$__skW,'failed'=>(int)$__fW,'started_at'=>(int)$GLOBALS['startedAt']]];
 if($bslQueueId!='')$d['queue_id']=$bslQueueId;
 $__rate=bslAdaptiveStateRead();$d['adaptive_rate']=is_array($__rate['kinds']??null)?$__rate['kinds']:[];
-$d['memory_mb']=(int)ceil(memory_get_usage(true)/1048576);$d['memory_peak_mb']=(int)ceil(memory_get_peak_usage(true)/1048576);
+$d['code_version']=APP_VERSION;$d['memory_mb']=(int)ceil(memory_get_usage(true)/1048576);$d['memory_peak_mb']=(int)ceil(memory_get_peak_usage(true)/1048576);
 $d['photo_cache_hits']=(int)($GLOBALS['_bslPhotoCacheHits']??0);$d['photo_cache_uploads']=(int)($GLOBALS['_bslPhotoCacheMisses']??0);
 /* v10.23 (۳۶ه): شمارنده‌های هر غرفه در هر ضربانِ پیشرفت هم می‌روند تا صف
    بتواند «زنده» نشانشان بدهد، نه فقط در پایانِ کار. */
@@ -80777,6 +80844,11 @@ exit;
 }
 
 $bslQueueId=$nextEntry['id'];
+/* The lane flock is held by this process: make queue ownership authoritative
+   again even if a stale writer previously left this active row as waiting. */
+$queue['entries'][$nextIdx]['status']='running';
+if((int)($queue['entries'][$nextIdx]['started_at']??0)<=0)$queue['entries'][$nextIdx]['started_at']=time();
+$queue['entries'][$nextIdx]['updated_at']=time();$nextEntry=$queue['entries'][$nextIdx];bslWriteQueue($queue);
 $__runtimeProfileKey=trim((string)($nextEntry['profile_key']??''));
 $__runtimeProfile=bslLoadSingleProfileSnapshot($__runtimeProfileKey);
 if($_bslLane==='detail'){
@@ -82214,11 +82286,13 @@ remoteMapRecord('bsl',array_merge($bslSentList,$bslUpdatedList),(string)($nextEn
 /* v10.23 (۳۶ه): شمارنده‌های تفکیکیِ غرفه در پیشرفتِ نهایی و در خودِ ردیفِ صف
    می‌نشینند تا بعد از تمام‌شدنِ کار هم — با ریفرشِ صفحه — باقی بمانند. */
 $bslFinalShopStats=bslShopStatRows($sent,$updated,$skipped,$fail);
-$finalProgress=['running'=>false,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'last_title'=>'','current'=>$total,'done'=>true,'started_at'=>$startedAt,'finished_at'=>time(),'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'phase'=>'done','phase_label'=>'ارسال کامل شد','phase_current'=>$total,'phase_total'=>$total,'phase_pct'=>100,'batch_done_indices'=>[],'recent_log'=>$bslLog,'total_log_count'=>count($bslLog),'log'=>$finalLog,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList,'shop_stats'=>$bslFinalShopStats];
+$finalProgress=['running'=>false,'code_version'=>APP_VERSION,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'last_title'=>'','current'=>$total,'done'=>true,'started_at'=>$startedAt,'finished_at'=>time(),'last_progress_ts'=>time(),'queue_id'=>$bslQueueId,'phase'=>'done','phase_label'=>'ارسال کامل شد','phase_current'=>$total,'phase_total'=>$total,'phase_pct'=>100,'batch_done_indices'=>[],'recent_log'=>$bslLog,'total_log_count'=>count($bslLog),'log'=>$finalLog,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList,'shop_stats'=>$bslFinalShopStats];
 writeProgress($bslProgressFile,$finalProgress);
 
 $queue=bslReadQueue();foreach($queue['entries'] as &$qe){
-if($qe['id']===$bslQueueId&&$qe['status']==='running'){
+if($qe['id']===$bslQueueId&&in_array((string)($qe['status']??''),['running','waiting'],true)){
+/* Exact queue_id + held lane flock proves this worker owns completion. A stale
+   waiting label must not leave the finished profile permanently queued. */
 $qe['status']='done';$qe['sent']=$sent;$qe['updated']=$updated;$qe['skipped']=$skipped;$qe['failed']=$fail;$qe['current']=$total;$qe['done_at']=time();
 $qe['sent_details']=$bslSentList;$qe['updated_details']=$bslUpdatedList;$qe['skipped_details']=$bslSkippedList;$qe['failed_details']=$bslFailedList;
 $qe['shop_stats']=$bslFinalShopStats;$qe['batch_done_indices']=[];
@@ -83327,7 +83401,7 @@ $bslLog[]=$finalLog;
 if($fromFile)@unlink(BSL_PRODUCTS_FILE);
 
 remoteMapRecord('bsl',array_merge($bslSentList,$bslUpdatedList));
-$finalProgress=['running'=>false,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'last_title'=>'','current'=>$total,'done'=>true,'started_at'=>$startedAt,'finished_at'=>time(),'last_progress_ts'=>time(),'recent_log'=>$bslLog,'total_log_count'=>count($bslLog),'log'=>$finalLog,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList];
+$finalProgress=['running'=>false,'code_version'=>APP_VERSION,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail,'total'=>$total,'last_title'=>'','current'=>$total,'done'=>true,'started_at'=>$startedAt,'finished_at'=>time(),'last_progress_ts'=>time(),'recent_log'=>$bslLog,'total_log_count'=>count($bslLog),'log'=>$finalLog,'sent_details'=>$bslSentList,'updated_details'=>$bslUpdatedList,'skipped_details'=>$bslSkippedList,'failed_details'=>$bslFailedList];
 if($bslQueueId!=='')$finalProgress['queue_id']=$bslQueueId;
 writeProgress(BSL_PROGRESS_FILE,$finalProgress);
 
@@ -100317,6 +100391,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.584', t:'🚚 بازیابی و تخلیهٔ کامل صف هر دو لین', items:[
+    'هر کران، وقتی flock یک لین آزاد است، همهٔ ردیف‌های running یتیم و pause سیستمی آن لین را در یک sweep به waiting برمی‌گرداند؛ توقف صریح کاربر همچنان دست‌نخورده می‌ماند.',
+    'اگر progress نهایی done شده ولی نویسندهٔ کهنه ردیف را waiting جا گذاشته باشد، همان progress به‌عنوان commit پایدار روی صف اعمال می‌شود تا پروفایل دوباره از اول اجرا نشود.',
+    'worker پس از گرفتن flock، ردیف انتخابی را صریحاً running می‌کند و در پایان، برچسب waiting کهنه را نیز با queue_id دقیق done می‌بندد.',
+    'ردیفی که current آن به total رسیده ولی فازهای غرفهٔ اضافی، دسته یا تصویرش تمام نشده دیگر از پمپ کران حذف نمی‌شود؛ فقط status=done پایان واقعی است.',
+    'پس از هر ردیف، همان worker تا ۱۰ پروفایل بعدی را زنجیره‌ای می‌گیرد و اگر backlog باقی باشد worker بعدی را راه می‌اندازد؛ در نتیجه هر دو لین تا تخلیهٔ صف ادامه می‌دهند.'
+  ]},
   {v:'10.583', t:'⚖️ توزیع دقیق ارسال دوره‌ای بین لین ۲ و لین ۱', items:[
     'صف‌ساز همگام‌سازی دوره‌ای بار فعال هر دو لین را با تعداد پروفایل‌های یکتا می‌سنجد؛ در تساوی لین ۲ اولویت دارد و وقتی لین ۲ مالک یک پروفایل شد، پروفایل بعدی برای پرکردن worker بیکار به لین ۱ می‌رود.',
     'پروفایل دارای selector و حداقل یک جزئیات واقعی می‌تواند به لین ۲ برود؛ پروفایل فاقد جزئیات معتبر فقط به لین ۱ می‌رود تا معنای دو لین حفظ شود.',
