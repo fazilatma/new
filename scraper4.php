@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.586';
+const APP_VERSION = '10.587';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48443,6 +48443,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"if(\$__exactLiveOwner&&(\$e['status']??'')==='waiting')\$e['status']='running'")!==false
         &&strpos($selfSrc,"{v:'10." . "586'")!==false
         &&version_compare(APP_VERSION,'10.586','>='));
+    $add('10.587','لین ۱ در تعدیل قیمت غرفهٔ اضافی قفل نمی‌شود',
+        strpos($selfSrc,"'inflight_stage'=>'extra_shop_price_request'")!==false
+        &&strpos($selfSrc,"bslShopMapKey((string)(\$p['key']??''),\$__sh),false")!==false
+        &&strpos($selfSrc,"\$bslReactivateDenied[\$__reactivateDenyKey]")!==false
+        &&strpos($selfSrc,"'reactivate_suppressed'")!==false
+        &&strpos($selfSrc,"{v:'10." . "587'")!==false
+        &&version_compare(APP_VERSION,'10.587','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79628,7 +79635,7 @@ foreach($entriesFb as $e){
 }
 foreach($groups as &$g){$g['codes']=(object)$g['codes'];$g['steps']=(object)$g['steps'];}unset($g);
 $progressSummaryFb=[];
-if($progressFb){foreach(['queue_id','running','done','paused','stopped','partial','failed_resume','phase','phase_label','phase_current','phase_total','phase_pct','current','total','sent','updated','skipped','failed','started_at','last_progress_ts','finished_at','memory_mb','memory_peak_mb'] as $k){if(array_key_exists($k,$progressFb))$progressSummaryFb[$k]=$progressFb[$k];}}
+if($progressFb){foreach(['queue_id','running','done','paused','stopped','partial','failed_resume','phase','phase_label','phase_current','phase_total','phase_pct','phase_shop_vendor_id','phase_shop_name','inflight_stage','inflight_stage_label','current','total','sent','updated','skipped','failed','started_at','last_progress_ts','finished_at','memory_mb','memory_peak_mb'] as $k){if(array_key_exists($k,$progressFb))$progressSummaryFb[$k]=$progressFb[$k];}}
 $lastBeatAgeFb=$beatFb>0?max(0,$nowFb-$beatFb):null;
 $handoffAllFb=json_decode((string)@file_get_contents(QUEUE_CRON_HANDOFF_FILE),true);
 $handoffRawFb=is_array($handoffAllFb['bsl']??null)?$handoffAllFb['bsl']:[];
@@ -81191,6 +81198,10 @@ bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['📊 جدول مغای�
 
 bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['🚀 شروع ارسال — آخرین جدول موجود استفاده می‌شود؛ اگر خالی باشد کل صف ارسال/به‌روزرسانی می‌شود']);
 $pd=$verifyProducts;$total=count($pd);$sent=0;$updated=0;$skipped=0;$fail=0;
+/* A decisive authorization denial for one vendor/status combination applies to
+   the rest of this run. Do not upload images and repeat hundreds of identical
+   reactivation PATCH requests after Basalam has already rejected the action. */
+$bslReactivateDenied=[];
 /* phase_current is a completed-item count. Resume after it for product phases;
    later phases skip the already-finished primary-shop sweep entirely. */
 if(in_array($bslResumePhase,['send','scope_shop','parallel_shops'],true)&&array_key_exists('phase_current',$bslResumeSnapshot))
@@ -81439,6 +81450,15 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 continue;
 }
 $statusLabel=$exStatusVal===3790?'غیرفعال':($exStatusVal===4184?'بایگانی':($exStatusVal===3567?'تأیید نشده':'در انتظار'));
+$__reactivateDenyKey=$vid.':'.$exStatusVal;
+if(isset($bslReactivateDenied[$__reactivateDenyKey])){
+    $fail++;bslShopStatBumpDefault('f');
+    $bslFailedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>(int)$exId,'status_value'=>$exStatusVal,
+        'error'=>'بازفعال‌سازی پس از پاسخ قطعی ۴۰۳ قبلی همین غرفه/وضعیت اجرا نشد: '.$bslReactivateDenied[$__reactivateDenyKey],
+        'error_code'=>403,'error_step'=>'reactivate_suppressed','reason_kind'=>'auth','endpoint'=>'products/'.$exId],$card);
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ بازفعال‌سازی‌های ۴۰۳ تکراری این غرفه بدون درخواست اضافه رد شد");
+    continue;
+}
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] 🔄 بازفعال‌سازی از {$statusLabel} (status=$exStatusVal) → ID#$exId");
 $bu=['primary_price'=>$pn,'stock'=>$newStock,'status'=>2976,'preparation_days'=>max(1,(int)($cn['basalam']['preparation_days']??3)),'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??((int)($cn['basalam']['weight']??500)+100))];
 bslApplyContent($bu,$p);
@@ -81450,6 +81470,7 @@ $reactImgNote=$imgU?($needsReactImg?'آپلود تصویر لازم بود':'ت�
 if($needsReactImg){$umU2=bslUploadMany($tk,$imgU,(int)($cn['basalam']['max_photos']??10));if(!empty($umU2['ok'])){$pid=$umU2['main'];$galU=$umU2['ids'];$reactImgNote=$umU2['note']??'تصویر آپلود شد';}else{$reactImgNote='آپلود تصویر ناموفق؛ ادامه بدون تغییر تصویر';}}
 if($pid){$bu['photo']=$pid;$bu['photos']=(!empty($galU)?$galU:[$pid]);}
 $r=bslReq($tk,'PATCH','products/'.$exId,$bu);if($r['code']===404)$r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,$bu);
+if(in_array((int)($r['code']??0),[401,403],true))$bslReactivateDenied[$__reactivateDenyKey]=bslErrText($r);
 if($r['ok']&&!empty($r['body']['id'])){
 bslShopMapRecord($p,['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName],(int)$exId,$pTitle,(int)$pn,(int)$newStock);
 $updated++;bslShopStatBumpDefault('u');$bslUpdatedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,
@@ -81783,6 +81804,17 @@ $__skipExtraPrice=$bslResumePhase==='extra_shop_price_done';
 $__resumeVid=$bslResumePhaseShopVid;
 $__priceVids=array_map(static fn($x)=>(int)($x['vendor_id']??0),$__liveShops);
 $__priceReached=!$__resumePrice||$__resumeVid<=0||!in_array($__resumeVid,$__priceVids,true);
+/* Targeted lookup can still spend time in network retries. Keep the exact
+   post-product checkpoint alive while those requests are in flight so cron
+   does not kill and replay the same extra-shop product. */
+$__extraPriceTitle='';$__previousLongHeartbeat=$GLOBALS['_bslLongOperationHeartbeat']??null;
+$GLOBALS['_bslLongOperationHeartbeatAt']=0;$GLOBALS['_bslLongOperationHeartbeatStage']='';
+$GLOBALS['_bslLongOperationHeartbeat']=function(string $__stage='')use(&$sent,&$updated,&$skipped,&$fail,$total,&$__extraPriceTitle){
+    $__phase=is_array($GLOBALS['_bslPhaseState']??null)?$GLOBALS['_bslPhaseState']:[];
+    if(($__phase['phase']??'')!=='extra_shop_price')return;
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,mb_substr($__extraPriceTitle,0,40),null,$__phase+[
+        'inflight_stage'=>'extra_shop_price_request','inflight_stage_label'=>'درخواست تعدیل قیمت غرفهٔ اضافی']);
+};
 foreach($__liveShops as $__sh){
     if($__skipExtraPrice||$__sendAllShops||$__isFanoutRow)break;
     $sTk=(string)$__sh['token'];$sVid=(int)$__sh['vendor_id'];
@@ -81804,7 +81836,7 @@ foreach($__liveShops as $__sh){
             ['phase'=>'extra_shop_price','phase_label'=>'تعدیل قیمت غرفه‌های اضافی','phase_current'=>$__i,
              'phase_total'=>$total,'phase_pct'=>(int)floor($__i*100/max(1,$total)),
              'phase_shop_vendor_id'=>$sVid,'phase_shop_name'=>$sShopName]);
-        $__pt=trim((string)($p['title']??$p['name']??''));if($__pt==='')continue;
+        $__pt=trim((string)($p['title']??$p['name']??''));if($__pt==='')continue;$__extraPriceTitle=$__pt;
         $__rawP=extractSourcePrice($p);
         if($__rawP!==''&&extractPriceNum($__rawP)>0&&$__profile2){
             $__pf=bslShopPriceForProfile($__profile2,$__rawP,$__sh,$shopRound);
@@ -81814,7 +81846,9 @@ foreach($__liveShops as $__sh){
             $__pf=bslShopPriceFor($__baseP,$__sh,$shopRound);
         }
         if((int)($__pf['price']??0)<=0)continue;
-        $__found=bslFindExisting($sTk,$sVid,$__pt,bslShopMapKey((string)($p['key']??''),$__sh));
+        /* Price adjustment needs one known-ID/matrix/targeted-title lookup only;
+           a 20-page catalog scan per product can freeze the lane for minutes. */
+        $__found=bslFindExisting($sTk,$sVid,$__pt,bslShopMapKey((string)($p['key']??''),$__sh),false);
         if(!$__found||(int)($__found['id']??0)<=0)continue;
         $__exId=(int)$__found['id'];$__np=(int)$__pf['price'];
         if(($p['price_unit']??'')!=='rial')$__np=$__np*10;
@@ -81851,6 +81885,9 @@ foreach($__liveShops as $__sh){
         "🏪 غرفهٔ $sVid: قیمت $__shopFixed محصول با تعدیلِ خودِ آن غرفه (و لایهٔ پروفایل) به‌روز شد");
     if($__priceStop)break;
 }
+if($__previousLongHeartbeat!==null)$GLOBALS['_bslLongOperationHeartbeat']=$__previousLongHeartbeat;
+else unset($GLOBALS['_bslLongOperationHeartbeat']);
+unset($__previousLongHeartbeat,$__extraPriceTitle);
 if(!$__sendAllShops&&!$__isFanoutRow&&!bslStopRequestedForQueue())
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'','🏁 پایانِ تعدیل قیمت غرفه‌های اضافی',
         ['phase'=>'extra_shop_price_done','phase_label'=>'تعدیل قیمت غرفه‌های اضافی تمام شد',
@@ -100422,6 +100459,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.587', t:'🔧 رفع توقف لین ۱ در فاز قیمت غرفه‌های اضافی', items:[
+    'جست‌وجوی هر محصول در فاز extra_shop_price دیگر به پیمایش عمیق تا ۲۰ صفحهٔ کاتالوگ وارد نمی‌شود و فقط شناسهٔ شناخته‌شده، ماتریس یا جست‌وجوی هدفمند عنوان را به‌کار می‌برد.',
+    'درخواست‌های شبکهٔ همین فاز heartbeat دقیقِ فروشگاه و محصول جاری را حفظ می‌کنند تا watchdog یک درخواست کند را با worker مرده اشتباه نگیرد و checkpoint را تکرار نکند.',
+    'پس از اولین پاسخ قطعی ۴۰۱/۴۰۳ برای بازفعال‌سازی یک وضعیت در همان غرفه، صدها آپلود تصویر و PATCH یکسان دیگر اجرا نمی‌شود؛ هر محصول با خطای روشن ثبت و صف سریع ادامه می‌یابد.',
+    'فیدبک لین اکنون vendor و نام غرفهٔ فاز جاری و مرحلهٔ درخواست درحال‌اجرا را نیز نشان می‌دهد.'
+  ]},
   {v:'10.586', t:'🟢 مالک زندهٔ لین فوراً running می‌شود', items:[
     'نمای وضعیت، queue_id دقیق progress زنده را همراه flock فیزیکی همان لین مالک قطعی می‌داند و برچسب waiting کهنه را همان لحظه به running اصلاح و ذخیره می‌کند.',
     'این اصلاح worker قدیمیِ در حال اجرا را هم بدون توقف یا شروع دوباره پوشش می‌دهد و checkpoint آن دست‌نخورده می‌ماند.'
