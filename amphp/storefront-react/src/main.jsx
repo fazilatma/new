@@ -41,6 +41,26 @@ function StarRow({ rating, size = 'sm' }) {
   return <span className={`sf-stars sf-stars-${size}`} title={`${toFa(rating)} از ۵`}>{items}</span>;
 }
 
+// Keep the stored category intact; remove the supplier name only in the storefront.
+function displayCategory(value) {
+  const name = String(value || '').replace(/مانتو[\s\u200c]*پاتریس(?![\u0621-\u064a\u0671-\u06d3])/g, '');
+  return name
+    .replace(/\s*([|/،,>»«:–—-])\s*(?:[|/،,>»«:–—-]\s*)+/g, ' $1 ')
+    .replace(/^[\s|/،,>»«:–—-]+|[\s|/،,>»«:–—-]+$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim() || 'عمومی';
+}
+
+function MobileNavIcon({ name }) {
+  const paths = {
+    home: <><path d="m3.5 10 8.5-7 8.5 7" /><path d="M5.5 9v10.5a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V9" /><path d="M9.5 20.5v-6h5v6" /></>,
+    menu: <><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.8" /><rect x="14" y="3.5" width="6.5" height="6.5" rx="1.8" /><rect x="3.5" y="14" width="6.5" height="6.5" rx="1.8" /><rect x="14" y="14" width="6.5" height="6.5" rx="1.8" /></>,
+    cart: <><path d="M3.5 4.5h2l1.8 9.2a2 2 0 0 0 2 1.6h8.5a2 2 0 0 0 2-1.6L21 8H6.2" /><circle cx="9.5" cy="19" r="1" /><circle cx="18" cy="19" r="1" /></>,
+    account: <><circle cx="12" cy="8" r="3.5" /><path d="M5 20a7 7 0 0 1 14 0" /></>,
+  };
+  return <svg className="sf-mob-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
+}
+
 const CAT_ICONS = {
   'عمومی': '📦', 'گجت': '📱', 'صوتی': '🎧', 'مد': '👕', 'خانگی': '🏠',
   'دیجیتال': '💻', 'زیبایی': '💄', 'ورزشی': '⚽', 'کتاب': '📚', 'خودرو': '🚗',
@@ -1042,7 +1062,7 @@ function ProductPage({ product, currency, ajax, onClose, onAdd, onAsk, onCheckou
         const data = await res.json().catch(() => ({}));
         const det = data?.data?.product || data?.product;
         if (!cancelled && data?.success && det && typeof det === 'object') {
-          setFull((prev) => ({ ...prev, ...det }));
+          setFull((prev) => ({ ...prev, ...det, category: displayCategory(det.category || prev?.category) }));
           if (det.ai_filled || (det.description || det.short_desc || '').trim()) {
             setAiFilling(false);
           } else if (det.ai_pending) {
@@ -2255,7 +2275,9 @@ function SupportChat({ settings, ajax, productCtx, onClearProduct, openSignal })
 function StoreApp({ boot }) {
   const settings = boot.settings || {};
   const meta = boot.meta || {};
-  const [products, setProducts] = useState(() => Array.isArray(boot.products) ? boot.products : []);
+  const [products, setProducts] = useState(() => Array.isArray(boot.products)
+    ? boot.products.map((product) => ({ ...product, category: displayCategory(product.category) }))
+    : []);
   /* v13.3.1: total_count = کل کاتالوگ (هم‌تراز پروفایل‌های اسکریپر) */
   const catalogTotal = Math.max(
     Number(meta.total_count) || 0,
@@ -3196,17 +3218,17 @@ function StoreApp({ boot }) {
 
       <nav className="sf-mob-bar" aria-label="منوی موبایل">
         <button type="button" className="sf-mob-item active" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-          <span>🏠</span><span>خانه</span>
+          <span className="sf-mob-icon-wrap"><MobileNavIcon name="home" /></span><span>خانه</span>
         </button>
         <button type="button" className="sf-mob-item sf-mob-menu" onClick={() => setMenuOpen(true)}>
-          <span className="sf-burger-ico sm" aria-hidden><i /><i /><i /></span><span>منو</span>
+          <span className="sf-mob-icon-wrap"><MobileNavIcon name="menu" /></span><span>منو</span>
         </button>
         <button type="button" className="sf-mob-item" onClick={() => setCartOpen(true)}>
-          <span>🛒</span><span>سبد</span>
+          <span className="sf-mob-icon-wrap"><MobileNavIcon name="cart" /></span><span>سبد</span>
           {cartCount > 0 ? <span className="sf-badge">{toFa(cartCount)}</span> : null}
         </button>
         <a className="sf-mob-item" href={boot.urls?.account || '#'}>
-          <span>👤</span><span>حساب</span>
+          <span className="sf-mob-icon-wrap"><MobileNavIcon name="account" /></span><span>حساب</span>
         </a>
       </nav>
 
