@@ -404,7 +404,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.593';
+const APP_VERSION = '10.594';
 
 
 if (!function_exists('str_starts_with')) {
@@ -14152,17 +14152,24 @@ function bslIsVariantUpdateMethodError(array $r): bool {
 }
 function bslRemoteVariantRows(array $row): array {
     $candidates=[
-        $row['variants']??null,$row['product_variants']??null,$row['variations']??null,
-        $row['revision']['data']['variants']??null,$row['data']['variants']??null,
+        $row['variants']??null,$row['product_variants']??null,$row['vendor_product_variants']??null,$row['variations']??null,
+        $row['revision']['data']['variants']??null,$row['data']['variants']??null,$row['data']['product_variants']??null,
     ];
-    foreach($candidates as $rows){
-        if(!is_array($rows)||!$rows)continue;$out=[];
-        foreach($rows as $vr){
-            if(!is_array($vr))continue;$id=(int)($vr['id']??$vr['variant_id']??$vr['vendor_product_variant_id']??0);
+    /* Basalam alternates between variants:[...] and variants:{data:[...]}.
+       Flatten only known variant containers; never recursively scan the whole
+       product row where photo/category IDs could be mistaken for variant IDs. */
+    $flatten=static function($rows)use(&$flatten):array{
+        if(!is_array($rows)||!$rows)return [];
+        foreach(['data','items','results','variants','product_variants','vendor_product_variants']as$k)
+            if(isset($rows[$k])&&is_array($rows[$k]))return $flatten($rows[$k]);
+        $out=[];foreach($rows as$vr){
+            if(!is_array($vr))continue;
+            $id=(int)($vr['id']??$vr['variant_id']??$vr['vendor_product_variant_id']??0);
             if($id>0)$out[]=['id'=>$id];
         }
-        if($out)return $out;
-    }
+        return $out;
+    };
+    foreach($candidates as $rows){$out=$flatten($rows);if($out)return $out;}
     return [];
 }
 /** v10.534: Basalam requires destination variant IDs for price/stock updates. */
@@ -14170,14 +14177,15 @@ function bslRepairExistingVariantUpdate(string $tk,int $vid,int $pid,array $base
     $row=bslGetProductRow($tk,$vid,$pid,2);
     $remote=is_array($row)?bslRemoteVariantRows($row):[];
     if(!$remote)return ['ok'=>false,'code'=>422,'error'=>'destination_variant_ids_not_found'];
+    $hasPrice=array_key_exists('primary_price',$basePayload);$hasStock=array_key_exists('stock',$basePayload);
     $fallbackPrice=max(10000,(int)($basePayload['primary_price']??0));
     $fallbackStock=max(0,(int)($basePayload['stock']??0));
     $variants=[];
     foreach($remote as $i=>$rv){
-        $src=is_array($sourceVariants[$i]??null)?$sourceVariants[$i]:[];
-        $variants[]=['id'=>(int)$rv['id'],
-            'primary_price'=>max(10000,(int)($src['primary_price']??$fallbackPrice)),
-            'stock'=>max(0,(int)($src['stock']??$fallbackStock))];
+        $src=is_array($sourceVariants[$i]??null)?$sourceVariants[$i]:[];$one=['id'=>(int)$rv['id']];
+        if($hasPrice||array_key_exists('primary_price',$src))$one['primary_price']=max(10000,(int)($src['primary_price']??$fallbackPrice));
+        if($hasStock||array_key_exists('stock',$src))$one['stock']=max(0,(int)($src['stock']??$fallbackStock));
+        $variants[]=$one;
     }
     $batch=$basePayload;unset($batch['variants']);$batch['id']=$pid;$batch['variants']=$variants;
     $r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batch]]);
@@ -48518,6 +48526,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'class="ssd-tooltip"')!==false
         &&strpos($selfSrc,"{v:'10." . "593'")!==false
         &&version_compare(APP_VERSION,'10.593','>='));
+    $add('10.594','خطاهای قابل رفع هر دو لین ترمیم و شمارنده‌ها آشتی داده می‌شوند',
+        strpos($selfSrc,'moderation_pending')!==false
+        &&strpos($selfSrc,'$__moderationReclassified')!==false
+        &&strpos($selfSrc,"'phase'=>'failed_retry'")!==false
+        &&strpos($selfSrc,'remote_identity_guard_failed')!==false
+        &&strpos($selfSrc,"\$row['vendor_product_variants']")!==false
+        &&strpos($selfSrc,'bslRepairExistingVariantUpdate($sTk,$sVid,$__exId,$__pricePayload,[])')!==false
+        &&((bslRemoteVariantRows(['variants'=>['data'=>[['id'=>91]]]])[0]['id']??0)===91)
+        &&bslIsVariantUpdateMethodError(['code'=>422,'body'=>['message'=>'قادر به تغییر قیمت یا موجودی محصول دارای تنوع به صورت مستقیم نمی باشید']])
+        &&strpos($selfSrc,"{v:'10." . "594'")!==false
+        &&version_compare(APP_VERSION,'10.594','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79692,7 +79711,9 @@ $solution=function(int $code,string $kind,string $detail):array{
         return ['key'=>'preparation_days_validation','title'=>'مدت زمان آماده‌سازی خارج از سقف دسته‌بندی','solution'=>'هر بار ۱ روز از preparation_days کم می‌شود و درخواست خودکار تکرار می‌گردد تا تایید شود','auto_repair'=>true];
     if($code===422&&(stripos($detail,'detected')!==false||preg_match('~پیج|کانال|تلگرام|اینستا|غیرمجاز~u',$detail)))
         return ['key'=>'forbidden_content','title'=>'محتوای تبلیغاتی/راه ارتباطی ممنوع','solution'=>'قطعهٔ detected از description/brief حذف و درخواست یک بار خودکار تکرار می‌شود','auto_repair'=>true];
-    if($code===422&&preg_match('~category|دسته~iu',$detail))return ['key'=>'category_validation','title'=>'دسته‌بندی نامعتبر','solution'=>'دستهٔ برگ و سپس دسته‌های جایگزین امتحان شود','auto_repair'=>false];
+    if($code===422&&preg_match('~محصول(?:ات)? دارای تنوع|variant|variants~iu',$detail))
+        return ['key'=>'variant_update','title'=>'روش آپدیت محصول تنوع‌دار','solution'=>'شناسه‌های تنوع مقصد خوانده و قیمت/موجودی با batch-updates خودکار ترمیم می‌شود','auto_repair'=>true];
+    if($code===422&&preg_match('~category|دسته~iu',$detail))return ['key'=>'category_validation','title'=>'دسته‌بندی نامعتبر','solution'=>'دستهٔ برگ و سپس دسته‌های جایگزین امتحان و در فاز ترمیم تکرار می‌شود','auto_repair'=>true];
     if(in_array($code,[401,403],true))return ['key'=>'auth','title'=>'توکن یا دسترسی غرفه','solution'=>'توکن و vendor_id همان غرفه بازبینی شود','auto_repair'=>false];
     if($code===404)return ['key'=>'stale_product_id','title'=>'شناسهٔ محصول قدیمی/ناموجود','solution'=>'نگاشت محلی حذف و محصول در همان غرفه دوباره جست‌وجو شود','auto_repair'=>false];
     if($code===429)return ['key'=>'rate_limit','title'=>'محدودیت نرخ','solution'=>'ارسال با backoff و همزمانی کمتر ادامه یابد','auto_repair'=>false];
@@ -81299,7 +81320,7 @@ $bslReactivateDenied=[];
    later phases skip the already-finished primary-shop sweep entirely. */
 if(in_array($bslResumePhase,['send','scope_shop','parallel_shops'],true)&&array_key_exists('phase_current',$bslResumeSnapshot))
     $bslResumeStart=max($bslResumeStart,min($total+1,max(1,$bslResumePhaseCurrent+1)));
-elseif(in_array($bslResumePhase,['multi_shop','multi_shop_done','extra_shop_price','extra_shop_price_done','scope_shop_done','parallel_shops_done','category_retry','category_retry_done','image_retry','image_retry_done'],true))
+elseif(in_array($bslResumePhase,['multi_shop','multi_shop_done','extra_shop_price','extra_shop_price_done','scope_shop_done','parallel_shops_done','category_retry','category_retry_done','image_retry','image_retry_done','failed_retry','failed_retry_done'],true))
     $bslResumeStart=$total+1;
 /* v10.56 (۷۰): ادامه — شمارنده‌ها را از فایلِ پیشرفتِ قبلی برمی‌گردانیم
    (فایلِ محصولاتِ هر ردیفِ صف ثابت است، پس شمارشِ اجرأ قبلی معتبر است).
@@ -81338,6 +81359,24 @@ break;
 }
 }catch(Exception $__exD){}
 }
+/* v10.594 migration: older runs counted Basalam moderation states 3567/3568
+   as failed token reactivations. Reclassify those durable cards once on resume
+   so the visible counter and its product list describe real send failures. */
+$__moderationReclassified=0;$__keptFailures=[];
+foreach((array)$bslFailedList as $__oldFailure){
+    $__oldStep=(string)($__oldFailure['error_step']??'');$__oldStatus=(int)($__oldFailure['status_value']??0);
+    if(in_array($__oldStatus,[3567,3568],true)&&in_array($__oldStep,['reactivate','reactivate_suppressed'],true)){
+        $__moderationReclassified++;
+        $bslSkippedList[]=array_merge($__oldFailure,['reason'=>'وضعیت بررسی/تأیید باسلام؛ بازفعال‌سازی مستقیم مجاز نیست','reason_kind'=>'moderation_pending']);
+        continue;
+    }
+    $__keptFailures[]=$__oldFailure;
+}
+if($__moderationReclassified>0){
+    $bslFailedList=$__keptFailures;$fail=max(0,$fail-$__moderationReclassified);$skipped+=$__moderationReclassified;
+    $GLOBALS['_bslResumeCounters']=['sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$fail];
+}
+unset($__keptFailures,$__oldFailure);
 if($bslResumeStart>0){
     $__resumePulseExtra=[];
     if($bslResumePhase!==''){
@@ -81543,6 +81582,18 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 continue;
 }
 $statusLabel=$exStatusVal===3790?'غیرفعال':($exStatusVal===4184?'بایگانی':($exStatusVal===3567?'تأیید نشده':'در انتظار'));
+/* 3567/3568 are moderation states, not seller-controlled inactive states.
+   PATCH status=active is forbidden by Basalam and must not be reported as an
+   auth/token failure hundreds of times. Keep the product visible as skipped
+   for review/category correction without losing its identity. */
+if(in_array($exStatusVal,[3567,3568],true)){
+    $skipped++;bslShopStatBumpDefault('s');
+    $bslSkippedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>(int)$exId,
+        'reason'=>'محصول در وضعیت '.$statusLabel.' باسلام است؛ بازفعال‌سازی مستقیم مجاز نیست و باید نتیجهٔ بررسی/دسته‌بندی اصلاح شود',
+        'reason_kind'=>'moderation_pending','status_value'=>$exStatusVal],$card);
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⏭ وضعیت بررسی باسلام ({$exStatusVal}) — خطای ارسال محسوب نشد");
+    continue;
+}
 $__reactivateDenyKey=$vid.':'.$exStatusVal;
 if(isset($bslReactivateDenied[$__reactivateDenyKey])){
     $fail++;bslShopStatBumpDefault('f');
@@ -81562,7 +81613,13 @@ $needsReactImg=($imgU&&array_key_exists('images_count',$reactRemote)&&(int)$reac
 $reactImgNote=$imgU?($needsReactImg?'آپلود تصویر لازم بود':'تصویر/گالری قبلی مقصد حفظ شد'):'محصول مبدأ تصویر نداشت';
 if($needsReactImg){$umU2=bslUploadMany($tk,$imgU,(int)($cn['basalam']['max_photos']??10));if(!empty($umU2['ok'])){$pid=$umU2['main'];$galU=$umU2['ids'];$reactImgNote=$umU2['note']??'تصویر آپلود شد';}else{$reactImgNote='آپلود تصویر ناموفق؛ ادامه بدون تغییر تصویر';}}
 if($pid){$bu['photo']=$pid;$bu['photos']=(!empty($galU)?$galU:[$pid]);}
-$r=bslReq($tk,'PATCH','products/'.$exId,$bu);if($r['code']===404)$r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,$bu);
+$__reactVars=bslBuildVariantsPayload($p,$pn,$newStock);
+$r=bslReq($tk,'PATCH','products/'.$exId,$bu);
+if(in_array((int)($r['code']??0),[401,403,404,422],true)){
+    $__rVendor=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,$bu);
+    if(!empty($__rVendor['ok'])||(int)($__rVendor['code']??0)!==404)$r=$__rVendor;
+}
+if(empty($r['ok'])&&bslIsVariantUpdateMethodError($r))$r=bslRepairExistingVariantUpdate($tk,$vid,(int)$exId,$bu,$__reactVars);
 if(in_array((int)($r['code']??0),[401,403],true))$bslReactivateDenied[$__reactivateDenyKey]=bslErrText($r);
 if($r['ok']&&!empty($r['body']['id'])){
 bslShopMapRecord($p,['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName],(int)$exId,$pTitle,(int)$pn,(int)$newStock);
@@ -81945,10 +82002,17 @@ foreach($__liveShops as $__sh){
         if(!$__found||(int)($__found['id']??0)<=0)continue;
         $__exId=(int)$__found['id'];$__np=(int)$__pf['price'];
         if(($p['price_unit']??'')!=='rial')$__np=$__np*10;
-        $__endpoint='products/'.$__exId;
-        $__ru=bslReq($sTk,'PATCH',$__endpoint,['primary_price'=>$__np]);
-        if($__ru['code']===404){$__endpoint='vendors/'.$sVid.'/products/'.$__exId;$__ru=bslReq($sTk,'PATCH',$__endpoint,['primary_price'=>$__np]);}
-        if($__ru['ok']&&!empty($__ru['body']['id'])){
+        $__endpoint='products/'.$__exId;$__pricePayload=['primary_price'=>$__np];
+        $__ru=bslReq($sTk,'PATCH',$__endpoint,$__pricePayload);
+        if(in_array((int)($__ru['code']??0),[401,403,404,422],true)){
+            $__endpoint='vendors/'.$sVid.'/products/'.$__exId;$__ru2=bslReq($sTk,'PATCH',$__endpoint,$__pricePayload);
+            if(!empty($__ru2['ok'])||(int)($__ru2['code']??0)!==404)$__ru=$__ru2;
+        }
+        if(empty($__ru['ok'])&&bslIsVariantUpdateMethodError($__ru)){
+            $__ru=bslRepairExistingVariantUpdate($sTk,$sVid,$__exId,$__pricePayload,[]);
+            $__endpoint='vendors/'.$sVid.'/products/batch-updates';
+        }
+        if($__ru['ok']&&(!empty($__ru['body']['id'])||!empty($__ru['variant_ids_repaired']))){
             $__shopFixed++;$updated++;bslShopStatBump($sVid,$sShopName,'u');
             $__title=trim((string)($p['title']??$p['name']??''));
             $bslUpdatedList[]=array_merge(['title'=>$__title,'key'=>$p['key']??'','remote_id'=>$__exId,
@@ -82440,7 +82504,98 @@ elseif(!$__skipImageRetry)bslBackendProgress($sent,$updated,$skipped,$fail,$tota
      'phase_total'=>count($imgFailedEntries),'phase_pct'=>(int)floor(($__imgDone??0)*100/max(1,count($imgFailedEntries))),
      'phase_shop_vendor_id'=>$vid]);
 
-$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped بدون تغییر, $fail خطا | Phase3: $imgRetryFixed تصویر اصلاح";
+/* Parallel lanes may finish a product window after transient Basalam failures,
+   and older code recorded variant-method failures without retrying the batch
+   endpoint. Retry only safe, identifiable cards once at the end. A successful
+   retry removes the matching durable cards and decrements the same counter the
+   UI opens; unresolved cards remain visible with retry_error. */
+$__failedRetryFixed=0;$__failedRetryTried=0;$__retryCandidates=[];
+if($__isParallelShopsRow&&!in_array($bslResumePhase,['failed_retry_done'],true)){
+    foreach((array)$bslFailedList as $__rf){
+        if(!is_array($__rf)||(int)($__rf['vendor_id']??0)<=0)continue;
+        $__rc=(int)($__rf['error_code']??0);$__rd=(string)($__rf['error_detail']??$__rf['error']??'');
+        $__safe=in_array($__rc,[429,500,504],true)||($__rc===422&&(bslIsVariantUpdateMethodError(['code'=>422,'body'=>['message'=>$__rd]])||preg_match('~category|دسته~iu',$__rd)));
+        if(!$__safe)continue;
+        $__sig=(int)$__rf['vendor_id'].'|'.(string)($__rf['key']??'').'|'.bslNormalizeTitle((string)($__rf['title']??''));
+        if(!isset($__retryCandidates[$__sig]))$__retryCandidates[$__sig]=$__rf;
+        if(count($__retryCandidates)>=200)break;
+    }
+}
+$__retryCandidates=array_values($__retryCandidates);$__retryTotal=count($__retryCandidates);$__allRetryShops=[];
+foreach(bslAllShops($cn)as$__rs){$__rv=(int)($__rs['vendor_id']??0);if($__rv>0)$__allRetryShops[$__rv]=$__rs;}
+foreach($__retryCandidates as $__ri=>$__rf){
+    clearstatcache(true,BSL_STOP_FILE);if(bslStopRequestedForQueue())break;
+    $__failedRetryTried++;$__rVid=(int)$__rf['vendor_id'];$__rShop=$__allRetryShops[$__rVid]??null;
+    $__rKey=(string)($__rf['key']??'');$__rTitle=(string)($__rf['title']??'');$__rProduct=null;
+    foreach($pd as $__rp){
+        $__pk=(string)($__rp['key']??'');$__pt=trim((string)($__rp['title']??$__rp['name']??''));
+        if(($__rKey!==''&&$__pk===$__rKey)||($__rKey===''&&bslTitlesAreSameProduct($__pt,$__rTitle))){$__rProduct=$__rp;break;}
+    }
+    $__retryResult=['ok'=>false,'error'=>'source_product_or_shop_not_found'];
+    if(is_array($__rShop)&&is_array($__rProduct)){
+        $__pid=0;if(preg_match('~products/(\d+)~',(string)($__rf['endpoint']??''),$__pm))$__pid=(int)$__pm[1];
+        if($__pid<=0&&preg_match('~(?:شناسه[: ]+|آپدیت\s*#)(\d+)~u',(string)($__rf['error']??'').' '.(string)($__rf['error_detail']??''),$__pm))$__pid=(int)$__pm[1];
+        $__remote=$__pid>0?bslGetProductRow((string)$__rShop['token'],$__rVid,$__pid,1):null;
+        $__remoteTitle=is_array($__remote)?trim((string)($__remote['title']??$__remote['name']??$__remote['revision']['data']['title']??'')):'';
+        if($__pid>0&&(!is_array($__remote)||$__remoteTitle===''||!bslTitlesAreSameProduct($__remoteTitle,trim((string)($__rProduct['title']??$__rProduct['name']??''))))){
+            $__retryResult=['ok'=>false,'error'=>'remote_identity_guard_failed'];
+        }else{
+            $__rCat=(int)($__rProduct['bsl_category_id']??$__rProduct['category_id']??0);
+            if($__rCat<=0&&$bslFlatCats)$__rCat=autoMatchBslCategoryForce(trim((string)($__rProduct['title']??'')),$bslFlatCats);
+            if($__rCat>0&&$cData)$__rCat=findLeafCategory($__rCat,$cData);
+            /* A duplicate product can carry an old parent category that makes
+               every ordinary PATCH fail validation. Repair that leaf first. */
+            if($__pid>0&&preg_match('~category|دسته~iu',(string)($__rf['error_detail']??''))&&$__rCat>0){
+                $__catRepair=bslPatchProduct((string)$__rShop['token'],$__rVid,$__pid,['category_id'=>$__rCat]);
+                if(empty($__catRepair['ok']))$__retryResult=$__catRepair;
+            }
+            if(($__retryResult['error']??'')!=='remote_identity_guard_failed'){
+                $__rOpts=['profile'=>$__parProf,'profile_key'=>$__parProfKey,'basalam_cfg'=>($cn['basalam']??[]),
+                    'stock'=>(int)($cn['basalam']['stock']??10),'preparation_days'=>(int)($cn['basalam']['preparation_days']??3),
+                    'weight'=>(int)($cn['basalam']['weight']??500),'package_weight'=>(int)($cn['basalam']['package_weight']??600),
+                    'category_id'=>$__rCat,'auto_category'=>$autoCat,'fallback_cat_ids'=>$bslFallbackCats,
+                    'flat_cats'=>$bslFlatCats,'cdata'=>($cData??[]),'find_deep_scan'=>false,'force_all'=>true];
+                if(is_array($__remote))$__rOpts['existing_override']=$__remote;
+                $__retryResult=bslUpsertToShop($__rProduct,$__rShop,$__rOpts);
+            }
+        }
+    }
+    if(!empty($__retryResult['ok'])){
+        $__before=count($bslFailedList);$bslFailedList=array_values(array_filter($bslFailedList,static function($x)use($__rVid,$__rKey,$__rTitle){
+            if(!is_array($x)||(int)($x['vendor_id']??0)!==$__rVid)return true;
+            if($__rKey!=='')return (string)($x['key']??'')!==$__rKey;
+            return !bslTitlesAreSameProduct((string)($x['title']??''),$__rTitle);
+        }));
+        $__removed=max(1,$__before-count($bslFailedList));$fail=max(0,$fail-$__removed);$updated++;$__failedRetryFixed++;
+        bslShopStatBump($__rVid,(string)($__rShop['shop_name']??''),'f',-$__removed);bslShopStatBump($__rVid,(string)($__rShop['shop_name']??''),'u');
+        $bslUpdatedList[]=array_merge(['title'=>$__rTitle,'key'=>$__rKey,'remote_id'=>(int)($__retryResult['id']??0),
+            'changes'=>'ترمیم خودکار خطای ارسال','update_reason'=>'تلاش نهایی امن پس از خطای قابل رفع','action'=>'failed_retry'],
+            ['vendor_id'=>$__rVid,'shop_name'=>(string)($__rShop['shop_name']??''),'image'=>$__rProduct['image']??'','link'=>$__rProduct['link']??'']);
+    }else{
+        foreach($bslFailedList as&$__left)if(is_array($__left)&&(int)($__left['vendor_id']??0)===$__rVid
+            &&(($__rKey!==''&&(string)($__left['key']??'')===$__rKey)||($__rKey===''&&bslTitlesAreSameProduct((string)($__left['title']??''),$__rTitle)))){
+            $__left['retry_error']=mb_substr((string)($__retryResult['error']??bslErrText($__retryResult)),0,220);break;
+        }unset($__left);
+    }
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,mb_substr($__rTitle,0,40),null,
+        ['phase'=>'failed_retry','phase_label'=>'ترمیم خطاهای قابل رفع','phase_current'=>$__ri+1,'phase_total'=>$__retryTotal,
+         'phase_pct'=>(int)floor(($__ri+1)*100/max(1,$__retryTotal))]);
+    usleep(250000);
+}
+if($__isParallelShopsRow&&bslStopRequestedForQueue()){
+    bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',['⏹ ترمیم خطاها با درخواست کاربر متوقف شد'],
+        ['phase'=>'failed_retry','phase_label'=>'ترمیم خطاهای قابل رفع','phase_current'=>$__failedRetryTried,'phase_total'=>$__retryTotal]);
+    taskMarkPartial($bslProgressFile,['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
+        ['queue_id'=>(string)$bslQueueId,'current'=>(int)$total,'total'=>(int)$total,'sent'=>(int)$sent,'updated'=>(int)$updated,
+         'skipped'=>(int)$skipped,'failed'=>(int)$fail,'failed_details'=>$bslFailedList]);
+    queuePauseRowsAfterStop('bsl',(string)$bslQueueId);exit;
+}
+if($__isParallelShopsRow)bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',
+    ['🔧 ترمیم خطاها: '.$__failedRetryFixed.' محصول اصلاح شد از '.$__failedRetryTried.' تلاش'],
+    ['phase'=>'failed_retry_done','phase_label'=>'ترمیم خطاهای قابل رفع تمام شد','phase_current'=>$__failedRetryTried,
+     'phase_total'=>$__retryTotal,'phase_pct'=>100]);
+
+$finalLog="پایان: $sent جدید, $updated آپدیت, $skipped بدون تغییر, $fail خطا | Phase3: $imgRetryFixed تصویر اصلاح | ترمیم خطا: $__failedRetryFixed";
 $bslLog[]=$finalLog;
 @unlink($bslProductsFile);
 remoteMapRecord('bsl',array_merge($bslSentList,$bslUpdatedList),(string)($nextEntry['profile_key']??''));
@@ -100603,6 +100758,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.594', t:'🛠 ترمیم خطاهای قابل رفع و شمارندهٔ واقعی هر دو لین', items:[
+    'محصولات وضعیت ۳۵۶۷/۳۵۶۸ باسلام دیگر به‌اشتباه بازفعال نمی‌شوند و خطای توکن نمی‌سازند؛ کارت‌های قدیمی این وضعیت هنگام resume از خطا به «نیازمند بررسی باسلام» منتقل و شمارندهٔ خطا کم می‌شود.',
+    'شناسه‌های تنوع تو‌در‌توی پاسخ باسلام خوانده می‌شوند و آپدیت عادی، بازفعال‌سازی و تعدیل قیمت محصولات تنوع‌دار از batch-updates امن استفاده می‌کنند.',
+    'لین موازی در پایان، خطاهای قابل رفع ۴۲۹/۵۰۰/۵۰۴، دستهٔ والد و روش آپدیت تنوع را با محافظ تطبیق دقیق عنوان/شناسه یک بار تکرار می‌کند؛ موفق‌ها از failed_details حذف و همان شمارنده و آمار غرفه اصلاح می‌شوند.'
+  ]},
   {v:'10.593', t:'✨ تاشوی مستقل صف‌ها و نمودار روزانهٔ پیشرفته', items:[
     'نمای تفصیلی کل محصولات، صف استخراج بک‌اند و صف‌های همگام‌سازی اکنون داخل کارت اجرای استخراج نیز سه بخش مستقل تاشو هستند؛ بستن هرکدام هیچ وضعیت یا DOM داخلی را بازسازی نمی‌کند.',
     'نمودار انتهایی با منحنی نرم، سطح گرادیانی، خط میانگین، راهنمای عمودی و tooltip تعاملی ارتقا یافت و روی موبایل نیز واکنش‌گراست.',
