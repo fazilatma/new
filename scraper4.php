@@ -404,7 +404,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.594';
+const APP_VERSION = '10.595';
 
 
 if (!function_exists('str_starts_with')) {
@@ -428,7 +428,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/11';
+const APP_VERSION_DATE = '1405/08/12';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -48537,6 +48537,13 @@ if (isset($_GET['selftest'])) {
         &&bslIsVariantUpdateMethodError(['code'=>422,'body'=>['message'=>'قادر به تغییر قیمت یا موجودی محصول دارای تنوع به صورت مستقیم نمی باشید']])
         &&strpos($selfSrc,"{v:'10." . "594'")!==false
         &&version_compare(APP_VERSION,'10.594','>='));
+    $add('10.595','worker قدیمی هر لین با تطبیق دقیق صف امن بازیافت می‌شود',
+        strpos($selfSrc,"isset(\$_GET['bsl_recycle_outdated_lanes'])")!==false
+        &&strpos($selfSrc,"(string)(\$__payload['get']['action']??'')!=='bsl_backend'")!==false
+        &&strpos($selfSrc,"!isset(\$targets[\$__qid])")!==false
+        &&strpos($selfSrc,"strpos(\$__raw,'queue_backend')===false")!==false
+        &&strpos($selfSrc,"{v:'10." . "595'")!==false
+        &&version_compare(APP_VERSION,'10.595','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79520,6 +79527,36 @@ if (isset($_GET['send_pipeline_audit'])) {
     exit;
 }
 
+/* Recycle only Basalam queue_backend CLI processes whose exact queue owns a
+   lane progress file written by an older code version. This is deliberately
+   narrower than pkill: argv's base64 payload must decode to action=bsl_backend
+   and the same queue_id before SIGTERM is sent. The durable lane pump then
+   resumes that checkpoint under the installed code. */
+if(isset($_GET['bsl_recycle_outdated_lanes'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $targets=[];foreach(['fast','detail']as$__ln){
+        $__pg=readProgress(bslLaneProgressFile($__ln));$__qid=trim((string)($__pg['queue_id']??''));$__ver=trim((string)($__pg['code_version']??''));
+        if($__qid!==''&&!empty($__pg['running'])&&$__ver!==APP_VERSION)$targets[$__qid]=['lane'=>$__ln,'from_version'=>$__ver];
+    }
+    $killed=[];$seen=[];$myPid=(int)@getmypid();
+    if($targets&&is_dir('/proc'))foreach((array)glob('/proc/[0-9]*/cmdline')as$__cmdFile){
+        $__pid=(int)basename(dirname($__cmdFile));if($__pid<=1||$__pid===$myPid)continue;
+        $__raw=(string)@file_get_contents($__cmdFile);if($__raw===''||strpos($__raw,'queue_backend')===false||strpos($__raw,basename(__FILE__))===false)continue;
+        $__args=array_values(array_filter(explode("\0",$__raw),static fn($x)=>$x!==''));$__payload=null;
+        foreach($__args as$__arg){
+            if(strlen($__arg)<20||!preg_match('~^[A-Za-z0-9_-]+$~',$__arg))continue;
+            $__pad=strtr($__arg,'-_','+/');$__pad.=str_repeat('=',(4-strlen($__pad)%4)%4);$__dec=base64_decode($__pad,true);if($__dec===false)continue;
+            $__json=json_decode($__dec,true);if(is_array($__json)&&is_array($__json['get']??null)&&is_array($__json['post']??null)){$__payload=$__json;break;}
+        }
+        if(!is_array($__payload)||(string)($__payload['get']['action']??'')!=='bsl_backend')continue;
+        $__qid=trim((string)($__payload['post']['queue_id']??''));if($__qid===''||!isset($targets[$__qid]))continue;
+        $__ok=false;if(function_exists('posix_kill'))$__ok=@posix_kill($__pid,defined('SIGTERM')?SIGTERM:15);
+        elseif(function_exists('exec')){$__out=[];$__rc=1;@exec('kill -TERM '.(int)$__pid.' >/dev/null 2>&1',$__out,$__rc);$__ok=$__rc===0;}
+        $seen[]=['pid'=>$__pid,'queue_id'=>$__qid,'lane'=>$targets[$__qid]['lane'],'killed'=>$__ok];if($__ok)$killed[]=$__pid;
+    }
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'targets'=>$targets,'seen'=>$seen,'killed'=>$killed],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+
 /* v10.285: فیدبک یک‌جای همهٔ خطاهای ماندگار صف ارسال باسلام.
    خروجی فقط دادهٔ خطا را می‌دهد و توکن/پیکربندی محرمانه را هرگز برنمی‌گرداند. */
 if(isset($_GET['bsl_send_feedback'])){
@@ -100758,6 +100795,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.595', t:'♻️ بارگذاری امن کد تازه در workerهای دو لین', items:[
+    'ابزار بازیافت هدفمند فقط پردازهٔ CLI باسلامی را متوقف می‌کند که payload رمزگشایی‌شدهٔ آن دقیقاً به همان queue_id فعال و نسخهٔ قدیمی تعلق دارد؛ پردازه‌های نامرتبط هرگز با الگوی کلی متوقف نمی‌شوند.',
+    'پس از آزادشدن lock، هر لین از checkpoint پایدار خودش با نسخهٔ نصب‌شده ادامه می‌یابد تا ترمیم failed_details بدون انتظار برای پایان کل ردیف جاری اجرا شود.'
+  ]},
   {v:'10.594', t:'🛠 ترمیم خطاهای قابل رفع و شمارندهٔ واقعی هر دو لین', items:[
     'محصولات وضعیت ۳۵۶۷/۳۵۶۸ باسلام دیگر به‌اشتباه بازفعال نمی‌شوند و خطای توکن نمی‌سازند؛ کارت‌های قدیمی این وضعیت هنگام resume از خطا به «نیازمند بررسی باسلام» منتقل و شمارندهٔ خطا کم می‌شود.',
     'شناسه‌های تنوع تو‌در‌توی پاسخ باسلام خوانده می‌شوند و آپدیت عادی، بازفعال‌سازی و تعدیل قیمت محصولات تنوع‌دار از batch-updates امن استفاده می‌کنند.',
@@ -122737,6 +122778,13 @@ async function s4RuntimeHealthCheck(force=false){
   const wake=()=>{localBeat();cronBeat();cronRunBeat();matrixBeat();};
   setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(matrixBeat,20000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
   window.addEventListener('pageshow',wake);window.addEventListener('online',wake);
+  window.addEventListener('focus',wake);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
+})();
+</script>
+</body>
+</html>
+);
   window.addEventListener('focus',wake);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
 })();
