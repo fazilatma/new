@@ -14,6 +14,14 @@ PYTHONPATH=pythonanywhere python -m unittest discover -s pythonanywhere/tests -v
 
 The test suite includes the WSGI gate and currently has 14 passing tests.
 
-## PythonAnywhere is not ready yet
+## PythonAnywhere staging smoke test only
 
-Do not install this scaffold as the live shop application. When full parity is reached, deployment will use a PythonAnywhere virtualenv and WSGI file at `wsgi.py`, a persistent database/media location outside the code checkout, and PythonAnywhere-compatible scheduled/worker tasks. The final migration must include an import/rollback plan for existing JSON state and test lane locks, restart/resume, credentials, and all external integrations before the feature gate is enabled.
+The supplied `install_and_smoke_test.sh` can install the gated WSGI scaffold solely to verify the PythonAnywhere domain and WSGI wiring. It refuses by default; explicit staging requires `PA_ALLOW_INCOMPLETE_STAGING=1`. After running the install command, click **Web → Reload**, then run the script's `--test-live` mode from the PythonAnywhere console. The smoke test expects `/api/port-status` to return 200 and `/` to return 503. That 503 is intentional, not a working scraper.
+
+```bash
+PA_ALLOW_INCOMPLETE_STAGING=1 bash pythonanywhere/install_and_smoke_test.sh --install-staging
+# Click Web → Reload in PythonAnywhere, then:
+bash pythonanywhere/install_and_smoke_test.sh --test-live
+```
+
+Do not route shop traffic to this scaffold. When full parity is reached, the final deployment will use a PythonAnywhere virtualenv and WSGI file, a persistent database/media location outside the code checkout, and PythonAnywhere-compatible scheduled/worker tasks. Before removing the gate, complete the existing-JSON import/rollback plan and test lane locks, restart/resume, credentials, and every external integration.
