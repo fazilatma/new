@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.589';
+const APP_VERSION = '10.590';
 
 
 if (!function_exists('str_starts_with')) {
@@ -34075,6 +34075,10 @@ function cronWatchdogs(array $cn): array {
            queues during this pulse. Each backend still has its own flock and
            only one row per destination can be dispatched at a time. */
         foreach (cronWatchdogQueueOrder() as $wq) {
+            /* Dual Basalam lanes have their own flock-aware pump before the
+               generic cron mutex. The legacy destination watchdog races that
+               pump, rewrites shared progress and can spawn a lane-less worker. */
+            if($wq==='bsl'&&bslParallelProfileLanesEnabled($cn))continue;
             if(!$stallWake&&$wq!=='bsl')continue;
             /* Promote every eligible paused row even while a healthy row is
                running. The destination flock keeps mutation separate from workers. */
@@ -36604,6 +36608,7 @@ if(!manualSyncActive()){
     try{
         $_earlyPumpStall=max(120,(int)($cn['stall_after']??300));
         foreach(cronWatchdogQueueOrder() as $_earlyDest){
+            if($_earlyDest==='bsl'&&bslParallelProfileLanesEnabled($cn))continue;
             $_earlyDestStall=$_earlyDest==='bsl'?BSL_SEND_STALL_SEC:$_earlyPumpStall;
             $_earlyChk=queueStallCheck($_earlyDest,$_earlyDestStall,true);
             if(empty($_earlyChk['stalled']))continue;
@@ -37691,6 +37696,7 @@ if (!manualSyncActive()) {
     try {
         $_pumpStall = max(120, (int)($cn['stall_after'] ?? 300));
         foreach (cronWatchdogQueueOrder() as $_pq) {
+            if($_pq==='bsl'&&bslParallelProfileLanesEnabled($cn))continue;
             /* Basalam keeps the same one-minute rule in this later pump too;
                otherwise this second checker could disagree with the early
                watchdog and report a stale row as fresh. */
@@ -48464,6 +48470,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'phase_current'=>(int)(\$e['phase_current']??0)")!==false
         &&strpos($selfSrc,"{v:'10." . "589'")!==false
         &&version_compare(APP_VERSION,'10.589','>='));
+    $add('10.590','نگهبان قدیمی دیگر با دو لین فیزیکی باسلام رقابت نمی‌کند',
+        substr_count($selfSrc,"==='bsl'&&bslParallelProfileLanesEnabled(\$cn))continue")===3
+        &&strpos($selfSrc,'The legacy destination watchdog races that')!==false
+        &&strpos($selfSrc,"{v:'10." . "590'")!==false
+        &&version_compare(APP_VERSION,'10.590','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -100488,6 +100499,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.590', t:'🚦 حذف رقابت watchdog قدیمی با دو لین باسلام', items:[
+    'وقتی دو لین فیزیکی باسلام فعال‌اند، نگهبان ابتدایی، پمپ عمومی و نگهبان پایانی legacy دیگر صف مشترک باسلام را resume یا بازنویسی نمی‌کنند؛ بازیابی فقط به پمپ flock-aware خود لین ۱ و لین ۲ سپرده می‌شود.',
+    'این تغییر حلقهٔ هزاران dispatch بی‌مالک، progress مشترک متناقض و جلوگیری از رفتن لین ۱ به ردیف بعدی را حذف می‌کند؛ مسیر عمومی ووکامرس بدون تغییر می‌ماند.',
+    'هر دو لین همچنان در ابتدای هر cron مستقل پمپ می‌شوند، توقف صریح کاربر محفوظ است و worker هر لین backlog خودش را زنجیره‌ای تخلیه می‌کند.'
+  ]},
   {v:'10.589', t:'🧭 رفع تناقض پایان محصول و ادامهٔ فازهای ارسال', items:[
     'کارت فعال و کارت صف وقتی مرحلهٔ اصلی محصولات تمام شده ولی فاز قیمت غرفه، دسته یا تصویر ادامه دارد، درصد و checkpoint همان فاز را نمایش می‌دهند؛ current/total محصول دیگر به‌اشتباه ۱۰۰٪ کل وظیفه نیست.',
     'ردیف running/waiting/paused با فاز غیرنهایی حتی در current>=total از کارت فعال حذف نمی‌شود و دکمهٔ ادامه صریحاً از checkpoint همان فاز کار می‌کند.',
