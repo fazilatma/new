@@ -4455,11 +4455,11 @@ class Scraper_Auto_Shop_Plugin {
 			. "نام مشتری: «{$customer_name}»\n"
 			. "ارسال رایگان برای خریدهای بالای {$threshold} {$currency}.\n"
 			. "ضمانت ۷ روز بازگشت و اصالت کالا.\n\n"
-			. "دسترسی زنده به داده فروشگاه (محصولات، سفارش‌ها، آمار):\n"
+			. "داده ثبت‌شده فروشگاه (ممکن است قدیمی باشد):\n"
 			. $catalog_ctx . "\n\n"
 			. "قوانین پاسخ:\n"
 			. "۱. فقط بر اساس داده بالا جواب بده؛ اگر نبود بگو در دسترس نیست.\n"
-			. "۲. برای قیمت/موجودی از کاتالوگ دقیق نقل کن.\n"
+			. "۲. قیمت، موجودی و تنوع کاتالوگ زنده نیستند؛ هرگز آنها را تأییدشده یا موجود اعلام نکن و برای بررسی محصول، انتخاب آن در ویترین یا نام کامل را بخواه.\n"
 			. "۳. برای پیگیری سفارش، شماره سفارش یا موبایل بخواه و از بخش سفارش‌ها استفاده کن.\n"
 			. "۴. لحن گرم، حرفه‌ای و فارسی. خودت را ربات معرفی نکن.\n"
 			. "۵. می‌توانی Markdown سبک بنویسی: **پررنگ**، لیست با - یا ۱. ، `کد`، و لینک [متن](url).\n"
@@ -4619,7 +4619,7 @@ class Scraper_Auto_Shop_Plugin {
 			$desc     = $top_p['description'] ?? '';
 			$desc_low = mb_strtolower( $desc, 'UTF-8' );
 
-			$reply = $greeting_prefix . "درباره «{$p_title}»، این محصول هم‌اکنون با قیمت {$p_price} در انبار موجود و آماده ثبت سفارش است.";
+			$reply = $greeting_prefix . "درباره «{$p_title}»، اطلاعات ثبت‌شده در کاتالوگ، قیمت {$p_price} را نشان می‌دهد؛ قیمت و موجودی فعلی باید تأیید شود.";
 			if ( $has_disc && $disc_pct > 0 ) {
 				$reply .= " (این کالا دارای {$disc_pct}٪ تخفیف ویژه می‌باشد).";
 			}
@@ -6537,7 +6537,7 @@ class Scraper_Auto_Shop_Plugin {
 	 * @param string $id md5(title+link) یا key محصول
 	 * @return array{raw:array,profile_key:string,entry_key:string}|null
 	 */
-	public static function find_raw_scraped_product( $id ) {
+	public static function find_raw_scraped_product( $id, $strict_id = false ) {
 		$id = (string) $id;
 		if ( $id === '' ) {
 			return null;
@@ -6577,7 +6577,7 @@ class Scraper_Auto_Shop_Plugin {
 				$link  = (string) ( $prod['link'] ?? $prod['url'] ?? '' );
 				$hash  = md5( $title . $link );
 				$pkey  = (string) ( $prod['key'] ?? ( $entry_is_pair ? (string) ( $entry[0] ?? '' ) : (string) $ek ) );
-				if ( self::profile_product_id( $p_key, $ek, $entry, $key_map ) === $id || $hash === $id || $pkey === $id || (string) ( $prod['id'] ?? '' ) === $id ) {
+				if ( self::profile_product_id( $p_key, $ek, $entry, $key_map ) === $id || $hash === $id || ( ! $strict_id && ( $pkey === $id || (string) ( $prod['id'] ?? '' ) === $id ) ) ) {
 					return array(
 						'raw'         => $prod,
 						'profile_key' => (string) $p_key,
@@ -7069,6 +7069,187 @@ class Scraper_Auto_Shop_Plugin {
 		wp_send_json_success( array( 'product' => $out ) );
 	}
 
+	/** Normalize product names only for conservative matching; never use a chat URL for fetching. */
+	public static function live_name( $text ) {
+		$text = mb_strtolower( strtr( (string) $text, array( 'ي' => 'ی', 'ك' => 'ک', '‌' => ' ' ) ), 'UTF-8' );
+		return trim( preg_replace( '/\s+/u', ' ', preg_replace( '/[^\p{L}\p{N}]+/u', ' ', $text ) ) );
+	}
+
+	/** A deliberately small CSS subset for saved detail selectors; unsupported selectors fail closed. */
+	public static function live_selector_xpath( $selector ) {
+		if ( ! is_string( $selector ) || strlen( $selector ) > 300 ) return '';
+		$branches = array();
+		foreach ( explode( ',', $selector ) as $branch ) {
+			$tokens = preg_split( '/\s+/', trim( preg_replace( '/\s*>\s*/', ' > ', trim( $branch ) ) ), -1, PREG_SPLIT_NO_EMPTY );
+			if ( ! $tokens || count( $tokens ) > 12 ) return '';
+			$xpath = ''; $axis = '//';
+			foreach ( $tokens as $token ) {
+				if ( $token === '>' ) { if ( $xpath === '' || $axis === '/' ) return ''; $axis = '/'; continue; }
+				if ( ! preg_match( '/^(\*|[a-zA-Z][a-zA-Z0-9_-]*)?((?:[.#][a-zA-Z0-9_-]+)*)$/', $token, $m ) || ( $m[1] === '' && $m[2] === '' ) ) return '';
+				$step = $m[1] !== '' ? $m[1] : '*';
+				preg_match_all( '/([.#])([a-zA-Z0-9_-]+)/', $m[2], $selectors, PREG_SET_ORDER );
+				foreach ( $selectors as $selector_part ) {
+					$step .= $selector_part[1] === '#' ? "[@id='" . $selector_part[2] . "']" : "[contains(concat(' ',normalize-space(@class),' '),' " . $selector_part[2] . " ')]";
+				}
+				$xpath .= $axis . $step; $axis = '//';
+			}
+			if ( $axis === '/' ) return '';
+			$branches[] = $xpath;
+		}
+		return implode( ' | ', $branches );
+	}
+
+	/** Extract only structured, bounded facts. Page text is never used as an AI instruction. */
+	public static function live_product_parse( $html, $title, $selectors = array() ) {
+		$out = array( 'price' => '', 'currency' => '', 'stock' => '', 'variants' => array(), 'options' => array() );
+		if ( ! class_exists( 'DOMDocument' ) || ! is_string( $html ) || $html === '' ) return $out;
+		$previous = libxml_use_internal_errors( true );
+		$dom = new \DOMDocument();
+		$ok = @$dom->loadHTML( '<?xml encoding="UTF-8">' . $html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING );
+		libxml_clear_errors();
+		libxml_use_internal_errors( $previous );
+		if ( ! $ok ) return $out;
+		$xp = new \DOMXPath( $dom );
+		// Find the matching Product rather than an arbitrary recommendation on the page.
+		$products = array();
+		$walk = function ( $node, $depth = 0 ) use ( &$walk, &$products ) {
+			if ( ! is_array( $node ) || $depth > 12 || count( $products ) >= 100 ) return;
+			$type = $node['@type'] ?? '';
+			if ( in_array( 'Product', (array) $type, true ) || in_array( 'ProductGroup', (array) $type, true ) ) $products[] = $node;
+			foreach ( $node as $v ) if ( is_array( $v ) ) $walk( $v, $depth + 1 );
+		};
+		foreach ( $xp->query( '//script[@type="application/ld+json"]' ) as $script ) {
+			$walk( json_decode( $script->textContent, true ) );
+		}
+		$norm_title = self::live_name( $title );
+		$matched = array();
+		foreach ( $products as $product ) {
+			$name = isset( $product['name'] ) && is_string( $product['name'] ) ? self::live_name( $product['name'] ) : '';
+			if ( $name !== '' && $name === $norm_title ) $matched[] = $product;
+		}
+		if ( count( $matched ) === 1 ) {
+			$offers = $matched[0]['offers'] ?? array();
+			if ( isset( $offers[0] ) ) $offers = count( $offers ) === 1 ? $offers[0] : array();
+			if ( is_array( $offers ) ) {
+				$price = $offers['price'] ?? '';
+				if ( is_scalar( $price ) && preg_match( '/^\d{1,12}(?:\.\d{1,2})?$/', (string) $price ) && (float) $price > 0 ) $out['price'] = (string) $price;
+				$currency = $offers['priceCurrency'] ?? '';
+				if ( is_string( $currency ) && preg_match( '/^[A-Za-z]{3}$/', $currency ) ) $out['currency'] = strtoupper( $currency );
+				$availability = $offers['availability'] ?? '';
+				if ( is_string( $availability ) && preg_match( '~(?:^|[/#])(InStock|OutOfStock)$~i', $availability, $m ) ) $out['stock'] = strtolower( $m[1] ) === 'instock' ? 'موجود' : 'ناموجود';
+			}
+		}
+		// WooCommerce variation combinations carry per-combination stock; do not infer it from option labels.
+		$forms = $xp->query( '//*[@data-product_variations]' );
+		if ( $forms && $forms->length === 1 ) {
+			$vars = json_decode( $forms->item(0)->getAttribute( 'data-product_variations' ), true );
+			if ( is_array( $vars ) ) foreach ( array_slice( $vars, 0, 100 ) as $v ) {
+				if ( ! is_array( $v ) || ! is_array( $v['attributes'] ?? null ) ) continue;
+				$parts = array(); $incomplete = false;
+				foreach ( $v['attributes'] as $key => $value ) {
+					if ( ! is_string( $value ) || $value === '' ) { $incomplete = true; continue; }
+					if ( mb_strlen( $value, 'UTF-8' ) > 50 || ! preg_match( '/^[\p{L}\p{N}\s_\-\.]+$/u', $value ) ) { $incomplete = true; continue; }
+					$key = rawurldecode( (string) $key );
+					$label = preg_match( '/color|colour|رنگ/i', $key ) ? 'رنگ' : ( preg_match( '/size|سایز|اندازه/i', $key ) ? 'سایز' : '' );
+					if ( $label === '' ) {
+						$label = preg_replace( '/^(attribute_)?(pa_)?/', '', $key );
+						if ( ! preg_match( '/^[\p{L}\p{N}_-]{1,40}$/u', $label ) ) { $incomplete = true; continue; }
+					}
+					$parts[] = $label . ': ' . $value;
+				}
+				if ( ! $parts ) continue;
+				$stock = 'موجودی نامشخص';
+				if ( isset( $v['is_in_stock'] ) && is_bool( $v['is_in_stock'] ) ) {
+					$stock = $v['is_in_stock'] ? 'موجود' : 'ناموجود';
+					if ( $v['is_in_stock'] && ( ! empty( $v['backorders_allowed'] ) || ( is_string( $v['availability_html'] ?? null ) && strpos( $v['availability_html'], 'available-on-backorder' ) !== false ) ) ) $stock = 'قابل سفارش؛ موجودی انبار نامشخص';
+					if ( ( isset( $v['variation_is_active'] ) && $v['variation_is_active'] === false ) || ( isset( $v['variation_is_purchasable'] ) && $v['variation_is_purchasable'] === false ) || ( isset( $v['variation_is_visible'] ) && $v['variation_is_visible'] === false ) ) $stock = 'غیرقابل خرید';
+				}
+				if ( $incomplete && $stock === 'موجود' ) $stock = 'موجودی ترکیب دقیق نامشخص';
+				$variation_price = $v['display_price'] ?? '';
+				$price_note = is_scalar( $variation_price ) && preg_match( '/^\d{1,12}(?:\.\d{1,2})?$/', (string) $variation_price ) && (float) $variation_price > 0 ? '، قیمت مبدأ: ' . $variation_price . ' ' . ( $out['currency'] ?: 'با واحد نامشخص' ) : '';
+				$out['variants'][] = implode( '، ', $parts ) . ' — ' . $stock . $price_note;
+			}
+		}
+		// Saved detail selectors are trusted configuration, but page values remain untrusted data.
+		foreach ( array( 'price', 'variations' ) as $field ) {
+			$config = $selectors[ $field ] ?? '';
+			if ( is_array( $config ) ) $config = array_key_exists( 'enabled', $config ) && ! $config['enabled'] ? '' : ( $config['selector'] ?? '' );
+			$path = self::live_selector_xpath( $config );
+			if ( $path === '' ) continue;
+			$nodes = @$xp->query( $path );
+			if ( ! $nodes ) continue;
+			if ( $field === 'price' && $out['price'] === '' && $nodes->length === 1 ) {
+				$text = strtr( $nodes->item(0)->textContent, array_combine( preg_split( '//u', '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', -1, PREG_SPLIT_NO_EMPTY ), str_split( '01234567890123456789' ) ) );
+				if ( preg_match_all( '/(?<![\d])([\d][\d,،٬\s]*[\d]|[\d])\s*(تومان|تومن|ریال)(?![\p{L}])/u', $text, $found, PREG_SET_ORDER ) === 1 ) {
+					$amount = preg_replace( '/[^0-9]/', '', $found[0][1] );
+					if ( strlen( $amount ) <= 12 && (float) $amount > 0 ) { $out['price'] = $amount; $out['currency'] = $found[0][2]; }
+				}
+			} elseif ( $field === 'variations' && ! $out['variants'] ) {
+				foreach ( $nodes as $node ) {
+					$candidates = strtolower( $node->nodeName ) === 'select' ? $xp->query( './/option[@value and @value!=""]', $node ) : array( $node );
+					foreach ( $candidates as $item ) {
+						$value = trim( $item->textContent );
+						if ( $value !== '' && mb_strlen( $value, 'UTF-8' ) <= 50 && preg_match( '/^[\p{L}\p{N}\s_\-\.]+$/u', $value ) ) $out['options'][] = $value;
+						if ( count( $out['options'] ) >= 20 ) break;
+					}
+					if ( count( $out['options'] ) >= 20 ) break;
+				}
+			}
+		}
+		$out['options'] = array_values( array_unique( $out['options'] ) );
+		$out['variants'] = array_values( array_unique( $out['variants'] ) );
+		return $out;
+	}
+
+	/** Returns null for unrelated chat; otherwise an honest, deterministic live-product reply. */
+	public static function live_product_chat_reply( $message, $product_id = '' ) {
+		$products = self::get_all_scraped_products();
+		$matches = array();
+		$normalized = self::live_name( $message );
+		foreach ( (array) $products as $p ) {
+			if ( ( $p['source'] ?? '' ) !== 'scraper' ) continue;
+			$title = self::live_name( $p['title'] ?? '' );
+			if ( $product_id !== '' ? (string) ( $p['id'] ?? '' ) === (string) $product_id : ( $title !== '' && mb_strlen( $title, 'UTF-8' ) >= 4 && mb_strpos( ' ' . $normalized . ' ', ' ' . $title . ' ' ) !== false ) ) $matches[] = $p;
+		}
+		if ( ! $matches ) {
+			if ( $product_id !== '' || ( preg_match( '/(سایز|سايز|رنگ|موجودی|موجوده|ناموجود|قیمت|چنده|چقدره)/u', $message ) && ! preg_match( '/(ارسال|پست|پیک)/u', $message ) ) ) return 'برای بررسی قیمت و موجودی، لطفاً محصول را از ویترین انتخاب کنید یا نام کامل و دقیق آن را بفرستید.';
+			return null;
+		}
+		if ( count( $matches ) !== 1 ) return 'چند محصول با این نام پیدا شد؛ لطفاً محصول موردنظر را از ویترین انتخاب کنید تا اشتباه نشود.';
+		$p = $matches[0];
+		$loc = self::find_raw_scraped_product( $p['id'], true );
+		if ( ! $loc || $loc['profile_key'] !== (string) $p['profile_key'] ) return 'محصول در پروفایل پیدا نشد؛ لطفاً از پشتیبانی استعلام بگیرید.';
+		$url = trim( (string) ( $loc['raw']['link'] ?? $loc['raw']['url'] ?? '' ) );
+		$parts = wp_parse_url( $url );
+		$safe = is_array( $parts ) && isset( $parts['host'], $parts['scheme'] ) && in_array( strtolower( $parts['scheme'] ), array( 'http', 'https' ), true ) && empty( $parts['user'] ) && empty( $parts['pass'] ) && ( ! isset( $parts['port'] ) || ( strtolower( $parts['scheme'] ) === 'https' ? (int) $parts['port'] === 443 : (int) $parts['port'] === 80 ) );
+		$unavailable = 'برای «' . $p['title'] . '» اطلاعات زنده قیمت، موجودی و تنوع قابل تأیید نیست؛ لطفاً از پشتیبانی استعلام بگیرید.';
+		if ( ! $safe || ! wp_http_validate_url( $url ) ) return $unavailable;
+		// Bound repeated anonymous requests without caching source data as current.
+		$rate_key = 'amphp_live_' . md5( (string) ( $_SERVER['REMOTE_ADDR'] ?? 'unknown' ) );
+		$count = (int) get_transient( $rate_key );
+		if ( $count >= 10 ) return $unavailable;
+		set_transient( $rate_key, $count + 1, 60 );
+		$response = wp_safe_remote_get( $url, array( 'timeout' => 8, 'redirection' => 0, 'limit_response_size' => 2097152, 'sslverify' => true, 'headers' => array( 'Accept' => 'text/html,application/xhtml+xml' ) ) );
+		if ( is_wp_error( $response ) || (int) wp_remote_retrieve_response_code( $response ) !== 200 ) return $unavailable;
+		$body = wp_remote_retrieve_body( $response );
+		if ( ! is_string( $body ) || $body === '' || strlen( $body ) >= 2097152 ) return $unavailable;
+		$profile_data = @json_decode( (string) @file_get_contents( self::find_profiles_json_path() ), true );
+		$selectors = is_array( $profile_data[ $loc['profile_key'] ]['detailSelectors'] ?? null ) ? $profile_data[ $loc['profile_key'] ]['detailSelectors'] : array();
+		$facts = self::live_product_parse( $body, $p['title'], $selectors );
+		$reply = 'بررسی صفحه مبدأ «' . $p['title'] . '»: ';
+		$reply .= $facts['price'] !== '' ? 'قیمت مبدأ: ' . $facts['price'] . ' ' . ( $facts['currency'] !== '' ? $facts['currency'] : 'با واحد نامشخص' ) . '؛ این مبلغ لزوماً قیمت فروش فروشگاه نیست و باید تأیید شود. ' : 'قیمت فعلی قابل تأیید نیست. ';
+		$reply .= $facts['stock'] !== '' ? 'وضعیت کلی مبدأ: ' . $facts['stock'] . '. ' : 'موجودی کلی نامشخص است. ';
+		if ( $facts['variants'] ) {
+			$reply .= 'ترکیب‌های سایز و رنگ ثبت‌شده در مبدأ (قیمت‌ها قیمت مبدأ هستند، نه لزوماً قیمت فروش): ' . implode( '؛ ', array_slice( $facts['variants'], 0, 20 ) ) . '.';
+			if ( count( $facts['variants'] ) > 20 ) $reply .= ' فهرست کامل نیست؛ برای سایر گزینه‌ها استعلام بگیرید.';
+		} elseif ( $facts['options'] ) {
+			$reply .= 'گزینه‌های دیده‌شده: ' . implode( '، ', $facts['options'] ) . '؛ نوع و موجودی هر گزینه نامشخص است.';
+		} else {
+			$reply .= 'سایز، رنگ و موجودی هر گزینه قابل تأیید نیست؛ برای جزئیات بیشتر از پشتیبانی استعلام بگیرید.';
+		}
+		return $reply;
+	}
+
 	public static function ajax_submit_support_chat() {
 		// Clean buffer so PHP notices never corrupt JSON for the storefront chat widget.
 		while ( function_exists( 'ob_get_level' ) && ob_get_level() > 0 ) {
@@ -7254,9 +7435,19 @@ class Scraper_Auto_Shop_Plugin {
 		$master_ai = array();
 		$model_lbl = 'هوش مصنوعی پشتیبان';
 		try {
-			$master_ai = self::get_scraper_master_ai_model( $settings );
-			$model_lbl = ! empty( $master_ai['model_name'] ) ? $master_ai['model_name'] : $model_lbl;
-			$ai_reply  = self::generate_ai_support_reply( $_ai_msg, $thread['name'], $settings );
+			try {
+				$live_reply = self::live_product_chat_reply( $message, $product_id );
+			} catch ( \Throwable $live_error ) {
+				$live_reply = 'اطلاعات زنده محصول قابل تأیید نیست؛ لطفاً از پشتیبانی استعلام بگیرید.';
+			}
+			if ( $live_reply !== null ) {
+				$ai_reply = $live_reply;
+				$model_lbl = 'بررسی محصول';
+			} else {
+				$master_ai = self::get_scraper_master_ai_model( $settings );
+				$model_lbl = ! empty( $master_ai['model_name'] ) ? $master_ai['model_name'] : $model_lbl;
+				$ai_reply = self::generate_ai_support_reply( $_ai_msg, $thread['name'], $settings );
+			}
 		} catch ( \Throwable $e ) {
 			error_log( 'AMPHP support chat AI error: ' . $e->getMessage() );
 			try {
