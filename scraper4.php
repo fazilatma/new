@@ -404,7 +404,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.595';
+const APP_VERSION = '10.596';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48544,6 +48544,18 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"strpos(\$__raw,'queue_backend')===false")!==false
         &&strpos($selfSrc,"{v:'10." . "595'")!==false
         &&version_compare(APP_VERSION,'10.595','>='));
+    $add('10.596','صفحهٔ شروع بدون نشت اسکریپت و با آماده‌شدن اولویت‌دار بارگذاری می‌شود',
+        substr_count($selfSrc,"window.addEventListener('focus'," . "wake);")===1
+        &&str_ends_with(rtrim($selfSrc),'</html>')
+        &&strpos($selfSrc,"</html>\n" . "})();\n</script>")===false
+        &&strpos($selfSrc,'const s4ReadyTasks=[]')!==false
+        &&strpos($selfSrc,'s4FlushReadyTasks();')!==false
+        &&strpos($selfSrc,'s4WhenAppReady(()=>loadConn(),0)')!==false
+        &&strpos($selfSrc,'s4WhenAppReady(()=>setBslSendLane(bslSendLane),120)')!==false
+        &&strpos($selfSrc,"body.querySelector('#changelogBox')")!==false
+        &&strpos($selfSrc,'function s4EnsureVersionPanel()')!==false
+        &&strpos($selfSrc,"{v:'10." . "596'")!==false
+        &&version_compare(APP_VERSION,'10.596','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -94325,6 +94337,11 @@ function toggleSmenu(hdr){
       body.classList.remove('open');
     }else{
       body.classList.add('open');
+      /* Heavy hidden panels are hydrated on first use, not during the critical
+         refresh-to-ready path. Their original DOM remains intact. */
+      if(body.querySelector('#changelogBox')&&typeof renderChangelog==='function')renderChangelog();
+      if(body.querySelector('#vcLocalInfo')&&typeof s4EnsureVersionPanel==='function')s4EnsureVersionPanel();
+      if(body.querySelector('#aiProviderToggleList')&&typeof aiLoadProviders==='function'&&!window._s4AiProvidersLoaded){window._s4AiProvidersLoaded=true;aiLoadProviders();if(typeof aiResumeTestModalOnLoad==='function')setTimeout(aiResumeTestModalOnLoad,300);}
       clearTimeout(body.__smenuT);
       body.__smenuT=setTimeout(function(){if(body.classList.contains('open'))body.classList.add('smenu-done');},320);
     }
@@ -100795,6 +100812,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.596', t:'⚡ آماده‌شدن سریع صفحه و حذف متن بیرون‌زده', items:[
+    'قطعهٔ تکراری JavaScript که بعد از بسته‌شدن HTML چاپ می‌شد حذف شد؛ انتهای صفحهٔ شروع دیگر متن خام نمایش نمی‌دهد.',
+    'درخواست سبک app_ready اکنون نخستین نوبت شبکه را می‌گیرد؛ اتصال‌ها، پروفایل آخر و نمای ووکامرس فقط پس از اعلام آمادگی و به‌ترتیب اولویت بازیابی می‌شوند.',
+    'گزارش تغییرات، پنل نسخه، کاتالوگ دسته‌های باسلام و فهرست ارائه‌دهندگان هوش مصنوعی تا نخستین استفاده بارگذاری نمی‌شوند؛ داده‌های پنهان پاسخ خودکار و آمار محتوا نیز به زمان بیکاری عقب افتادند.'
+  ]},
   {v:'10.595', t:'♻️ بارگذاری امن کد تازه در workerهای دو لین', items:[
     'ابزار بازیافت هدفمند فقط پردازهٔ CLI باسلامی را متوقف می‌کند که payload رمزگشایی‌شدهٔ آن دقیقاً به همان queue_id فعال و نسخهٔ قدیمی تعلق دارد؛ پردازه‌های نامرتبط هرگز با الگوی کلی متوقف نمی‌شوند.',
     'پس از آزادشدن lock، هر لین از checkpoint پایدار خودش با نسخهٔ نصب‌شده ادامه می‌یابد تا ترمیم failed_details بدون انتظار برای پایان کل ردیف جاری اجرا شود.'
@@ -111557,11 +111579,16 @@ function vcFilterFile() {
 
 document.addEventListener('click', e => { if (!e.target.closest('.vc-pick')) vcCloseDrops(); });
 
-vcLoad(() => {
-    if (VC && VC.check_on_load) setTimeout(() => vcCheck(false), 1200);
-    if (VC && VC.repo) setTimeout(() => vcLoadBranches(false), 2200);
-});
-renderChangelog();
+let s4VersionPanelStarted=false;
+function s4EnsureVersionPanel(){
+  if(s4VersionPanelStarted)return;s4VersionPanelStarted=true;
+  vcLoad(() => {
+      if (VC && VC.check_on_load) setTimeout(() => vcCheck(false), 1200);
+      if (VC && VC.repo) setTimeout(() => vcLoadBranches(false), 2200);
+  });
+}
+/* Changelog and version-control data are intentionally lazy. toggleSmenu()
+   initializes each hidden panel the first time the user opens it. */
 
 // ========== Connection JS ==========
 let wSend=false,bSend=false,cn={woocommerce:{},basalam:{}},extractPollTimer=null,extractModalTimer=null;
@@ -111571,7 +111598,7 @@ try{if(typeof reconAutoApplyCfg==='function') reconAutoApplyCfg(cn.recon_auto||{
 try{if(typeof catfixAutoApplyCfg==='function') catfixAutoApplyCfg(cn.catfix_auto||{});}catch(e){}
 if(w.store_url&&$('wcUrl'))$('wcUrl').value=w.store_url;if(w.consumer_key&&$('wcCK'))$('wcCK').value=w.consumer_key;if(w.consumer_secret&&$('wcCS'))$('wcCS').value=w.consumer_secret;try{const sm=w.sync_mode||'api';if($('wcModeApi'))$('wcModeApi').checked=(sm!=='direct');if($('wcModeDirect'))$('wcModeDirect').checked=(sm==='direct');if($('wcSyncFallback'))$('wcSyncFallback').value=w.sync_fallback||'api_then_direct';}catch(e){}if(w.default_status&&$('wcSt'))$('wcSt').value=w.default_status;if(w.default_category&&$('wcCat'))$('wcCat').value=w.default_category;if($('wcMS'))$('wcMS').checked=!!w.manage_stock;if(w.stock_quantity&&$('wcSQ'))$('wcSQ').value=w.stock_quantity;if($('wcPMode'))$('wcPMode').value=w.price_mode||'none';if($('wcPVal'))$('wcPVal').value=(w.price_val!==undefined?w.price_val:0);if($('wcPRound'))$('wcPRound').value=String(w.price_round||0);try{syncWcPriceUi('main');}catch(e){}if($('bsPMode'))$('bsPMode').value=b.price_mode||'none';if($('bsPVal'))$('bsPVal').value=(b.price_val!==undefined?b.price_val:0);if($('bsPRound'))$('bsPRound').value=String(b.price_round||0);try{destPricePreview('wc');destPricePreview('bs');}catch(e){}if(b.token&&$('bsTk'))$('bsTk').value=b.token;if(b.vendor_id&&$('bsVid'))$('bsVid').value=b.vendor_id;if(b.preparation_days&&$('bsPD'))$('bsPD').value=b.preparation_days;if(b.weight&&$('bsW'))$('bsW').value=b.weight;if($('bsPW')&&b.package_weight)$('bsPW').value=b.package_weight;if(b.stock&&$('bsSt'))$('bsSt').value=b.stock;// v9.80: سوییچ «اتصال غیرمستقیم» باسلام
 if($('bsIndirect'))$('bsIndirect').checked=!!b.net_indirect;// v7.48: Restore category in searchable dropdown
-if(b.category_id){$('bsCat').value=String(b.category_id);bslSelectedCatId=b.category_id;if(bslAllCats.length>0){renderBslCatDropdown(bslAllCats,b.category_id);}else{loadBslCats();}}else{$('bsCat').value='0';bslSelectedCatId=0;if($('bsCatSearch'))$('bsCatSearch').value='';}
+if(b.category_id){$('bsCat').value=String(b.category_id);bslSelectedCatId=b.category_id;if(bslAllCats.length>0){renderBslCatDropdown(bslAllCats,b.category_id);}else if($('bsCatSearch')){$('bsCatSearch').value='شناسه '+String(b.category_id);$('bsCatSearch').dataset.lazyCats='1';}}else{$('bsCat').value='0';bslSelectedCatId=0;if($('bsCatSearch'))$('bsCatSearch').value='';}
 if($('bsAutoCat'))$('bsAutoCat').checked=!!b.auto_category;if($('bsShopSendMode'))$('bsShopSendMode').value=(b.shop_send_mode==='parallel'?'parallel':'serial');if($('bsSendAllShops')){$('bsSendAllShops').checked=!!b.send_all_shops;try{bslRenderShopsHint();}catch(e){}}if($('bsDelayMs')&&b.delay_ms)$('bsDelayMs').value=b.delay_ms;if($('bsRetryDelayMs')&&b.retry_delay_ms)$('bsRetryDelayMs').value=b.retry_delay_ms;if($('bsProductTimeout'))$('bsProductTimeout').value=Math.max(30,Math.min(1800,parseInt(b.product_timeout_sec)||180));if($('bsParallelN'))$('bsParallelN').value=(b.send_parallel_n||4);if($('bsParallelAuto'))$('bsParallelAuto').checked=(b.send_parallel_auto!==false);
 // v8.17: Restore global fallback categories
 if(b.fallback_cat_ids&&Array.isArray(b.fallback_cat_ids)){renderBslFallbackCats(b.fallback_cat_ids);}
@@ -111581,26 +111608,29 @@ if(Array.isArray(b.vendors)){bslExtraVendors=b.vendors;renderBslVendors();}bslIn
 
 // v9.20: AI settings — چند-ارائه‌دهنده
 applyAiNet(cn.ai_net||{});
-aiLoadProviders();
-// v9.24: اگر تست مدل‌ها در حال اجراست (مثلاً بعد از ریفرش)، مودال را ادامه بده
-if(typeof aiResumeTestModalOnLoad==='function')setTimeout(aiResumeTestModalOnLoad,1500);
+/* Provider catalogs and a hidden test modal are loaded when their settings
+   panel is opened; they are not prerequisites for the Start page. */
 // v8.17: Restore Baleh/Rubika settings
 const bl=cn.baleh||{};if($('balehEnabled'))$('balehEnabled').checked=!!bl.enabled;if($('balehToken')&&bl.token)$('balehToken').value=bl.token;if($('balehChatId')&&bl.chat_id)$('balehChatId').value=bl.chat_id;if($('balehS')&&bl.token){$('balehS').textContent='فعال';$('balehS').className='cst on';}
 const rb=cn.rubika||{};if($('rubikaEnabled'))$('rubikaEnabled').checked=!!rb.enabled;if($('rubikaToken')&&rb.token)$('rubikaToken').value=rb.token;if($('rubikaChatId')&&rb.chat_id)$('rubikaChatId').value=rb.chat_id;
 const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!!tgm.enabled;if($('telegramToken')&&tgm.token)$('telegramToken').value=tgm.token;if($('telegramChatId')&&tgm.chat_id)$('telegramChatId').value=tgm.chat_id;
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
 if($('notifSourceText'))$('notifSourceText').value=String(cn.notif_source_text||'');if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
-updN();if(b.token&&bslAllCats.length===0){loadBslCats();}syncMatrixRenderDestinations(b);
+updN();syncMatrixRenderDestinations(b);
+const lazyCatInput=$('bsCatSearch');if(lazyCatInput&&!lazyCatInput.dataset.lazyBound){lazyCatInput.dataset.lazyBound='1';let catsRequested=false;const needCats=()=>{if(!catsRequested&&bslAllCats.length===0){catsRequested=true;loadBslCats();}};lazyCatInput.addEventListener('focus',needCats,{once:true});lazyCatInput.addEventListener('pointerdown',needCats,{once:true});}
 try{if(typeof rvMarkDirty==='function')rvMarkDirty();if(typeof rvDirty!=='undefined'){rvDirty.table=true;if(resultsVisible()){if(rvCurView==='table')rvBuildTable();else rvEnsure(rvCurView);}}if(typeof bslRefreshVendorPreviews==='function')bslRefreshVendorPreviews();}catch(e){}
 renderNotifHealth(); /* v10.46 (۶۰): خطِ وضعیتِ اعلان‌ها */
-arApplyCfg(cn.autoreply||{});arLoad();
+arApplyCfg(cn.autoreply||{});
+/* Rule rows are hidden settings data; hydrate them after idle rather than
+   competing with readiness and the selected profile. */
+s4WhenAppReady(()=>arLoad(),4500);
 try{
   const aca=cn.ai_content_auto||{};
   if($('aiContentAutoEnabled'))$('aiContentAutoEnabled').checked=(aca.enabled!==false&&aca.enabled!==0&&aca.enabled!=='0');
   if($('aiContentAutoWeb'))$('aiContentAutoWeb').checked=aca.web_search!==false;
   if($('aiContentAutoBsl'))$('aiContentAutoBsl').checked=aca.bsl_cats!==false;
   if($('aiContentAutoPerRun')&&aca.per_run)$('aiContentAutoPerRun').value=String(aca.per_run);
-  aiContentAutoRefreshStat();
+  s4WhenAppReady(()=>aiContentAutoRefreshStat(),5000);
 }catch(e){}
 }
 /* v8.87: پیش‌نمایش زندهٔ تعدیل قیمت مقصد.
@@ -117651,24 +117681,35 @@ function finishBslClient(s,u,k,f,t){
 }
 
 let s4AppReadyRetry=null;
+const s4ReadyTasks=[];
+function s4WhenAppReady(task,delay=0){
+  if(typeof task!=='function')return;
+  if(window._s4AppReady){setTimeout(task,Math.max(0,delay||0));return;}
+  s4ReadyTasks.push([task,Math.max(0,delay||0)]);
+}
+function s4FlushReadyTasks(){
+  while(s4ReadyTasks.length){const item=s4ReadyTasks.shift();setTimeout(item[0],item[1]);}
+}
 function s4AppReadyCheck(attempt){
   attempt=Math.max(0,parseInt(attempt)||0);clearTimeout(s4AppReadyRetry);
   fetch('?app_ready=1&_v='+Date.now(),{cache:'no-store',credentials:'same-origin'}).then(r=>r.json()).then(d=>{
     if(!d||d.ok!==true||d.ready!==true)throw new Error('not ready');
     document.documentElement.dataset.s4Ready='1';window._s4AppReady=true;
     const st=$('status');if(st&&/در حال بارگذاری|آماده/i.test(st.textContent||''))st.textContent='آماده';
+    s4FlushReadyTasks();
     if(d.stop_all_pending&&typeof tmStopAllPoll==='function')tmStopAllPoll(0);
   }).catch(()=>{
     document.documentElement.dataset.s4Ready='0';window._s4AppReady=false;
     if(attempt<20)s4AppReadyRetry=setTimeout(()=>s4AppReadyCheck(attempt+1),Math.min(5000,600+attempt*250));
   });
 }
+/* The readiness probe gets the first network slot. Configuration hydration is
+   required immediately afterwards; profile/result reconstruction and Woo UI
+   restoration are not prerequisites for declaring the dashboard ready. */
+s4WhenAppReady(()=>loadConn(),0);
+s4WhenAppReady(()=>{try{restoreLastProfile();}catch(e){}},180);
+s4WhenAppReady(()=>checkWooProgress(),900);
 s4AppReadyCheck(0);
-loadConn();
-// v8.68: آخرین پروفایل باز را برگردان
-try{ restoreLastProfile(); }catch(e){}
-// v8.06: Auto-restore WooCommerce progress on page load
-checkWooProgress();
 // v7.48: Offline category matching — apply autoMatchBslCategory to all products
 function offlineCatMatch(){
     const ps=getSendP();
@@ -117797,7 +117838,7 @@ function setBslSendLane(lane){
        trigger a fetch/render cycle merely because visibility changed. */
     if(!q)checkBslQueue();
 }
-setTimeout(()=>setBslSendLane(bslSendLane),0);
+s4WhenAppReady(()=>setBslSendLane(bslSendLane),120);
 // v7.48: Queue management functions
 let bslQueuePollTimer=null;
 let bslLaneBackgroundMonitors={};
@@ -122778,13 +122819,6 @@ async function s4RuntimeHealthCheck(force=false){
   const wake=()=>{localBeat();cronBeat();cronRunBeat();matrixBeat();};
   setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(matrixBeat,20000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
   window.addEventListener('pageshow',wake);window.addEventListener('online',wake);
-  window.addEventListener('focus',wake);
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
-})();
-</script>
-</body>
-</html>
-);
   window.addEventListener('focus',wake);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
 })();
