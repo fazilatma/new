@@ -731,7 +731,7 @@
   box-shadow: 0 -8px 28px rgba(15, 23, 42, .08);
   backdrop-filter: blur(16px);
 }
-.sf-mob-item {
+.sf-app .sf-mob-item {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   min-height: 54px; border: 0; background: transparent; text-decoration: none;
   font-size: .68rem; font-weight: 800; color: #64748b; position: relative; padding: 3px 6px;
@@ -741,8 +741,8 @@
   display: grid; place-items: center; width: 44px; height: 29px; border-radius: 12px;
   transition: background .2s ease, transform .2s ease;
 }
-.sf-mob-icon { display: block; width: 22px; height: 22px; flex: none; }
-.sf-mob-item.active, .sf-mob-item:hover { color: var(--sf-accent); }
+.sf-app .sf-mob-icon { display: block; width: 22px; height: 22px; flex: none; }
+.sf-app .sf-mob-item.active, .sf-app .sf-mob-item:hover { color: var(--sf-accent); }
 .sf-mob-item.active .sf-mob-icon-wrap { background: #f1f5f9; background: color-mix(in srgb, var(--sf-accent) 10%, white); }
 .sf-mob-item:active .sf-mob-icon-wrap { transform: scale(.92); }
 .sf-mob-item:focus-visible { outline: 2px solid var(--sf-accent); outline-offset: -2px; border-radius: 12px; }

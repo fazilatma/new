@@ -58,7 +58,7 @@ function MobileNavIcon({ name }) {
     cart: <><path d="M3.5 4.5h2l1.8 9.2a2 2 0 0 0 2 1.6h8.5a2 2 0 0 0 2-1.6L21 8H6.2" /><circle cx="9.5" cy="19" r="1" /><circle cx="18" cy="19" r="1" /></>,
     account: <><circle cx="12" cy="8" r="3.5" /><path d="M5 20a7 7 0 0 1 14 0" /></>,
   };
-  return <svg className="sf-mob-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
+  return <svg className="sf-mob-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 
 const CAT_ICONS = {

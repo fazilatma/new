@@ -7,6 +7,8 @@ function add_action( ...$args ) {}
 function did_action( $name ) { return false; }
 function register_activation_hook( ...$args ) {}
 function register_deactivation_hook( ...$args ) {}
+function plugin_dir_path( $file ) { return dirname( $file ) . '/'; }
+function wp_cache_flush() { $GLOBALS['purges'] = ( $GLOBALS['purges'] ?? 0 ) + 1; }
 function get_option( $key, $default = false ) { return $GLOBALS['opts'][$key] ?? $default; }
 function update_option( $key, $value, $autoload = null ) { $GLOBALS['opts'][$key] = $value; return true; }
 function add_option( $key, $value, $deprecated = '', $autoload = null ) { if ( isset( $GLOBALS['opts'][$key] ) ) return false; $GLOBALS['opts'][$key] = $value; return true; }
@@ -42,18 +44,22 @@ foreach ( array( array('evil/x/extra','main','amphp'), array('evil/x','../main',
 }
 $GLOBALS['opts'][$c::GITHUB_UPDATE_OPTION] = array( 'enabled' => true, 'repo' => 'fazilatma/new', 'branch' => 'arena/9c213522-new', 'path' => 'amphp' );
 $c::github_update_schedule(); check_update( $GLOBALS['schedule'][1] === 'hourly', 'Hourly schedule' );
+$initial_release = $c::storefront_release_token();
 $GLOBALS['fail_file'] = 'agent.php?';
 $c::github_update_run();
 check_update( file_get_contents( $dir . '/agent.php' ) === $agent, 'Failed download did not modify plugin' );
 check_update( file_get_contents( $dir . '/asset/js/storefront/storefront.css' ) === 'old css', 'Failed download did not modify assets' );
 check_update( strpos( $GLOBALS['opts'][$c::GITHUB_UPDATE_OPTION]['last_message'], 'Update failed:' ) === 0, 'Failure reported' );
 check_update( empty( $GLOBALS['opts'][$c::GITHUB_UPDATE_OPTION]['installed_sha'] ), 'Failure did not mark SHA installed' );
+check_update( empty( $GLOBALS['purges'] ), 'Failed update does not purge cache' );
 $GLOBALS['fail_file'] = '';
 $c::github_update_run();
 check_update( file_get_contents( $dir . '/agent.php' ) === $GLOBALS['new_agent'], 'Agent updated' );
 check_update( file_get_contents( $dir . '/asset/js/storefront/storefront.css' ) === 'new css', 'Installed disk asset updated' );
 check_update( file_get_contents( $dir . '/profiles.json' ) === 'user data', 'Runtime data preserved' );
 check_update( $GLOBALS['opts'][$c::GITHUB_UPDATE_OPTION]['installed_sha'] === $GLOBALS['sha'], 'SHA recorded' );
+check_update( $c::storefront_release_token() !== $initial_release, 'New release invalidates open storefront version' );
+check_update( $GLOBALS['purges'] === 1, 'Successful update purges cache once' );
 foreach ( $GLOBALS['http'] as $request ) {
     check_update( strpos( $request[0], 'https://api.github.com/repos/fazilatma/new/' ) === 0 && $request[1]['redirection'] === 0, 'Fixed GitHub host and no redirects' );
     if ( strpos( $request[0], '/contents/' ) !== false ) check_update( strpos( $request[0], 'ref=' . $GLOBALS['sha'] ) !== false, 'Files pinned to commit' );
