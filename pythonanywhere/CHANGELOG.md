@@ -1,5 +1,10 @@
 # PythonAnywhere port and helper changelog
 
+## Helper 1.0.4 — 2026-11-03
+
+- Added cleanup-only and cleanup-before-install modes for the pip download cache and Python bytecode caches.
+- Added an explicit, home-directory-guarded virtualenv removal option requiring confirmation; never deletes the checkout, state, reports, or WSGI backups.
+
 ## Helper 1.0.3 — 2026-11-03
 
 - Made the PythonAnywhere API token optional: without it, the helper pauses for a manual Web-tab reload; only the GitHub token is needed to publish the report.

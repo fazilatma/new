@@ -34,6 +34,27 @@ class PythonAnywhereHelperTests(unittest.TestCase):
         with patch.object(pa_helper.urllib.request, "urlopen", side_effect=failure):
             self.assertEqual(pa_helper.request_status("https://example.invalid/"), (503, None))
 
+    def test_cleanup_preserves_checkout_data_and_reports(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            home = root / "home"
+            repo = root / "new"
+            pip_cache = home / ".cache" / "pip"
+            bytecode = repo / "pythonanywhere" / "module" / "__pycache__"
+            reports = repo / "pythonanywhere" / "reports"
+            pip_cache.mkdir(parents=True)
+            bytecode.mkdir(parents=True)
+            reports.mkdir(parents=True)
+            (pip_cache / "wheel.whl").write_text("cache")
+            (bytecode / "module.pyc").write_text("cache")
+            (reports / "result.json").write_text("keep")
+            with patch.object(pa_helper.Path, "home", return_value=home):
+                pa_helper.cleanup_generated_space(repo, home / ".virtualenvs" / "scraper4-pa")
+            self.assertFalse(pip_cache.exists())
+            self.assertFalse(bytecode.exists())
+            self.assertTrue(reports.joinpath("result.json").exists())
+            self.assertTrue(repo.exists())
+
     def test_manual_reload_needs_no_pythonanywhere_api_token(self):
         with patch.dict(os.environ, {"PA_API_TOKEN": ""}):
             with patch("builtins.input", return_value=""):

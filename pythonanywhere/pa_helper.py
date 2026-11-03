@@ -26,7 +26,7 @@ from pathlib import Path
 TARGET_BRANCH = "arena/e868e86a-new"
 SOURCE_BRANCH = "arena/01a0ebf7-new"
 SOURCE_VERSION = "10.599"
-HELPER_VERSION = "1.0.3"
+HELPER_VERSION = "1.0.4"
 REPOSITORY_HTTPS = "https://github.com/Fazilatma/new.git"
 
 
@@ -50,6 +50,40 @@ def ensure_checkout(repo: Path) -> str:
         run(["git", "checkout", TARGET_BRANCH], cwd=repo)
     run(["git", "pull", "--ff-only", "origin", TARGET_BRANCH], cwd=repo)
     return run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+
+def cleanup_generated_space(repo: Path, venv: Path, *, remove_venv: bool = False) -> list[str]:
+    """Remove only disposable helper-related caches, never app/state/report files."""
+    removed: list[str] = []
+    pip_cache = Path.home() / ".cache" / "pip"
+    if pip_cache.is_symlink():
+        pip_cache.unlink()
+        removed.append(str(pip_cache))
+    elif pip_cache.is_dir():
+        shutil.rmtree(pip_cache)
+        removed.append(str(pip_cache))
+
+    app_dir = repo / "pythonanywhere"
+    if app_dir.is_dir():
+        for cache_dir in app_dir.rglob("__pycache__"):
+            if cache_dir.is_symlink():
+                cache_dir.unlink()
+            elif cache_dir.is_dir():
+                shutil.rmtree(cache_dir)
+            removed.append(str(cache_dir))
+
+    if remove_venv and (venv.exists() or venv.is_symlink()):
+        home = Path.home().resolve()
+        target = venv.expanduser().resolve()
+        if venv.is_symlink() or target == home or home not in target.parents:
+            raise RuntimeError(f"Refusing to remove a virtualenv outside the home directory: {venv}")
+        answer = input(f"Type DELETE to remove this virtualenv only: {venv}: ").strip()
+        if answer == "DELETE":
+            shutil.rmtree(venv)
+            removed.append(str(venv))
+        else:
+            removed.append("virtualenv kept; confirmation did not match")
+    return removed
 
 
 def install_environment(repo: Path, venv: Path) -> None:
@@ -234,7 +268,26 @@ def main() -> int:
     parser.add_argument("--domain", default=os.environ.get("PA_API_DOMAIN", "fazilatma.pythonanywhere.com"))
     parser.add_argument("--live-host", default=os.environ.get("LIVE_HOST", "Fazilatma.pythonanywhere.com"))
     parser.add_argument("--wait-seconds", type=int, default=60)
+    parser.add_argument("--cleanup-only", action="store_true",
+                        help="remove disposable pip/Python caches, then exit without deploying")
+    parser.add_argument("--cleanup-before-install", action="store_true",
+                        help="remove disposable pip/Python caches before staging install")
+    parser.add_argument("--remove-venv", action="store_true",
+                        help="also offer to remove only the selected virtualenv; requires typing DELETE")
     args = parser.parse_args()
+
+    if args.remove_venv and not (args.cleanup_only or args.cleanup_before_install):
+        parser.error("--remove-venv requires --cleanup-only or --cleanup-before-install")
+    cleanup_removed: list[str] = []
+    if args.cleanup_only or args.cleanup_before_install:
+        try:
+            cleanup_removed = cleanup_generated_space(args.repo_dir, args.venv_dir, remove_venv=args.remove_venv)
+            print(json.dumps({"cleanup_completed": True, "removed": cleanup_removed}, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            print(json.dumps({"cleanup_completed": False, "error": f"{type(exc).__name__}: {str(exc)[:300]}"}, indent=2))
+            return 1
+        if args.cleanup_only:
+            return 0
 
     if not args.allow_incomplete_staging:
         parser.error("this port is incomplete; pass --allow-incomplete-staging only for the gated status smoke test")
@@ -247,6 +300,7 @@ def main() -> int:
         "expected_source_version": SOURCE_VERSION,
         "python_version": platform.python_version(),
         "host": args.live_host,
+        "cleanup_removed": cleanup_removed,
         "deployable": False,
         "errors": [],
     }
