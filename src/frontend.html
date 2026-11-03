@@ -87,6 +87,17 @@ tailwind.config = {
   .leg-chip:hover { background: rgba(148,163,184,.12); }
   .leg-chip i { width: 10px; height: 10px; border-radius: 99px; display: inline-block; }
   .leg-chip.leg-off { opacity: .35; text-decoration: line-through; } .chart-box.tall { height: 320px; }
+  #orders-tbl { table-layout: fixed; }
+  #orders-tbl th, #orders-tbl td { white-space: normal; overflow-wrap: anywhere; }
+  #orders-tbl th { padding-inline-end: 14px; }
+  #orders-tbl td > .flex { flex-wrap: wrap; }
+  #orders-tbl .chip { white-space: normal; max-width: 100%; }
+  .column-resize { position: absolute; inset-inline-end: 0; top: 0; bottom: 0; width: 10px; cursor: col-resize; touch-action: none; border-inline-end: 2px solid rgba(99,102,241,.3); }
+  .column-resize:hover { background: rgba(99,102,241,.25); }
+  .column-setting { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .5rem; border-bottom: 1px solid rgba(148,163,184,.2); }
+  .column-setting > label:first-child { flex: 1; min-width: 10rem; font-size: .85rem; }
+  .column-width { width: 5.5rem; padding: .3rem; }
+  .column-setting button:disabled { opacity: .35; cursor: default; }
   .num { font-variant-numeric: tabular-nums; letter-spacing: 0; }
   /* Reflow at browser zoom; never truncate financial values. */
   #r-kpis, #orders-summary { grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); }
@@ -272,6 +283,14 @@ tailwind.config = {
           <span class="lg lg-cancelled">❌ لغو شده</span>
         </div>
         <div id="status-chips" class="flex flex-wrap gap-1.5 mb-3 no-print"></div>
+        <details class="coll mb-3 no-print">
+          <summary><span class="chev">▾</span> ⚙️ تنظیم ستون‌های جدول</summary>
+          <div class="coll-body">
+            <p class="text-xs text-slate-500 mb-3">با تیک، ستون اضافه یا پنهان می‌شود (بدون حذف اطلاعات). با فلش‌ها ترتیب را تغییر دهید؛ عرض به پیکسل است یا لبه ستون را بکشید. چیدمان در همین مرورگر ذخیره می‌شود.</p>
+            <button type="button" class="btn btn-soft mb-3" onclick="resetOrderColumns()">بازگشت به چیدمان پیش‌فرض</button>
+            <div id="order-column-settings"></div>
+          </div>
+        </details>
         <div class="overflow-x-auto"><table class="tbl" id="orders-tbl"></table></div>
       </div>
     </section>
@@ -572,7 +591,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.19.2';
+const APP_VER = '1.20.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1347,6 +1366,133 @@ function onStatusFilter() {
   state.statusSel = v && v !== '__multi' ? new Set([v]) : (v === '__multi' ? state.statusSel : new Set());
   renderOrders();
 }
+/* Browser-local order table layout; hiding columns never changes order data. */
+const ORDER_COLUMNS = [
+  ['select', 'انتخاب', 64], ['code', 'کد', 130], ['booth', 'غرفه / منبع', 180],
+  ['date', 'تاریخ', 120], ['customer', 'مشتری', 180], ['profit', 'سود/زیان', 150],
+  ['product', 'کالا × تعداد', 230], ['supplier', 'تامین‌کننده', 170], ['revenue', 'فروش', 150],
+  ['status', 'وضعیت', 150], ['actions', 'عملیات', 150],
+  ['phone', 'شماره تماس', 150], ['city', 'شهر', 130], ['quantity', 'تعداد', 90],
+  ['purchase', 'هزینه کل خرید', 160], ['commission', 'کمیسیون', 140],
+  ['shipping', 'هزینه ارسال', 140], ['supplierOrder', 'وضعیت سفارش خرید', 190], ['notes', 'یادداشت', 240],
+];
+const ORDER_LAYOUT_KEY = 'hd_order_columns_v1';
+function normalizeOrderLayout(saved) {
+  const rows = [], used = new Set();
+  for (const entry of Array.isArray(saved) ? saved : []) {
+    const def = ORDER_COLUMNS.find(c => c[0] === entry?.id);
+    if (!def || used.has(entry.id)) continue;
+    used.add(entry.id);
+    rows.push({id: entry.id, visible: entry.visible !== false, width: Math.max(64, Math.min(800, Number(entry.width) || def[2]))});
+  }
+  ORDER_COLUMNS.forEach(([id, , width], i) => {
+    if (!used.has(id)) rows.push({id, width, visible: i < 11});
+  });
+  if (!rows.some(c => c.visible)) rows.find(c => c.id === 'code').visible = true;
+  return rows;
+}
+function loadOrderLayout() {
+  try { return normalizeOrderLayout(JSON.parse(localStorage.getItem(ORDER_LAYOUT_KEY))); }
+  catch { return normalizeOrderLayout(null); }
+}
+let orderLayout = loadOrderLayout();
+function saveOrderLayout() {
+  try { localStorage.setItem(ORDER_LAYOUT_KEY, JSON.stringify(orderLayout)); }
+  catch { toast('ذخیره چیدمان در مرورگر ممکن نیست', 'err'); }
+}
+function renderOrderColumnSettings() {
+  $('#order-column-settings').innerHTML = orderLayout.map((c, i) => {
+    const title = ORDER_COLUMNS.find(d => d[0] === c.id)[1];
+    return `<div class="column-setting">
+      <label><input type="checkbox" ${c.visible ? 'checked' : ''} onchange="changeOrderColumn('${c.id}', 'visible', this.checked)"> ${title}</label>
+      <div class="flex gap-1"><button type="button" class="btn btn-soft !px-2 !py-1" ${i === 0 ? 'disabled' : ''} onclick="moveOrderColumn('${c.id}', -1)" aria-label="${title}: انتقال به قبل">↑</button><button type="button" class="btn btn-soft !px-2 !py-1" ${i === orderLayout.length - 1 ? 'disabled' : ''} onclick="moveOrderColumn('${c.id}', 1)" aria-label="${title}: انتقال به بعد">↓</button></div>
+      <label class="text-xs">عرض <input type="number" min="64" max="800" step="1" value="${Math.round(c.width)}" class="inp column-width" aria-label="عرض ستون ${title} به پیکسل" onchange="changeOrderColumn('${c.id}', 'width', this.value)"></label>
+    </div>`;
+  }).join('');
+}
+function changeOrderColumn(id, key, value) {
+  const col = orderLayout.find(c => c.id === id);
+  if (!col) return;
+  if (key === 'visible') {
+    if (!value && orderLayout.filter(c => c.visible).length === 1) {
+      toast('حداقل یک ستون باید نمایش داده شود', 'err'); renderOrderColumnSettings(); return;
+    }
+    col.visible = !!value;
+  } else if (key === 'width') col.width = Math.max(64, Math.min(800, Number(value) || 150));
+  saveOrderLayout(); renderOrders();
+}
+function moveOrderColumn(id, direction) {
+  const index = orderLayout.findIndex(c => c.id === id), next = index + direction;
+  if (index < 0 || next < 0 || next >= orderLayout.length) return;
+  [orderLayout[index], orderLayout[next]] = [orderLayout[next], orderLayout[index]];
+  saveOrderLayout(); renderOrders();
+}
+function resetOrderColumns() {
+  orderLayout = normalizeOrderLayout(null); saveOrderLayout(); renderOrders();
+}
+function extraOrderCell(o, id) {
+  switch (id) {
+    case 'phone': return esc(o.customer_phone || '—');
+    case 'city': return esc(o.city || '—');
+    case 'quantity': return fmtN(o.quantity || 1);
+    case 'purchase': return fmtN(N(o.unit_cost) * (N(o.quantity) || 1));
+    case 'commission': return fmtN(o.commission);
+    case 'shipping': return fmtN(o.shipping_cost);
+    case 'supplierOrder': return o.supplier_order_status === 'placed' ? 'ثبت سفارش شده' : 'ثبت سفارش نشده';
+    case 'notes': return esc(o.notes || '—');
+    default: return '';
+  }
+}
+function applyOrderColumnLayout(orders) {
+  const table = $('#orders-tbl'), visible = orderLayout.filter(c => c.visible);
+  const header = table.tHead.rows[0], originalHeaders = [...header.cells];
+  const cols = document.createElement('colgroup');
+  for (const c of visible) {
+    const col = document.createElement('col'); col.style.width = c.width + 'px'; col.dataset.column = c.id; cols.append(col);
+  }
+  table.prepend(cols);
+  table.style.width = visible.reduce((sum, c) => sum + c.width, 0) + 'px';
+  header.replaceChildren(...visible.map(c => {
+    const index = ORDER_COLUMNS.findIndex(d => d[0] === c.id);
+    const th = originalHeaders[index] || document.createElement('th');
+    if (index >= 11) th.textContent = ORDER_COLUMNS[index][1];
+    th.scope = 'col'; th.dataset.column = c.id;
+    const handle = document.createElement('span'); handle.className = 'column-resize';
+    handle.title = 'برای تغییر عرض بکشید؛ تنظیم عددی در بخش ستون‌ها';
+    handle.onpointerdown = e => startOrderColumnResize(e, c.id, handle);
+    th.append(handle); return th;
+  }));
+  [...table.tBodies[0].rows].forEach((row, i) => {
+    if (!orders[i]) { row.cells[0].colSpan = visible.length; return; }
+    const original = [...row.cells];
+    row.replaceChildren(...visible.map(c => {
+      const index = ORDER_COLUMNS.findIndex(d => d[0] === c.id);
+      if (index < 11) return original[index];
+      const td = document.createElement('td'); td.innerHTML = extraOrderCell(orders[i], c.id); return td;
+    }));
+  });
+  renderOrderColumnSettings();
+}
+function startOrderColumnResize(event, id, handle) {
+  if (event.button !== 0) return;
+  event.preventDefault(); event.stopPropagation();
+  const col = orderLayout.find(c => c.id === id), startX = event.clientX, startWidth = col.width;
+  const table = $('#orders-tbl'), rtl = getComputedStyle(table).direction === 'rtl';
+  handle.setPointerCapture(event.pointerId);
+  const move = e => {
+    col.width = Math.round(Math.max(64, Math.min(800, startWidth + (e.clientX - startX) * (rtl ? -1 : 1))));
+    table.querySelector(`col[data-column="${id}"]`).style.width = col.width + 'px';
+    table.style.width = orderLayout.filter(c => c.visible).reduce((sum, c) => sum + c.width, 0) + 'px';
+  };
+  const end = () => {
+    handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end);
+    handle.removeEventListener('pointercancel', end); handle.removeEventListener('lostpointercapture', end);
+    saveOrderLayout(); renderOrderColumnSettings();
+  };
+  handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end);
+  handle.addEventListener('pointercancel', end); handle.addEventListener('lostpointercapture', end);
+}
+
 function renderOrders() {
   const list = filteredOrders();
   const s = summarize(list, true);
@@ -1377,6 +1523,7 @@ function renderOrders() {
           <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delOrder('${o.id}')" title="حذف">🗑</button>
         </div></td></tr>`;
     }).join('') || '<tr><td colspan="11" class="text-center text-slate-400 py-8">سفارشی یافت نشد 🍃</td></tr>') + '</tbody>';
+  applyOrderColumnLayout(list.slice(0, 300));
   renderOrdersBulkBar();
 }
 async function delOrder(id) {
