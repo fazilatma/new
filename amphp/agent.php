@@ -238,6 +238,7 @@ class Scraper_Auto_Shop_Plugin {
 	 */
 	public static function on_deactivate() {
 		wp_clear_scheduled_hook( 'scraper_auto_shop_cron_sync' );
+		wp_clear_scheduled_hook( self::GITHUB_UPDATE_HOOK );
 		delete_transient( 'scraper_shop_cached_products' );
 		wp_cache_flush();
 	}
@@ -249,6 +250,9 @@ class Scraper_Auto_Shop_Plugin {
 		// Admin menu
 		add_action( 'admin_menu', array( __CLASS__, 'register_admin_menus' ) );
 		add_action( 'rest_api_init', array( __CLASS__, 'register_diagnostic_routes' ) );
+		add_action( 'init', array( __CLASS__, 'github_update_schedule' ) );
+		add_action( self::GITHUB_UPDATE_HOOK, array( __CLASS__, 'github_update_run' ) );
+		add_action( 'admin_post_amphp_github_update', array( __CLASS__, 'github_update_admin_save' ) );
 
 		// Shortcodes for modern shop
 		add_shortcode( 'scraped_shop', array( __CLASS__, 'render_shop_shortcode' ) );
@@ -427,6 +431,153 @@ class Scraper_Auto_Shop_Plugin {
 			'assets_available' => self::has_storefront_assets(),
 			'note' => 'A loopback HTTP check only; it does not execute JavaScript or test checkout. Redirects are reported, not followed.',
 		) );
+	}
+
+	/** GitHub updates are opt-in and only available to users who may update plugins. */
+	const GITHUB_UPDATE_OPTION = 'amphp_github_update';
+	const GITHUB_UPDATE_HOOK = 'amphp_github_update_cron';
+
+	public static function github_update_config() {
+		$config = get_option( self::GITHUB_UPDATE_OPTION, array() );
+		return array_merge( array( 'enabled' => false, 'repo' => 'fazilatma/new', 'branch' => 'arena/9c213522-new', 'path' => 'amphp', 'installed_sha' => '', 'last_check' => '', 'last_message' => '' ), is_array( $config ) ? $config : array() );
+	}
+
+	public static function github_update_valid_config( $repo, $branch, $path ) {
+		if ( ! preg_match( '~^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$~D', $repo ) || strpos( $repo, '..' ) !== false ) { return false; }
+		if ( $branch === '' || strlen( $branch ) > 200 || ! preg_match( '~^[A-Za-z0-9_./-]+$~D', $branch ) || strpos( $branch, '..' ) !== false || strpos( $branch, '//' ) !== false || $branch[0] === '/' || substr( $branch, -1 ) === '/' || substr( $branch, -1 ) === '.' ) { return false; }
+		if ( $path !== '' && ( ! preg_match( '~^[A-Za-z0-9_./-]+$~D', $path ) || strpos( $path, '..' ) !== false || strpos( $path, '//' ) !== false || $path[0] === '/' || substr( $path, -1 ) === '/' ) ) { return false; }
+		return true;
+	}
+
+	public static function github_update_schedule() {
+		$config = self::github_update_config();
+		if ( empty( $config['enabled'] ) ) {
+			if ( wp_next_scheduled( self::GITHUB_UPDATE_HOOK ) ) { wp_clear_scheduled_hook( self::GITHUB_UPDATE_HOOK ); }
+		} elseif ( ! wp_next_scheduled( self::GITHUB_UPDATE_HOOK ) ) {
+			wp_schedule_event( time() + 60, 'hourly', self::GITHUB_UPDATE_HOOK );
+		}
+	}
+
+	public static function github_update_admin_save() {
+		if ( ! current_user_can( 'manage_options' ) || ! current_user_can( 'update_plugins' ) ) { wp_die( 'Access denied', 403 ); }
+		check_admin_referer( 'amphp_github_update' );
+		$old = self::github_update_config();
+		$repo = trim( sanitize_text_field( wp_unslash( $_POST['repo'] ?? '' ) ) );
+		$branch = trim( sanitize_text_field( wp_unslash( $_POST['branch'] ?? '' ) ) );
+		$path = trim( sanitize_text_field( wp_unslash( $_POST['path'] ?? '' ) ), " \t\n\r\0\x0B/" );
+		if ( ! self::github_update_valid_config( $repo, $branch, $path ) ) { wp_die( 'Invalid GitHub repository, branch, or plugin path.' ); }
+		$old['enabled'] = ! empty( $_POST['enabled'] );
+		if ( $old['repo'] !== $repo || $old['branch'] !== $branch || $old['path'] !== $path ) { $old['installed_sha'] = ''; }
+		$old['repo'] = $repo; $old['branch'] = $branch; $old['path'] = $path;
+		update_option( self::GITHUB_UPDATE_OPTION, $old, false );
+		self::github_update_schedule();
+		if ( ! empty( $_POST['check_now'] ) ) { self::github_update_run( true ); }
+		wp_safe_redirect( admin_url( 'admin.php?page=scraper-auto-shop#amphp-github-update' ) );
+		exit;
+	}
+
+	/** All requests are fixed to GitHub's API. A single commit SHA pins all downloaded files. */
+	public static function github_update_fetch( $url, $raw = false ) {
+		$result = wp_safe_remote_get( $url, array(
+			'timeout' => 45, 'redirection' => 0, 'limit_response_size' => 8 * 1024 * 1024,
+			'headers' => array( 'Accept' => $raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json', 'User-Agent' => 'AMPHP-WordPress-Updater' ),
+		) );
+		if ( is_wp_error( $result ) ) { return $result; }
+		$status = (int) wp_remote_retrieve_response_code( $result );
+		if ( $status !== 200 ) { return new WP_Error( 'amphp_github_http', 'GitHub HTTP ' . $status ); }
+		return (string) wp_remote_retrieve_body( $result );
+	}
+
+	public static function github_update_run( $manual = false ) {
+		$config = self::github_update_config();
+		if ( ! $manual && empty( $config['enabled'] ) ) { return; }
+		if ( ! self::github_update_valid_config( $config['repo'], $config['branch'], $config['path'] ) ) { return; }
+		// add_option is atomic; expired locks are reclaimed after ten minutes.
+		$lock_key = 'amphp_github_update_lock';
+		$now = time();
+		$lock = get_option( $lock_key, 0 );
+		if ( $lock && (int) $lock < $now - 600 ) { delete_option( $lock_key ); }
+		if ( ! add_option( $lock_key, $now, '', false ) ) { return; }
+		try {
+			$repo = implode( '/', array_map( 'rawurlencode', explode( '/', $config['repo'] ) ) );
+			$base = 'https://api.github.com/repos/' . $repo;
+			$head = self::github_update_fetch( $base . '/commits/' . rawurlencode( $config['branch'] ) );
+			if ( is_wp_error( $head ) ) { throw new \RuntimeException( $head->get_error_message() ); }
+			$commit = json_decode( $head, true );
+			$sha = (string) ( $commit['sha'] ?? '' );
+			if ( ! preg_match( '/^[a-f0-9]{40}$/D', $sha ) ) { throw new \RuntimeException( 'GitHub returned an invalid commit SHA.' ); }
+			if ( hash_equals( (string) $config['installed_sha'], $sha ) ) {
+				$config['last_message'] = 'Already up to date: ' . substr( $sha, 0, 12 );
+			} else {
+				self::github_update_install( $base, $sha, $config['path'] );
+				$config['installed_sha'] = $sha;
+				$config['last_message'] = 'Updated successfully: ' . substr( $sha, 0, 12 );
+			}
+		} catch ( \Throwable $e ) {
+			$config['last_message'] = 'Update failed: ' . $e->getMessage();
+		} finally {
+			$config['last_check'] = gmdate( 'Y-m-d H:i:s' ) . ' UTC';
+			// Do not overwrite configuration changed during a long update.
+			$current = self::github_update_config();
+			if ( $current['repo'] === $config['repo'] && $current['branch'] === $config['branch'] && $current['path'] === $config['path'] ) {
+				$current['installed_sha'] = $config['installed_sha'];
+				$current['last_message'] = $config['last_message'];
+				$current['last_check'] = $config['last_check'];
+				update_option( self::GITHUB_UPDATE_OPTION, $current, false );
+			}
+			delete_option( $lock_key );
+		}
+	}
+
+	/** Stage and validate every installed code asset before replacing any file. */
+	public static function github_update_install( $base, $sha, $path ) {
+		$root = realpath( dirname( __FILE__ ) );
+		if ( ! $root || is_link( __FILE__ ) ) { throw new \RuntimeException( 'Plugin directory is not supported.' ); }
+		$files = array( 'asset/js/storefront/storefront.js', 'asset/js/storefront/storefront.css', 'includes/storefront/storefront.js', 'includes/storefront/storefront.css', 'includes/storefront/embedded-assets.php', 'includes/geo/iran-cities.json', 'templates/native-shop.php', 'scraper4.php', 'agent.php' );
+		$staged = array(); $backups = array(); $replaced = array();
+		try {
+			foreach ( $files as $file ) {
+				$target = $root . '/' . $file;
+				if ( $file !== 'agent.php' && ! file_exists( $target ) ) { continue; }
+				$parent = realpath( dirname( $target ) );
+				if ( ! $parent || ( $parent !== $root && strpos( $parent, $root . DIRECTORY_SEPARATOR ) !== 0 ) || is_link( $target ) || ! is_file( $target ) || ! is_writable( $target ) || ! is_writable( $parent ) ) { throw new \RuntimeException( 'Unsafe or unwritable plugin file: ' . $file ); }
+				$remote_path = ltrim( ( $path === '' ? '' : $path . '/' ) . $file, '/' );
+				$url = $base . '/contents/' . implode( '/', array_map( 'rawurlencode', explode( '/', $remote_path ) ) ) . '?ref=' . rawurlencode( $sha );
+				$body = self::github_update_fetch( $url, true );
+				if ( is_wp_error( $body ) ) { throw new \RuntimeException( $file . ': ' . $body->get_error_message() ); }
+				if ( $body === '' || strlen( $body ) >= 8 * 1024 * 1024 ) { throw new \RuntimeException( 'Empty or oversized file: ' . $file ); }
+				if ( substr( $file, -4 ) === '.php' && strpos( ltrim( $body ), '<?php' ) !== 0 ) { throw new \RuntimeException( 'Invalid PHP file: ' . $file ); }
+				if ( $file === 'agent.php' && strpos( substr( $body, 0, 4096 ), 'Plugin Name: Scraper & Auto Shop Pro' ) === false ) { throw new \RuntimeException( 'Unexpected plugin header.' ); }
+				$tmp = tempnam( $parent, '.amphp-stage-' );
+				if ( ! $tmp ) { throw new \RuntimeException( 'Cannot stage ' . $file ); }
+				$staged[ $target ] = $tmp;
+				if ( file_put_contents( $tmp, $body, LOCK_EX ) !== strlen( $body ) ) { throw new \RuntimeException( 'Cannot write staged file: ' . $file ); }
+				@chmod( $tmp, fileperms( $target ) & 0777 );
+				$backup = tempnam( $parent, '.amphp-backup-' );
+				if ( ! $backup ) { throw new \RuntimeException( 'Cannot create backup: ' . $file ); }
+				$backups[ $target ] = $backup;
+				if ( ! copy( $target, $backup ) ) { throw new \RuntimeException( 'Cannot back up: ' . $file ); }
+				@chmod( $backup, fileperms( $target ) & 0777 );
+			}
+			foreach ( $staged as $target => $tmp ) {
+				if ( ! rename( $tmp, $target ) ) { throw new \RuntimeException( 'Cannot replace ' . basename( $target ) ); }
+				$replaced[] = $target;
+				if ( function_exists( 'opcache_invalidate' ) ) { @opcache_invalidate( $target, true ); }
+			}
+		} catch ( \Throwable $e ) {
+			foreach ( array_reverse( $replaced ) as $target ) {
+				if ( ! @rename( $backups[ $target ], $target ) ) { error_log( 'AMPHP update: rollback failed for ' . $target ); }
+				else { unset( $backups[ $target ] ); }
+				if ( function_exists( 'opcache_invalidate' ) ) { @opcache_invalidate( $target, true ); }
+			}
+			throw $e;
+		} finally {
+			foreach ( $staged as $tmp ) { if ( is_file( $tmp ) ) { @unlink( $tmp ); } }
+			foreach ( $backups as $target => $backup ) {
+				// Preserve a backup if a rollback failed.
+				if ( ! in_array( $target, $replaced, true ) || ! isset( $e ) ) { if ( is_file( $backup ) ) { @unlink( $backup ); } }
+			}
+		}
 	}
 
 	public static function register_admin_menus() {
@@ -11131,6 +11282,24 @@ public static function get_embedded_storefront_assets() {
 				@keyframes amphpFadeTab { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 			</style>
 
+			<?php if ( current_user_can( 'update_plugins' ) ) : $update_config = self::github_update_config(); ?>
+			<section id="amphp-github-update" style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:16px;margin:12px 0;">
+				<h3>به‌روزرسانی خودکار افزونه از گیت‌هاب</h3>
+				<p>فقط مخزن عمومی و مورد اعتماد: هر کسی که روی برنچ انتخاب‌شده پوش کند، می‌تواند کد سایت را تغییر دهد. فایل‌های داده و تنظیمات جایگزین نمی‌شوند. قبل از فعال‌سازی نسخهٔ پشتیبان تهیه کنید.</p>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+					<input type="hidden" name="action" value="amphp_github_update">
+					<?php wp_nonce_field( 'amphp_github_update' ); ?>
+					<p><label>مخزن (owner/repo): <input name="repo" required value="<?php echo esc_attr( $update_config['repo'] ); ?>" dir="ltr"></label></p>
+					<p><label>برنچ: <input name="branch" required value="<?php echo esc_attr( $update_config['branch'] ); ?>" dir="ltr"></label></p>
+					<p><label>پوشهٔ افزونه در مخزن (برای ریشه خالی): <input name="path" value="<?php echo esc_attr( $update_config['path'] ); ?>" dir="ltr"></label></p>
+					<p><label><input type="checkbox" name="enabled" value="1" <?php checked( ! empty( $update_config['enabled'] ) ); ?>> فعال‌سازی به‌روزرسانی خودکار</label></p>
+					<button type="submit" class="button button-primary">ذخیره تنظیمات</button>
+					<button type="submit" name="check_now" value="1" class="button">ذخیره و بررسی فوری</button>
+				</form>
+				<p>بررسی تقریباً ساعتی با WP-Cron انجام می‌شود؛ روی سایت کم‌ترافیک ممکن است دیرتر اجرا شود. هاست باید به api.github.com دسترسی و اجازهٔ نوشتن فایل‌ها را داشته باشد.</p>
+				<p>آخرین بررسی: <?php echo esc_html( $update_config['last_check'] ?: 'هنوز انجام نشده' ); ?><br>نتیجه: <?php echo esc_html( $update_config['last_message'] ?: '—' ); ?></p>
+			</section>
+			<?php endif; ?>
 			<section style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:16px;margin:12px 0;">
 				<h3>آزمایش زندهٔ سایت</h3>
 				<p>فقط برای مدیر: بررسی اجرای وردپرس و پاسخ HTTP صفحهٔ اصلی. این آزمایش جایگزین تست مرورگر یا پرداخت نیست.</p>
