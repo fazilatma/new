@@ -12,10 +12,11 @@
 
 The inventory currently records 2,876 PHP function declarations and 711 distinct request-variable keys (1,752 source references). These are an initial mechanical inventory, not a claim that every key is an HTTP endpoint. Each route must be classified from its surrounding control flow before porting.
 
-## Completed in this first slice
+## Completed slices
 
 - Compatibility implementations for custom pagination URL construction, Persian/Arabic digits and price parsing, URL/profile identity, and product identity.
-- Initial Python unit tests for the helpers, including the pagination cases already covered by the PHP/Laravel source suite (14 tests currently pass, including the WSGI feature gate).
+- Initial Persian, mobile-friendly dashboard at `/` with source-status display and an interactive pagination preview. This is a staging UI only; it does not scrape products.
+- Python unit tests for compatibility helpers, the WSGI feature gates, and the initial UI (20 tests currently pass).
 
 ## Not yet ported
 

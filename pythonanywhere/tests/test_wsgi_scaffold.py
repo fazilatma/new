@@ -15,10 +15,16 @@ class WsgiScaffoldTests(unittest.TestCase):
         self.assertEqual("arena/01a0ebf7-new", data["source"]["branch"])
         self.assertFalse(data["deployable"])
 
-    def test_root_is_gated_until_full_parity(self):
+    def test_root_serves_initial_staging_ui_without_claiming_parity(self):
         response = self.client.get("/")
-        self.assertEqual(503, response.status_code)
-        self.assertFalse(response.get_json()["deployable"])
+        self.assertEqual(200, response.status_code)
+        self.assertIn("text/html", response.content_type)
+        self.assertIn("پیش‌نمایش صفحه‌بندی".encode("utf-8"), response.data)
+        self.assertIn("در حال انتقال".encode("utf-8"), response.data)
+        status = self.client.get("/api/port-status").get_json()
+        self.assertFalse(status["deployable"])
+        self.assertIn("initial_dashboard", status["implemented_ui_features"])
+
 
     def test_pagination_preview_uses_compatibility_builder(self):
         response = self.client.get(

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Smoke-test installer for the deliberately gated v10.599 migration scaffold.
-# It does NOT deploy full scraper functionality: / returns 503 by design.
+# Staging installer for the v10.599 migration dashboard.
+# It does NOT deploy full scraper functionality: / shows only the initial UI.
 PA_USER="${PA_USER:-fazilatma}"
 # Hostname spelling as supplied by the user (DNS/HTTP hostnames are case-insensitive).
 LIVE_HOST="${LIVE_HOST:-Fazilatma.pythonanywhere.com}"
@@ -27,8 +27,8 @@ EOF
 
 install_staging() {
   if [[ "${PA_ALLOW_INCOMPLETE_STAGING:-}" != "1" ]]; then
-    echo "Refusing deployment: the Python port is incomplete and its root intentionally returns HTTP 503." >&2
-    echo "For an explicit status-endpoint smoke test only, rerun with PA_ALLOW_INCOMPLETE_STAGING=1." >&2
+    echo "Refusing deployment: the Python port has only an initial staging UI and is not feature-complete." >&2
+    echo "For an explicit staging install only, rerun with PA_ALLOW_INCOMPLETE_STAGING=1." >&2
     exit 2
   fi
 
@@ -49,9 +49,10 @@ install_staging() {
 
   test -f "$APP_DIR/application.py"
   test -f "$APP_DIR/requirements.txt"
-  python3.11 -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/python" -m pip install --upgrade pip
-  "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
+  python3 -m venv "$VENV_DIR"
+  "$VENV_DIR/bin/python" -m pip install --no-cache-dir --upgrade pip
+  "$VENV_DIR/bin/python" -m pip install --no-cache-dir -r "$APP_DIR/requirements.txt"
+  py_minor="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 
   test -d "$(dirname "$WSGI_FILE")" || {
     echo "PythonAnywhere WSGI directory not found: $(dirname "$WSGI_FILE")" >&2
@@ -65,7 +66,7 @@ install_staging() {
   cat > "$tmp" <<EOF
 import sys
 import site
-site.addsitedir("$VENV_DIR/lib/python3.11/site-packages")
+site.addsitedir("$VENV_DIR/lib/python$py_minor/site-packages")
 sys.path.insert(0, "$APP_DIR")
 from application import app as application
 EOF
@@ -76,7 +77,7 @@ EOF
 Staging WSGI file installed at: $WSGI_FILE
 Next: PythonAnywhere Dashboard -> Web -> fazilatma.pythonanywhere.com -> Reload.
 Then run: bash $APP_DIR/install_and_smoke_test.sh --test-live
-Expected for this incomplete scaffold: /api/port-status is HTTP 200; / is HTTP 503.
+Expected for this incomplete staging UI: /api/port-status and / are HTTP 200; deployable remains false.
 EOF
 }
 
@@ -103,12 +104,16 @@ print("Status OK:", d["source"]["branch"], "v" + d["source"]["version"], "(migra
 PY
 
   root_code="$(curl --silent --show-error --max-time 30 -o "$root_body" -w '%{http_code}' "$LIVE_URL/")"
-  if [[ "$root_code" != "503" ]]; then
-    echo "Expected gated root to return HTTP 503, got HTTP $root_code" >&2
+  if [[ "$root_code" != "200" ]]; then
+    echo "Expected the initial staging dashboard to return HTTP 200, got HTTP $root_code" >&2
     cat "$root_body" >&2 || true
     exit 1
   fi
-  echo "Root gate OK: HTTP 503 is expected until full PHP/Python feature parity is complete."
+  if ! grep -q 'Scraper |' "$root_body"; then
+    echo "Root responded but the staging dashboard title was not found." >&2
+    exit 1
+  fi
+  echo "Initial dashboard OK: root is HTTP 200; full scraper parity remains incomplete."
 }
 
 case "${1:-}" in

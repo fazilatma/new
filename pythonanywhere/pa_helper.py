@@ -26,7 +26,7 @@ from pathlib import Path
 TARGET_BRANCH = "arena/e868e86a-new"
 SOURCE_BRANCH = "arena/01a0ebf7-new"
 SOURCE_VERSION = "10.599"
-HELPER_VERSION = "1.0.4"
+HELPER_VERSION = "1.0.5"
 REPOSITORY_HTTPS = "https://github.com/Fazilatma/new.git"
 
 
@@ -193,9 +193,9 @@ def live_smoke(domain: str, wait_seconds: int) -> dict:
         "source_version_matches": version_ok,
         "source_branch_matches": branch_ok,
         "port_still_gated": gated_ok,
-        "root_http": root_code,
-        "root_503_is_expected": root_code == 503,
-        "passed": status_code == 200 and version_ok and branch_ok and gated_ok and root_code == 503,
+        "root_ui_http": root_code,
+        "initial_ui_served": root_code == 200,
+        "passed": status_code == 200 and version_ok and branch_ok and gated_ok and root_code == 200,
     }
 
 

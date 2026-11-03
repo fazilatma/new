@@ -90,12 +90,12 @@ class PythonAnywhereHelperTests(unittest.TestCase):
         def fake_request(url, timeout=25):
             if url.endswith("/api/port-status"):
                 return 200, payload
-            return 503, None
+            return 200, None
 
         with patch.object(pa_helper, "request_status", side_effect=fake_request):
             result = pa_helper.live_smoke("example.invalid", 10)
         self.assertTrue(result["passed"])
-        self.assertTrue(result["root_503_is_expected"])
+        self.assertTrue(result["initial_ui_served"])
 
 
 if __name__ == "__main__":

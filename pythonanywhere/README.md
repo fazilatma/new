@@ -2,7 +2,7 @@
 
 This directory begins the feature-equivalent Python port of the latest `arena/01a0ebf7-new` source (v10.599). It targets PythonAnywhere's WSGI model, but it is **not yet a usable replacement**: most of the PHP application remains unported.
 
-Read [`MIGRATION_STATUS.md`](MIGRATION_STATUS.md) and the generated source inventory before changing scope. The executable WSGI scaffold is deliberately gated: `/` returns HTTP 503 and unported routes return HTTP 501. This avoids silently pretending that a partial translation supports existing store operations.
+Read [`MIGRATION_STATUS.md`](MIGRATION_STATUS.md) and the generated source inventory before changing scope. The root now serves an initial Persian, mobile-friendly staging dashboard (HTTP 200) with a functional pagination preview. The app still reports `deployable: false`; unported scraper routes return HTTP 501. This UI milestone does not imply feature parity or production readiness.
 
 ## Local checks for the translated compatibility slice
 
@@ -16,7 +16,7 @@ The test suite includes the WSGI gate and currently has 20 passing tests.
 
 ## One-command PythonAnywhere staging helper
 
-For a staging smoke test only, bootstrap the standard-library helper from the chat branch; it clones/updates `~/new`, installs the Python requirements, backs up and writes the WSGI file, calls the PythonAnywhere reload API, tests the live endpoints, writes a redacted JSON report, pushes that report to `arena/e868e86a-new`, then reads it back from the branch and prints it:
+For a staging smoke test only, bootstrap the standard-library helper from the chat branch; it clones/updates `~/new`, installs the Python requirements, backs up and writes the WSGI file, pauses for a Web-tab reload when no PythonAnywhere API token is available, tests the live endpoints, writes a redacted JSON report, pushes that report to `arena/e868e86a-new`, then reads it back from the branch and prints it:
 
 ```bash
 mkdir -p ~/pa-bootstrap
@@ -36,4 +36,4 @@ curl -fsSL https://raw.githubusercontent.com/Fazilatma/new/arena/e868e86a-new/py
 
 If you explicitly want to remove the helper's selected virtualenv too (default `~/.virtualenvs/scraper4-pa`), use `--cleanup-only --remove-venv`; it asks you to type `DELETE` first. This removes that virtualenv, so the next install will recreate it. Or add `--cleanup-before-install` to the normal staging command to clear disposable caches first. These cleanup modes preserve the checkout, application data, reports, and WSGI backups.
 
-Expected smoke result for this scaffold: `/api/port-status` is HTTP 200 and `/` is HTTP 503. The root 503 is deliberate. **Do not route shop traffic to it.** When full parity is reached, the release must also include persistent database/media storage, JSON-state import/rollback, and tested worker scheduling, lane locks, restart/resume, credentials, and all external integrations.
+Expected staging smoke result: `/api/port-status` is HTTP 200, and `/` serves the initial dashboard with HTTP 200. `deployable` remains false and unported scraper routes return HTTP 501. **Do not route shop traffic to this scaffold.** When full parity is reached, the release must also include persistent database/media storage, JSON-state import/rollback, and tested worker scheduling, lane locks, restart/resume, credentials, and all external integrations.

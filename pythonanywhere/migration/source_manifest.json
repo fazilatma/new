@@ -17330,6 +17330,6 @@
   },
   "validation": {
     "python_unit_tests": "14 passed at initial helper + WSGI-gate milestone",
-    "pythonanywhere_wsgi": "scaffold only; root deliberately returns HTTP 503 until full parity"
+    "pythonanywhere_wsgi": "initial staging dashboard at root; deployable remains false until full parity"
   }
 }

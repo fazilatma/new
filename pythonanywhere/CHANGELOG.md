@@ -1,5 +1,15 @@
 # PythonAnywhere port and helper changelog
 
+## Helper 1.0.5 — 2026-11-03
+
+- Updated live smoke expectations to verify the initial dashboard is served at HTTP 200 while the application remains non-deployable.
+
+## Python UI 0.1.0 — 2026-11-03
+
+- Added the first responsive Persian dashboard at `/`, with a clear staging/incomplete banner, port-status display, and an interactive pagination preview.
+- Kept `deployable: false`; all unported scraper features remain unavailable and no production readiness is implied.
+- Updated the live smoke checks to expect the staging UI at HTTP 200.
+
 ## Helper 1.0.4 — 2026-11-03
 
 - Added cleanup-only and cleanup-before-install modes for the pip download cache and Python bytecode caches.
