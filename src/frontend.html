@@ -572,7 +572,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.19.1';
+const APP_VER = '1.19.2';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1357,16 +1357,17 @@ function renderOrders() {
     kpiCard('💰 فروش', fmtMoney(s.revenue), 'جمع فروش', 'grad-sky', '💵', '') +
     kpiCard('🧾 هزینه', fmtMoney(s.cost), 'جمع هزینه‌ها', 'grad-amber', '🧮', '') +
     kpiCard('✅ سود', fmtMoney(s.profit), `حاشیه ${toFa(s.margin.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', '📈', '');
-  $('#orders-tbl').innerHTML = `<thead><tr><th><input type="checkbox" onchange="toggleSelAll('orders', this.checked)" class="w-4 h-4 accent-indigo-600" title="انتخاب همه"></th><th>کد</th><th>تاریخ</th><th>مشتری</th><th>سود/زیان</th><th>کالا × تعداد</th><th>منبع/غرفه</th><th>تامین‌کننده</th><th>فروش</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
+  $('#orders-tbl').innerHTML = `<thead><tr><th><input type="checkbox" onchange="toggleSelAll('orders', this.checked)" class="w-4 h-4 accent-indigo-600" title="انتخاب همه"></th><th>کد</th><th>غرفه / منبع</th><th>تاریخ</th><th>مشتری</th><th>سود/زیان</th><th>کالا × تعداد</th><th>تامین‌کننده</th><th>فروش</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
     (list.slice(0, 300).map((o) => {
       const c = calc(o, true), st = STATUS[o.status] || STATUS.pending, pc = c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500';
       return `<tr class="${orderRowClass(o)} cursor-pointer" onclick="editOrder('${o.id}')">
         <td onclick="event.stopPropagation()"><input type="checkbox" ${state.sel.orders.has(String(o.id)) ? 'checked' : ''} onchange="toggleSel('orders','${o.id}',this.checked)" class="w-4 h-4 accent-indigo-600"></td>
-        <td class="num font-bold">${esc(o.order_code || '—')}</td><td class="num">${fmtJ(o.order_date)}</td>
+        <td class="num font-bold">${esc(o.order_code || '—')}</td>
+        <td class="text-xs">${o.source === 'basalam' ? `<div class="font-bold">${esc(boothName(o.booth_id))}</div><div class="text-[11px] text-slate-400">${SOURCES[o.source] || ''}</div>` : (SOURCES[o.source] || '—')}</td>
+        <td class="num">${fmtJ(o.order_date)}</td>
         <td><div class="font-bold">${esc(o.customer_name || '—')}</div><div class="text-[11px] text-slate-400 num">${esc(o.customer_phone || '')}</div></td>
         ${o.status === 'cancelled' ? '<td class="text-center text-slate-300">—</td>' : `<td class="num"><div class="font-black ${pc}">${fmtN(c.profit)}</div><div class="text-[11px] ${pc} opacity-70">${toFa(c.margin.toFixed(1))}٪</div></td>`}
         <td><div class="font-bold">${esc(o.product_name || '—')}</div><div class="text-[11px] text-slate-400 num">× ${fmtN(o.quantity || 1)}</div></td>
-        <td class="text-xs">${SOURCES[o.source] || ''}${o.source === 'basalam' ? `<div class="text-[11px] text-slate-400">${esc(boothName(o.booth_id))}</div>` : ''}</td>
         <td class="text-xs">${esc(supNameOf(o))}<div class="text-[11px] text-slate-400">${PTYPE[o.purchase_type] || PTYPE.cash}</div></td>
         <td class="num">${fmtN(c.revenue)}</td>
         <td><span class="chip ${st.c}">${st.i} ${st.t}</span></td>
