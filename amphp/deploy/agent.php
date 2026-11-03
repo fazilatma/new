@@ -1015,6 +1015,29 @@ class Scraper_Auto_Shop_Plugin {
 		return $out;
 	}
 
+	/** Map scraper product keys to their original array indexes without dropping duplicates. */
+	public static function profile_product_entry_key( $entry, $index ) {
+		if ( is_array( $entry ) && isset( $entry[1] ) && is_array( $entry[1] ) ) {
+			return (string) ( $entry[0] ?? $index );
+		}
+		return (string) ( is_array( $entry ) ? ( $entry['key'] ?? $entry['id'] ?? $index ) : $index );
+	}
+
+	public static function profile_product_key_map( $entries ) {
+		$keys = array();
+		foreach ( $entries as $index => $entry ) {
+			$keys[ self::profile_product_entry_key( $entry, $index ) ][] = $index;
+		}
+		return $keys;
+	}
+
+	/** Stable for a unique scraper key, scoped to the profile; duplicates use their index. */
+	public static function profile_product_id( $profile_key, $entry_key, $entry, $key_map ) {
+		$key = self::profile_product_entry_key( $entry, $entry_key );
+		$duplicate_index = count( $key_map[ $key ] ?? array() ) > 1 ? (string) $entry_key : '';
+		return 'sp_' . md5( wp_json_encode( array( (string) $profile_key, $key, $duplicate_index ), JSON_UNESCAPED_UNICODE ) );
+	}
+
 	public static function get_all_scraped_products() {
 		$settings = self::get_settings();
 		$source   = self::resolve_catalog_source( $settings );
@@ -1031,6 +1054,20 @@ class Scraper_Auto_Shop_Plugin {
 			$json = @file_get_contents( $profiles_file );
 			$data = @json_decode( (string) $json, true );
 			if ( is_array( $data ) ) {
+				// Choose the legacy-ID owner in storage order, as find_raw_scraped_product does.
+				$legacy_owners = array();
+				foreach ( $data as $owner_profile => $owner_data ) {
+					foreach ( (array) ( $owner_data['products'] ?? array() ) as $owner_index => $owner_entry ) {
+						$raw = is_array( $owner_entry ) && isset( $owner_entry[1] ) && is_array( $owner_entry[1] ) ? $owner_entry[1] : $owner_entry;
+						if ( ! is_array( $raw ) ) { continue; }
+						$title = trim( (string) ( $raw['title'] ?? $raw['name'] ?? '' ) );
+						if ( $title === '' ) { continue; }
+						$hash = md5( $title . (string) ( $raw['link'] ?? $raw['url'] ?? '' ) );
+						if ( ! isset( $legacy_owners[ $hash ] ) ) {
+							$legacy_owners[ $hash ] = array( (string) $owner_profile, (string) $owner_index );
+						}
+					}
+				}
 				foreach ( $data as $p_key => $p_item ) {
 					if ( ! is_array( $p_item ) ) {
 						continue;
@@ -1039,42 +1076,26 @@ class Scraper_Auto_Shop_Plugin {
 					if ( ! is_array( $raw_prods ) ) {
 						continue;
 					}
-					/* productsOrder: ترتیب نمایش اگر باشد */
-					$order = $p_item['productsOrder'] ?? $p_item['products_order'] ?? null;
-					$ordered_entries = array();
-					if ( is_array( $order ) && $order ) {
-						$map = array();
-						foreach ( $raw_prods as $ek => $entry ) {
-							if ( is_array( $entry ) && isset( $entry[1] ) && is_array( $entry[1] ) ) {
-								$k = (string) ( $entry[0] ?? $ek );
-								$map[ $k ] = $entry;
-							} elseif ( is_array( $entry ) && ( isset( $entry['title'] ) || isset( $entry['name'] ) ) ) {
-								$k = (string) ( $entry['key'] ?? $ek );
-								$map[ $k ] = $entry;
-							} else {
-								$map[ (string) $ek ] = $entry;
+					// Keep each stored entry, even when order keys or products are duplicated.
+					$order = $p_item['productsOrder'] ?? $p_item['products_order'] ?? array();
+					$keys_by_order = self::profile_product_key_map( $raw_prods );
+					$ordered_keys = array();
+					$used = array();
+					foreach ( is_array( $order ) ? $order : array() as $order_key ) {
+						if ( ! is_scalar( $order_key ) ) { continue; }
+						foreach ( $keys_by_order[ (string) $order_key ] ?? array() as $ek ) {
+							if ( ! isset( $used[ $ek ] ) ) {
+								$ordered_keys[] = $ek;
+								$used[ $ek ] = true;
 							}
-						}
-						$used = array();
-						foreach ( $order as $ok ) {
-							$ok = (string) $ok;
-							if ( isset( $map[ $ok ] ) ) {
-								$ordered_entries[] = $map[ $ok ];
-								$used[ $ok ] = true;
-							}
-						}
-						foreach ( $map as $mk => $mv ) {
-							if ( empty( $used[ $mk ] ) ) {
-								$ordered_entries[] = $mv;
-							}
-						}
-					} else {
-						foreach ( $raw_prods as $entry ) {
-							$ordered_entries[] = $entry;
 						}
 					}
+					foreach ( $raw_prods as $ek => $unused ) {
+						if ( ! isset( $used[ $ek ] ) ) { $ordered_keys[] = $ek; }
+					}
 
-					foreach ( $ordered_entries as $entry ) {
+					foreach ( $ordered_keys as $entry_key ) {
+						$entry = $raw_prods[ $entry_key ];
 						$prod = null;
 						if ( is_array( $entry ) ) {
 							if ( isset( $entry[1] ) && is_array( $entry[1] ) ) {
@@ -1099,10 +1120,17 @@ class Scraper_Auto_Shop_Plugin {
 						$hash = md5( $title . $link );
 						/* key پایدار اگر باشد */
 						$pkey = trim( (string) ( $prod['key'] ?? $prod['id'] ?? '' ) );
-						$uid  = $pkey !== '' ? ( 'k:' . $pkey ) : ( 'h:' . $hash );
-						if ( isset( $seen[ $uid ] ) || isset( $seen[ 'h:' . $hash ] ) ) {
+						// Profile-only shows every entry. Preserve legacy deduplication in merge mode.
+						$uid = $pkey !== '' ? ( 'k:' . $pkey ) : ( 'h:' . $hash );
+						if ( $source === 'merge' && ( isset( $seen[ $uid ] ) || isset( $seen[ 'h:' . $hash ] ) ) ) {
 							continue;
 						}
+						// Keep the old ID for the first occurrence so existing links and carts still work.
+						// Later identical records need a profile-scoped ID to stay independently addressable.
+						$is_legacy_owner = ( $legacy_owners[ $hash ] ?? null ) === array( (string) $p_key, (string) $entry_key );
+						$profile_id = $source === 'scraper' && ! $is_legacy_owner
+							? self::profile_product_id( $p_key, $entry_key, $entry, $keys_by_order )
+							: $hash;
 						$seen[ $uid ] = true;
 						$seen[ 'h:' . $hash ] = true;
 
@@ -1148,7 +1176,7 @@ class Scraper_Auto_Shop_Plugin {
 						}
 
 						$products[] = array(
-							'id'                  => $hash,
+							'id'                  => $profile_id,
 							'key'                 => $pkey,
 							'title'               => $title,
 							'has_price'           => $price_calc['has_price'],
@@ -1181,7 +1209,7 @@ class Scraper_Auto_Shop_Plugin {
 			plugin_dir_path( __FILE__ ) . 'woo_products_temp.json',
 			plugin_dir_path( __FILE__ ) . 'bsl_products.json',
 		);
-		foreach ( $woo_temps as $woo_temp ) {
+		foreach ( $source === 'merge' ? $woo_temps : array() as $woo_temp ) {
 			if ( ! file_exists( $woo_temp ) ) {
 				continue;
 			}
@@ -1232,7 +1260,7 @@ class Scraper_Auto_Shop_Plugin {
 		}
 
 		/* v13.3.8: ادغام با ووکامرس یا fallback اگر اسکرپر خالی است */
-		$need_woo = ( $source === 'merge' ) || empty( $products );
+		$need_woo = ( $source === 'merge' );
 		if ( $need_woo ) {
 			$woo_list = self::get_woocommerce_native_products();
 			if ( ! empty( $woo_list ) ) {
@@ -1252,7 +1280,7 @@ class Scraper_Auto_Shop_Plugin {
 		}
 
 		// Demo fallback only when truly empty (preview sandbox)
-		if ( empty( $products ) ) {
+		if ( empty( $products ) && $source !== 'scraper' ) {
 			$demo_items = array(
 				array(
 					'id'            => 'demo_1',
@@ -6366,6 +6394,7 @@ class Scraper_Auto_Shop_Plugin {
 			if ( ! is_array( $raw_prods ) ) {
 				continue;
 			}
+			$key_map = self::profile_product_key_map( $raw_prods );
 			foreach ( $raw_prods as $ek => $entry ) {
 				$prod = null;
 				$entry_is_pair = false;
@@ -6384,7 +6413,7 @@ class Scraper_Auto_Shop_Plugin {
 				$link  = (string) ( $prod['link'] ?? $prod['url'] ?? '' );
 				$hash  = md5( $title . $link );
 				$pkey  = (string) ( $prod['key'] ?? ( $entry_is_pair ? (string) ( $entry[0] ?? '' ) : (string) $ek ) );
-				if ( $hash === $id || $pkey === $id || (string) ( $prod['id'] ?? '' ) === $id ) {
+				if ( self::profile_product_id( $p_key, $ek, $entry, $key_map ) === $id || $hash === $id || $pkey === $id || (string) ( $prod['id'] ?? '' ) === $id ) {
 					return array(
 						'raw'         => $prod,
 						'profile_key' => (string) $p_key,
