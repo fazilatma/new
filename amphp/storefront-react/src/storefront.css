@@ -835,11 +835,18 @@
 /* Chat */
 .sf-chat-fab {
   position: fixed; z-index: 11000; bottom: calc(80px + var(--sf-safe-bottom));
-  width: auto; height: 50px; border-radius: 999px; padding: 0 16px;
-  display: inline-flex; align-items: center; gap: 8px;
-  background: var(--sf-accent); color: #fff;
-  font-weight: 900; box-shadow: 0 10px 24px rgba(239,57,78,.4);
+  width: auto; min-height: 60px; border-radius: 999px; padding: 6px 8px 6px 16px;
+  display: inline-flex; align-items: center; gap: 9px;
+  background: #422276; color: #fff; border: 2px solid #fff;
+  font-weight: 900; box-shadow: 0 0 0 3px rgba(66,34,118,.2), 0 10px 25px rgba(32,16,60,.34);
+  cursor: pointer;
 }
+.sf-chat-fab:focus-visible { outline: 3px solid #f8bf3b; outline-offset: 4px; }
+.sf-chat-fab-icon { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: #fff; color: #422276; flex-shrink: 0; }
+.sf-chat-fab-icon svg { display: block; width: 30px; height: 30px; }
+.sf-chat-fab-copy { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.35; white-space: nowrap; }
+.sf-chat-fab .lbl { display: block; font-size: .91rem; font-weight: 900; }
+.sf-chat-fab-hint { font-size: .7rem; font-weight: 600; color: #eee5ff; }
 .sf-chat-fab.left { left: 14px; }
 .sf-chat-fab.right { right: 14px; }
 .sf-chat-win {
@@ -970,8 +977,10 @@
   .sf-card-actions { grid-template-columns: 1fr; }
   .sf-hero-content { padding: 22px 16px; }
   .sf-search-panel input { font-size: .84rem; }
-  .sf-chat-fab .lbl { display: none; }
-  .sf-chat-fab { width: 50px; height: 50px; border-radius: 50%; padding: 0; justify-content: center; }
+  .sf-chat-fab { min-height: 56px; padding: 5px 7px 5px 13px; gap: 7px; }
+  .sf-chat-fab-icon { width: 38px; height: 38px; }
+  .sf-chat-fab .lbl { font-size: .82rem; }
+  .sf-chat-fab-hint { font-size: .65rem; }
   .sf-amazing-card { flex-basis: 132px; }
 }
 

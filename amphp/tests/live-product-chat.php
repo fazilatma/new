@@ -61,5 +61,45 @@ ck( Scraper_Auto_Shop_Plugin::live_product_chat_reply( 'سلام' ) === null, 'G
 $local = Scraper_Auto_Shop_Plugin::generate_smart_local_reply( 'مانتو آبی', '', $GLOBALS['settings'] );
 ck( strpos( $local, 'در انبار موجود' ) === false && strpos( $local, 'باید تأیید شود' ) !== false, 'Local fallback does not claim live availability' );
 ck( strpos( Scraper_Auto_Shop_Plugin::live_product_chat_reply( 'قیمت مانتو چنده؟' ), 'نام کامل' ) !== false, 'Partial product name asks for clarification' );
+// Marketplace endpoint selection is derived exclusively from the saved product URL.
+$market_profiles = array( 'a' => array( 'products' => array(
+ array( 'dk', array( 'title' => 'کالای دیجی', 'link' => 'https://www.digikala.com/product/dkp-12345/title/?x=ignored' ) ),
+ array( 'sn', array( 'title' => 'کالای اسنپ', 'link' => 'https://snappshop.ir/product/snp-25751584' ) ),
+ array( 'bad', array( 'title' => 'بدون شناسه', 'link' => 'https://snappshop.ir/category/mobile' ) ),
+) ) );
+file_put_contents( $GLOBALS['fixture_dir'] . '/profiles.json', json_encode( $market_profiles ) );
+$market_products = Scraper_Auto_Shop_Plugin::get_all_scraped_products();
+$GLOBALS['transients'] = array();
+$dk = array( 'status' => 200, 'data' => array( 'product' => array( 'id' => 12345, 'status' => 'marketable', 'default_variant' => array( 'price' => array( 'selling_price' => 1234000 ) ), 'variants' => array(
+ array( 'color' => array( 'title' => 'آبی' ), 'status' => 'marketable', 'price' => array( 'selling_price' => 1234000 ), 'seller' => array( 'title' => 'فروشنده اول' ) ),
+ array( 'color' => array( 'title' => 'قرمز' ), 'status' => 'out_of_stock', 'price' => array( 'selling_price' => 1300000 ) ),
+ array( 'size' => array( 'title' => 'M' ), 'price' => array( 'selling_price' => 1400000 ) ),
+) ) ) );
+$GLOBALS['response'] = array( 'code' => 200, 'body' => json_encode( $dk, JSON_UNESCAPED_UNICODE ) );
+$r = Scraper_Auto_Shop_Plugin::live_product_chat_reply( 'قیمت https://evil.example', $market_products[0]['id'] );
+$call = end( $GLOBALS['calls'] );
+ck( $call[0] === 'https://api.digikala.com/v2/product/12345/' && $call[1]['redirection'] === 0 && $call[1]['headers']['Accept'] === 'application/json', 'Digikala fixed API and safe transport' );
+ck( strpos( $r, '1234000 ریال' ) !== false && strpos( $r, 'آبی، فروشنده: فروشنده اول — موجود' ) !== false && strpos( $r, 'قرمز — ناموجود' ) !== false && strpos( $r, 'سایز: M — موجودی نامشخص' ) !== false, 'Digikala price and variant status' );
+$dk['data']['product']['id'] = 555; $GLOBALS['response']['body'] = json_encode( $dk );
+ck( strpos( Scraper_Auto_Shop_Plugin::live_product_chat_reply( 'قیمت', $market_products[0]['id'] ), 'قابل تأیید نیست' ) !== false, 'Mismatched Digikala ID rejected' );
+$sn = array( 'status' => true, 'data' => array( 'id' => 'opaque', 'page' => array( 'extra_meta' => array( array( 'property' => 'og:url', 'content' => 'https://snappshop.ir/product/snp-25751584' ) ) ),
+ 'configurable_attribute' => array( array( 'title' => 'رنگ', 'value' => array( 'id' => 'c1', 'title' => 'آبی' ) ), array( 'title' => 'سایز', 'value' => array( 'id' => 's1', 'title' => 'M' ) ) ),
+ 'default_variant' => array( 'vendor_product_info_id' => 'v1' ), 'vendors' => array( array( 'id' => 's', 'title' => 'فروشنده اول' ) ),
+ 'variants' => array( array( 'attribute_ids' => array( array( 'attribute_value_id' => 'c1' ), array( 'attribute_value_id' => 's1' ) ), 'vendor' => array(
+ array( 'vendor_product_info_id' => 'v1', 'vendor_id' => 's', 'price' => 500000, 'special_price' => 450000, 'stock' => 1, 'is_available_in_shop' => false, 'is_available_in_vendor_inventory' => true ),
+ array( 'vendor_product_info_id' => 'v2', 'price' => 500000, 'stock' => 0, 'is_available_in_shop' => false, 'is_available_in_vendor_inventory' => false ),
+ ) ) ) ) );
+$GLOBALS['response'] = array( 'code' => 200, 'body' => json_encode( $sn, JSON_UNESCAPED_UNICODE ) );
+$r = Scraper_Auto_Shop_Plugin::live_product_chat_reply( 'موجوده؟', $market_products[1]['id'] );
+$call = end( $GLOBALS['calls'] );
+ck( $call[0] === 'https://apix.snappshop.ir/products/v2/25751584' && $call[1]['headers']['Origin'] === 'https://snappshop.ir', 'SnappShop fixed API' );
+ck( strpos( $r, '450000 تومان' ) !== false && strpos( $r, 'رنگ: آبی، سایز: M، فروشنده: فروشنده اول — موجود' ) !== false && strpos( $r, 'سایز: M — ناموجود' ) !== false, 'SnappShop combinations, offer price and availability' );
+$sn['data']['page']['extra_meta'][0]['content'] = 'https://snappshop.ir/product/snp-999'; $GLOBALS['response']['body'] = json_encode( $sn );
+ck( strpos( Scraper_Auto_Shop_Plugin::live_product_chat_reply( 'موجوده', $market_products[1]['id'] ), 'قابل تأیید نیست' ) !== false, 'Unverified SnappShop identity rejected' );
+$before = count( $GLOBALS['calls'] );
+ck( strpos( Scraper_Auto_Shop_Plugin::live_product_chat_reply( 'قیمت', $market_products[2]['id'] ), 'قابل تأیید نیست' ) !== false && $before === count( $GLOBALS['calls'] ), 'Unknown marketplace paths rejected' );
+ck( Scraper_Auto_Shop_Plugin::live_marketplace_endpoint( array( 'host' => 'digikala.com.evil.test', 'path' => '/product/dkp-123/' ) ) === null, 'Lookalike domains are not trusted' );
+$GLOBALS['response'] = array( 'code' => 429, 'body' => '' );
+ck( strpos( Scraper_Auto_Shop_Plugin::live_product_chat_reply( 'قیمت', $market_products[1]['id'] ), 'قابل تأیید نیست' ) !== false, 'API failure is explicit and never stale' );
 unlink( $GLOBALS['fixture_dir'] . '/profiles.json' ); rmdir( $GLOBALS['fixture_dir'] );
 echo "Live product chat tests passed\n";

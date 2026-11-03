@@ -2198,12 +2198,18 @@ function SupportChat({ settings, ajax, productCtx, onClearProduct, openSignal })
 
   return (
     <>
-      <button type="button" className={`sf-chat-fab ${pos}`} data-amphp-sf="13.3.21" onClick={() => setOpen((v) => !v)}>
-        <span>💬</span>
-        <span className="lbl">{settings.chat_window_title || 'پشتیبانی'}</span>
+      <button type="button" className={`sf-chat-fab ${pos}`} data-amphp-sf="13.3.21" onClick={() => setOpen((v) => !v)} aria-label={open ? 'بستن دستیار هوشمند' : 'گفتگو با دستیار هوشمند'} aria-expanded={open} aria-controls="sf-support-chat">
+        <span className="sf-chat-fab-icon" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M6 7.5A4.5 4.5 0 0 1 10.5 3h11A4.5 4.5 0 0 1 26 7.5v10a4.5 4.5 0 0 1-4.5 4.5H15l-5.5 4v-4.1A4.5 4.5 0 0 1 6 17.5v-10Z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+            <circle cx="12" cy="12.5" r="1.6" fill="currentColor"/><circle cx="20" cy="12.5" r="1.6" fill="currentColor"/>
+            <path d="M12 17c1.2 1.4 6.8 1.4 8 0M25.5 23.5v5M23 26h5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+        </span>
+        <span className="sf-chat-fab-copy"><span className="lbl">دستیار هوشمند</span><span className="sf-chat-fab-hint">سؤالی دارید؟ بپرسید</span></span>
       </button>
       {open ? (
-        <div className={`sf-chat-win ${pos}`}>
+        <div id="sf-support-chat" className={`sf-chat-win ${pos}`}>
           <div className="sf-chat-head">
             <span>{settings.chat_window_title || 'پشتیبانی آنلاین'}</span>
             <button type="button" onClick={() => setOpen(false)} style={{ color: '#fff', fontWeight: 900 }}>✕</button>
