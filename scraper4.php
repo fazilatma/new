@@ -404,7 +404,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.592';
+const APP_VERSION = '10.593';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48509,6 +48509,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'START_SHOP_DAILY_FILE')!==false
         &&strpos($selfSrc,"{v:'10." . "592'")!==false
         &&version_compare(APP_VERSION,'10.592','>='));
+    $add('10.593','سه صف داخلی مستقل تاشو و نمودار روزانه پیشرفته است',
+        strpos($selfSrc,'id="startExtractQueueCard"')!==false
+        &&strpos($selfSrc,'id="startSyncQueuesSection"')!==false
+        &&strpos($selfSrc,"$('startProductOverview'),$('startExtractQueueCard'),$('startSyncQueuesSection')")!==false
+        &&strpos($selfSrc,'class="ssd-metrics"')!==false
+        &&strpos($selfSrc,'const smoothPath=')!==false
+        &&strpos($selfSrc,'class="ssd-tooltip"')!==false
+        &&strpos($selfSrc,"{v:'10." . "593'")!==false
+        &&version_compare(APP_VERSION,'10.593','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -92356,7 +92365,10 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                   @media(max-width:720px){.sync-pipe-list{grid-template-columns:1fr;gap:8px}.sync-pipe-card{padding:9px;border-radius:12px}.sync-pipe-step{grid-template-columns:29px minmax(0,1fr) auto;padding:7px}.sync-pipe-dot{width:27px;height:27px}.sync-pipe-track:before{right:14px}.sync-pipe-name{font-size:10px}.sync-pipe-count{flex:1;min-width:64px}.sync-detail-modal{align-items:flex-end;padding:0}.sync-detail-sheet{width:100%;max-height:88vh;border-radius:18px 18px 0 0;padding:13px}.sync-detail-top{top:-13px}}
                   @media(prefers-reduced-motion:reduce){.sync-pipe-step.active:after{animation:none}}
                 </style>
-                <div id="syncPipelineCards" class="sync-pipe-list"></div>
+                <section id="startSyncQueuesSection" class="start-inner-card">
+                  <div class="start-inner-collapse-head"><span style="font-size:11px;font-weight:800;color:#c4b5fd">🧭 صف‌های همگام‌سازی</span><small style="color:#64748b;font-size:9px">وضعیت زندهٔ هر پروفایل و مراحل اجرا</small></div>
+                  <div id="syncPipelineCards" class="sync-pipe-list"></div>
+                </section>
                 <div id="syncDetailModal" class="sync-detail-modal" onclick="if(event.target===this)syncDetailClose()">
                   <section class="sync-detail-sheet" role="dialog" aria-modal="true" aria-labelledby="syncDetailTitle">
                     <div class="sync-detail-top"><b id="syncDetailTitle" style="color:#f8fafc;flex:1">جزئیات مرحله</b><button class="btn btn-gray" onclick="syncDetailClose()">✕</button></div>
@@ -92374,8 +92386,8 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             </div>
 
             <div id="extractQueueSection" style="margin-top:10px">
-                <div style="background:#1e293b;border:1px solid #475569;border-radius:10px;padding:12px">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div id="startExtractQueueCard" style="background:#1e293b;border:1px solid #475569;border-radius:10px;padding:12px">
+                    <div class="start-inner-collapse-head" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                         <span style="font-weight:700;font-size:12px;color:#a855f7">📋 صف استخراج بک‌اند</span>
                         <div style="display:flex;gap:4px">
                             <button class="btn btn-gray" onclick="clearExtractQueueDone()" style="font-size:10px;padding:3px 8px" title="پاک کردن تکمیل‌شده‌ها">🧹</button>
@@ -92456,10 +92468,11 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             <div><h3 id="startShopDailyTitle">📈 نمودار روزانه مجموع محصولات همهٔ غرفه‌ها</h3><p>جمع محصولات فعال همهٔ غرفه‌های باسلام بر اساس آخرین جدول مغایرت هر روز؛ تاریخچه از زمان نصب این نسخه ثبت می‌شود.</p></div>
             <b id="startShopDailyCurrent">در حال دریافت…</b>
         </div>
+        <div id="startShopDailyMetrics" class="ssd-metrics"><div class="spo-skeleton"></div><div class="spo-skeleton"></div><div class="spo-skeleton"></div><div class="spo-skeleton"></div></div>
         <div id="startShopDailyBody" class="ssd-body"><div class="spo-skeleton"></div></div>
         <style>
-          .start-shop-daily{margin-top:12px}.ssd-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.ssd-head>div{flex:1}.ssd-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.ssd-head p{font-size:9.5px;color:#64748b;margin:0;line-height:1.7}.ssd-head>b{padding:6px 10px;border:1px solid #0e7490;border-radius:9px;background:#083344;color:#a5f3fc;font-size:11px;white-space:nowrap}.ssd-chart{width:100%;height:auto;min-height:220px;display:block;border:1px solid #273449;border-radius:12px;background:linear-gradient(180deg,#0b1324,#0f172a)}.ssd-grid{stroke:#334155;stroke-width:1}.ssd-line{fill:none;stroke:#22d3ee;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.ssd-area{fill:url(#ssdArea)}.ssd-dot{fill:#0f172a;stroke:#67e8f9;stroke-width:2}.ssd-axis{fill:#94a3b8;font:9px var(--app-font)}.ssd-value{fill:#cffafe;font:700 9px var(--app-font)}.ssd-empty{padding:32px;text-align:center;color:#64748b;border:1px dashed #334155;border-radius:12px;font-size:11px}.ssd-foot{display:flex;justify-content:space-between;gap:8px;margin-top:7px;color:#64748b;font-size:9px}.start-collapsible-card>.start-collapse-anchor{display:flex!important;align-items:center;gap:8px;cursor:pointer}.start-collapse-toggle{margin-inline-start:auto;flex:0 0 auto!important;width:auto!important;padding:3px 8px!important;border:1px solid #475569;border-radius:7px;background:#111827;color:#cbd5e1;font:700 10px var(--app-font);cursor:pointer}.start-collapse-toggle:hover{border-color:#22d3ee;color:#a5f3fc}.start-collapsible-card.start-collapsed>:not(.start-collapse-anchor){display:none!important}.start-collapsible-card.start-collapsed>.start-collapse-anchor{margin-bottom:0!important}.start-collapse-toggle .sc-open{display:none}.start-collapsible-card.start-collapsed .start-collapse-toggle .sc-open{display:inline}.start-collapsible-card.start-collapsed .start-collapse-toggle .sc-close{display:none}
-          @media(max-width:600px){.ssd-head{flex-wrap:wrap}.ssd-head>b{width:100%;text-align:center}.ssd-chart{min-height:190px}.ssd-axis{font-size:8px}}
+          .start-shop-daily{margin-top:12px}.ssd-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.ssd-head>div{flex:1}.ssd-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.ssd-head p{font-size:9.5px;color:#64748b;margin:0;line-height:1.7}.ssd-head>b{padding:6px 10px;border:1px solid #0e7490;border-radius:9px;background:#083344;color:#a5f3fc;font-size:11px;white-space:nowrap}.ssd-chart{width:100%;height:auto;min-height:220px;display:block;border:1px solid #273449;border-radius:12px;background:linear-gradient(180deg,#0b1324,#0f172a)}.ssd-grid{stroke:#334155;stroke-width:1}.ssd-line{fill:none;stroke:#22d3ee;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.ssd-area{fill:url(#ssdArea)}.ssd-dot{fill:#0f172a;stroke:#67e8f9;stroke-width:2}.ssd-axis{fill:#94a3b8;font:9px var(--app-font)}.ssd-value{fill:#cffafe;font:700 9px var(--app-font)}.ssd-empty{padding:32px;text-align:center;color:#64748b;border:1px dashed #334155;border-radius:12px;font-size:11px}.ssd-foot{display:flex;justify-content:space-between;gap:8px;margin-top:7px;color:#64748b;font-size:9px}.ssd-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:9px}.ssd-metric{position:relative;overflow:hidden;padding:10px 11px;border:1px solid #273449;border-radius:11px;background:linear-gradient(145deg,#111c31,#0b1324);box-shadow:inset 0 1px #ffffff08}.ssd-metric:after{content:"";position:absolute;inset:auto 0 0;height:2px;background:var(--ssd-accent,#22d3ee)}.ssd-metric small{display:block;color:#64748b;font-size:8.5px}.ssd-metric b{display:block;color:#f8fafc;font-size:16px;margin-top:3px;direction:ltr;text-align:right}.ssd-metric em{display:block;color:var(--ssd-accent,#22d3ee);font-size:8px;font-style:normal;margin-top:2px}.ssd-chart-wrap{position:relative}.ssd-tooltip{position:absolute;z-index:3;display:none;pointer-events:none;transform:translate(-50%,-115%);padding:6px 8px;border:1px solid #0e7490;border-radius:8px;background:#020617ed;color:#cffafe;box-shadow:0 8px 22px #0009;font-size:9px;white-space:nowrap}.ssd-chart-wrap:hover .ssd-tooltip.active{display:block}.ssd-guide{stroke:#67e8f9;stroke-width:1;stroke-dasharray:3 4;opacity:0}.ssd-hit{fill:transparent;cursor:crosshair}.ssd-hit:hover+.ssd-guide{opacity:.65}.ssd-hit:hover~.ssd-dot{filter:drop-shadow(0 0 5px #22d3ee)}.start-inner-card{margin-top:10px;padding:9px;border:1px solid #334155;border-radius:11px;background:#0b132466}.start-inner-collapse-head{display:flex;align-items:center;gap:8px}.start-inner-collapse-head>span:first-child{flex:1}.start-collapsible-card>.start-collapse-anchor{display:flex!important;align-items:center;gap:8px;cursor:pointer}.start-collapse-toggle{margin-inline-start:auto;flex:0 0 auto!important;width:auto!important;padding:3px 8px!important;border:1px solid #475569;border-radius:7px;background:#111827;color:#cbd5e1;font:700 10px var(--app-font);cursor:pointer}.start-collapse-toggle:hover{border-color:#22d3ee;color:#a5f3fc}.start-collapsible-card.start-collapsed>:not(.start-collapse-anchor){display:none!important}.start-collapsible-card.start-collapsed>.start-collapse-anchor{margin-bottom:0!important}.start-collapse-toggle .sc-open{display:none}.start-collapsible-card.start-collapsed .start-collapse-toggle .sc-open{display:inline}.start-collapsible-card.start-collapsed .start-collapse-toggle .sc-close{display:none}
+          @media(max-width:600px){.ssd-head{flex-wrap:wrap}.ssd-head>b{width:100%;text-align:center}.ssd-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.ssd-metric{padding:8px}.ssd-metric b{font-size:14px}.ssd-chart{min-height:190px}.ssd-axis{font-size:8px}}
         </style>
     </section>
 </div>
@@ -93790,9 +93803,11 @@ function scheduleStartBreakdownRefresh(){clearTimeout(startBreakdownRefreshTimer
 function spoNum(n){try{return Number(n||0).toLocaleString('fa-IR')}catch(e){return toFa(n||0)}}
 function initStartCollapsibles(){
   const pane=$('pane-start');if(!pane)return;
-  Array.from(pane.children).filter(card=>card.classList&&card.classList.contains('card')).forEach((card,i)=>{
+  const top=Array.from(pane.children).filter(card=>card.classList&&card.classList.contains('card'));
+  const nested=[$('startProductOverview'),$('startExtractQueueCard'),$('startSyncQueuesSection')].filter(Boolean);
+  top.concat(nested).forEach((card,i)=>{
     if(card.dataset.startCollapseReady==='1')return;
-    const direct=Array.from(card.children),anchor=direct.find(x=>x.classList&&(x.classList.contains('section-title')||x.classList.contains('mode-tabs')||x.classList.contains('spb-head')||x.classList.contains('ssd-head')));
+    const direct=Array.from(card.children),anchor=direct.find(x=>x.classList&&(x.classList.contains('section-title')||x.classList.contains('mode-tabs')||x.classList.contains('spb-head')||x.classList.contains('ssd-head')||x.classList.contains('spo-head')||x.classList.contains('start-inner-collapse-head')));
     if(!anchor)return;const key=card.id||('start-section-'+i);if(!card.id)card.id=key;let saved=null;try{saved=localStorage.getItem('s4-start-collapse:'+key)}catch(e){}
     card.dataset.startCollapseReady='1';card.classList.add('start-collapsible-card');anchor.classList.add('start-collapse-anchor');
     const btn=document.createElement('button');btn.type='button';btn.className='start-collapse-toggle';btn.title='آزمایشی: باز/بسته کردن این بخش بدون حذف یا بازسازی محتوا';btn.setAttribute('aria-controls',key);btn.innerHTML='<span class="sc-close">جمع کردن ▴</span><span class="sc-open">باز کردن ▾</span>';
@@ -93801,16 +93816,24 @@ function initStartCollapsibles(){
   });
 }
 function renderStartShopDaily(d){
-  const body=$('startShopDailyBody'),badge=$('startShopDailyCurrent');if(!body||!badge)return;
+  const body=$('startShopDailyBody'),badge=$('startShopDailyCurrent'),metrics=$('startShopDailyMetrics');if(!body||!badge||!metrics)return;
   const rows=(Array.isArray(d&&d.daily_shop_history)?d.daily_shop_history:[]).filter(x=>x&&/^\d{4}-\d{2}-\d{2}$/.test(String(x.date||''))).slice(-30);
   const current=parseInt((d&&d.shop_total)||0),shops=parseInt((d&&d.shop_count)||0);badge.textContent=spoNum(current)+' محصول · '+spoNum(shops)+' غرفه';
-  if(!rows.length){body.innerHTML='<div class="ssd-empty">هنوز دادهٔ روزانه‌ای ثبت نشده است؛ نخستین نقطه با همین به‌روزرسانی ذخیره می‌شود.</div>';return;}
-  const w=920,h=270,ml=64,mr=22,mt=24,mb=48,pw=w-ml-mr,ph=h-mt-mb,vals=rows.map(x=>Math.max(0,parseInt(x.total)||0));
-  let lo=Math.min(...vals),hi=Math.max(...vals);if(lo===hi){lo=Math.max(0,lo-Math.max(1,Math.round(lo*.05)));hi+=Math.max(1,Math.round(hi*.05))}else{const pad=Math.max(1,Math.round((hi-lo)*.12));lo=Math.max(0,lo-pad);hi+=pad}
-  const x=i=>ml+(rows.length===1?pw/2:i*pw/(rows.length-1)),y=v=>mt+(hi-v)*ph/Math.max(1,hi-lo),pts=vals.map((v,i)=>x(i).toFixed(1)+','+y(v).toFixed(1)).join(' '),area=(rows.length===1?(x(0)-1)+','+y(vals[0])+' '+(x(0)+1)+','+y(vals[0]):pts)+' '+x(rows.length-1)+','+(mt+ph)+' '+x(0)+','+(mt+ph);
-  let grid='',labels='',dots='';for(let i=0;i<5;i++){const gy=mt+i*ph/4,v=Math.round(hi-i*(hi-lo)/4);grid+='<line class="ssd-grid" x1="'+ml+'" y1="'+gy+'" x2="'+(w-mr)+'" y2="'+gy+'"/><text class="ssd-axis" x="'+(ml-8)+'" y="'+(gy+3)+'" text-anchor="end">'+spoNum(v)+'</text>'}
-  const labelEvery=Math.max(1,Math.ceil(rows.length/7));rows.forEach((r,i)=>{const xx=x(i),yy=y(vals[i]);if(i%labelEvery===0||i===rows.length-1)labels+='<text class="ssd-axis" x="'+xx+'" y="'+(h-18)+'" text-anchor="middle">'+esc(String(r.date).slice(5).replace('-','/'))+'</text>';dots+='<circle class="ssd-dot" cx="'+xx+'" cy="'+yy+'" r="4"><title>'+esc(r.date)+' · '+spoNum(vals[i])+' محصول · '+spoNum(r.shops||0)+' غرفه</title></circle>';if(i===rows.length-1)dots+='<text class="ssd-value" x="'+xx+'" y="'+Math.max(12,yy-10)+'" text-anchor="middle">'+spoNum(vals[i])+'</text>'});
-  body.innerHTML='<svg class="ssd-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="نمودار روزانه مجموع محصولات همه غرفه‌ها"><defs><linearGradient id="ssdArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee" stop-opacity=".35"/><stop offset="1" stop-color="#22d3ee" stop-opacity=".02"/></linearGradient></defs>'+grid+'<polygon class="ssd-area" points="'+area+'"/><polyline class="ssd-line" points="'+pts+'"/>'+dots+labels+'</svg><div class="ssd-foot"><span>نمایش '+spoNum(rows.length)+' روز اخیر</span><span>آخرین داده: '+esc(rows[rows.length-1].date)+' · بر پایهٔ جدول مغایرت</span></div>';
+  if(!rows.length){metrics.innerHTML='';body.innerHTML='<div class="ssd-empty">هنوز دادهٔ روزانه‌ای ثبت نشده است؛ نخستین نقطه با همین به‌روزرسانی ذخیره می‌شود.</div>';return;}
+  const vals=rows.map(x=>Math.max(0,parseInt(x.total)||0)),latest=vals[vals.length-1],previous=vals.length>1?vals[vals.length-2]:latest,delta=latest-previous,avg=Math.round(vals.reduce((a,v)=>a+v,0)/vals.length),min=Math.min(...vals),max=Math.max(...vals),deltaPct=previous?Math.round(delta*1000/previous)/10:0;
+  metrics.innerHTML='<div class="ssd-metric" style="--ssd-accent:#22d3ee"><small>آخرین مجموع</small><b>'+spoNum(latest)+'</b><em>'+spoNum(shops)+' غرفه فعال</em></div>'+
+    '<div class="ssd-metric" style="--ssd-accent:'+(delta>=0?'#34d399':'#fb7185')+'"><small>تغییر روزانه</small><b>'+(delta>0?'+':'')+spoNum(delta)+'</b><em>'+(delta>=0?'رشد ':'کاهش ')+spoNum(Math.abs(deltaPct))+'٪</em></div>'+
+    '<div class="ssd-metric" style="--ssd-accent:#a78bfa"><small>میانگین دوره</small><b>'+spoNum(avg)+'</b><em>'+spoNum(vals.length)+' روز ثبت‌شده</em></div>'+
+    '<div class="ssd-metric" style="--ssd-accent:#fbbf24"><small>کمینه تا بیشینه</small><b>'+spoNum(min)+' — '+spoNum(max)+'</b><em>دامنه '+spoNum(max-min)+' محصول</em></div>';
+  const w=920,h=300,ml=68,mr=26,mt=30,mb=52,pw=w-ml-mr,ph=h-mt-mb;
+  let lo=min,hi=max;if(lo===hi){lo=Math.max(0,lo-Math.max(1,Math.round(lo*.05)));hi+=Math.max(1,Math.round(hi*.05))}else{const pad=Math.max(1,Math.round((hi-lo)*.15));lo=Math.max(0,lo-pad);hi+=pad}
+  const x=i=>ml+(rows.length===1?pw/2:i*pw/(rows.length-1)),y=v=>mt+(hi-v)*ph/Math.max(1,hi-lo),points=vals.map((v,i)=>[x(i),y(v)]);
+  const smoothPath=ps=>{if(ps.length===1)return'M '+ps[0][0]+' '+ps[0][1];let p='M '+ps[0][0]+' '+ps[0][1];for(let i=0;i<ps.length-1;i++){const p0=ps[i-1]||ps[i],p1=ps[i],p2=ps[i+1],p3=ps[i+2]||p2;p+=' C '+(p1[0]+(p2[0]-p0[0])/6)+' '+(p1[1]+(p2[1]-p0[1])/6)+', '+(p2[0]-(p3[0]-p1[0])/6)+' '+(p2[1]-(p3[1]-p1[1])/6)+', '+p2[0]+' '+p2[1]}return p};
+  const linePath=smoothPath(points),areaPath=linePath+' L '+x(rows.length-1)+' '+(mt+ph)+' L '+x(0)+' '+(mt+ph)+' Z',avgY=y(avg);
+  let grid='',labels='',marks='';for(let i=0;i<5;i++){const gy=mt+i*ph/4,v=Math.round(hi-i*(hi-lo)/4);grid+='<line class="ssd-grid" x1="'+ml+'" y1="'+gy+'" x2="'+(w-mr)+'" y2="'+gy+'"/><text class="ssd-axis" x="'+(ml-9)+'" y="'+(gy+3)+'" text-anchor="end">'+spoNum(v)+'</text>'}
+  const labelEvery=Math.max(1,Math.ceil(rows.length/7)),hitW=Math.max(18,pw/Math.max(1,rows.length));rows.forEach((r,i)=>{const xx=x(i),yy=y(vals[i]);if(i%labelEvery===0||i===rows.length-1)labels+='<text class="ssd-axis" x="'+xx+'" y="'+(h-19)+'" text-anchor="middle">'+esc(String(r.date).slice(5).replace('-','/'))+'</text>';marks+='<g><rect class="ssd-hit" data-i="'+i+'" x="'+(xx-hitW/2)+'" y="'+mt+'" width="'+hitW+'" height="'+ph+'"/><line class="ssd-guide" x1="'+xx+'" y1="'+mt+'" x2="'+xx+'" y2="'+(mt+ph)+'"/><circle class="ssd-dot" cx="'+xx+'" cy="'+yy+'" r="4.5"/></g>';if(i===rows.length-1)marks+='<text class="ssd-value" x="'+xx+'" y="'+Math.max(14,yy-11)+'" text-anchor="middle">'+spoNum(vals[i])+'</text>'});
+  body.innerHTML='<div class="ssd-chart-wrap"><div class="ssd-tooltip" role="status"></div><svg class="ssd-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="نمودار روزانه مجموع محصولات همه غرفه‌ها"><defs><linearGradient id="ssdArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee" stop-opacity=".42"/><stop offset=".6" stop-color="#2563eb" stop-opacity=".12"/><stop offset="1" stop-color="#22d3ee" stop-opacity=".01"/><filter id="ssdGlow"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>'+grid+'<path class="ssd-area" d="'+areaPath+'"/><line x1="'+ml+'" y1="'+avgY+'" x2="'+(w-mr)+'" y2="'+avgY+'" stroke="#a78bfa" stroke-width="1.3" stroke-dasharray="6 5" opacity=".75"/><text class="ssd-axis" x="'+(w-mr)+'" y="'+(avgY-5)+'" text-anchor="end">میانگین '+spoNum(avg)+'</text><path class="ssd-line" d="'+linePath+'" filter="url(#ssdGlow)"/>'+marks+labels+'</svg></div><div class="ssd-foot"><span>نمایش '+spoNum(rows.length)+' روز اخیر · برای جزئیات روی نمودار حرکت کنید</span><span>آخرین داده: '+esc(rows[rows.length-1].date)+' · بر پایهٔ جدول مغایرت</span></div>';
+  const wrap=body.querySelector('.ssd-chart-wrap'),tip=body.querySelector('.ssd-tooltip');body.querySelectorAll('.ssd-hit').forEach(hit=>{hit.addEventListener('mouseenter',()=>{const i=parseInt(hit.dataset.i),r=rows[i];tip.innerHTML='<b>'+spoNum(vals[i])+' محصول</b><br>'+esc(r.date)+' · '+spoNum(r.shops||0)+' غرفه';tip.classList.add('active')});hit.addEventListener('mousemove',e=>{const box=wrap.getBoundingClientRect();tip.style.left=(e.clientX-box.left)+'px';tip.style.top=(e.clientY-box.top)+'px'});hit.addEventListener('mouseleave',()=>tip.classList.remove('active'))});
 }
 function renderStartProfileBreakdown(d){
   const body=$('startProfileBreakdownBody'),foot=$('startProfileBreakdownFoot'),head=$('startProfileBreakdownHead'),meta=$('startProfileBreakdownMeta'),updated=$('startProfileBreakdownUpdatedAt');if(!body||!foot||!head)return;
@@ -100580,6 +100603,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.593', t:'✨ تاشوی مستقل صف‌ها و نمودار روزانهٔ پیشرفته', items:[
+    'نمای تفصیلی کل محصولات، صف استخراج بک‌اند و صف‌های همگام‌سازی اکنون داخل کارت اجرای استخراج نیز سه بخش مستقل تاشو هستند؛ بستن هرکدام هیچ وضعیت یا DOM داخلی را بازسازی نمی‌کند.',
+    'نمودار انتهایی با منحنی نرم، سطح گرادیانی، خط میانگین، راهنمای عمودی و tooltip تعاملی ارتقا یافت و روی موبایل نیز واکنش‌گراست.',
+    'چهار شاخص بالای نمودار آخرین مجموع، تغییر و درصد روزانه، میانگین دوره و بازهٔ کمینه تا بیشینه را آشکار نمایش می‌دهند.'
+  ]},
   {v:'10.592', t:'📈 بخش‌های تاشوی شروع و نمودار روزانهٔ مجموع غرفه‌ها', items:[
     'همهٔ کارت‌های اصلی تب شروع به‌صورت آزمایشی و بدون حذف یا بازسازی DOM تاشو شدند؛ وضعیت هر بخش مستقل در مرورگر حفظ می‌شود و با «باز کردن» دقیقاً به حالت اصلی برمی‌گردد.',
     'بعد از جدول انتهای صفحهٔ شروع، نمودار SVG روزانهٔ جمع محصولات فعال همهٔ غرفه‌های باسلام اضافه شد؛ هر روز فقط یک نقطهٔ پایدار روی سرور نگه می‌دارد و ۳۰ روز اخیر را نمایش می‌دهد.',
