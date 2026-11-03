@@ -403,7 +403,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.590';
+const APP_VERSION = '10.591';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48475,6 +48475,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'The legacy destination watchdog races that')!==false
         &&strpos($selfSrc,"{v:'10." . "590'")!==false
         &&version_compare(APP_VERSION,'10.590','>='));
+    $add('10.591','مالکیت فعال صف، حالت دو لین را پایدار نگه می‌دارد',
+        strpos($selfSrc,'Lane ownership is durable queue state')!==false
+        &&strpos($selfSrc,"in_array(\$lane,['fast','detail'],true)")!==false
+        &&strpos($selfSrc,"['running','waiting','paused'],true")!==false
+        &&strpos($selfSrc,"{v:'10." . "591'")!==false
+        &&version_compare(APP_VERSION,'10.591','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -78992,7 +78998,17 @@ function bslQueueCatInfo(array $cfg): array {
  * lock/progress/products lane. Unlabelled legacy rows remain on the legacy lane. */
 function bslParallelProfileLanesEnabled(?array $cn=null): bool {
     if($cn===null)$cn=loadConnections();
-    return !empty($cn['basalam']['parallel_profile_lanes']);
+    if(!empty($cn['basalam']['parallel_profile_lanes']))return true;
+    /* Lane ownership is durable queue state. A temporarily missing/overwritten
+       setting must not send existing fast/detail rows back through the legacy
+       watchdog. Keep physical mode until every owned active row is terminal. */
+    $raw=is_file(BSL_QUEUE_FILE)?json_decode((string)@file_get_contents(BSL_QUEUE_FILE),true):null;
+    foreach((array)($raw['entries']??[]) as $row){
+        if(!is_array($row)||!in_array((string)($row['status']??''),['running','waiting','paused'],true))continue;
+        $lane=strtolower(trim((string)($row['lane']??'')));
+        if(in_array($lane,['fast','detail'],true))return true;
+    }
+    return false;
 }
 /** Return one lane's share of the bounded cross-lane concurrency budget. */
 function bslParallelLaneBudget(int $configured,string $lane,bool $bothActive): int {
@@ -100499,6 +100515,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.591', t:'🔒 مالکیت صف، دو لین را تا تخلیه پایدار نگه می‌دارد', items:[
+    'وجود هر ردیف فعال running/waiting/paused با lane=fast یا lane=detail اکنون منبع پایدار فعال‌بودن دو لین است؛ حذف یا بازنویسی موقت فلگ تنظیمات نمی‌تواند backlog موجود را به watchdog قدیمی برگرداند.',
+    'پس از terminal شدن همهٔ ردیف‌های مالک‌دار، تنظیم ذخیره‌شده دوباره تعیین‌کننده است؛ بنابراین مهاجرت صف نیمه‌تمام ایمن است و حالت legacy بدون کار فعال نیز محترم می‌ماند.'
+  ]},
   {v:'10.590', t:'🚦 حذف رقابت watchdog قدیمی با دو لین باسلام', items:[
     'وقتی دو لین فیزیکی باسلام فعال‌اند، نگهبان ابتدایی، پمپ عمومی و نگهبان پایانی legacy دیگر صف مشترک باسلام را resume یا بازنویسی نمی‌کنند؛ بازیابی فقط به پمپ flock-aware خود لین ۱ و لین ۲ سپرده می‌شود.',
     'این تغییر حلقهٔ هزاران dispatch بی‌مالک، progress مشترک متناقض و جلوگیری از رفتن لین ۱ به ردیف بعدی را حذف می‌کند؛ مسیر عمومی ووکامرس بدون تغییر می‌ماند.',
