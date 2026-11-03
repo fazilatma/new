@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.599';
+const APP_VERSION = '10.600';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48628,6 +48628,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"mode==='daily'?'daily':'update'")!==false
         &&strpos($selfSrc,"{v:'10." . "599'")!==false
         &&version_compare(APP_VERSION,'10.599','>='));
+    $add('10.600','استعلام گفتگوهای باسلام نام غرفه را در ستون مستقل نشان می‌دهد',
+        strpos($selfSrc,"\$chatShops=bslChatShops(\$cn)")!==false
+        &&strpos($selfSrc,"\$n['shop_name']=trim")!==false
+        &&strpos($selfSrc,"\$n['vendor_id']=\$vendorId")!==false
+        &&strpos($selfSrc,"<th>نام غرفه</th>")!==false
+        &&strpos($selfSrc,"esc(r.shop_name||'غرفهٔ پیش‌فرض')")!==false
+        &&strpos($selfSrc,"{v:'10." . "600'")!==false
+        &&version_compare(APP_VERSION,'10.600','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -72552,8 +72560,25 @@ if (isset($_GET['bsl_chats_list'])) {
             JSON_UNESCAPED_UNICODE); exit;
     }
     $raw = $r['body']['data']['chats'] ?? ($r['body']['data'] ?? []);
+    /* Inquiry rows must carry shop identity. Prefer an explicit vendor id from
+       the chat payload, then fall back to the shop owning the token used for
+       this request. This also remains correct if Basalam starts returning
+       account-wide chats through one token. */
+    $chatShops=bslChatShops($cn);$chatShopByVendor=[];$requestShop=null;
+    foreach($chatShops as $sh){
+        $chatShopByVendor[(int)($sh['vendor_id']??0)]=$sh;
+        if(!empty($sh['is_default'])||hash_equals((string)($sh['token']??''),$tk))$requestShop=$sh;
+    }
+    if(!$requestShop&&$chatShops)$requestShop=$chatShops[0];
     $rows = [];
-    foreach ($raw as $c) { if (is_array($c)) $rows[] = bslNormalizeChat($c); }
+    foreach ($raw as $c) {
+        if (!is_array($c)) continue;
+        $vendorId=(int)($c['vendor_id']??($c['vendor']['id']??($c['shop']['vendor_id']??($c['shop']['id']??0))));
+        $shop=($vendorId>0&&isset($chatShopByVendor[$vendorId]))?$chatShopByVendor[$vendorId]:$requestShop;
+        $n=bslNormalizeChat($c);$n['vendor_id']=$vendorId>0?$vendorId:(int)($shop['vendor_id']??0);
+        $n['shop_name']=trim((string)($shop['name']??''))?:($n['vendor_id']>0?('غرفهٔ '.$n['vendor_id']):'غرفهٔ پیش‌فرض');
+        $rows[]=$n;
+    }
     $unseen = 0;
     foreach ($rows as $n) { if ($n['unseen'] > 0) $unseen++; }
     echo json_encode(['ok' => true, 'rows' => $rows, 'total' => count($rows), 'unseen' => $unseen,
@@ -100947,6 +100972,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.600', t:'🏪 نمایش نام غرفه در استعلام گفتگوهای باسلام', items:[
+    'جدول «اعلان‌ها ← استعلام ← گفتگوها» ستون مستقل «نام غرفه» دارد و برای هر گفتگو نام غرفه و شناسهٔ vendor را نمایش می‌دهد.',
+    'هویت غرفه ابتدا از vendor_id خود پاسخ گفتگو و تنظیمات غرفه‌ها تطبیق داده می‌شود و در نبود آن، غرفهٔ مالک توکن استعلام به‌عنوان fallback امن ثبت می‌شود.'
+  ]},
   {v:'10.599', t:'📈 دو نمای زمانی برای نمودار محصولات غرفه‌ها', items:[
     'دراپ‌داون نمودار دو حالت دارد: «بعد از هر به‌روزرسانی جدول» که با هر دریافت موفق جدول یک نقطهٔ پایدار اضافه می‌کند، و «نمودار روزانه» که رفتار یک نقطه برای هر روز را حفظ می‌کند.',
     'تاریخچهٔ بروزرسانی‌ها جدا از تاریخچهٔ روزانه روی سرور نگه‌داری می‌شود؛ ۷۲۰ نقطهٔ آخر ذخیره و ۶۰ نقطهٔ اخیر نمایش داده می‌شود.',
@@ -110200,7 +110229,7 @@ function inqRenderBody(){
     +'<th style="width:34px"><input type="checkbox" onclick="inqSelectAll(this.checked)" style="width:15px;height:15px;cursor:pointer"></th>';
   h+=isOrd
     ?'<th>شماره</th><th>مشتری</th><th>مبلغ</th><th>وضعیت</th><th>تاریخ</th>'
-    :'<th>مشتری</th><th>آخرین پیام</th><th>خوانده‌نشده</th><th>زمان</th>';
+    :'<th>مشتری</th><th>نام غرفه</th><th>آخرین پیام</th><th>خوانده‌نشده</th><th>زمان</th>';
   h+='</tr></thead><tbody>';
   rows.forEach(r=>{
     const id=inqId(r);
@@ -110220,6 +110249,7 @@ function inqRenderBody(){
       h+='<td style="font-size:10px;color:#94a3b8;white-space:nowrap">'+esc(inqDate(r.created_at))+'</td>';
     }else{
       h+='<td>'+esc(r.who||'—')+'</td>';
+      h+='<td style="min-width:140px"><span style="color:#67e8f9;font-weight:700">'+esc(r.shop_name||'غرفهٔ پیش‌فرض')+'</span>'+(r.vendor_id?'<div style="font-size:9px;color:#64748b;direction:ltr;text-align:right">#'+toFa(r.vendor_id)+'</div>':'')+'</td>';
       h+='<td style="max-width:340px;color:#cbd5e1">'+esc((r.text||'').slice(0,90))+'</td>';
       h+='<td style="text-align:center">'+(r.unseen>0
         ?'<span style="font-size:10px;padding:2px 7px;border-radius:10px;background:#7f1d1d;color:#fca5a5">'+toFa(r.unseen)+'</span>'
