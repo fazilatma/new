@@ -26,7 +26,7 @@ from pathlib import Path
 TARGET_BRANCH = "arena/e868e86a-new"
 SOURCE_BRANCH = "arena/01a0ebf7-new"
 SOURCE_VERSION = "10.599"
-HELPER_VERSION = "1.0.1"
+HELPER_VERSION = "1.0.2"
 REPOSITORY_HTTPS = "https://github.com/Fazilatma/new.git"
 
 
@@ -53,8 +53,8 @@ def ensure_checkout(repo: Path) -> str:
 
 
 def install_environment(repo: Path, venv: Path) -> None:
-    if sys.version_info < (3, 11):
-        raise RuntimeError(f"Python 3.11+ is required, found {platform.python_version()}")
+    if sys.version_info < (3, 10):
+        raise RuntimeError(f"Python 3.10+ is required, found {platform.python_version()}")
     app_dir = repo / "pythonanywhere"
     if not (app_dir / "requirements.txt").is_file():
         raise RuntimeError(f"Python port not found under {app_dir}")

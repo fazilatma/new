@@ -1,5 +1,9 @@
 # PythonAnywhere port and helper changelog
 
+## Helper 1.0.2 — 2026-11-03
+
+- Lowered the helper minimum to Python 3.10, matching the port's syntax and allowing PythonAnywhere's reported Python 3.10.5 runtime; documented using the matching web-app runtime.
+
 ## Helper 1.0.1 — 2026-11-03
 
 - Added a hidden prompt for a GitHub token and HTTPS askpass authentication so report pushes do not require PythonAnywhere SSH-key setup. Tokens stay out of the Git remote URL and report.
