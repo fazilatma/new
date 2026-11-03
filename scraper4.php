@@ -404,7 +404,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.597';
+const APP_VERSION = '10.598';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48595,6 +48595,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"s4WhenAppReady(()=>s4RegisterShellWorker(),1200)")!==false
         &&strpos($selfSrc,"{v:'10." . "597'")!==false
         &&version_compare(APP_VERSION,'10.597','>='));
+    $add('10.598','تنظیمات دسته‌بندی باسلام مستقل و پایدار تاشو است',
+        strpos($selfSrc,'id="bslCategorySettingsHead"')!==false
+        &&strpos($selfSrc,'id="bslCategorySettingsBody"')!==false
+        &&strpos($selfSrc,'function toggleBslCategorySettings(forceCollapsed)')!==false
+        &&strpos($selfSrc,"localStorage.setItem(BSL_CATEGORY_COLLAPSE_KEY")!==false
+        &&strpos($selfSrc,"localStorage.getItem(BSL_CATEGORY_COLLAPSE_KEY)==='1'")!==false
+        &&strpos($selfSrc,"a.style.display='none'")!==false
+        &&strpos($selfSrc,"{v:'10." . "598'")!==false
+        &&version_compare(APP_VERSION,'10.598','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -93551,8 +93560,11 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div class="card" style="margin-top:14px">
 <div class="section-title" style="color:#22d3ee">📤 ارسال باسلام</div>
 
-<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;margin-bottom:10px">
-<div style="font-size:11px;color:#fbbf24;font-weight:700;margin-bottom:8px">📂 تنظیمات دسته‌بندی باسلام</div>
+<div id="bslCategorySettingsCard" style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px;margin-bottom:10px">
+<div id="bslCategorySettingsHead" role="button" tabindex="0" aria-controls="bslCategorySettingsBody" aria-expanded="true" onclick="toggleBslCategorySettings()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleBslCategorySettings();}" style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#fbbf24;font-weight:700;font-size:11px">
+<span style="flex:1">📂 تنظیمات دسته‌بندی باسلام</span><span id="bslCategorySettingsArrow" aria-hidden="true" style="font-size:10px;color:#94a3b8">▴</span>
+</div>
+<div id="bslCategorySettingsBody" style="margin-top:8px">
 <div class="crow"><label>دسته پیش‌فرض:</label><div style="flex:1;display:flex;flex-direction:column;position:relative"><input type="hidden" id="bsCat" value="0"><input type="text" id="bsCatSearch" placeholder="جستجو دسته..." style="width:100%;padding:6px 8px;border:1px solid #475569;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:12px;direction:rtl" autocomplete="off"><div id="bsCatList" style="display:none;position:absolute;top:100%;left:0;right:0;max-height:300px;overflow-y:auto;background:#1e293b;border:1px solid #475569;border-radius:6px;z-index:99999;direction:rtl"></div></div><button class="btn btn-gray" onclick="loadBslCats()" style="flex:0;padding:8px">🔄</button></div>
 <div style="margin-top:6px;padding-top:6px;border-top:1px solid #334155">
 <div style="font-size:11px;color:#94a3b8;margin-bottom:6px">📂 دسته‌های جایگزین (اگر دسته رد شد):</div>
@@ -93569,6 +93581,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
 <div class="crow"><label>🔄 تاخیر:</label><input type="number" id="bsRetryDelayMs" value="1000" min="0" max="30000" step="100" style="max-width:120px" dir="ltr"><small>ms</small></div>
 <div class="crow"><label>⏳ سقف هر محصول:</label><input type="number" id="bsProductTimeout" value="180" min="30" max="1800" step="30" style="max-width:120px" dir="ltr"><small>ثانیه؛ پس از آن محصول رد و صف ادامه می‌یابد</small></div>
 <div class="crow"><label>🚀 همزمانی ارسال:</label><input type="number" id="bsParallelN" value="4" min="1" max="8" step="1" style="max-width:80px" dir="ltr"><label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#93c5fd"><input type="checkbox" id="bsParallelAuto" checked> خودکار</label><small>۱ تا ۸ درخواست امن</small></div>
+</div>
 </div>
 
 <details class="alert alert-info hint-collapse" style="margin-bottom:8px"><summary><span>💡 <b id="bsN">۰</b> محصول با قیمت از <span id="bsT2">۰</span> کل</span></summary><div class="hint-body" style="font-size:11px">فقط محصولاتِ دارای <b>قیمت</b> به باسلام فرستاده می‌شوند. با تیکِ «ارسال همزمان به همهٔ غرفه‌ها» هر غرفه قیمتِ خودش را می‌گیرد.</div></details>
@@ -94365,6 +94378,21 @@ function toggleFullSettings(){
 /* v9.94 (۸ب): بعد از پایانِ ترنزیشنِ باز شدن، کلاس smenu-done می‌گیرد تا سقفِ
    max-height برداشته و overflow باز شود؛ موقعِ بستن اول برمی‌گردد به حالتِ
    سقف‌دار وگرنه انیمیشنِ بسته‌شدن اصلاً دیده نمی‌شود. */
+const BSL_CATEGORY_COLLAPSE_KEY='s4-bsl-category-settings-collapsed';
+function toggleBslCategorySettings(forceCollapsed){
+  const body=$('bslCategorySettingsBody'),head=$('bslCategorySettingsHead'),arrow=$('bslCategorySettingsArrow');if(!body||!head)return;
+  const collapsed=typeof forceCollapsed==='boolean'?forceCollapsed:body.style.display!=='none';
+  body.style.display=collapsed?'none':'';head.setAttribute('aria-expanded',collapsed?'false':'true');
+  if(arrow)arrow.textContent=collapsed?'▾':'▴';
+  if(collapsed){const a=$('bsCatList'),b=$('bslFallbackCatDropList');if(a)a.style.display='none';if(b)b.style.display='none';}
+  try{localStorage.setItem(BSL_CATEGORY_COLLAPSE_KEY,collapsed?'1':'0');}catch(e){}
+}
+function initBslCategorySettingsCollapse(){
+  let collapsed=false;try{collapsed=localStorage.getItem(BSL_CATEGORY_COLLAPSE_KEY)==='1';}catch(e){}
+  toggleBslCategorySettings(collapsed);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initBslCategorySettingsCollapse,{once:true});else initBslCategorySettingsCollapse();
+
 function toggleSmenu(hdr){
   const isOpen=hdr.classList.contains('open');
   hdr.classList.toggle('open');
@@ -100878,6 +100906,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.598', t:'📂 تنظیمات دسته‌بندی باسلام تاشو شد', items:[
+    'کادر تنظیمات دسته‌بندی باسلام با کلیک روی سربرگ یا کلیدهای Enter و Space جمع و باز می‌شود؛ کنترل‌ها در DOM می‌مانند و مقدارهای واردشده بازسازی یا پاک نمی‌شوند.',
+    'وضعیت باز یا بسته در localStorage همان مرورگر نگه‌داری می‌شود و پس از رفرش بازمی‌گردد؛ هنگام بستن، فهرست‌های باز دسته نیز بسته می‌شوند.'
+  ]},
   {v:'10.597', t:'💾 کش کامل نسخه‌دار برای رفرش فوری', items:[
     'سرویس‌ورکر یکپارچه، پوستهٔ کامل HTML و فایل‌های هم‌مبدأ رابط را در Cache Storage مرورگر نگه می‌دارد؛ رفرش معمولی مستقیماً از کش باز می‌شود و درخواست‌های API، صف و وضعیت همیشه شبکه‌ای می‌مانند.',
     'app_ready نسخهٔ زنده را با نسخهٔ پوسته مقایسه می‌کند؛ فقط هنگام تغییر نسخه، پوستهٔ تازه ابتدا از شبکه دریافت و به‌صورت اتمیک جایگزین می‌شود و سپس صفحه رفرش می‌گردد.',
