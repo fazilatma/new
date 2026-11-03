@@ -15,6 +15,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -25,9 +26,8 @@ from pathlib import Path
 TARGET_BRANCH = "arena/e868e86a-new"
 SOURCE_BRANCH = "arena/01a0ebf7-new"
 SOURCE_VERSION = "10.599"
-HELPER_VERSION = "1.0.0"
+HELPER_VERSION = "1.0.1"
 REPOSITORY_HTTPS = "https://github.com/Fazilatma/new.git"
-REPOSITORY_SSH = "git@github.com:Fazilatma/new.git"
 
 
 def run(args: list[str], *, cwd: Path | None = None, check: bool = True,
@@ -162,6 +162,36 @@ def live_smoke(domain: str, wait_seconds: int) -> dict:
     }
 
 
+def push_with_github_token(repo: Path) -> None:
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        token = getpass.getpass("GitHub token (input hidden; never written to report): ").strip()
+    if not token:
+        raise RuntimeError("GitHub token was empty")
+
+    # Keep the token out of the URL and process arguments. Git's askpass hook
+    # reads it from this child process's environment only for the HTTPS push.
+    with tempfile.TemporaryDirectory(prefix="pa-git-askpass-") as temp_dir:
+        askpass = Path(temp_dir) / "askpass.sh"
+        askpass.write_text(
+            '''#!/bin/sh
+case "$1" in
+  *Username*) printf '%s\\n' 'x-access-token' ;;
+  *Password*) printf '%s\\n' "$GITHUB_TOKEN" ;;
+  *) exit 1 ;;
+esac
+''',
+            encoding="utf-8",
+        )
+        os.chmod(askpass, 0o700)
+        push_env = os.environ.copy()
+        push_env["GITHUB_TOKEN"] = token
+        push_env["GIT_ASKPASS"] = str(askpass)
+        push_env["GIT_TERMINAL_PROMPT"] = "0"
+        run(["git", "-c", "credential.helper=", "push", REPOSITORY_HTTPS,
+             f"HEAD:refs/heads/{TARGET_BRANCH}"], cwd=repo, env=push_env)
+
+
 def push_report(repo: Path, report: dict) -> tuple[str, str, dict]:
     reports_dir = repo / "pythonanywhere" / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -179,11 +209,7 @@ def push_report(repo: Path, report: dict) -> tuple[str, str, dict]:
         "commit", "-m", f"Add PythonAnywhere smoke report {stamp}",
     ], cwd=repo)
     try:
-        push_url = os.environ.get("GITHUB_PUSH_URL", REPOSITORY_SSH)
-        push_env = os.environ.copy()
-        push_env["GIT_TERMINAL_PROMPT"] = "0"
-        push_env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
-        run(["git", "push", push_url, f"HEAD:refs/heads/{TARGET_BRANCH}"], cwd=repo, env=push_env)
+        push_with_github_token(repo)
         commit = run(["git", "rev-parse", "HEAD"], cwd=repo).stdout.strip()
         rel_path = str(report_path.relative_to(repo))
         run(["git", "fetch", "origin", TARGET_BRANCH], cwd=repo)
@@ -191,7 +217,7 @@ def push_report(repo: Path, report: dict) -> tuple[str, str, dict]:
         readback = json.loads(raw)
         return rel_path, commit, readback
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError("Report was saved locally but push/readback failed; configure a write-enabled GitHub SSH key on PythonAnywhere. " + exc.stdout[-500:]) from exc
+        raise RuntimeError("Report was saved locally but push/readback failed; check that the GitHub token has repository write access. " + exc.stdout[-500:]) from exc
 
 
 def main() -> int:

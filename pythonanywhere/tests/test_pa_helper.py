@@ -1,5 +1,8 @@
 import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -30,6 +33,26 @@ class PythonAnywhereHelperTests(unittest.TestCase):
         failure = HTTPError("https://example.invalid/", 503, "unavailable", {}, None)
         with patch.object(pa_helper.urllib.request, "urlopen", side_effect=failure):
             self.assertEqual(pa_helper.request_status("https://example.invalid/"), (503, None))
+
+    def test_github_token_is_passed_via_askpass_not_remote_url(self):
+        token = "test-only-secret-token"
+        observed = {}
+
+        def capture_push(args, *, cwd=None, check=True, env=None):
+            observed["args"] = args
+            observed["askpass"] = Path(env["GIT_ASKPASS"]).read_text(encoding="utf-8")
+            observed["env_token"] = env["GITHUB_TOKEN"]
+            return None
+
+        with patch.dict(os.environ, {"GITHUB_TOKEN": token}):
+            with patch.object(pa_helper, "run", side_effect=capture_push):
+                pa_helper.push_with_github_token(Path(tempfile.gettempdir()))
+
+        self.assertEqual(observed["env_token"], token)
+        self.assertNotIn(token, " ".join(observed["args"]))
+        self.assertNotIn(token, observed["askpass"])
+        self.assertIn("$GITHUB_TOKEN", observed["askpass"])
+        self.assertIn(pa_helper.REPOSITORY_HTTPS, observed["args"])
 
     def test_live_smoke_requires_pinned_source_and_gated_root(self):
         payload = {
