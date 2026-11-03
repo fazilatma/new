@@ -26,7 +26,7 @@ from pathlib import Path
 TARGET_BRANCH = "arena/e868e86a-new"
 SOURCE_BRANCH = "arena/01a0ebf7-new"
 SOURCE_VERSION = "10.599"
-HELPER_VERSION = "1.0.2"
+HELPER_VERSION = "1.0.3"
 REPOSITORY_HTTPS = "https://github.com/Fazilatma/new.git"
 
 
@@ -96,12 +96,15 @@ def install_wsgi(repo: Path, venv: Path, wsgi_file: Path) -> str:
     return backup
 
 
-def reload_pythonanywhere(username: str, domain: str) -> tuple[int, str]:
+def reload_pythonanywhere(username: str, domain: str) -> tuple[int | None, str]:
     token = os.environ.get("PA_API_TOKEN", "").strip()
     if not token:
-        token = getpass.getpass("PythonAnywhere API token (input hidden; never written to report): ").strip()
-    if not token:
-        raise RuntimeError("PythonAnywhere reload token was empty")
+        print("No PythonAnywhere API token needed. Open the Web tab, press Reload, then return here.")
+        try:
+            input("Press Enter after the Web app has reloaded: ")
+        except EOFError:
+            return None, "manual reload was not confirmed"
+        return None, "manual reload confirmed by operator"
     endpoint = (
         "https://www.pythonanywhere.com/api/v0/user/"
         + urllib.parse.quote(username, safe="")
@@ -255,8 +258,10 @@ def main() -> int:
         reload_code, reload_message = reload_pythonanywhere(args.username, args.domain)
         report["reload_http"] = reload_code
         report["reload_message"] = reload_message
+        report["reload_mode"] = "api" if reload_code is not None else "manual"
         report["smoke"] = live_smoke(args.live_host, max(10, args.wait_seconds))
-        report["passed"] = reload_code in (200, 201, 202) and report["smoke"]["passed"]
+        reload_ok = reload_code in (200, 201, 202) or reload_message == "manual reload confirmed by operator"
+        report["passed"] = reload_ok and report["smoke"]["passed"]
     except Exception as exc:  # report a concise error; don't dump env or credentials
         report["passed"] = False
         report["errors"].append(f"{type(exc).__name__}: {str(exc)[:400]}")

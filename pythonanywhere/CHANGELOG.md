@@ -1,5 +1,10 @@
 # PythonAnywhere port and helper changelog
 
+## Helper 1.0.3 — 2026-11-03
+
+- Made the PythonAnywhere API token optional: without it, the helper pauses for a manual Web-tab reload; only the GitHub token is needed to publish the report.
+- Clarified that the report is pushed to and read back from the branch, so terminal output does not need to be copied.
+
 ## Helper 1.0.2 — 2026-11-03
 
 - Lowered the helper minimum to Python 3.10, matching the port's syntax and allowing PythonAnywhere's reported Python 3.10.5 runtime; documented using the matching web-app runtime.

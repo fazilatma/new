@@ -12,7 +12,7 @@ From the repository root:
 PYTHONPATH=pythonanywhere python -m unittest discover -s pythonanywhere/tests -v
 ```
 
-The test suite includes the WSGI gate and currently has 18 passing tests.
+The test suite includes the WSGI gate and currently has 19 passing tests.
 
 ## One-command PythonAnywhere staging helper
 
@@ -24,6 +24,6 @@ curl -fsSL https://raw.githubusercontent.com/Fazilatma/new/arena/e868e86a-new/py
 env -u GITHUB_TOKEN -u PA_API_TOKEN python3 ~/pa-bootstrap/pa_helper.py --allow-incomplete-staging
 ```
 
-The helper prompts with hidden input for the PythonAnywhere API token and GitHub token when `PA_API_TOKEN` or `GITHUB_TOKEN` are not already set. The GitHub token is used only for the HTTPS push via Git's askpass hook; neither token is written to the report or embedded in the remote URL. Use a fine-grained GitHub token with contents write access to this repository. The report file path and commit are printed; the helper also verifies its readback from the branch. Override `--repo-dir`, `--venv-dir`, `--wsgi-file`, `--username`, `--domain`, or `--live-host` if PythonAnywhere's Web tab shows different paths/settings. The PythonAnywhere Web app must already exist and use the same Python minor version (3.10 or newer) as the `python3` command used to run the helper.
+The only token normally required is a GitHub token; the helper prompts for it with hidden input when `GITHUB_TOKEN` is unset. Use a fine-grained token with contents write access to this repository. The token is used only for the HTTPS report push via Git's askpass hook and is neither written to the report nor embedded in the remote URL. A PythonAnywhere API token is optional: if `PA_API_TOKEN` is unset, the helper asks you to manually press **Web → Reload** and then press Enter in the console. You do not need to copy terminal output—the redacted report is pushed to `arena/e868e86a-new`, read back by the helper, and can be retrieved from that branch. Override `--repo-dir`, `--venv-dir`, `--wsgi-file`, `--username`, `--domain`, or `--live-host` if PythonAnywhere's Web tab shows different paths/settings. The PythonAnywhere Web app must already exist and use the same Python minor version (3.10 or newer) as the `python3` command used to run the helper.
 
 Expected smoke result for this scaffold: `/api/port-status` is HTTP 200 and `/` is HTTP 503. The root 503 is deliberate. **Do not route shop traffic to it.** When full parity is reached, the release must also include persistent database/media storage, JSON-state import/rollback, and tested worker scheduling, lane locks, restart/resume, credentials, and all external integrations.

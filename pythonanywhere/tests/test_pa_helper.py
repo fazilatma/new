@@ -34,6 +34,12 @@ class PythonAnywhereHelperTests(unittest.TestCase):
         with patch.object(pa_helper.urllib.request, "urlopen", side_effect=failure):
             self.assertEqual(pa_helper.request_status("https://example.invalid/"), (503, None))
 
+    def test_manual_reload_needs_no_pythonanywhere_api_token(self):
+        with patch.dict(os.environ, {"PA_API_TOKEN": ""}):
+            with patch("builtins.input", return_value=""):
+                result = pa_helper.reload_pythonanywhere("example", "example.pythonanywhere.com")
+        self.assertEqual(result, (None, "manual reload confirmed by operator"))
+
     def test_github_token_is_passed_via_askpass_not_remote_url(self):
         token = "test-only-secret-token"
         observed = {}
