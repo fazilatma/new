@@ -57,6 +57,7 @@ const DEFAULT_URL = 'https://barfbox.ir/search/?page=1';
 const FETCH_MISSING_IMAGES = true;
 const PROFILES_FILE = __DIR__ . '/profiles.json';
 const PROFILE_SUMMARY_CACHE_FILE = __DIR__ . '/.profile_summary_cache.json'; // v10.478: lightweight dashboard bootstrap
+const START_SHOP_DAILY_FILE = __DIR__ . '/start_shop_daily_history.json'; // v10.592: daily aggregate of all Basalam shops
 const PROFILES_DELETED_FILE = __DIR__ . '/profiles_deleted.json';
 const CONNECTIONS_FILE = __DIR__ . '/connections.json';
 const BSL_PROGRESS_FILE = __DIR__ . '/bsl_progress.json';
@@ -403,7 +404,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.591';
+const APP_VERSION = '10.592';
 
 
 if (!function_exists('str_starts_with')) {
@@ -21810,7 +21811,26 @@ if (isset($_GET['start_product_stats'])) {
             'price_mismatches'=>(array)($matrixStats['price_mismatch_counts'][(string)$pk]??[])];
     }
     usort($byProfile, static fn($a,$b) => (int)$b['counts']['total'] <=> (int)$a['counts']['total']);
+    /* One point per local calendar day: the latest known active-product count
+       summed across every Basalam shop. The small durable history starts on
+       installation and is independent of browser/localStorage. */
+    $shopTotal=0;$shopCount=0;
+    foreach((array)($matrixStats['destinations']??[])as$dest){
+        if((string)($dest['type']??'')!=='bsl')continue;
+        $shopCount++;$shopTotal+=max(0,(int)($matrixStats['totals'][(string)($dest['key']??'')]??0));
+    }
+    $daily=[];$dailyLock=@fopen(START_SHOP_DAILY_FILE.'.lock','c');
+    if($dailyLock&&@flock($dailyLock,LOCK_EX)){
+        $saved=json_decode((string)@file_get_contents(START_SHOP_DAILY_FILE),true);
+        if(is_array($saved))$daily=$saved;
+        $day=date('Y-m-d');$daily[$day]=['date'=>$day,'total'=>$shopTotal,'shops'=>$shopCount,'at'=>time(),
+            'matrix_at'=>(int)($matrixStats['generated_at']??0)];
+        ksort($daily);if(count($daily)>180)$daily=array_slice($daily,-180,null,true);
+        writeJsonFile(START_SHOP_DAILY_FILE,$daily);@flock($dailyLock,LOCK_UN);@fclose($dailyLock);
+    }elseif($dailyLock)@fclose($dailyLock);
+    $daily=array_values(array_slice($daily,-30,null,true));
     echo json_encode(['ok'=>true,'generated_at'=>time(),'profiles'=>count($profiles),'totals'=>$totals,'by_profile'=>$byProfile,'samples'=>$samples,
+        'daily_shop_history'=>$daily,'shop_total'=>$shopTotal,'shop_count'=>$shopCount,
         'matrix'=>['generated_at'=>(int)$matrixStats['generated_at'],'source'=>(string)$matrixStats['source'],
             'destinations'=>$matrixStats['destinations'],'totals'=>$matrixStats['totals'],
             'price_mismatch_totals'=>$matrixStats['price_mismatch_totals'],
@@ -48481,6 +48501,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"['running','waiting','paused'],true")!==false
         &&strpos($selfSrc,"{v:'10." . "591'")!==false
         &&version_compare(APP_VERSION,'10.591','>='));
+    $add('10.592','بخش‌های شروع تاشو و نمودار روزانهٔ مجموع غرفه‌ها هستند',
+        strpos($selfSrc,'function initStartCollapsibles()')!==false
+        &&strpos($selfSrc,"localStorage.setItem('s4-start-collapse:'")!==false
+        &&strpos($selfSrc,'id="startShopDailyChart"')!==false
+        &&strpos($selfSrc,"'daily_shop_history'=>\$daily")!==false
+        &&strpos($selfSrc,'START_SHOP_DAILY_FILE')!==false
+        &&strpos($selfSrc,"{v:'10." . "592'")!==false
+        &&version_compare(APP_VERSION,'10.592','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -92421,6 +92449,19 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
           .spb-dup-btn:hover{opacity:1;background:#6d28d9;color:#fff}
         </style>
     </section>
+
+    <!-- v10.592: durable daily aggregate, deliberately after the final Start table. -->
+    <section class="card start-shop-daily" id="startShopDailyChart" aria-labelledby="startShopDailyTitle">
+        <div class="ssd-head">
+            <div><h3 id="startShopDailyTitle">📈 نمودار روزانه مجموع محصولات همهٔ غرفه‌ها</h3><p>جمع محصولات فعال همهٔ غرفه‌های باسلام بر اساس آخرین جدول مغایرت هر روز؛ تاریخچه از زمان نصب این نسخه ثبت می‌شود.</p></div>
+            <b id="startShopDailyCurrent">در حال دریافت…</b>
+        </div>
+        <div id="startShopDailyBody" class="ssd-body"><div class="spo-skeleton"></div></div>
+        <style>
+          .start-shop-daily{margin-top:12px}.ssd-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.ssd-head>div{flex:1}.ssd-head h3{font-size:13px;color:#f8fafc;margin:0 0 3px}.ssd-head p{font-size:9.5px;color:#64748b;margin:0;line-height:1.7}.ssd-head>b{padding:6px 10px;border:1px solid #0e7490;border-radius:9px;background:#083344;color:#a5f3fc;font-size:11px;white-space:nowrap}.ssd-chart{width:100%;height:auto;min-height:220px;display:block;border:1px solid #273449;border-radius:12px;background:linear-gradient(180deg,#0b1324,#0f172a)}.ssd-grid{stroke:#334155;stroke-width:1}.ssd-line{fill:none;stroke:#22d3ee;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.ssd-area{fill:url(#ssdArea)}.ssd-dot{fill:#0f172a;stroke:#67e8f9;stroke-width:2}.ssd-axis{fill:#94a3b8;font:9px var(--app-font)}.ssd-value{fill:#cffafe;font:700 9px var(--app-font)}.ssd-empty{padding:32px;text-align:center;color:#64748b;border:1px dashed #334155;border-radius:12px;font-size:11px}.ssd-foot{display:flex;justify-content:space-between;gap:8px;margin-top:7px;color:#64748b;font-size:9px}.start-collapsible-card>.start-collapse-anchor{display:flex!important;align-items:center;gap:8px;cursor:pointer}.start-collapse-toggle{margin-inline-start:auto;flex:0 0 auto!important;width:auto!important;padding:3px 8px!important;border:1px solid #475569;border-radius:7px;background:#111827;color:#cbd5e1;font:700 10px var(--app-font);cursor:pointer}.start-collapse-toggle:hover{border-color:#22d3ee;color:#a5f3fc}.start-collapsible-card.start-collapsed>:not(.start-collapse-anchor){display:none!important}.start-collapsible-card.start-collapsed>.start-collapse-anchor{margin-bottom:0!important}.start-collapse-toggle .sc-open{display:none}.start-collapsible-card.start-collapsed .start-collapse-toggle .sc-open{display:inline}.start-collapsible-card.start-collapsed .start-collapse-toggle .sc-close{display:none}
+          @media(max-width:600px){.ssd-head{flex-wrap:wrap}.ssd-head>b{width:100%;text-align:center}.ssd-chart{min-height:190px}.ssd-axis{font-size:8px}}
+        </style>
+    </section>
 </div>
 
 <div class="tab-pane" id="pane-settings">
@@ -93747,6 +93788,30 @@ const START_PRODUCT_METRICS = [
 let startProductOverviewData=null,startProductOverviewBusy=false,startBreakdownRefreshTimer=null;
 function scheduleStartBreakdownRefresh(){clearTimeout(startBreakdownRefreshTimer);startBreakdownRefreshTimer=setTimeout(()=>loadStartProductOverview(true),1800)}
 function spoNum(n){try{return Number(n||0).toLocaleString('fa-IR')}catch(e){return toFa(n||0)}}
+function initStartCollapsibles(){
+  const pane=$('pane-start');if(!pane)return;
+  Array.from(pane.children).filter(card=>card.classList&&card.classList.contains('card')).forEach((card,i)=>{
+    if(card.dataset.startCollapseReady==='1')return;
+    const direct=Array.from(card.children),anchor=direct.find(x=>x.classList&&(x.classList.contains('section-title')||x.classList.contains('mode-tabs')||x.classList.contains('spb-head')||x.classList.contains('ssd-head')));
+    if(!anchor)return;const key=card.id||('start-section-'+i);if(!card.id)card.id=key;let saved=null;try{saved=localStorage.getItem('s4-start-collapse:'+key)}catch(e){}
+    card.dataset.startCollapseReady='1';card.classList.add('start-collapsible-card');anchor.classList.add('start-collapse-anchor');
+    const btn=document.createElement('button');btn.type='button';btn.className='start-collapse-toggle';btn.title='آزمایشی: باز/بسته کردن این بخش بدون حذف یا بازسازی محتوا';btn.setAttribute('aria-controls',key);btn.innerHTML='<span class="sc-close">جمع کردن ▴</span><span class="sc-open">باز کردن ▾</span>';
+    btn.onclick=e=>{e.preventDefault();e.stopPropagation();const collapsed=card.classList.toggle('start-collapsed');btn.setAttribute('aria-expanded',collapsed?'false':'true');try{localStorage.setItem('s4-start-collapse:'+key,collapsed?'1':'0')}catch(err){}};
+    anchor.appendChild(btn);if(saved==='1')card.classList.add('start-collapsed');btn.setAttribute('aria-expanded',card.classList.contains('start-collapsed')?'false':'true');
+  });
+}
+function renderStartShopDaily(d){
+  const body=$('startShopDailyBody'),badge=$('startShopDailyCurrent');if(!body||!badge)return;
+  const rows=(Array.isArray(d&&d.daily_shop_history)?d.daily_shop_history:[]).filter(x=>x&&/^\d{4}-\d{2}-\d{2}$/.test(String(x.date||''))).slice(-30);
+  const current=parseInt((d&&d.shop_total)||0),shops=parseInt((d&&d.shop_count)||0);badge.textContent=spoNum(current)+' محصول · '+spoNum(shops)+' غرفه';
+  if(!rows.length){body.innerHTML='<div class="ssd-empty">هنوز دادهٔ روزانه‌ای ثبت نشده است؛ نخستین نقطه با همین به‌روزرسانی ذخیره می‌شود.</div>';return;}
+  const w=920,h=270,ml=64,mr=22,mt=24,mb=48,pw=w-ml-mr,ph=h-mt-mb,vals=rows.map(x=>Math.max(0,parseInt(x.total)||0));
+  let lo=Math.min(...vals),hi=Math.max(...vals);if(lo===hi){lo=Math.max(0,lo-Math.max(1,Math.round(lo*.05)));hi+=Math.max(1,Math.round(hi*.05))}else{const pad=Math.max(1,Math.round((hi-lo)*.12));lo=Math.max(0,lo-pad);hi+=pad}
+  const x=i=>ml+(rows.length===1?pw/2:i*pw/(rows.length-1)),y=v=>mt+(hi-v)*ph/Math.max(1,hi-lo),pts=vals.map((v,i)=>x(i).toFixed(1)+','+y(v).toFixed(1)).join(' '),area=(rows.length===1?(x(0)-1)+','+y(vals[0])+' '+(x(0)+1)+','+y(vals[0]):pts)+' '+x(rows.length-1)+','+(mt+ph)+' '+x(0)+','+(mt+ph);
+  let grid='',labels='',dots='';for(let i=0;i<5;i++){const gy=mt+i*ph/4,v=Math.round(hi-i*(hi-lo)/4);grid+='<line class="ssd-grid" x1="'+ml+'" y1="'+gy+'" x2="'+(w-mr)+'" y2="'+gy+'"/><text class="ssd-axis" x="'+(ml-8)+'" y="'+(gy+3)+'" text-anchor="end">'+spoNum(v)+'</text>'}
+  const labelEvery=Math.max(1,Math.ceil(rows.length/7));rows.forEach((r,i)=>{const xx=x(i),yy=y(vals[i]);if(i%labelEvery===0||i===rows.length-1)labels+='<text class="ssd-axis" x="'+xx+'" y="'+(h-18)+'" text-anchor="middle">'+esc(String(r.date).slice(5).replace('-','/'))+'</text>';dots+='<circle class="ssd-dot" cx="'+xx+'" cy="'+yy+'" r="4"><title>'+esc(r.date)+' · '+spoNum(vals[i])+' محصول · '+spoNum(r.shops||0)+' غرفه</title></circle>';if(i===rows.length-1)dots+='<text class="ssd-value" x="'+xx+'" y="'+Math.max(12,yy-10)+'" text-anchor="middle">'+spoNum(vals[i])+'</text>'});
+  body.innerHTML='<svg class="ssd-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="نمودار روزانه مجموع محصولات همه غرفه‌ها"><defs><linearGradient id="ssdArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee" stop-opacity=".35"/><stop offset="1" stop-color="#22d3ee" stop-opacity=".02"/></linearGradient></defs>'+grid+'<polygon class="ssd-area" points="'+area+'"/><polyline class="ssd-line" points="'+pts+'"/>'+dots+labels+'</svg><div class="ssd-foot"><span>نمایش '+spoNum(rows.length)+' روز اخیر</span><span>آخرین داده: '+esc(rows[rows.length-1].date)+' · بر پایهٔ جدول مغایرت</span></div>';
+}
 function renderStartProfileBreakdown(d){
   const body=$('startProfileBreakdownBody'),foot=$('startProfileBreakdownFoot'),head=$('startProfileBreakdownHead'),meta=$('startProfileBreakdownMeta'),updated=$('startProfileBreakdownUpdatedAt');if(!body||!foot||!head)return;
   const rows=Array.isArray(d&&d.by_profile)?d.by_profile:[],mx=(d&&d.matrix)||{},dests=Array.isArray(mx.destinations)?mx.destinations:[],cols=5+dests.length;
@@ -93849,13 +93914,13 @@ function loadStartProductOverview(force){
   const grid=$('startProductOverviewGrid'),meta=$('startProductOverviewMeta');if(!grid||startProductOverviewBusy)return;
   startProductOverviewBusy=true;if(force){meta.textContent='در حال محاسبهٔ دوباره…';const u=$('startProfileBreakdownUpdatedAt');if(u)u.textContent='در حال به‌روزرسانی…';}
   fetch('?start_product_stats=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{
-    if(!d||!d.ok)throw new Error((d&&d.error)||'پاسخ نامعتبر');startProductOverviewData=d;renderStartProfileBreakdown(d);
+    if(!d||!d.ok)throw new Error((d&&d.error)||'پاسخ نامعتبر');startProductOverviewData=d;renderStartProfileBreakdown(d);renderStartShopDaily(d);
     const total=parseInt((d.totals||{}).total||0),prof=parseInt(d.profiles||0);
     meta.textContent=spoNum(total)+' محصول در '+spoNum(prof)+' پروفایل · آخرین محاسبه: '+new Date((d.generated_at||0)*1000).toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'});
     grid.innerHTML=START_PRODUCT_METRICS.map(m=>{const n=parseInt((d.totals||{})[m[0]]||0),pct=total?Math.round(n*100/total):0;
       return '<button class="spo-card" style="--spo-color:'+m[3]+'" onclick="openStartProductOverviewDetail(\''+m[0]+'\')" title="'+esc(m[4])+'"><span class="spo-icon">'+m[1]+'</span><b class="spo-value">'+spoNum(n)+'</b><span class="spo-label">'+esc(m[2])+'</span><span class="spo-foot"><span>'+esc(m[4])+'</span><b class="spo-pct">'+spoNum(pct)+'٪</b></span></button>';
     }).join('');
-  }).catch(e=>{grid.innerHTML='<div class="spo-error">آمار کل محصولات خوانده نشد: '+esc(e.message||String(e))+'</div>';meta.textContent='برای تلاش دوباره دکمهٔ تازه‌سازی را بزنید.';const u=$('startProfileBreakdownUpdatedAt');if(u)u.textContent='به‌روزرسانی ناموفق';const b=$('startProfileBreakdownBody'),f=$('startProfileBreakdownFoot');if(b)b.innerHTML='<tr><td colspan="99" class="spb-empty">جدول پروفایل‌ها خوانده نشد؛ دوباره تلاش کنید.</td></tr>';if(f)f.innerHTML='';}).finally(()=>{startProductOverviewBusy=false;});
+  }).catch(e=>{grid.innerHTML='<div class="spo-error">آمار کل محصولات خوانده نشد: '+esc(e.message||String(e))+'</div>';meta.textContent='برای تلاش دوباره دکمهٔ تازه‌سازی را بزنید.';const u=$('startProfileBreakdownUpdatedAt');if(u)u.textContent='به‌روزرسانی ناموفق';const b=$('startProfileBreakdownBody'),f=$('startProfileBreakdownFoot'),chart=$('startShopDailyBody');if(b)b.innerHTML='<tr><td colspan="99" class="spb-empty">جدول پروفایل‌ها خوانده نشد؛ دوباره تلاش کنید.</td></tr>';if(f)f.innerHTML='';if(chart)chart.innerHTML='<div class="ssd-empty">نمودار روزانه خوانده نشد؛ دوباره تلاش کنید.</div>';}).finally(()=>{startProductOverviewBusy=false;});
 }
 function openStartProductOverviewDetail(metric){
   const d=startProductOverviewData;if(!d)return;const def=START_PRODUCT_METRICS.find(x=>x[0]===metric);if(!def)return;
@@ -93870,7 +93935,7 @@ function openStartProductOverviewDetail(metric){
   $('spoDetailBody').innerHTML=h;openStartOverviewModal();
 }
 function closeStartProductOverviewDetail(){const m=$('startProductOverviewModal');if(m)m.classList.remove('open');document.body.style.overflow='';}
-setTimeout(()=>loadStartProductOverview(false),700);
+setTimeout(()=>{initStartCollapsibles();loadStartProductOverview(false)},700);
 setInterval(()=>{const pane=$('pane-start');if(document.visibilityState==='visible'&&pane&&pane.classList.contains('active'))loadStartProductOverview(false)},60000);
 
 function markDirty() {
@@ -100515,6 +100580,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.592', t:'📈 بخش‌های تاشوی شروع و نمودار روزانهٔ مجموع غرفه‌ها', items:[
+    'همهٔ کارت‌های اصلی تب شروع به‌صورت آزمایشی و بدون حذف یا بازسازی DOM تاشو شدند؛ وضعیت هر بخش مستقل در مرورگر حفظ می‌شود و با «باز کردن» دقیقاً به حالت اصلی برمی‌گردد.',
+    'بعد از جدول انتهای صفحهٔ شروع، نمودار SVG روزانهٔ جمع محصولات فعال همهٔ غرفه‌های باسلام اضافه شد؛ هر روز فقط یک نقطهٔ پایدار روی سرور نگه می‌دارد و ۳۰ روز اخیر را نمایش می‌دهد.',
+    'تاریخچهٔ نمودار در فایل کوچک مستقل تا ۱۸۰ روز نگهداری می‌شود و تعداد غرفه‌ها، مقدار روز و زمان جدول مغایرت را همراه هر نقطه ثبت می‌کند.'
+  ]},
   {v:'10.591', t:'🔒 مالکیت صف، دو لین را تا تخلیه پایدار نگه می‌دارد', items:[
     'وجود هر ردیف فعال running/waiting/paused با lane=fast یا lane=detail اکنون منبع پایدار فعال‌بودن دو لین است؛ حذف یا بازنویسی موقت فلگ تنظیمات نمی‌تواند backlog موجود را به watchdog قدیمی برگرداند.',
     'پس از terminal شدن همهٔ ردیف‌های مالک‌دار، تنظیم ذخیره‌شده دوباره تعیین‌کننده است؛ بنابراین مهاجرت صف نیمه‌تمام ایمن است و حالت legacy بدون کار فعال نیز محترم می‌ماند.'
