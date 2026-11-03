@@ -14,14 +14,16 @@ PYTHONPATH=pythonanywhere python -m unittest discover -s pythonanywhere/tests -v
 
 The test suite includes the WSGI gate and currently has 14 passing tests.
 
-## PythonAnywhere staging smoke test only
+## One-command PythonAnywhere staging helper
 
-The supplied `install_and_smoke_test.sh` can install the gated WSGI scaffold solely to verify the PythonAnywhere domain and WSGI wiring. It refuses by default; explicit staging requires `PA_ALLOW_INCOMPLETE_STAGING=1`. After running the install command, click **Web → Reload**, then run the script's `--test-live` mode from the PythonAnywhere console. The smoke test targets `https://Fazilatma.pythonanywhere.com` by default (override with `LIVE_HOST` or `LIVE_URL`), expects `/api/port-status` to return 200, and expects `/` to return 503. That 503 is intentional, not a working scraper.
+For a staging smoke test only, bootstrap the standard-library helper from the chat branch; it clones/updates `~/new`, installs the Python requirements, backs up and writes the WSGI file, calls the PythonAnywhere reload API, tests the live endpoints, writes a redacted JSON report, pushes that report to `arena/e868e86a-new`, then reads it back from the branch and prints it:
 
 ```bash
-PA_ALLOW_INCOMPLETE_STAGING=1 bash pythonanywhere/install_and_smoke_test.sh --install-staging
-# Click Web → Reload in PythonAnywhere, then:
-bash pythonanywhere/install_and_smoke_test.sh --test-live
+mkdir -p ~/pa-bootstrap
+curl -fsSL https://raw.githubusercontent.com/Fazilatma/new/arena/e868e86a-new/pythonanywhere/pa_helper.py -o ~/pa-bootstrap/pa_helper.py
+python3.11 ~/pa-bootstrap/pa_helper.py --allow-incomplete-staging
 ```
 
-Do not route shop traffic to this scaffold. When full parity is reached, the final deployment will use a PythonAnywhere virtualenv and WSGI file, a persistent database/media location outside the code checkout, and PythonAnywhere-compatible scheduled/worker tasks. Before removing the gate, complete the existing-JSON import/rollback plan and test lane locks, restart/resume, credentials, and every external integration.
+The helper prompts with hidden input for a PythonAnywhere API token if `PA_API_TOKEN` is not already in the environment; it never writes that token into the report. To push the report, PythonAnywhere must have a write-enabled GitHub SSH key configured and available non-interactively (for example, an unencrypted deploy key with write access). Push uses SSH with batch mode and accepts the host key on first connection. The report file path and commit are printed; the helper also verifies its readback from the branch. Override `--repo-dir`, `--venv-dir`, `--wsgi-file`, `--username`, `--domain`, or `--live-host` if PythonAnywhere's Web tab shows different paths/settings. The PythonAnywhere Web app must already exist and use Python 3.11.
+
+Expected smoke result for this scaffold: `/api/port-status` is HTTP 200 and `/` is HTTP 503. The root 503 is deliberate. **Do not route shop traffic to it.** When full parity is reached, the release must also include persistent database/media storage, JSON-state import/rollback, and tested worker scheduling, lane locks, restart/resume, credentials, and all external integrations.
