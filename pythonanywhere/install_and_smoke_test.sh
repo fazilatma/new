@@ -4,21 +4,23 @@ set -euo pipefail
 # Smoke-test installer for the deliberately gated v10.599 migration scaffold.
 # It does NOT deploy full scraper functionality: / returns 503 by design.
 PA_USER="${PA_USER:-fazilatma}"
+# Hostname spelling as supplied by the user (DNS/HTTP hostnames are case-insensitive).
+LIVE_HOST="${LIVE_HOST:-Fazilatma.pythonanywhere.com}"
 REPO_DIR="${REPO_DIR:-$HOME/new}"
 BRANCH="arena/e868e86a-new"
 APP_DIR="$REPO_DIR/pythonanywhere"
 VENV_DIR="${VENV_DIR:-$HOME/.virtualenvs/scraper4-pa}"
 WSGI_FILE="${WSGI_FILE:-/var/www/${PA_USER}_pythonanywhere_com_wsgi.py}"
-LIVE_URL="${LIVE_URL:-https://${PA_USER}.pythonanywhere.com}"
+LIVE_URL="${LIVE_URL:-https://${LIVE_HOST}}"
 
 usage() {
   cat <<'EOF'
 Usage:
   bash install_and_smoke_test.sh --install-staging
-  # Then click Web -> Reload for fazilatma.pythonanywhere.com, and run:
+  # Then click Web -> Reload for Fazilatma.pythonanywhere.com, and run:
   bash install_and_smoke_test.sh --test-live
 
-Optional overrides: PA_USER, REPO_DIR, VENV_DIR, WSGI_FILE, LIVE_URL.
+Optional overrides: PA_USER, REPO_DIR, VENV_DIR, WSGI_FILE, LIVE_HOST, LIVE_URL.
 The install step refuses dirty git worktrees and backs up an existing WSGI file.
 EOF
 }
@@ -35,7 +37,7 @@ install_staging() {
       echo "REPO_DIR exists but is not a git checkout: $REPO_DIR" >&2
       exit 2
     fi
-    git clone --branch "$BRANCH" --single-branch https://github.com/fazilatma/new.git "$REPO_DIR"
+    git clone --branch "$BRANCH" --single-branch https://github.com/Fazilatma/new.git "$REPO_DIR"
   fi
   if [[ -n "$(git -C "$REPO_DIR" status --porcelain)" ]]; then
     echo "Refusing to update a dirty checkout; preserve/commit its files first: $REPO_DIR" >&2

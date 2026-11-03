@@ -16,7 +16,7 @@ The test suite includes the WSGI gate and currently has 14 passing tests.
 
 ## PythonAnywhere staging smoke test only
 
-The supplied `install_and_smoke_test.sh` can install the gated WSGI scaffold solely to verify the PythonAnywhere domain and WSGI wiring. It refuses by default; explicit staging requires `PA_ALLOW_INCOMPLETE_STAGING=1`. After running the install command, click **Web → Reload**, then run the script's `--test-live` mode from the PythonAnywhere console. The smoke test expects `/api/port-status` to return 200 and `/` to return 503. That 503 is intentional, not a working scraper.
+The supplied `install_and_smoke_test.sh` can install the gated WSGI scaffold solely to verify the PythonAnywhere domain and WSGI wiring. It refuses by default; explicit staging requires `PA_ALLOW_INCOMPLETE_STAGING=1`. After running the install command, click **Web → Reload**, then run the script's `--test-live` mode from the PythonAnywhere console. The smoke test targets `https://Fazilatma.pythonanywhere.com` by default (override with `LIVE_HOST` or `LIVE_URL`), expects `/api/port-status` to return 200, and expects `/` to return 503. That 503 is intentional, not a working scraper.
 
 ```bash
 PA_ALLOW_INCOMPLETE_STAGING=1 bash pythonanywhere/install_and_smoke_test.sh --install-staging
