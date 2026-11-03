@@ -404,7 +404,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.596';
+const APP_VERSION = '10.597';
 
 
 if (!function_exists('str_starts_with')) {
@@ -21503,12 +21503,39 @@ if (isset($_GET['sw'])) {
     header('Content-Type: application/javascript; charset=UTF-8');
     header('Cache-Control: no-cache');
     header('Service-Worker-Allowed: /');
-    echo <<<'SWJS'
-/* scraper4 service worker — v10.69 (83) */
-self.addEventListener('install', e => { self.skipWaiting(); });
-self.addEventListener('activate', e => { e.waitUntil(self.clients.claim()); });
+    $sw = <<<'SWJS'
+/* scraper4 unified app-shell + notification service worker — __S4_VERSION__ */
+const S4_VERSION='__S4_VERSION__';
+const SHELL_CACHE='s4-app-shell-'+S4_VERSION;
+const ASSET_CACHE='s4-app-assets-'+S4_VERSION;
+const SHELL_KEY=new Request(self.location.origin+self.location.pathname,{method:'GET'});
+const shellNetworkUrl=()=>self.location.pathname+'?s4_shell_cache='+encodeURIComponent(S4_VERSION)+'&_='+Date.now();
+async function cacheFreshShell(){
+  const response=await fetch(shellNetworkUrl(),{cache:'no-store',credentials:'same-origin'});
+  const type=(response.headers.get('content-type')||'').toLowerCase();
+  if(!response.ok||type.indexOf('text/html')===-1)throw new Error('shell_fetch_failed');
+  const cache=await caches.open(SHELL_CACHE);await cache.put(SHELL_KEY,response.clone());return true;
+}
+self.addEventListener('install',e=>{e.waitUntil(cacheFreshShell().catch(()=>false).then(()=>self.skipWaiting()));});
+self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.indexOf('s4-app-')===0&&k!==SHELL_CACHE&&k!==ASSET_CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
+self.addEventListener('fetch',e=>{
+  const req=e.request;if(req.method!=='GET')return;
+  const url=new URL(req.url);
+  const shellNav=req.mode==='navigate'&&url.origin===self.location.origin&&url.pathname===self.location.pathname&&[...url.searchParams.keys()].every(k=>k==='_v');
+  if(shellNav){
+    e.respondWith(caches.open(SHELL_CACHE).then(cache=>cache.match(SHELL_KEY)).then(hit=>hit||fetch(req).then(async response=>{if(response.ok)try{const cache=await caches.open(SHELL_CACHE);await cache.put(SHELL_KEY,response.clone());}catch(_e){}return response;})).catch(()=>fetch(req)));
+    return;
+  }
+  if(url.origin===self.location.origin&&['style','script','font','image'].includes(req.destination)){
+    e.respondWith(caches.open(ASSET_CACHE).then(cache=>cache.match(req).then(hit=>hit||fetch(req).then(response=>{if(response.ok)cache.put(req,response.clone()).catch(()=>{});return response;}))));
+  }
+});
 self.addEventListener('message', e => {
   const d = e.data || {};
+  if(d.type==='refreshAppShell'){
+    e.waitUntil(cacheFreshShell().then(()=>{if(e.ports&&e.ports[0])e.ports[0].postMessage({ok:true,version:S4_VERSION});}).catch(err=>{if(e.ports&&e.ports[0])e.ports[0].postMessage({ok:false,error:String(err&&err.message||err)});}));
+    return;
+  }
   if (d.type === 'showNotification' && d.title) {
     const opt = { body: d.body || '', tag: d.tag || ('mr_live_' + Date.now()),
                   requireInteraction: !!d.requireInteraction, data: d.data || {} };
@@ -21551,6 +21578,7 @@ self.addEventListener('notificationclick', e => {
   }));
 });
 SWJS;
+    echo str_replace('__S4_VERSION__', APP_VERSION, $sw);
     exit;
 }
 
@@ -48556,6 +48584,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function s4EnsureVersionPanel()')!==false
         &&strpos($selfSrc,"{v:'10." . "596'")!==false
         &&version_compare(APP_VERSION,'10.596','>='));
+    $add('10.597','پوستهٔ کامل برنامه در کش نسخه‌دار مرورگر نگه‌داری می‌شود',
+        strpos($selfSrc,"const SHELL_CACHE='s4-app-shell-'")!==false
+        &&strpos($selfSrc,"req.mode==='navigate'")!==false
+        &&strpos($selfSrc,"every(k=>k==='_v')")!==false
+        &&strpos($selfSrc,"d.type==='refreshAppShell'")!==false
+        &&strpos($selfSrc,"function s4RegisterShellWorker()")!==false
+        &&strpos($selfSrc,"function s4RefreshCachedShell(nextVersion)")!==false
+        &&strpos($selfSrc,"String(d.version)!==String(S4_LOADED_VERSION)")!==false
+        &&strpos($selfSrc,"s4WhenAppReady(()=>s4RegisterShellWorker(),1200)")!==false
+        &&strpos($selfSrc,"{v:'10." . "597'")!==false
+        &&version_compare(APP_VERSION,'10.597','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -100770,6 +100809,28 @@ const S4_LOADED_VERSION='<?=APP_VERSION?>';
 const S4_LOADED_SHA='<?=s4DiskCodeMeta()['sha']?>';
 window._s4CodeReloading=false;
 window._vcInstalling=false;
+let s4ShellSwPromise=null;
+function s4RegisterShellWorker(){
+  if(s4ShellSwPromise)return s4ShellSwPromise;
+  if(!('serviceWorker' in navigator)||!window.isSecureContext)return Promise.resolve(null);
+  s4ShellSwPromise=navigator.serviceWorker.register('?sw=1&app_v='+encodeURIComponent(S4_LOADED_VERSION),{updateViaCache:'none'})
+    .then(reg=>navigator.serviceWorker.ready.then(()=>reg)).catch(()=>null);
+  return s4ShellSwPromise;
+}
+function s4RefreshCachedShell(nextVersion){
+  return s4RegisterShellWorker().then(async reg=>{
+    if(!reg)return false;
+    const worker=reg.active||reg.waiting||reg.installing||navigator.serviceWorker.controller;
+    if(!worker)return false;
+    return new Promise(resolve=>{
+      const channel=new MessageChannel();let settled=false;
+      const finish=ok=>{if(settled)return;settled=true;clearTimeout(timer);resolve(!!ok);};
+      const timer=setTimeout(()=>finish(false),15000);
+      channel.port1.onmessage=e=>finish(!!(e.data&&e.data.ok));
+      try{worker.postMessage({type:'refreshAppShell',targetVersion:String(nextVersion||'')},[channel.port2]);}catch(e){finish(false);}
+    });
+  }).catch(()=>false);
+}
 function s4ReloadForNewCode(nextVersion, manualInstall){
   if(window._s4CodeReloading)return;
   if(!manualInstall){
@@ -100788,7 +100849,12 @@ function s4ReloadForNewCode(nextVersion, manualInstall){
   }
   window._s4CodeReloading=true;
   try{showToast('✅ کد '+String(nextVersion||'جدید')+' نصب شد — صفحه رفرش می‌شود');}catch(e){}
-  setTimeout(()=>{const u=new URL(location.href);u.searchParams.set('_v',Date.now());location.replace(u.toString());},900);
+  setTimeout(async()=>{
+    /* A cached navigation must be replaced before reload, otherwise the browser
+       would instantly reopen the old shell and enter a version loop. */
+    await s4RefreshCachedShell(nextVersion);
+    const u=new URL(location.href);u.searchParams.set('_v',Date.now());location.replace(u.toString());
+  },900);
 }
 function s4WatchInstalledCode(){
   if(window._s4CodeReloading||window._vcInstalling||document.visibilityState==='hidden')return;
@@ -100812,6 +100878,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.597', t:'💾 کش کامل نسخه‌دار برای رفرش فوری', items:[
+    'سرویس‌ورکر یکپارچه، پوستهٔ کامل HTML و فایل‌های هم‌مبدأ رابط را در Cache Storage مرورگر نگه می‌دارد؛ رفرش معمولی مستقیماً از کش باز می‌شود و درخواست‌های API، صف و وضعیت همیشه شبکه‌ای می‌مانند.',
+    'app_ready نسخهٔ زنده را با نسخهٔ پوسته مقایسه می‌کند؛ فقط هنگام تغییر نسخه، پوستهٔ تازه ابتدا از شبکه دریافت و به‌صورت اتمیک جایگزین می‌شود و سپس صفحه رفرش می‌گردد.',
+    'سرویس‌ورکر اعلان‌های قبلی حفظ و با کش برنامه ادغام شد؛ مسیرهای مدیریتی دارای query هرگز به‌اشتباه از کش HTML پاسخ نمی‌گیرند.'
+  ]},
   {v:'10.596', t:'⚡ آماده‌شدن سریع صفحه و حذف متن بیرون‌زده', items:[
     'قطعهٔ تکراری JavaScript که بعد از بسته‌شدن HTML چاپ می‌شد حذف شد؛ انتهای صفحهٔ شروع دیگر متن خام نمایش نمی‌دهد.',
     'درخواست سبک app_ready اکنون نخستین نوبت شبکه را می‌گیرد؛ اتصال‌ها، پروفایل آخر و نمای ووکامرس فقط پس از اعلام آمادگی و به‌ترتیب اولویت بازیابی می‌شوند.',
@@ -108430,7 +108501,8 @@ function mrSwReady(){
     let done=false;
     const to=setTimeout(()=>{if(!done){done=true;mrSwState='failed';mrSwUpdateDiag();res(null);}},2500);
     try{
-      navigator.serviceWorker.register('?sw=1').then(r=>{
+      s4RegisterShellWorker().then(r=>{
+        if(!r)throw new Error('service_worker_unavailable');
         if(done)return; done=true; clearTimeout(to);
         mrSwReg=r; mrSwState='ok'; mrSwUpdateDiag(); res(r);
       }).catch(()=>{if(!done){done=true;clearTimeout(to);mrSwState='failed';mrSwUpdateDiag();res(null);}});
@@ -117694,6 +117766,7 @@ function s4AppReadyCheck(attempt){
   attempt=Math.max(0,parseInt(attempt)||0);clearTimeout(s4AppReadyRetry);
   fetch('?app_ready=1&_v='+Date.now(),{cache:'no-store',credentials:'same-origin'}).then(r=>r.json()).then(d=>{
     if(!d||d.ok!==true||d.ready!==true)throw new Error('not ready');
+    if(d.version&&String(d.version)!==String(S4_LOADED_VERSION)){s4ReloadForNewCode(d.version,false);return;}
     document.documentElement.dataset.s4Ready='1';window._s4AppReady=true;
     const st=$('status');if(st&&/در حال بارگذاری|آماده/i.test(st.textContent||''))st.textContent='آماده';
     s4FlushReadyTasks();
@@ -117707,6 +117780,7 @@ function s4AppReadyCheck(attempt){
    required immediately afterwards; profile/result reconstruction and Woo UI
    restoration are not prerequisites for declaring the dashboard ready. */
 s4WhenAppReady(()=>loadConn(),0);
+s4WhenAppReady(()=>s4RegisterShellWorker(),1200);
 s4WhenAppReady(()=>{try{restoreLastProfile();}catch(e){}},180);
 s4WhenAppReady(()=>checkWooProgress(),900);
 s4AppReadyCheck(0);
