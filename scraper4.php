@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.600';
+const APP_VERSION = '10.601';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48629,13 +48629,22 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"{v:'10." . "599'")!==false
         &&version_compare(APP_VERSION,'10.599','>='));
     $add('10.600','استعلام گفتگوهای باسلام نام غرفه را در ستون مستقل نشان می‌دهد',
-        strpos($selfSrc,"\$chatShops=bslChatShops(\$cn)")!==false
-        &&strpos($selfSrc,"\$n['shop_name']=trim")!==false
-        &&strpos($selfSrc,"\$n['vendor_id']=\$vendorId")!==false
+        strpos($selfSrc,"\$shops = bslChatShops(\$cn)")!==false
+        &&strpos($selfSrc,"\$n['shop_name']=(string)\$requestShop['name']")!==false
+        &&strpos($selfSrc,"\$n['vendor_id']=\$payloadVendor")!==false
         &&strpos($selfSrc,"<th>نام غرفه</th>")!==false
         &&strpos($selfSrc,"esc(r.shop_name||'غرفهٔ پیش‌فرض')")!==false
         &&strpos($selfSrc,"{v:'10." . "600'")!==false
         &&version_compare(APP_VERSION,'10.600','>='));
+    $add('10.601','گفتگوهای همهٔ غرفه‌ها، مسیر اعلان و گزارش سرعت پاسخ اضافه شده است',
+        strpos($selfSrc,"function bslChatRouteForShop(array \$cn, int \$vendorId): array")!==false
+        &&strpos($selfSrc,"isset(\$_GET['bsl_chat_routes_save'])")!==false
+        &&strpos($selfSrc,"isset(\$_GET['bsl_chat_response_stats'])")!==false
+        &&strpos($selfSrc,"function openChatRouteModal()")!==false
+        &&strpos($selfSrc,"function openChatSpeedModal()")!==false
+        &&strpos($selfSrc,"shops_queried")!==false
+        &&strpos($selfSrc,"{v:'10." . "601'")!==false
+        &&version_compare(APP_VERSION,'10.601','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -53440,10 +53449,10 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
          str_contains($selfSrc, "const APP_VERSION = '10.46';"));
     $add('10.46.1', 'انتخاب غرفهٔ «پیام مشتری» در ذخیرهٔ اتصال ثبت می‌شود',
          str_contains($selfSrc, "if (isset(\$_POST['notif_chat_shop'])) \$conn['notif_chat_shop'] = max(0, (int)\$_POST['notif_chat_shop']);"));
-    $add('10.46.2', 'بررسیِ پیام‌ها فقط از غرفهٔ انتخاب‌شده است',
-         str_contains($selfSrc, "\$onlyVid = (int)(\$cn['notif_chat_shop'] ?? 0);"));
-    $add('10.46.3', 'غرفهٔ انتخاب‌شدهٔ حذف‌شده → همهٔ غرفه‌ها (نه سکوتِ کامل)',
-         str_contains($selfSrc, "if (\$sel) \$shops = \$sel;"));
+    $add('10.46.2', 'انتخاب قدیمی غرفه در مسیرهای جدید پیام مشتری حفظ می‌شود',
+         str_contains($selfSrc, "\$oldShop = (int)(\$cn['notif_chat_shop'] ?? 0);"));
+    $add('10.46.3', 'نبود مسیر ذخیره‌شده با تنظیم قدیمی سازگار می‌ماند',
+         str_contains($selfSrc, "\$oldShop <= 0 || \$oldShop === \$vendorId"));
     $add('10.46.4', 'هر دورِ بررسی، خلاصهٔ «چه دیده شد» روی دیسک می‌نشیند',
          str_contains($selfSrc, "\$stN['last_notif_run'] = time();")
       && str_contains($selfSrc, "\$stN['last_notif_seen'] = \$seen;"));
@@ -62950,6 +62959,26 @@ function notifEventOn(array $ne, string $key): bool {
 }
 
 /** A configured channel has credentials; readiness additionally requires its saved switch. */
+/** v10.601: مسیر مستقل اعلان پیام مشتری/ادمین برای هر غرفه. */
+function bslChatRouteForShop(array $cn, int $vendorId): array {
+    $routes = is_array($cn['notif_chat_routes'] ?? null) ? $cn['notif_chat_routes'] : [];
+    $saved = is_array($routes[(string)$vendorId] ?? null) ? $routes[(string)$vendorId] : null;
+    if ($saved !== null) {
+        return ['customer' => !empty($saved['customer']), 'admin' => !empty($saved['admin'])];
+    }
+    /* سازگاری با تنظیم قدیمی: همه یا فقط notif_chat_shop؛ پیام ادمین قبلاً خاموش بوده است. */
+    $oldShop = (int)($cn['notif_chat_shop'] ?? 0);
+    $globalCustomer = notifEventOn(is_array($cn['notif_events'] ?? null) ? $cn['notif_events'] : [], 'chat_msg');
+    return ['customer' => $globalCustomer && ($oldShop <= 0 || $oldShop === $vendorId), 'admin' => false];
+}
+function bslAnyChatRouteOn(array $cn): bool {
+    foreach (bslAllShops($cn) as $sh) {
+        $r = bslChatRouteForShop($cn, (int)($sh['vendor_id'] ?? 0));
+        if (!empty($r['customer']) || !empty($r['admin'])) return true;
+    }
+    return false;
+}
+
 function notifMessengerConfigured(array $cn, string $channel): bool {
     if (!in_array($channel, ['baleh', 'rubika', 'telegram'], true)) return false;
     $cfg = $cn[$channel] ?? null;
@@ -64431,7 +64460,7 @@ function bslChatShops(array $cn): array {
                   'name' => (string)($sh['shop_name'] ?? ('غرفهٔ ' . $vid)),
                   'is_default' => !empty($sh['is_default'])];
     }
-    return array_slice($out, 0, 8);   // سقفِ محافظ: پُلِ هر ثانیه روی ۸ غرفه نمی‌چرخد
+    return $out;   // v10.601: همهٔ غرفه‌های تنظیم‌شده باید در استعلام و گزارش دیده شوند
 }
 
 function bslShopByNum(array $shops, int $num): ?array {
@@ -64526,6 +64555,63 @@ function bslChatThread(string $tk, int $chatId, int $limit = 30): array {
                   'img'    => $imgMR];
     }
     return array_reverse($out);
+}
+
+/** v10.601: جفت‌کردن اولین پیام مشتریِ بی‌پاسخ با اولین پاسخ بعدی ادمین. */
+function bslChatResponseSamples(array $thread, int $now = 0): array {
+    if ($now <= 0) $now = time();
+    $out = []; $customerAt = 0;
+    foreach ($thread as $m) {
+        if (!is_array($m)) continue;
+        $at = strtotime((string)($m['at'] ?? '')) ?: 0;
+        if ($at <= 0 || $at > $now + 300) continue;
+        if (!empty($m['mine'])) {
+            if ($customerAt > 0 && $at >= $customerAt) {
+                $out[] = ['at' => $at, 'seconds' => $at - $customerAt];
+                $customerAt = 0;
+            }
+        } elseif ($customerAt <= 0) {
+            $customerAt = $at;
+        }
+    }
+    return $out;
+}
+function bslChatResponseStats(array $cn, bool $fresh = false): array {
+    $cacheFile = __DIR__ . '/bsl_chat_response_stats.json';
+    if (!$fresh && is_file($cacheFile) && time() - (int)@filemtime($cacheFile) < 900) {
+        $cached = json_decode((string)@file_get_contents($cacheFile), true);
+        if (is_array($cached) && !empty($cached['ok'])) { $cached['cached'] = true; return $cached; }
+    }
+    $now = time(); $shopsOut = []; $errors = [];
+    foreach (bslChatShops($cn) as $sh) {
+        $r = bslReqRead((string)$sh['token'], 'chats?limit=30&order_by=updated_at');
+        if (empty($r['ok'])) {
+            $errors[] = (string)$sh['name'] . ': ' . bslApiError($r, 'دریافت گفتگوها ناموفق', 'chats', 'customer.chat.read');
+            $shopsOut[] = ['vendor_id'=>(int)$sh['vendor_id'],'shop_name'=>(string)$sh['name'],'ok'=>false,'periods'=>[]];
+            continue;
+        }
+        $raw = $r['body']['data']['chats'] ?? ($r['body']['data'] ?? []);
+        $samples = []; $chatCount = 0;
+        foreach ((array)$raw as $chat) {
+            if (!is_array($chat)) continue;
+            $chatId = (int)($chat['id'] ?? 0); if ($chatId <= 0) continue;
+            $thread = bslChatThread((string)$sh['token'], $chatId, 50);
+            if (!$thread) continue;
+            $chatCount++;
+            foreach (bslChatResponseSamples($thread, $now) as $sample) $samples[] = $sample;
+        }
+        $periods = [];
+        foreach (['day'=>86400,'week'=>604800,'month'=>2592000] as $key=>$span) {
+            $vals = [];
+            foreach ($samples as $sample) if ((int)$sample['at'] >= $now - $span) $vals[] = (int)$sample['seconds'];
+            $periods[$key] = ['avg_seconds'=>$vals ? (int)round(array_sum($vals)/count($vals)) : null, 'responses'=>count($vals)];
+        }
+        $shopsOut[] = ['vendor_id'=>(int)$sh['vendor_id'],'shop_name'=>(string)$sh['name'],'ok'=>true,
+                       'chats_scanned'=>$chatCount,'periods'=>$periods];
+    }
+    $out = ['ok'=>true,'generated_at'=>$now,'shops'=>$shopsOut,'errors'=>$errors,'cached'=>false];
+    @file_put_contents($cacheFile, json_encode($out, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES), LOCK_EX);
+    return $out;
 }
 
 /** آخرین ۲۰ پاسخ خودکار، برای نمایش در رابط کاربری */
@@ -64907,14 +64993,7 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
     if (!$shops) return ['ok' => false, 'found' => 0, 'total_seen' => 0, 'shops' => [],
             'sent' => [], 'sample' => '',
             'errors' => ['تنظیمات باسلام ناقص است (توکن یا غرفه)']];
-    /* v10.46 (۶۰): انتخاب غرفه برای رویداد «پیام مشتری» (دراپ‌داونِ بخش
-       اعلان‌ها). 0 = همهٔ غرفه‌ها. اگر غرفهٔ انتخاب‌شده حذف شده باشد، به
-       جای سکوتِ کامل، همهٔ غرفه‌ها برگردانده می‌شوند. */
-    $onlyVid = (int)($cn['notif_chat_shop'] ?? 0);
-    if ($onlyVid > 0) {
-        $sel = array_values(array_filter($shops, fn($s) => (int)($s['vendor_id'] ?? 0) === $onlyVid));
-        if ($sel) $shops = $sel;
-    }
+    /* v10.601: هر غرفه دو مسیر مستقل مشتری/ادمین دارد. */
     $st = notifLoadState(); $now = time(); $cfg = notifRemindCfg($cn);
     $multi = count($shops) > 1;
     $found = 0; $reminded = 0; $totalSeen = 0; $sentTo = []; $samples = [];
@@ -64923,6 +65002,11 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
     foreach ($shops as $sh) {
         $tk = trim((string)$sh['token']); $vid = (int)$sh['vendor_id'];
         $isDef = !empty($sh['is_default']); $name = (string)$sh['shop_name'];
+        $route = bslChatRouteForShop($cn, $vid);
+        if (empty($route['customer']) && empty($route['admin'])) {
+            $shopRows[]=['vendor_id'=>$vid,'shop_name'=>$name,'ok'=>true,'seen'=>0,'found'=>0,'route_off'=>true];
+            continue;
+        }
         // v8.31: مسیر درست — گفتگوها زیر ریشه است، نه زیر vendors
         $r = bslReqRead($tk, 'chats?limit=' . notifScanLimit($cn) . '&order_by=updated_at'); /* v10.86 (100) */
         if (!$r['ok']) {
@@ -64942,13 +65026,11 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             if (!is_array($c)) continue;
             $nc = bslNormalizeChat($c);
             if ($nc['chat_id'] <= 0) continue;
-            /* v10.84 (98): اگر آخرین پیام از خودِ غرفه‌دار (ادمین) باشد،
-               رویداد «پیام مشتری» نمی‌زند — پاسخِ خودِ ما نباید به
-               پیام‌رسان برود. (bslMyUserId کشِ استاتیک دارد؛ بدونِ
-               درخواستِ API اضافه.) */
             $_myUid84 = bslMyUserId($tk);
             $_lmSid84 = (int)($c['last_message']['sender']['id'] ?? 0);
-            if ($_myUid84 > 0 && $_lmSid84 > 0 && $_lmSid84 === $_myUid84) continue;
+            $_isAdmin601 = ($_myUid84 > 0 && $_lmSid84 > 0 && $_lmSid84 === $_myUid84);
+            if (($_isAdmin601 && empty($route['admin'])) || (!$_isAdmin601 && empty($route['customer']))) continue;
+            $nc['shop']=(int)($sh['shop'] ?? 1); $nc['vendor_id']=$vid; $nc['shop_name']=$name;
             $lastId = (int)($c['last_message']['id'] ?? 0);
             // v8.38: امضا فقط شناسهٔ آخرین پیام است. اگر تعداد خوانده‌نشده را هم
             // در امضا بیاوریم، جواب دادن مشتری (۲ → ۰) مثل «رویداد تازه» دیده
@@ -64966,7 +65048,8 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             $norm[] = ['nc' => $nc, 'key' => ($isDef ? 'chat:' : 'chat:' . $vid . ':') . $nc['chat_id'],
                        'sig' => $sig,
                        'ts' => ($_lmCreatedAt !== '' ? (strtotime($_lmCreatedAt) ?: 0) : 0) ?: (strtotime($nc['updated_at'] ?: '') ?: 0),
-                       'pending' => $nc['unseen'] > 0];
+                       'is_admin' => $_isAdmin601,
+                       'pending' => !$_isAdmin601 && $nc['unseen'] > 0];
         }
 
         /* v10.47 (۶۱): شمارشِ «بی‌جواب» (موردِ یادآوری) و تشخیصِ
@@ -65037,7 +65120,12 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             if ($why === '') continue;
             $n = (int)($st['items'][$f['key']]['n'] ?? 1);
             $body = $f['pending'] ? bslFetchChatMessages($tk, $f['nc']['chat_id'], min(10, max(1, $f['nc']['unseen']))) : [];
-            $msg = bslChatMsg($f['nc'], notifHead($why, '💬 پیام مشتری باسلام' . $suffix, $n - 1), $body);
+            if (!empty($f['is_admin'])) {
+                $msg='🧑‍💼 پیام ادمین غرفه‌دار'.($suffix!==''?$suffix:(' — '.$name))
+                    ."\nمخاطب: ".(string)$f['nc']['who']."\n".(string)$f['nc']['text'];
+            } else {
+                $msg = bslChatMsg($f['nc'], notifHead($why, '💬 پیام مشتری باسلام' . $suffix, $n - 1), $body);
+            }
             $samples[] = $msg;
             if ($why === 'remind') { $shopRemind++; $reminded++; } else { $shopFound++; $found++; }
             if ($send) {
@@ -72321,7 +72409,7 @@ function bslCheckNotifications(array $cn): array {
     $found = ['orders' => 0, 'chats' => 0, 'products' => 0];
     $pending = 0; /* v10.47 (۶۱): چند گفتگوی بی‌جواب است (موردِ یادآوری) */
     if (!(notifEventOn($ne, 'order_new') || notifEventOn($ne, 'order_status')
-          || notifEventOn($ne, 'chat_msg') || notifEventOn($ne, 'product_status')
+          || notifEventOn($ne, 'chat_msg') || bslAnyChatRouteOn($cn) || notifEventOn($ne, 'product_status')
           || notifEventOn($ne, 'product_new'))) $out['events_off'] = true;
     if (notifEventOn($ne, 'order_new') || notifEventOn($ne, 'order_status')) {
         $r = notifCheckOrders($cn);
@@ -72330,7 +72418,7 @@ function bslCheckNotifications(array $cn): array {
         if ($found['orders'] > 0) $out['orders'] = $found['orders'];
         if (!empty($r['errors'])) $errors = array_merge($errors, (array)$r['errors']);
     }
-    if (notifEventOn($ne, 'chat_msg')) {
+    if (notifEventOn($ne, 'chat_msg') || bslAnyChatRouteOn($cn)) {
         $r = notifCheckChats($cn);
         $seen['chats'] += (int)($r['total_seen'] ?? 0);
         $found['chats'] += (int)($r['found'] ?? 0) + (int)($r['reminded'] ?? 0);
@@ -72540,50 +72628,79 @@ if (isset($_GET['bsl_orders_list'])) {
     exit;
 }
 
-/** لیست گفتگوها — برای مودال */
-if (isset($_GET['bsl_chats_list'])) {
+/** v10.601: تنظیم مسیر اعلان‌های گفتگو برای هر غرفه. */
+if (isset($_GET['bsl_chat_routes'])) {
     header('Content-Type: application/json; charset=UTF-8');
-    $cn = loadConnections();
-    $tk = trim((string)($cn['basalam']['token'] ?? ''));
-    if ($tk === '') {
-        echo json_encode(['ok' => false, 'error' => 'توکن باسلام تنظیم نشده'], JSON_UNESCAPED_UNICODE); exit;
+    $cn = loadConnections(); $rows = [];
+    foreach (bslChatShops($cn) as $sh) {
+        $route = bslChatRouteForShop($cn, (int)$sh['vendor_id']);
+        $rows[] = ['vendor_id'=>(int)$sh['vendor_id'],'shop_name'=>(string)$sh['name'],
+                   'customer'=>!empty($route['customer']),'admin'=>!empty($route['admin'])];
     }
+    echo json_encode(['ok'=>true,'rows'=>$rows], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES); exit;
+}
+if (isset($_GET['bsl_chat_routes_save'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') { echo json_encode(['ok'=>false,'error'=>'روش درخواست نامعتبر'],JSON_UNESCAPED_UNICODE); exit; }
+    $cn = loadConnections();
+    $payload = json_decode((string)($_POST['routes'] ?? ''), true);
+    if (!is_array($payload)) { echo json_encode(['ok'=>false,'error'=>'تنظیمات نامعتبر است'],JSON_UNESCAPED_UNICODE); exit; }
+    $valid = [];
+    foreach (bslChatShops($cn) as $sh) $valid[(string)(int)$sh['vendor_id']] = true;
+    $routes = [];
+    foreach ($payload as $vid=>$route) {
+        $key=(string)(int)$vid; if (!isset($valid[$key]) || !is_array($route)) continue;
+        $routes[$key]=['customer'=>!empty($route['customer']),'admin'=>!empty($route['admin'])];
+    }
+    $cn['notif_chat_routes']=$routes;
+    /* تنظیم قدیمی دیگر نتایج جدید را محدود نکند؛ مسیرهای بالا منبع حقیقت‌اند. */
+    $cn['notif_chat_shop']=0;
+    $ok=saveConnections($cn);
+    echo json_encode(['ok'=>$ok,'saved'=>count($routes),'error'=>$ok?'':'ذخیره تنظیمات ناموفق بود'],JSON_UNESCAPED_UNICODE); exit;
+}
+if (isset($_GET['bsl_chat_response_stats'])) {
+    header('Content-Type: application/json; charset=UTF-8'); @set_time_limit(240);
+    echo json_encode(bslChatResponseStats(loadConnections(), !empty($_GET['fresh'])), JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE); exit;
+}
+
+/** لیست گفتگوها — v10.601: همهٔ غرفه‌ها با توکن مستقل، نه فقط پیش‌فرض. */
+if (isset($_GET['bsl_chats_list'])) {
+    header('Content-Type: application/json; charset=UTF-8'); @set_time_limit(180);
+    $cn = loadConnections(); $shops = bslChatShops($cn);
+    if (!$shops) { echo json_encode(['ok'=>false,'error'=>'غرفهٔ باسلامی با توکن تنظیم نشده است'],JSON_UNESCAPED_UNICODE); exit; }
     $limit = min(50, max(5, (int)($_GET['limit'] ?? 20)));
     $filter = (string)($_GET['filter'] ?? 'all');
     $ep = 'chats?limit=' . $limit . '&order_by=updated_at';
-    if ($filter === 'unseen') $ep .= '&filters=unseen';   // فیلتر رسمی مستندات
-
-    $r = bslReqRead($tk, $ep);
-    if (!$r['ok']) {
-        echo json_encode(['ok' => false,
-            'error' => bslApiError($r, 'دریافت گفتگوها ناموفق', 'chats', 'customer.chat.read')],
-            JSON_UNESCAPED_UNICODE); exit;
+    if ($filter === 'unseen') $ep .= '&filters=unseen';
+    $rows=[]; $shopErrors=[]; $shopsOk=0;
+    foreach ($shops as $requestShop) {
+        $r=bslReqRead((string)$requestShop['token'],$ep);
+        if (empty($r['ok'])) {
+            $shopErrors[]=['vendor_id'=>(int)$requestShop['vendor_id'],'shop_name'=>(string)$requestShop['name'],
+                'error'=>bslApiError($r,'دریافت گفتگوها ناموفق','chats','customer.chat.read')];
+            continue;
+        }
+        $shopsOk++;
+        $raw=$r['body']['data']['chats']??($r['body']['data']??[]);
+        foreach ((array)$raw as $c) {
+            if (!is_array($c)) continue;
+            $n=bslNormalizeChat($c); if ((int)$n['chat_id']<=0) continue;
+            $payloadVendor=(int)($c['vendor_id']??($c['vendor']['id']??($c['shop']['vendor_id']??($c['shop']['id']??0))));
+            $n['vendor_id']=$payloadVendor>0?$payloadVendor:(int)$requestShop['vendor_id'];
+            $n['shop_name']=(string)$requestShop['name'];
+            $n['shop']=(int)$requestShop['shop'];
+            $n['row_key']=$n['vendor_id'].':'.$n['chat_id'];
+            $rows[]=$n;
+        }
     }
-    $raw = $r['body']['data']['chats'] ?? ($r['body']['data'] ?? []);
-    /* Inquiry rows must carry shop identity. Prefer an explicit vendor id from
-       the chat payload, then fall back to the shop owning the token used for
-       this request. This also remains correct if Basalam starts returning
-       account-wide chats through one token. */
-    $chatShops=bslChatShops($cn);$chatShopByVendor=[];$requestShop=null;
-    foreach($chatShops as $sh){
-        $chatShopByVendor[(int)($sh['vendor_id']??0)]=$sh;
-        if(!empty($sh['is_default'])||hash_equals((string)($sh['token']??''),$tk))$requestShop=$sh;
+    if ($shopsOk===0) {
+        $msg=$shopErrors?implode(' | ',array_map(fn($e)=>(string)$e['shop_name'].': '.(string)$e['error'],$shopErrors)):'دریافت گفتگوها ناموفق';
+        echo json_encode(['ok'=>false,'error'=>$msg,'shop_errors'=>$shopErrors],JSON_UNESCAPED_UNICODE); exit;
     }
-    if(!$requestShop&&$chatShops)$requestShop=$chatShops[0];
-    $rows = [];
-    foreach ($raw as $c) {
-        if (!is_array($c)) continue;
-        $vendorId=(int)($c['vendor_id']??($c['vendor']['id']??($c['shop']['vendor_id']??($c['shop']['id']??0))));
-        $shop=($vendorId>0&&isset($chatShopByVendor[$vendorId]))?$chatShopByVendor[$vendorId]:$requestShop;
-        $n=bslNormalizeChat($c);$n['vendor_id']=$vendorId>0?$vendorId:(int)($shop['vendor_id']??0);
-        $n['shop_name']=trim((string)($shop['name']??''))?:($n['vendor_id']>0?('غرفهٔ '.$n['vendor_id']):'غرفهٔ پیش‌فرض');
-        $rows[]=$n;
-    }
-    $unseen = 0;
-    foreach ($rows as $n) { if ($n['unseen'] > 0) $unseen++; }
-    echo json_encode(['ok' => true, 'rows' => $rows, 'total' => count($rows), 'unseen' => $unseen,
-        'filter' => $filter], JSON_UNESCAPED_UNICODE);
-    exit;
+    usort($rows,fn($a,$b)=>strcmp((string)($b['updated_at']??''),(string)($a['updated_at']??'')));
+    $unseen=0; foreach($rows as $n) if((int)$n['unseen']>0)$unseen++;
+    echo json_encode(['ok'=>true,'rows'=>$rows,'total'=>count($rows),'unseen'=>$unseen,'filter'=>$filter,
+        'shops_queried'=>count($shops),'shops_ok'=>$shopsOk,'shop_errors'=>$shopErrors],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES); exit;
 }
 
 /**
@@ -72601,7 +72718,8 @@ if (isset($_GET['bsl_notify_selected'])) {
     $vid = (int)$cn['basalam']['vendor_id'];
     $kind = (string)($_GET['kind'] ?? '');
     $idsRaw = trim((string)($_GET['ids'] ?? ''));
-    $want = $idsRaw === '' ? [] : array_filter(array_map('intval', explode(',', $idsRaw)));
+    $wantRaw = $idsRaw === '' ? [] : array_values(array_filter(array_map('trim', explode(',', $idsRaw))));
+    $want = array_filter(array_map('intval', $wantRaw));
     $digest = !empty($_GET['digest']);   // یک پیام خلاصه به‌جای چند پیام جدا
 
     if ($kind === 'orders') {
@@ -72634,17 +72752,19 @@ if (isset($_GET['bsl_notify_selected'])) {
         }
         if (!$okAny) { echo json_encode(['ok' => false, 'error' => $lastErr ?: 'دریافت سفارش‌ها ناموفق'], JSON_UNESCAPED_UNICODE); exit; }
     } elseif ($kind === 'chats') {
-        $r = bslReq($tk, 'GET', 'chats?limit=50&order_by=updated_at');
-        if (!$r['ok']) { echo json_encode(['ok' => false,
-            'error' => bslApiError($r, 'دریافت گفتگوها ناموفق', 'chats', 'customer.chat.read')],
-            JSON_UNESCAPED_UNICODE); exit; }
-        $raw = $r['body']['data']['chats'] ?? ($r['body']['data'] ?? []);
-        $picked = [];
-        foreach ($raw as $c) {
-            if (!is_array($c)) continue;
-            $n = bslNormalizeChat($c);
-            if ($want ? in_array($n['chat_id'], $want, true) : $n['unseen'] > 0) $picked[] = $n;
+        $picked=[]; $okAny=false; $lastErr='';
+        foreach (bslChatShops($cn) as $shC) {
+            $r=bslReqRead((string)$shC['token'],'chats?limit=50&order_by=updated_at');
+            if (empty($r['ok'])) { $lastErr=bslApiError($r,'دریافت گفتگوها ناموفق','chats','customer.chat.read'); continue; }
+            $okAny=true; $raw=$r['body']['data']['chats']??($r['body']['data']??[]);
+            foreach ((array)$raw as $c) {
+                if (!is_array($c)) continue; $n=bslNormalizeChat($c); if ((int)$n['chat_id']<=0) continue;
+                $n['vendor_id']=(int)$shC['vendor_id']; $n['shop_name']=(string)$shC['name'];
+                $n['_token']=(string)$shC['token']; $n['row_key']=$n['vendor_id'].':'.$n['chat_id'];
+                if ($wantRaw ? in_array($n['row_key'],$wantRaw,true) : $n['unseen']>0) $picked[]=$n;
+            }
         }
+        if (!$okAny) { echo json_encode(['ok'=>false,'error'=>$lastErr?:'دریافت گفتگوها ناموفق'],JSON_UNESCAPED_UNICODE); exit; }
     } else { echo json_encode(['ok' => false, 'error' => 'نوع نامعتبر'], JSON_UNESCAPED_UNICODE); exit; }
 
     if (!$picked) {
@@ -72682,7 +72802,7 @@ if (isset($_GET['bsl_notify_selected'])) {
                 $msg = bslParcelMsg($n, '📦 سفارش ارسال‌نشده');
             } else {
                 // v8.33: متن کامل پیام‌های مشتری، نه فقط آخرین پیام
-                $body = bslFetchChatMessages($tk, $n['chat_id'], max(1, min(10, $n['unseen'] ?: 1)));
+                $body = bslFetchChatMessages((string)($n['_token'] ?? $tk), $n['chat_id'], max(1, min(10, $n['unseen'] ?: 1)));
                 $msg = bslChatMsg($n, '💬 پیام خوانده‌نشده', $body);
                 $_mediaSel = bslChatCollectMedia($n, $body);
                 $delivery = notifSend($cn, $msg, 'remind', $_mediaSel);
@@ -91307,6 +91427,10 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <button class="btn btn-cyan" onclick="openChatsModal()" style="flex:1">💬 گفتگوها</button>
 </div>
 <div class="cact">
+<button class="btn btn-purple" onclick="openChatRouteModal()" style="flex:1">⚙️ تنظیم ارسال پیام‌ها</button>
+<button class="btn btn-indigo" onclick="openChatSpeedModal()" style="flex:1">⏱ میانگین سرعت پاسخ</button>
+</div>
+<div class="cact">
 <button class="btn btn-indigo" onclick="notifTest('products')" style="flex:1">📋 تست محصولات</button>
 <button class="btn btn-orange" onclick="notifTest('source')" style="flex:1">💰 تست تغییرات مبدأ</button>
 </div>
@@ -100972,6 +101096,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.601', t:'💬 گفتگوی چندغرفه‌ای، مسیر اعلان و سرعت پاسخ', items:[
+    'استعلام گفتگوها اکنون هر غرفهٔ دارای توکن را جداگانه می‌خواند، نتایج را با نام و شناسهٔ غرفه ادغام می‌کند و خطای یک غرفه مانع نمایش بقیه نمی‌شود.',
+    'مودال «تنظیم ارسال پیام‌ها» برای هر غرفه دو کنترل مستقل دارد: ارسال پیام مشتری و ارسال پیام ادمین غرفه‌دار به پیام‌رسان‌ها.',
+    'گزارش جذاب سرعت پاسخ، میانگین پاسخ ادمین به پیام مشتری را برای امروز، ۷ روز و ۳۰ روز گذشته به تفکیک غرفه نشان می‌دهد.'
+  ]},
   {v:'10.600', t:'🏪 نمایش نام غرفه در استعلام گفتگوهای باسلام', items:[
     'جدول «اعلان‌ها ← استعلام ← گفتگوها» ستون مستقل «نام غرفه» دارد و برای هر گفتگو نام غرفه و شناسهٔ vendor را نمایش می‌دهد.',
     'هویت غرفه ابتدا از vendor_id خود پاسخ گفتگو و تنظیمات غرفه‌ها تطبیق داده می‌شود و در نبود آن، غرفهٔ مالک توکن استعلام به‌عنوان fallback امن ثبت می‌شود.'
@@ -110096,6 +110225,54 @@ function watchdogCheck(){
  * ===================================================================== */
 let inqState={kind:'',filter:'',rows:[],sel:{},loading:false};
 
+function chatAuxClose(id){const m=document.getElementById(id);if(m)m.remove();}
+function openChatRouteModal(){
+  chatAuxClose('chatRouteModal');
+  const d=document.createElement('div');d.id='chatRouteModal';
+  d.innerHTML='<div class="bsl-modal-overlay" onclick="if(event.target===this)chatAuxClose(\'chatRouteModal\')"><div class="bsl-modal" style="max-width:760px">'
+    +'<div class="bsl-modal-head"><h2>⚙️ مسیر ارسال پیام‌های هر غرفه</h2><button class="btn btn-gray" onclick="chatAuxClose(\'chatRouteModal\')">✕</button></div>'
+    +'<div class="bsl-modal-body" id="chatRouteBody" style="min-height:160px"><div style="padding:30px;text-align:center;color:#93c5fd">⏳ در حال دریافت غرفه‌ها...</div></div>'
+    +'<div class="bsl-modal-pager" style="justify-content:flex-end"><button class="btn btn-green" id="chatRouteSave" onclick="saveChatRoutes()">💾 ذخیره تنظیمات</button></div></div></div>';
+  document.body.appendChild(d);
+  fetch('?bsl_chat_routes=1').then(r=>r.json()).then(x=>{
+    const b=document.getElementById('chatRouteBody');if(!b)return;
+    if(!x.ok){b.innerHTML='<div style="color:#fca5a5;padding:20px">'+esc(x.error||'خطا')+'</div>';return;}
+    let h='<div style="padding:10px 12px;color:#94a3b8;font-size:11px;line-height:1.8">برای هر غرفه مشخص کنید کدام سمت گفتگو به پیام‌رسان‌های فعال فرستاده شود.</div>'
+      +'<table class="bsl-modal-table"><thead><tr><th>نام غرفه</th><th style="text-align:center">ارسال پیام مشتری به پیام‌رسان‌ها</th><th style="text-align:center">ارسال پیام‌های ادمین غرفه‌دار به پیام‌رسان‌ها</th></tr></thead><tbody>';
+    (x.rows||[]).forEach(v=>{h+='<tr data-route-vid="'+String(v.vendor_id)+'"><td><b style="color:#67e8f9">'+esc(v.shop_name||'غرفه')+'</b><div style="font-size:9px;color:#64748b;direction:ltr;text-align:right">#'+toFa(v.vendor_id)+'</div></td>'
+      +'<td style="text-align:center"><label style="display:inline-flex;align-items:center;gap:7px;cursor:pointer"><input class="route-customer" type="checkbox" '+(v.customer?'checked':'')+' style="width:18px;height:18px"><span>'+(v.customer?'فعال':'')+'</span></label></td>'
+      +'<td style="text-align:center"><label style="display:inline-flex;align-items:center;gap:7px;cursor:pointer"><input class="route-admin" type="checkbox" '+(v.admin?'checked':'')+' style="width:18px;height:18px"><span>'+(v.admin?'فعال':'')+'</span></label></td></tr>';});
+    h+='</tbody></table>';b.innerHTML=h;
+  }).catch(()=>{const b=document.getElementById('chatRouteBody');if(b)b.innerHTML='<div style="color:#fca5a5;padding:20px">خطا در ارتباط</div>';});
+}
+function saveChatRoutes(){
+  const routes={};document.querySelectorAll('#chatRouteBody tr[data-route-vid]').forEach(tr=>{routes[tr.dataset.routeVid]={customer:tr.querySelector('.route-customer')?.checked?1:0,admin:tr.querySelector('.route-admin')?.checked?1:0};});
+  const btn=document.getElementById('chatRouteSave');if(btn){btn.disabled=true;btn.textContent='⏳ در حال ذخیره...';}
+  const fd=new FormData();fd.append('routes',JSON.stringify(routes));
+  fetch('?bsl_chat_routes_save=1',{method:'POST',body:fd}).then(r=>r.json()).then(x=>{if(!x.ok)throw new Error(x.error||'ذخیره ناموفق');showToast('✓ مسیر ارسال پیام‌های غرفه‌ها ذخیره شد');chatAuxClose('chatRouteModal');}).catch(e=>{showToast(e.message||'ذخیره ناموفق',1);if(btn){btn.disabled=false;btn.textContent='💾 ذخیره تنظیمات';}});
+}
+function chatSpeedText(sec){
+  if(sec===null||sec===undefined)return '<span style="color:#64748b">داده کافی نیست</span>';
+  sec=Math.max(0,Number(sec)||0);let txt=sec<60?Math.round(sec)+' ثانیه':sec<3600?Math.round(sec/60)+' دقیقه':sec<86400?(sec/3600).toFixed(sec<7200?1:0)+' ساعت':(sec/86400).toFixed(1)+' روز';
+  const color=sec<=900?'#4ade80':sec<=3600?'#fbbf24':'#fb7185';return '<b style="font-size:14px;color:'+color+'">'+toFa(txt)+'</b>';
+}
+function openChatSpeedModal(fresh){
+  if(!document.getElementById('chatSpeedModal')){
+    const d=document.createElement('div');d.id='chatSpeedModal';d.innerHTML='<div class="bsl-modal-overlay" onclick="if(event.target===this)chatAuxClose(\'chatSpeedModal\')"><div class="bsl-modal" style="max-width:940px">'
+      +'<div class="bsl-modal-head"><h2>⏱ میانگین سرعت پاسخ غرفه‌دارها</h2><div style="display:flex;gap:6px"><button class="btn btn-cyan" onclick="openChatSpeedModal(true)">🔄 محاسبه تازه</button><button class="btn btn-gray" onclick="chatAuxClose(\'chatSpeedModal\')">✕</button></div></div>'
+      +'<div class="bsl-modal-body" id="chatSpeedBody" style="min-height:240px"></div></div></div>';document.body.appendChild(d);
+  }
+  const b=document.getElementById('chatSpeedBody');if(b)b.innerHTML='<div style="padding:45px;text-align:center;color:#93c5fd">⏳ در حال بررسی گفتگوها و محاسبه فاصله پیام مشتری تا اولین پاسخ ادمین...</div>';
+  fetch('?bsl_chat_response_stats=1'+(fresh?'&fresh=1':'')).then(r=>r.json()).then(x=>{
+    if(!b)return;if(!x.ok){b.innerHTML='<div style="padding:20px;color:#fca5a5">'+esc(x.error||'خطا')+'</div>';return;}
+    let h='<div style="padding:10px 12px;background:linear-gradient(135deg,#0f2847,#172554);border:1px solid #1d4ed8;border-radius:10px;margin:10px;color:#bfdbfe;font-size:11px;line-height:1.8">'
+      +'مبنای محاسبه: فاصلهٔ اولین پیام مشتریِ بی‌پاسخ تا اولین پیام بعدی ادمین. پاسخ‌های امروز، ۷ روز و ۳۰ روز گذشته جداگانه میانگین‌گیری شده‌اند.'+(x.cached?' <b style="color:#fbbf24">(کش ۱۵ دقیقه‌ای)</b>':'')+'</div>';
+    h+='<table class="bsl-modal-table"><thead><tr><th>غرفه</th><th style="text-align:center">روزانه<br><small>۲۴ ساعت</small></th><th style="text-align:center">هفتگی<br><small>۷ روز</small></th><th style="text-align:center">ماهانه<br><small>۳۰ روز</small></th><th style="text-align:center">گفتگوهای بررسی‌شده</th></tr></thead><tbody>';
+    (x.shops||[]).forEach(v=>{const p=v.periods||{};const cell=k=>{const z=p[k]||{};return chatSpeedText(z.avg_seconds)+'<div style="font-size:9px;color:#64748b;margin-top:3px">'+toFa(z.responses||0)+' پاسخ</div>';};h+='<tr><td><b style="color:#67e8f9">'+esc(v.shop_name||'غرفه')+'</b><div style="font-size:9px;color:#64748b;direction:ltr;text-align:right">#'+toFa(v.vendor_id)+'</div></td>'+(v.ok?'<td style="text-align:center">'+cell('day')+'</td><td style="text-align:center">'+cell('week')+'</td><td style="text-align:center">'+cell('month')+'</td><td style="text-align:center;color:#cbd5e1">'+toFa(v.chats_scanned||0)+'</td>':'<td colspan="4" style="color:#fca5a5;text-align:center">دریافت اطلاعات این غرفه ناموفق بود</td>')+'</tr>';});
+    h+='</tbody></table>';if((x.errors||[]).length)h+='<div style="margin:10px;padding:8px;color:#fca5a5;background:#7f1d1d22;border-radius:8px;font-size:10px">'+(x.errors||[]).map(esc).join('<br>')+'</div>';b.innerHTML=h;
+  }).catch(()=>{if(b)b.innerHTML='<div style="padding:20px;color:#fca5a5">خطا در ارتباط</div>';});
+}
+
 function inqClose(){
   const m=document.getElementById('inqModalContainer');
   if(m)m.remove();
@@ -110116,7 +110293,7 @@ function inqDate(s){
 function inqMoney(n){return toFa(Number(n||0).toLocaleString('en-US'))+' تومان';}
 
 /** کلید یکتای هر ردیف بسته به نوع */
-function inqId(r){return inqState.kind==='orders'?r.parcel_id:r.chat_id;}
+function inqId(r){return inqState.kind==='orders'?String(r.parcel_id):String(r.row_key||(String(r.vendor_id||0)+':'+String(r.chat_id)));}
 
 /** ردیف‌هایی که به‌طور پیش‌فرض «اقدام‌نشده» شمرده می‌شوند */
 function inqIsPending(r){return inqState.kind==='orders'?!!r.unsent:(r.unseen>0);}
@@ -110164,6 +110341,8 @@ function inqOpen(kind,filter){
   }else{
     html+='<button class="btn btn-gray" id="inqF_all" onclick="inqSetFilter(\'all\')" style="font-size:11px;padding:5px 10px">همه</button>';
     html+='<button class="btn btn-gray" id="inqF_unseen" onclick="inqSetFilter(\'unseen\')" style="font-size:11px;padding:5px 10px">💬 خوانده‌نشده</button>';
+    html+='<button class="btn btn-purple" onclick="openChatRouteModal()" style="font-size:11px;padding:5px 10px">⚙️ تنظیم ارسال پیام‌ها</button>';
+    html+='<button class="btn btn-indigo" onclick="openChatSpeedModal()" style="font-size:11px;padding:5px 10px">⏱ سرعت پاسخ</button>';
   }
   html+='<span class="mb-sp"></span>';
   html+='<span id="inqSummary" style="font-size:11px;color:#94a3b8"></span>';
@@ -110202,7 +110381,9 @@ function inqReload(){
       sm.innerHTML=isOrd
         ?(toFa(d.total||0)+' سفارش · <b style="color:#fbbf24">'+toFa(d.unsent||0)+'</b> ارسال‌نشده'
           +((d.shops_ok&&d.shops_ok>1)?' · <span style="color:#67e8f9">'+toFa(d.shops_ok)+' غرفه</span>':''))
-        :(toFa(d.total||0)+' گفتگو · <b style="color:#fbbf24">'+toFa(d.unseen||0)+'</b> خوانده‌نشده');
+        :(toFa(d.total||0)+' گفتگو · <b style="color:#fbbf24">'+toFa(d.unseen||0)+'</b> خوانده‌نشده'
+          +' · <span style="color:#67e8f9">'+toFa(d.shops_ok||0)+' از '+toFa(d.shops_queried||0)+' غرفه</span>'
+          +((d.shop_errors||[]).length?' · <span style="color:#fca5a5">'+toFa(d.shop_errors.length)+' خطا</span>':''));
     }
     ['all','unsent','unseen'].forEach(f=>{
       const b=document.getElementById('inqF_'+f);
@@ -110237,7 +110418,7 @@ function inqRenderBody(){
     const on=!!inqState.sel[id];
     h+='<tr id="inqRow_'+id+'" style="border-bottom:1px solid #1e293b;'+(on?'background:#1e3a5f':'')+'">';
     h+='<td style="text-align:center"><input type="checkbox" id="inqCb_'+id+'" '+(on?'checked':'')
-      +' onclick="inqToggle('+id+')" style="width:15px;height:15px;cursor:pointer"></td>';
+      +' onclick="inqToggle(\''+id+'\')" style="width:15px;height:15px;cursor:pointer"></td>';
     if(isOrd){
       const it0=(r.items&&r.items[0]&&r.items[0].title)?String(r.items[0].title):'';
       h+='<td style="font-family:ui-monospace,monospace;direction:ltr;text-align:right">#'+toFa(r.order_id||r.parcel_id)
