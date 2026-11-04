@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.610';
+const APP_VERSION = '10.611';
 
 
 if (!function_exists('str_starts_with')) {
@@ -2410,6 +2410,19 @@ function matrixWakePausedJobs(): int {
     });
     return $resumed;
 }
+/** Resume matrix work on both full hosting and exec-disabled LiteSpeed.
+ * The queue remains the single owner; the web endpoint claims that exact row. */
+function matrixDispatchResumePortable(array $opts): array {
+    if(function_exists('s4WorkerIsActive')&&s4WorkerIsActive())return s4WorkerEnqueueMatrixBuild($opts,true);
+    $spawn=function_exists('s4SpawnMatrixBuildChild')?s4SpawnMatrixBuildChild($opts,true):['ok'=>false,'error'=>'spawn_unavailable'];
+    if(!empty($spawn['ok']))return $spawn;
+    $queued=function_exists('s4WorkerEnqueueMatrixBuild')?s4WorkerEnqueueMatrixBuild($opts,true):['ok'=>false,'error'=>'queue_unavailable'];
+    if(!empty($queued['ok'])){
+        $queued['spawn_error']=(string)($spawn['error']??'');
+        $queued['web_fallback']=function_exists('fireAndForget')?fireAndForget('internal_matrix_feedback=1',1800):false;
+    }
+    return $queued;
+}
 function matrixWakeWaitingBuild(): array {
     $p=matrixProgressRead(false);$q=s4WorkerLoadQueue();
     /* An active queue owner is authoritative, including the tiny unlocked gap
@@ -2430,7 +2443,7 @@ function matrixWakeWaitingBuild(): array {
         'live_fill'=>!empty($p['live_fill']??$cp['live_fill']??false),
         'selected_destinations'=>array_key_exists('selected_destinations',$cp)?array_values((array)$cp['selected_destinations']):null,
         'slice_seconds'=>max(2,min(20,(int)($p['slice_seconds']??$cp['slice_seconds']??8)))];
-    $r=s4WorkerIsActive()?s4WorkerEnqueueMatrixBuild($opts,true):s4SpawnMatrixBuildChild($opts,true);
+    $r=matrixDispatchResumePortable($opts);
     if($orphaned&&!empty($r['ok']))matrixProgress(['log_add'=>['♻️ کران owner ازدست‌رفتهٔ build را بازیابی کرد؛ ادامه از checkpoint بدون شروع دوباره']]);
     return ['woken'=>!empty($r['ok']),'orphaned'=>$orphaned,'result'=>$r];
 }
@@ -46002,7 +46015,7 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
         $mxResumeOpts=['profile'=>(string)($mx['profile']??'all'),'parallel_destinations'=>(string)($mx['fetch_mode']??'')==='parallel','live_fill'=>!empty($mx['live_fill']),'selected_destinations'=>array_key_exists('selected_destinations',$mxResumeCp)?array_values((array)$mxResumeCp['selected_destinations']):(array_key_exists('selected_destinations',$mx)?array_values((array)$mx['selected_destinations']):null),'slice_seconds'=>max(2,min(20,(int)($mx['slice_seconds']??8)))];
         /* daemon زنده مالک recovery باشد تا child را wait و exit/OOM را ثبت کند؛
            detached فقط fallback نصب‌هایی است که daemon واقعاً بالا نمی‌آید. */
-        $actions['matrix']=$workerActive?s4WorkerEnqueueMatrixBuild($mxResumeOpts,true):s4SpawnMatrixBuildChild($mxResumeOpts,true);
+        $actions['matrix']=matrixDispatchResumePortable($mxResumeOpts);
     }
     $healthy=$workerActive&&($cronAge===null||$cronAge<900)&&!( !empty($mx['running'])&&!$mxLocked&&($mxAge===null||$mxAge>120));
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'now'=>$now,'healthy'=>$healthy,'repair'=>$repair,
@@ -46043,8 +46056,7 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
                 'live_fill'=>!empty($prog['live_fill']??$rcp['live_fill']??false),
                 'selected_destinations'=>array_key_exists('selected_destinations',$rcp)?array_values((array)$rcp['selected_destinations']):(array_key_exists('selected_destinations',$prog)?array_values((array)$prog['selected_destinations']):null),
                 'slice_seconds'=>max(2,min(20,(int)($prog['slice_seconds']??$rcp['slice_seconds']??8)))];
-            if(function_exists('s4WorkerIsActive')&&s4WorkerIsActive())s4WorkerEnqueueMatrixBuild($ro,true);
-            elseif(function_exists('s4SpawnMatrixBuildChild'))s4SpawnMatrixBuildChild($ro,true);
+            if(function_exists('matrixDispatchResumePortable'))matrixDispatchResumePortable($ro);
             $prog=matrixProgressRead(false);
         }
         if($mf)@fclose($mf);
@@ -48836,6 +48848,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'matrixWorkHeartbeat($prog)')!==false
         &&strpos($selfSrc,"{v:'10." . "610'")!==false
         &&version_compare(APP_VERSION,'10.610','>='));
+    $add('10.611','هاست بدون exec ادامهٔ جدول را به web worker می‌سپارد',
+        strpos($selfSrc,'function matrixDispatchResumePortable(array $opts)')!==false
+        &&strpos($selfSrc,"fireAndForget('internal_matrix_feedback=1',1800)")!==false
+        &&substr_count($selfSrc,'matrixDispatchResumePortable(')>=4
+        &&strpos($selfSrc,"{v:'10." . "611'")!==false
+        &&version_compare(APP_VERSION,'10.611','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101341,6 +101359,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.611', t:'♻️ ادامهٔ خودکار جدول روی هاست بدون exec', items:[
+    'اگر ساخت child مستقل به‌علت exec_disabled ممکن نباشد، یک job یکتای resume در صف worker ثبت می‌شود.',
+    'web worker همان job را فوراً claim می‌کند و ساخت را از checkpoint ادامه می‌دهد؛ نیاز به بازیابی دستی هر برش حذف شد.',
+    'مسیرهای cron، status و ops repair همگی از dispatcher قابل‌حمل مشترک استفاده می‌کنند.'
+  ]},
   {v:'10.610', t:'🫀 بازیابی واقعی ساخت جدول مغایرت', items:[
     'رسیدن کران دیگر timestamp پیشرفت واقعی ساخت یا اصلاح جدول را جلو نمی‌برد.',
     'watchdog از ضربان مستقل کار استفاده می‌کند و برای state قدیمی، آخرین log غیرکران را به‌عنوان حرکت واقعی بازیابی می‌کند.',
