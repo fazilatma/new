@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.604';
+const APP_VERSION = '10.605';
 
 
 if (!function_exists('str_starts_with')) {
@@ -43299,9 +43299,10 @@ function matrixBuild(array $opts = []): array {
         foreach ($matrixShopCp as $savedVid => $_savedRows) $matrixShopDone[(string)$savedVid] = true;
     }
     $matrixCp = static function (string $phase, array $rows, array $done, array $woo, array $shops, int $at, bool $wooDone = false) use ($profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, &$matrixWooPage, &$matrixWooComplete, &$matrixShopPages, &$matrixShopDone, &$selectedDestinations): array {
-        /* raw destination rows already live in append-only cursors. Repeating a
-           growing 10k+ catalog inside every JSON checkpoint caused OOM/worker death. */
-        $cpShops=[];foreach($shops as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
+        /* v10.605: an unfinished catalog must travel with the durable checkpoint.
+           The private NDJSON cursor is only an optimization and may disappear on
+           shared hosting; omitting partial rows made resume restart at page one. */
+        $cpShops=[];foreach($shops as $vid=>$raw)if(is_array($raw))$cpShops[$vid]=$raw;
         return ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
             'profile_rows' => $rows, 'profiles_done' => $done, 'woo_rows' => $wooDone ? $woo : [],
             'woo_done' => $wooDone, 'woo_page' => $matrixWooPage, 'woo_complete' => $matrixWooComplete,
@@ -43328,7 +43329,7 @@ function matrixBuild(array $opts = []): array {
     $stopMatrix = static function (string $phase) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
         &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$codedOnly, &$sliceSeconds, &$selectedDestinations): array {
-        $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
+        $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(is_array($raw))$cpShops[$vid]=$raw;
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooDone ? $matrixWooCp : [], 'woo_done' => $matrixWooDone,
@@ -43344,7 +43345,7 @@ function matrixBuild(array $opts = []): array {
     $yieldMatrix = static function (string $phase, int $retryAfter=0) use (&$rowsByKey, &$profilesDone, &$matrixWooCp,
         &$matrixShopCp, &$startedAt, &$matrixWooDone, &$matrixWooPage, &$matrixWooComplete,
         &$matrixShopPages, &$matrixShopDone, $profileFilter, &$parallelDest, &$liveFill, &$codedOnly, &$sliceSeconds, $cn, $source, &$selectedDestinations): array {
-        $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(!empty($matrixShopDone[(string)$vid]))$cpShops[$vid]=$raw;
+        $cpShops=[];foreach($matrixShopCp as $vid=>$raw)if(is_array($raw))$cpShops[$vid]=$raw;
         $cp = ['phase' => $phase, 'profile_filter' => ($profileFilter ?: 'all'), 'selected_destinations'=>$selectedDestinations,
             'profile_rows' => $rowsByKey, 'profiles_done' => $profilesDone,
             'woo_rows' => $matrixWooDone ? $matrixWooCp : [], 'woo_done' => $matrixWooDone,
@@ -43622,12 +43623,12 @@ function matrixBuild(array $opts = []): array {
         if (matrixStopRequested()) return $stopMatrix('bsl_fetch');
         if (!empty($shopMeta['stopped']) && !matrixStopRequested()) return $yieldMatrix('bsl_fetch');
         if (!$shopDone) {
-            $why = $bslErr ?: ('برداشت غرفهٔ ' . $sname . ' کامل نشد');
-            matrixProgress(['running' => false, 'done' => true, 'stale' => true, 'partial' => true,
-                'error' => $why, 'phase' => 'stopped',
-                'checkpoint' => $matrixCp('bsl_fetch', $rowsByKey, $profilesDone, $matrixWooCp, $matrixShopCp, $startedAt, $matrixWooDone),
-                'log_add' => ['⚠️ ' . $why . ' — checkpoint حفظ شد']]);
-            return ['ok' => false, 'partial' => true, 'error' => $why];
+            /* v10.605: API hiccups and the bounded page window are continuation
+               points, not completed failures. Persist rows/page and let cron retry. */
+            $reason=(string)($shopMeta['reason']??'partial');
+            $why = $bslErr ?: ('برداشت غرفهٔ ' . $sname . ' موقتاً ناقص ماند');
+            matrixProgress(['log_add'=>['↻ '.$why.' ('.$reason.') — ادامه از checkpoint در تیک بعدی']]);
+            return $yieldMatrix('bsl_fetch', $reason==='http'?15:0);
         }
         /* Product rows stay in the reconciliation matrix only; no catalog copy is written. */
         $seen = [];
@@ -48730,6 +48731,19 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$res['profile_count']")!==false
         &&strpos($selfSrc,"{v:'10." . "604'")!==false
         &&version_compare(APP_VERSION,'10.604','>='));
+    $__matrixCp605=['shop_rows'=>['735703'=>[['id'=>1],['id'=>2]]],
+        'shop_pages'=>['735703'=>8],'shop_done'=>['735703'=>false]];
+    $__matrixSeed605=matrixCheckpointCursorSeed($__matrixCp605,'bsl_active',735703);
+    $add('10.605','ادامهٔ ماتریس، ردیف‌های ناقص غرفه و صفحهٔ checkpoint را حفظ می‌کند',
+        ($__matrixSeed605['page']??0)===8
+        &&count($__matrixSeed605['rows']??[])===2
+        &&strpos($selfSrc,"foreach(\$shops as \$vid=>\$raw)if(is_array(\$raw))\$cpShops[\$vid]=\$raw")!==false
+        &&strpos($selfSrc,"reconFetchCursorReplace('bsl_active'")!==false
+        &&strpos($selfSrc,"return \$yieldMatrix('bsl_fetch', \$reason==='http'?15:0);")!==false
+        &&strpos($selfSrc,"'done'=>false,'yielded'=>true")!==false
+        &&strpos($selfSrc,"if (empty(\$res['yielded'])) break;")!==false
+        &&strpos($selfSrc,"{v:'10." . "605'")!==false
+        &&version_compare(APP_VERSION,'10.605','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -70799,6 +70813,32 @@ function reconFetchBsl(string $tk, int $vid, int $maxPages = 0, bool $customerVi
 }
 
 function matrixFetchCursorFile(): string { return SYNC_MATRIX_FETCH_CURSOR_FILE; }
+/** Return the durable rows/page needed to rebuild a missing matrix-private cursor. */
+function matrixCheckpointCursorSeed(array $cp, string $target, int $vid = 0): array {
+    if ($target === 'bsl_active') {
+        $rows=is_array(($cp['shop_rows']??[])[(string)$vid]??null)?$cp['shop_rows'][(string)$vid]:[];
+        $page=max(0,(int)(($cp['shop_pages']??[])[(string)$vid]??0));
+        return ['rows'=>array_values(array_filter($rows,'is_array')),'page'=>$page];
+    }
+    if ($target === 'woo') {
+        $rows=is_array($cp['woo_rows']??null)?$cp['woo_rows']:[];
+        return ['rows'=>array_values(array_filter($rows,'is_array')),'page'=>max(0,(int)($cp['woo_page']??0))];
+    }
+    return ['rows'=>[],'page'=>0];
+}
+/** Atomically replace one destination inside the append-only cursor. */
+function reconFetchCursorReplace(string $target,int $vid,int $page,array $rows): bool {
+    $f=reconFetchCursorFile();$kept=[];
+    foreach((array)@file($f,FILE_IGNORE_NEW_LINES|FILE_SKIP_EMPTY_LINES) as $ln){
+        $d=json_decode($ln,true);if(is_array($d)&&(string)($d['target']??'')===$target&&(int)($d['vid']??0)===$vid)continue;
+        $kept[]=$ln;
+    }
+    if($page>0||$rows)$kept[]=json_encode(['target'=>$target,'vid'=>$vid,'page'=>$page,'rows'=>array_values($rows)],JSON_UNESCAPED_UNICODE);
+    $tmp=$f.'.tmp.'.getmypid().'.'.substr(md5(uniqid('',true)),0,8);
+    $body=$kept?implode("\n",$kept)."\n":'';
+    if(@file_put_contents($tmp,$body,LOCK_EX)===false){@unlink($tmp);return false;}
+    if(!@rename($tmp,$f)){@unlink($tmp);return false;}return true;
+}
 /** Select the matrix-private cursor for this request. On the first v10.347
  * resume only, migrate the legacy shared cursor when it covers every page
  * promised by the matrix checkpoint; otherwise a mismatched catalog is never
@@ -70815,6 +70855,18 @@ function matrixActivateFetchCursor(array $cp = []): void {
         if($valid)@copy($legacy,$dedicated);
     }
     $GLOBALS['_reconFetchCursorFileOverride']=$dedicated;
+    /* v10.605: checkpoint is authoritative. Recreate a missing/short private
+       cursor from partial rows so the next request starts after its saved page. */
+    foreach((array)($cp['shop_pages']??[]) as $vid=>$expected){
+        $seed=matrixCheckpointCursorSeed($cp,'bsl_active',(int)$vid);$expected=(int)$expected;
+        if($expected<=0||!$seed['rows'])continue;
+        $cur=reconFetchCursorLoad('bsl_active',(int)$vid);
+        if((int)($cur['page']??0)<$expected)reconFetchCursorReplace('bsl_active',(int)$vid,$expected,$seed['rows']);
+    }
+    if(empty($cp['woo_done'])){
+        $seed=matrixCheckpointCursorSeed($cp,'woo',0);$cur=reconFetchCursorLoad('woo',0);
+        if($seed['page']>0&&$seed['rows']&&(int)($cur['page']??0)<$seed['page'])reconFetchCursorReplace('woo',0,$seed['page'],$seed['rows']);
+    }
 }
 function reconFetchCursorFile(): string {
     $override=(string)($GLOBALS['_reconFetchCursorFileOverride']??'');
@@ -70868,10 +70920,10 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
     if ($rows) reconProgress(['log_add' => ['↻ ادامهٔ واکشی از صفحهٔ ' . $startPage . ' — ' . count($rows) . ' محصولِ قبلاً خوانده‌شده']]);
     $limit = $startPage + max(1, $maxPages);
     for ($page = $startPage; $page < $limit; $page++) {
-        if (reconFetchStopRequested($stopScope)) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = $page; break; }
+        if (reconFetchStopRequested($stopScope)) { $meta['partial'] = true; $meta['stopped'] = true; $meta['reason'] = 'stopped'; $meta['page'] = max(0, $page - 1); break; }
         if ($target === 'woo') {
             $r = wooReq((string)($w['store_url'] ?? ''), (string)($w['consumer_key'] ?? ''), (string)($w['consumer_secret'] ?? ''), 'GET', 'products?per_page=100&status=any&page=' . $page);
-            if (empty($r['ok']) || !is_array($r['body'])) { $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = $page; break; }
+            if (empty($r['ok']) || !is_array($r['body'])) { $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = max(0, $page - 1); break; }
             $batch = $r['body'];
             if (!$batch) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
             $pageRows = [];
@@ -70885,7 +70937,7 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
         } else {
             $stQ = $customerVisibleOnly ? bslActiveStatusQuery() : '&statuses=2976&statuses=3790';
             $r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page . '&per_page=100' . $stQ);
-            if (empty($r['ok']) || !is_array($r['body']['data'] ?? null)) { $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = $page; break; }
+            if (empty($r['ok']) || !is_array($r['body']['data'] ?? null)) { $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = max(0, $page - 1); break; }
             $batch = $r['body']['data'];
             if (!$batch) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
             $pageRows = [];
@@ -101195,6 +101247,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.605', t:'↻ ادامهٔ امن ساخت جدول مغایرت از checkpoint', items:[
+    'ردیف‌های ناقص هر غرفه اکنون همراه صفحهٔ واکشی داخل checkpoint فشرده ذخیره می‌شوند؛ حذف فایل cursor دیگر ساخت جدول را به صفحهٔ یک برنمی‌گرداند.',
+    'در شروع ادامه، cursor خصوصی از ردیف‌ها و صفحهٔ checkpoint بازسازی می‌شود و صفحه‌بندی از همان نقطه پیش می‌رود.',
+    'پایان برش زمانی، سقف صفحهٔ هر دور و خطای موقت API دیگر حالت done/stopped نمی‌سازند؛ job به‌صورت resumable به cron/worker تحویل داده می‌شود.'
+  ]},
   {v:'10.604', t:'♻️ بازیابی واقعی پروفایل‌ها در درون‌ریزی تنظیمات', items:[
     'علت دیده‌نشدن پروفایل‌ها رفع شد: profiles.json قبلاً مستقیم نوشته می‌شد اما tombstoneهای حذف قدیمیِ سایت مقصد همچنان پروفایل‌های واردشده را از فهرست پنهان می‌کردند.',
     'درون‌ریزی پروفایل اکنون از نویسندهٔ اتمیک و محافظ سهمیهٔ دیسک استفاده می‌کند، پشتیبان و کش فهرست را تازه می‌سازد و فقط tombstoneهای متناظر با پروفایل‌های صریحاً واردشده را پاک می‌کند.',
