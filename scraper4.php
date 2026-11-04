@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.609';
+const APP_VERSION = '10.610';
 
 
 if (!function_exists('str_starts_with')) {
@@ -2383,7 +2383,7 @@ function matrixCronWatchdog(?array $cfg=null): array {
     $targets=[['kind'=>'build','file'=>SYNC_MATRIX_PROGRESS_FILE,'state'=>matrixProgressRead(false)],
         ['kind'=>'fix','file'=>SYNC_MATRIX_FIX_PROGRESS_FILE,'state'=>function_exists('matrixFixProgressRead')?matrixFixProgressRead():[]]];
     foreach($targets as $t){$s=$t['state'];if(empty($s['running'])||!empty($s['queued']))continue;
-        $beat=(int)($s['ts']??$s['started_at']??0);$age=$beat>0?$now-$beat:0;$pid=(int)($s['runner_pid']??0);
+        $beat=$t['kind']==='build'?matrixWorkHeartbeat($s):(int)($s['work_heartbeat_at']??$s['ts']??$s['started_at']??0);$age=$beat>0?$now-$beat:0;$pid=(int)($s['runner_pid']??0);
         if($age<$limit||$pid<=1||$pid===(int)@getmypid()||!function_exists('posix_kill')||!@posix_kill($pid,0))continue;
         $sent=@posix_kill($pid,defined('SIGTERM')?SIGTERM:15);
         if($t['kind']==='build')matrixProgress(['log_add'=>['🛡 نگهبان کران: child بدون پیشرفت متوقف شد؛ ادامه از آخرین checkpoint به worker سپرده شد']]);
@@ -2448,8 +2448,8 @@ function matrixCronLogArrival(string $source,array $cfg,array $watchdog,int $res
     $build=matrixProgressRead(false);$fix=function_exists('matrixFixProgressRead')?matrixFixProgressRead():[];
     $buildRelevant=!empty($build['running'])||!empty($build['yielded'])||!empty($build['queued'])||in_array((string)($build['phase']??''),['waiting_cron','در صف worker'],true);
     $fixRelevant=!empty($fix['running'])||!empty($fix['queued'])||in_array((string)($fix['phase']??''),['waiting_cron','در انتظار ضربان کران','در صف worker'],true);
-    if($buildRelevant)matrixProgress(['cron_arrived_at'=>time(),'cron_arrived_source'=>$source,'log_add'=>[$line]]);
-    if($fixRelevant)matrixFixProgress(['cron_arrived_at'=>time(),'cron_arrived_source'=>$source,'log_add'=>[$line]]);
+    if($buildRelevant)matrixProgress(['_touch_work_heartbeat'=>false,'cron_arrived_at'=>time(),'cron_arrived_source'=>$source,'log_add'=>[$line]]);
+    if($fixRelevant)matrixFixProgress(['_touch_work_heartbeat'=>false,'cron_arrived_at'=>time(),'cron_arrived_source'=>$source,'log_add'=>[$line]]);
 }
 function matrixCronPulse(string $source='external'): array {
     $cfg=matrixExecutionCfg();$state=['at'=>time(),'source'=>$source,'pid'=>(int)@getmypid(),'version'=>APP_VERSION];
@@ -42930,6 +42930,8 @@ function matrixCheckpointLoad(): ?array {
     $cp=json_decode($blob,true);return is_array($cp)?$cp:null;
 }
 function matrixProgress(array $patch): void {
+    $touchWork=!array_key_exists('_touch_work_heartbeat',$patch)||!empty($patch['_touch_work_heartbeat']);
+    unset($patch['_touch_work_heartbeat']);
     if(array_key_exists('checkpoint',$patch)){
         if(is_array($patch['checkpoint'])&&empty($patch['checkpoint']['_external']))$patch['checkpoint']=matrixCheckpointSave($patch['checkpoint']);
         elseif($patch['checkpoint']===null)@unlink(SYNC_MATRIX_CHECKPOINT_FILE);
@@ -42949,7 +42951,19 @@ function matrixProgress(array $patch): void {
     }
     $cur['log'] = $log;
     $cur['ts'] = time();
+    if($touchWork)$cur['work_heartbeat_at']=$cur['ts'];
     writeProgress(SYNC_MATRIX_PROGRESS_FILE, $cur);
+}
+/** Matrix liveness excludes cron-arrival log writes. For a pre-v10.610 state,
+ * recover the last genuine activity from the newest non-cron log entry. */
+function matrixWorkHeartbeat(array $state): int {
+    $beat=(int)($state['work_heartbeat_at']??0);if($beat>0)return $beat;
+    $logs=is_array($state['log']??null)?$state['log']:[];
+    for($i=count($logs)-1;$i>=0;$i--){$row=$logs[$i]??null;if(!is_array($row))continue;
+        $msg=(string)($row['m']??'');if(strpos($msg,'🫀 کران رسید')!==false)continue;
+        $at=(int)($row['t']??0);if($at>0)return $at;
+    }
+    return (int)($state['last_progress_ts']??$state['started_at']??0);
 }
 function matrixStopRequested(): bool {
     if (!is_file(SYNC_MATRIX_STOP_FILE)) return false;
@@ -43877,6 +43891,8 @@ function matrixBuild(array $opts = []): array {
  * ===================================================================== */
 
 function matrixFixProgress(array $patch): void {
+    $touchWork=!array_key_exists('_touch_work_heartbeat',$patch)||!empty($patch['_touch_work_heartbeat']);
+    unset($patch['_touch_work_heartbeat']);
     $cur = localTaskStateRead(SYNC_MATRIX_FIX_PROGRESS_FILE, []);
     $log = is_array($cur['log'] ?? null) ? $cur['log'] : [];
     if (isset($patch['log_add'])) {
@@ -43904,6 +43920,7 @@ function matrixFixProgress(array $patch): void {
     }
     $cur['log'] = $log;
     $cur['ts'] = time();
+    if($touchWork)$cur['work_heartbeat_at']=$cur['ts'];
     writeProgress(SYNC_MATRIX_FIX_PROGRESS_FILE, $cur);
 }
 
@@ -45961,7 +45978,7 @@ if(isset($_GET['ops_feedback'])||(($_POST['action']??'')==='ops_feedback')){
     $profilesCount=count(loadProfiles());
     $staleWorkerLock=$repair?s4WorkerRecoverStaleLockPath():['recovered'=>false];
     $wst=s4WorkerStateLoad();$wq=s4WorkerLoadQueue();$whb=(int)($wst['heartbeat']??0);$workerActive=s4WorkerIsActive();
-    $mx=matrixProgressRead(false);$mxBeat=function_exists('tasksHeartbeat')?tasksHeartbeat($mx):(int)($mx['ts']??0);$mxAge=$mxBeat>0?max(0,$now-$mxBeat):null;
+    $mx=matrixProgressRead(false);$mxBeat=function_exists('matrixWorkHeartbeat')?matrixWorkHeartbeat($mx):(int)($mx['ts']??0);$mxAge=$mxBeat>0?max(0,$now-$mxBeat):null;
     $mxFp=@fopen(SYNC_MATRIX_LOCK_FILE,'c');$mxLocked=false;if($mxFp){$free=@flock($mxFp,LOCK_EX|LOCK_NB);$mxLocked=!$free;if($free)@flock($mxFp,LOCK_UN);@fclose($mxFp);}
     $cronFile=__DIR__.'/cron_last_run.json';$cronAt=is_file($cronFile)?(int)@filemtime($cronFile):0;$cronAge=$cronAt>0?max(0,$now-$cronAt):null;
     $active=[];foreach((array)($wq['entries']??[])as$e)if(is_array($e)&&in_array((string)($e['status']??''),['pending','running'],true))$active[]=['id'=>(string)($e['id']??''),'type'=>(string)($e['type']??''),'status'=>(string)($e['status']??''),'attempts'=>(int)($e['attempts']??0)];
@@ -46012,7 +46029,7 @@ if (isset($_GET['sync_matrix_status']) || (($_POST['action'] ?? '') === 'sync_ma
     /* running یتیمِ build را خود status ترمیم می‌کند؛ UI نباید پنج دقیقه منتظر
        ops_feedback بماند یا دکمه را قفل‌شده ببیند. heartbeat کهنه + flock آزاد
        شرط اجباری است تا فاصلهٔ کوتاه بین دو child سالم recovery کاذب نسازد. */
-    $progBeat=function_exists('tasksHeartbeat')?tasksHeartbeat($prog):(int)($prog['ts']??$prog['started_at']??0);
+    $progBeat=function_exists('matrixWorkHeartbeat')?matrixWorkHeartbeat($prog):(int)($prog['ts']??$prog['started_at']??0);
     if(!empty($prog['running'])&&$progBeat>0&&(time()-$progBeat)>180){
         $mf=@fopen(SYNC_MATRIX_LOCK_FILE,'c');$matrixFree=$mf&&@flock($mf,LOCK_EX|LOCK_NB);
         if($matrixFree){
@@ -48813,6 +48830,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"count(\$batch['variants'])")!==false
         &&strpos($selfSrc,"{v:'10." . "609'")!==false
         &&version_compare(APP_VERSION,'10.609','>='));
+    $add('10.610','نبض کران به‌عنوان پیشرفت ساخت جدول ثبت نمی‌شود',
+        strpos($selfSrc,"'_touch_work_heartbeat'=>false")!==false
+        &&strpos($selfSrc,'function matrixWorkHeartbeat(array $state)')!==false
+        &&strpos($selfSrc,'matrixWorkHeartbeat($prog)')!==false
+        &&strpos($selfSrc,"{v:'10." . "610'")!==false
+        &&version_compare(APP_VERSION,'10.610','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101318,6 +101341,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.610', t:'🫀 بازیابی واقعی ساخت جدول مغایرت', items:[
+    'رسیدن کران دیگر timestamp پیشرفت واقعی ساخت یا اصلاح جدول را جلو نمی‌برد.',
+    'watchdog از ضربان مستقل کار استفاده می‌کند و برای state قدیمی، آخرین log غیرکران را به‌عنوان حرکت واقعی بازیابی می‌کند.',
+    'ساخت یتیم با lock آزاد از checkpoint فشرده و همان صفحهٔ غرفه ادامه می‌یابد؛ داده‌های کامل‌شده دوباره واکشی نمی‌شوند.'
+  ]},
   {v:'10.609', t:'⚡ آپدیت مستقیم و قانونی تنوع‌ها در لین ۱', items:[
     'شناسه‌های تنوع مقصد پیش از نوشتن، در یک موج موازی از خود محصولات باسلام خوانده می‌شوند.',
     'محصول تنوع‌دار مستقیماً با IDهای مقصد و batch-updates همان غرفه به‌روزرسانی می‌شود؛ PATCH نامعتبر والد و ترمیم ترتیبیِ کند حذف شده است.',
