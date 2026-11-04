@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.614';
+const APP_VERSION = '10.615';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48880,6 +48880,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$shopMeta['http_error']")!==false
         &&strpos($selfSrc,"{v:'10." . "614'")!==false
         &&version_compare(APP_VERSION,'10.614','>='));
+    $add('10.615','هر صفحهٔ ماتریس یک تلاش شبکهٔ محدود دارد',
+        strpos($selfSrc,"\$stopScope === 'matrix' ? 1 : 3")!==false
+        &&strpos($selfSrc,"\$stopScope === 'matrix', \$stopScope")!==false
+        &&strpos($selfSrc,"{v:'10." . "615'")!==false
+        &&version_compare(APP_VERSION,'10.615','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -71072,7 +71077,7 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
             }
         } else {
             $stQ = $customerVisibleOnly ? bslActiveStatusQuery() : '&statuses=2976&statuses=3790';
-            $r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page . '&per_page=100' . $stQ);
+            $r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page . '&per_page=100' . $stQ, null, false, null, $stopScope === 'matrix', $stopScope === 'matrix' ? 1 : 3);
             if (empty($r['ok']) || !is_array($r['body']['data'] ?? null)) {
                 $meta['partial']=true;$meta['reason']='http';$meta['page']=max(0,$page-1);
                 $meta['failed_page']=$page;$meta['http_code']=(int)($r['code']??0);
@@ -101390,6 +101395,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.615', t:'⏳ درخواست صفحه کوتاه‌تر از سقف LiteSpeed', items:[
+    'صفحه‌بندی جدول مغایرت در هر برش فقط یک تلاش شبکهٔ حداکثر ۳۰ ثانیه‌ای انجام می‌دهد؛ سه retry مخصوص ارسال دیگر request وب را از سقف هاست عبور نمی‌دهد.',
+    'خطای شبکه پس از همان تلاش به checkpoint برمی‌گردد و در اولین کران بعدی تکرار می‌شود؛ سیاست retry ارسال محصولات تغییر نکرده است.',
+    'خواندن ماتریس از stop signal هدف‌دار صف ارسال مستقل است.'
+  ]},
   {v:'10.614', t:'🔎 تشخیص دقیق توقف صفحهٔ باسلام', items:[
     'شمارهٔ صفحهٔ ناموفق، HTTP status و پیام کوتاه واقعی باسلام در metadata واکشی حفظ می‌شود.',
     'log جدول به‌جای عبارت مبهم http، علت دقیق توقف cursor را نشان می‌دهد تا retry یا پایان صفحه درست تصمیم‌گیری شود.'
