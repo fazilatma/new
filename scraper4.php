@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.615';
+const APP_VERSION = '10.616';
 
 
 if (!function_exists('str_starts_with')) {
@@ -11876,6 +11876,8 @@ function bslCurlOpts(string $url, string $tk, string $m, $d, bool $mp, array $ne
         CURLOPT_SSL_VERIFYPEER => 0, CURLOPT_SSL_VERIFYHOST => 0,
         CURLOPT_HTTPHEADER => $h, CURLOPT_CUSTOMREQUEST => $m,
     ];
+    $__requestTimeout=(int)($GLOBALS['_bslRequestTimeoutSec']??0);
+    if($__requestTimeout>0){$opt[CURLOPT_TIMEOUT]=max(3,min(30,$__requestTimeout));$opt[CURLOPT_CONNECTTIMEOUT]=min($opt[CURLOPT_CONNECTTIMEOUT],$opt[CURLOPT_TIMEOUT]);}
     $__deadline=(float)($GLOBALS['_bslProductDeadlineAt']??0);
     if($__deadline>0){
         $__remain=max(1,(int)ceil($__deadline-microtime(true)));
@@ -48885,6 +48887,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$stopScope === 'matrix', \$stopScope")!==false
         &&strpos($selfSrc,"{v:'10." . "615'")!==false
         &&version_compare(APP_VERSION,'10.615','>='));
+    $add('10.616','timeout صفحهٔ ماتریس زیر سقف LiteSpeed است',
+        strpos($selfSrc,"_bslRequestTimeoutSec']=12")!==false
+        &&strpos($selfSrc,'$__requestTimeout>0')!==false
+        &&strpos($selfSrc,"{v:'10." . "616'")!==false
+        &&version_compare(APP_VERSION,'10.616','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -71077,7 +71084,11 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
             }
         } else {
             $stQ = $customerVisibleOnly ? bslActiveStatusQuery() : '&statuses=2976&statuses=3790';
-            $r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page . '&per_page=100' . $stQ, null, false, null, $stopScope === 'matrix', $stopScope === 'matrix' ? 1 : 3);
+            $__prevReqTimeout=$GLOBALS['_bslRequestTimeoutSec']??null;
+            if($stopScope==='matrix')$GLOBALS['_bslRequestTimeoutSec']=12;
+            try{$r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page . '&per_page=100' . $stQ, null, false, null, $stopScope === 'matrix', $stopScope === 'matrix' ? 1 : 3);}
+            finally{if($__prevReqTimeout===null)unset($GLOBALS['_bslRequestTimeoutSec']);else $GLOBALS['_bslRequestTimeoutSec']=$__prevReqTimeout;}
+
             if (empty($r['ok']) || !is_array($r['body']['data'] ?? null)) {
                 $meta['partial']=true;$meta['reason']='http';$meta['page']=max(0,$page-1);
                 $meta['failed_page']=$page;$meta['http_code']=(int)($r['code']??0);
@@ -101395,6 +101406,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.616', t:'⏲️ timeout ماتریس پایین‌تر از قطع LiteSpeed', items:[
+    'هر GET صفحهٔ باسلام در ساخت جدول حداکثر ۱۲ ثانیه منتظر شبکه می‌ماند تا PHP پیش از سقف ۳۰ ثانیه‌ای هاست کنترل را پس بگیرد.',
+    'پس از timeout، علت و checkpoint ذخیره و ادامه به اولین کران واگذار می‌شود؛ timeout عمومی ارسال محصولات همچنان ۳۰ ثانیه است.',
+    'override شبکه پس از همان درخواست با finally پاک می‌شود و به هیچ عملیات دیگری نشت نمی‌کند.'
+  ]},
   {v:'10.615', t:'⏳ درخواست صفحه کوتاه‌تر از سقف LiteSpeed', items:[
     'صفحه‌بندی جدول مغایرت در هر برش فقط یک تلاش شبکهٔ حداکثر ۳۰ ثانیه‌ای انجام می‌دهد؛ سه retry مخصوص ارسال دیگر request وب را از سقف هاست عبور نمی‌دهد.',
     'خطای شبکه پس از همان تلاش به checkpoint برمی‌گردد و در اولین کران بعدی تکرار می‌شود؛ سیاست retry ارسال محصولات تغییر نکرده است.',
