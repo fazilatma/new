@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.605';
+const APP_VERSION = '10.606';
 
 
 if (!function_exists('str_starts_with')) {
@@ -46116,7 +46116,10 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
        دوباره انجام می‌شود و پروفایل‌های مبدأ از ابتدا تکرار نمی‌شوند. */
     $matrixCp = null;
     if (!empty($_GET['resume'] ?? $_POST['resume'] ?? null) && is_file(SYNC_MATRIX_PROGRESS_FILE)) {
-        $oldMatrix = json_decode((string)@file_get_contents(SYNC_MATRIX_PROGRESS_FILE), true);
+        /* v10.606: progress contains only an _external pointer once checkpoints
+           are gzip-backed. Hydrate it; reading JSON directly made every web
+           continuation fresh and deleted the private page cursor. */
+        $oldMatrix = matrixProgressRead(true);
         $oldCp = is_array($oldMatrix['checkpoint'] ?? null) ? $oldMatrix['checkpoint'] : null;
         if (is_array($oldCp) && empty($oldCp['coded_only'])
             && (string)($oldCp['profile_filter'] ?? 'all') === ($opts['profile'] ?: 'all')
@@ -48744,6 +48747,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"if (empty(\$res['yielded'])) break;")!==false
         &&strpos($selfSrc,"{v:'10." . "605'")!==false
         &&version_compare(APP_VERSION,'10.605','>='));
+    $__webResumeStart606=strpos($selfSrc,"if (!empty(\$_GET['resume'] ?? \$_POST['resume'] ?? null) && is_file(SYNC_MATRIX_PROGRESS_FILE))");
+    $__webResumeEnd606=$__webResumeStart606===false?false:strpos($selfSrc,"if (\$matrixCp && isset(\$matrixCp['fetch_mode']))",$__webResumeStart606);
+    $__webResumeBody606=$__webResumeStart606!==false&&$__webResumeEnd606!==false?substr($selfSrc,$__webResumeStart606,$__webResumeEnd606-$__webResumeStart606):'';
+    $add('10.606','ادامهٔ وبیِ بدون exec، checkpoint خارجی gzip را hydrate می‌کند',
+        strpos($__webResumeBody606,'$oldMatrix = matrixProgressRead(true);')!==false
+        &&strpos($__webResumeBody606,"file_get_contents(SYNC_MATRIX_PROGRESS_FILE)")===false
+        &&strpos($selfSrc,"if (\$matrixCp === null && function_exists('matrixFetchCursorFile')) @unlink(matrixFetchCursorFile());")!==false
+        &&strpos($selfSrc,"{v:'10." . "606'")!==false
+        &&version_compare(APP_VERSION,'10.606','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101247,6 +101259,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.606', t:'🧭 حفظ checkpoint در ادامهٔ وبی سرور', items:[
+    'مسیر ادامهٔ داخلی روی هاست بدون exec اکنون اشاره‌گر checkpoint را از فایل gzip hydrate می‌کند و آن را با JSON کوچک progress اشتباه نمی‌گیرد.',
+    'هر برش ادامه، ردیف‌های ناقص و cursor صفحهٔ قبلی را نگه می‌دارد؛ بنابراین شروع تازه و حذف cursor میان برش‌ها رخ نمی‌دهد.'
+  ]},
   {v:'10.605', t:'↻ ادامهٔ امن ساخت جدول مغایرت از checkpoint', items:[
     'ردیف‌های ناقص هر غرفه اکنون همراه صفحهٔ واکشی داخل checkpoint فشرده ذخیره می‌شوند؛ حذف فایل cursor دیگر ساخت جدول را به صفحهٔ یک برنمی‌گرداند.',
     'در شروع ادامه، cursor خصوصی از ردیف‌ها و صفحهٔ checkpoint بازسازی می‌شود و صفحه‌بندی از همان نقطه پیش می‌رود.',
