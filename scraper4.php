@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.608';
+const APP_VERSION = '10.609';
 
 
 if (!function_exists('str_starts_with')) {
@@ -14199,7 +14199,7 @@ function bslRepairExistingVariantUpdate(string $tk,int $vid,int $pid,array $base
     $batch=bslBuildVariantRepairBatch($pid,$basePayload,$remote,$sourceVariants);
     if(empty($batch['variants']))return ['ok'=>false,'code'=>422,'error'=>'destination_variant_ids_not_found'];
     $r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batch]]);
-    if(!empty($r['ok'])){if(!is_array($r['body']??null))$r['body']=[];$r['body']['id']=$pid;$r['variant_ids_repaired']=count($variants);}
+    if(!empty($r['ok'])){if(!is_array($r['body']??null))$r['body']=[];$r['body']['id']=$pid;$r['variant_ids_repaired']=count($batch['variants']);}
     return $r;
 }
 
@@ -33251,6 +33251,19 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
         /* v10.33 (۴۶): دفترچه یک بار خوانده می‌شود، نه یک بار برای هر غرفه.
            در حلقهٔ چند هزار محصولی، خواندنِ مکررِ همین فایل خودش گران است. */
         $__bslMap = remoteMapLoad()['bsl'] ?? [];
+        /* v10.609: destination variant IDs are read in one parallel wave before
+           any write. Existing variant products then go straight to the legal
+           vendor batch endpoint; do not spend the request lifetime on rejected
+           parent PATCHes followed by five sequential repair calls. */
+        $variantRemote=[];$variantReads=[];
+        foreach($ids as $vid=>$exId){
+            if(!isset($live[$vid])||!bslBuildVariantsPayload($p,(int)($prices[$vid]??0),$stock))continue;
+            $variantReads[$vid]=['tk'=>(string)$live[$vid]['token'],'m'=>'GET','ep'=>'products/'.(int)$exId,'d'=>null];
+        }
+        if($variantReads)foreach(bslReqMulti($variantReads,$conc)as$vid=>$vr){
+            if(empty($vr['ok']))continue;$row=$vr['body']['data']??($vr['body']??null);
+            if(is_array($row)){$remote=bslRemoteVariantRows($row);if($remote)$variantRemote[(int)$vid]=$remote;}
+        }
         foreach ($ids as $vid => $exId) {
             if (!isset($live[$vid])) continue;
             $__mk = bslShopMapKey($pKey, $live[$vid]);
@@ -33273,6 +33286,14 @@ function bslUpsertManyShops(array $p, array $shops, array $opts, int $conc = 4):
             bslApplyContent($bu, $p); /* v10.98: توضیح + تنوع */
             $_mvUpd = bslBuildVariantsPayload($p, (int)$prices[$vid], $stock);
             if ($_mvUpd) $bu['variants'] = $_mvUpd;
+            if($_mvUpd&&!empty($variantRemote[(int)$vid])){
+                $batchRow=bslBuildVariantRepairBatch((int)$exId,$bu,$variantRemote[(int)$vid],$_mvUpd);
+                if(!empty($batchRow['variants'])){
+                    $jobs[$vid]=['tk'=>(string)$live[$vid]['token'],'m'=>'PATCH',
+                        'ep'=>'vendors/'.$vid.'/products/batch-updates','d'=>['data'=>[$batchRow]]];
+                    $directDefaultBatch[(int)$vid]=true;continue;
+                }
+            }
             /* v10.531: The default token consistently rejects generic PATCH
                and accepts its official vendor batch endpoint. Start there in
                parallel instead of paying for generic + scoped failures first.
@@ -48786,6 +48807,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"if(\$_laneRequested&&!bslParallelProfileLanesEnabled(\$cn))")!==false
         &&strpos($selfSrc,"{v:'10." . "608'")!==false
         &&version_compare(APP_VERSION,'10.608','>='));
+    $add('10.609','لین ۱ تنوع‌ها را مستقیماً با ID مقصد و batch غرفه آپدیت می‌کند',
+        strpos($selfSrc,'$variantReads[$vid]')!==false
+        &&strpos($selfSrc,'bslBuildVariantRepairBatch((int)$exId')!==false
+        &&strpos($selfSrc,"count(\$batch['variants'])")!==false
+        &&strpos($selfSrc,"{v:'10." . "609'")!==false
+        &&version_compare(APP_VERSION,'10.609','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101291,6 +101318,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.609', t:'⚡ آپدیت مستقیم و قانونی تنوع‌ها در لین ۱', items:[
+    'شناسه‌های تنوع مقصد پیش از نوشتن، در یک موج موازی از خود محصولات باسلام خوانده می‌شوند.',
+    'محصول تنوع‌دار مستقیماً با IDهای مقصد و batch-updates همان غرفه به‌روزرسانی می‌شود؛ PATCH نامعتبر والد و ترمیم ترتیبیِ کند حذف شده است.',
+    'شمارش تنوع‌های ترمیم‌شده نیز از payload واقعی batch انجام می‌شود.'
+  ]},
   {v:'10.608', t:'🛣️ بازیابی خطا در همان لین ارسال', items:[
     'بازسازی یک ردیف پایان‌یافته از پروفایل، lane اصلی ردیف را صریحاً به مسیر صف‌سازی منتقل می‌کند.',
     'بازیابی خطاهای لین ۱ دیگر با تنظیم قدیمیِ خاموش بودن دو لین به صف legacy منحرف نمی‌شود و همان مالکیت یکتای پروفایل حفظ می‌گردد.'
