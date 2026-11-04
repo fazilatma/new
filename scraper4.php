@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.611';
+const APP_VERSION = '10.612';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1503,7 +1503,7 @@ function s4WorkerClaimMatrixWebJob(): ?array {
            not PID, is authoritative; stale rows are returned to pending. */
         foreach($q['entries'] as &$e){
             if(!is_array($e)||!in_array((string)($e['type']??''),['matrix_build','matrix_fix'],true)||(string)($e['status']??'')!=='running')continue;
-            $age=$now-(int)($e['updated_at']??$e['started_at']??0);if($age<120)continue;
+            $age=$now-(int)($e['updated_at']??$e['started_at']??0);if($age<20)continue;
             $lf=@fopen((string)$e['type']==='matrix_build'?SYNC_MATRIX_LOCK_FILE:SYNC_MATRIX_FIX_LOCK_FILE,'c');$free=$lf&&@flock($lf,LOCK_EX|LOCK_NB);
             if($free){@flock($lf,LOCK_UN);$e['status']='pending';$e['worker_pid']=0;$e['updated_at']=$now;$e['payload']=is_array($e['payload']??null)?$e['payload']:[];$e['payload']['resume']=true;}
             if($lf)@fclose($lf);
@@ -48854,6 +48854,11 @@ if (isset($_GET['selftest'])) {
         &&substr_count($selfSrc,'matrixDispatchResumePortable(')>=4
         &&strpos($selfSrc,"{v:'10." . "611'")!==false
         &&version_compare(APP_VERSION,'10.611','>='));
+    $add('10.612','web worker مردهٔ جدول در اولین کران از lock آزاد بازیابی می‌شود',
+        strpos($selfSrc,"if(\$age<20)continue;")!==false
+        &&strpos($selfSrc,"SYNC_MATRIX_LOCK_FILE:SYNC_MATRIX_FIX_LOCK_FILE")!==false
+        &&strpos($selfSrc,"{v:'10." . "612'")!==false
+        &&version_compare(APP_VERSION,'10.612','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101359,6 +101364,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.612', t:'⏱️ بازیابی جدول در اولین کران', items:[
+    'web worker ماتریس که درخواستش روی LiteSpeed قطع شده، پس از ۲۰ ثانیه و فقط با اثبات آزاد بودن flock دوباره pending می‌شود.',
+    'مرز امن همچنان از اجرای همزمان جلوگیری می‌کند، اما انتظار کاذب ۱۲۰ ثانیه‌ای حذف شده است.',
+    'checkpoint همان صفحه حفظ می‌شود و اولین ضربان کران ادامه را claim می‌کند.'
+  ]},
   {v:'10.611', t:'♻️ ادامهٔ خودکار جدول روی هاست بدون exec', items:[
     'اگر ساخت child مستقل به‌علت exec_disabled ممکن نباشد، یک job یکتای resume در صف worker ثبت می‌شود.',
     'web worker همان job را فوراً claim می‌کند و ساخت را از checkpoint ادامه می‌دهد؛ نیاز به بازیابی دستی هر برش حذف شد.',
