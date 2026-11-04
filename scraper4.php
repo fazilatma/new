@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.606';
+const APP_VERSION = '10.607';
 
 
 if (!function_exists('str_starts_with')) {
@@ -14173,22 +14173,31 @@ function bslRemoteVariantRows(array $row): array {
     foreach($candidates as $rows){$out=$flatten($rows);if($out)return $out;}
     return [];
 }
-/** v10.534: Basalam requires destination variant IDs for price/stock updates. */
-function bslRepairExistingVariantUpdate(string $tk,int $vid,int $pid,array $basePayload,array $sourceVariants=[]): array {
-    $row=bslGetProductRow($tk,$vid,$pid,2);
-    $remote=is_array($row)?bslRemoteVariantRows($row):[];
-    if(!$remote)return ['ok'=>false,'code'=>422,'error'=>'destination_variant_ids_not_found'];
+/** Build the only legal batch shape for an existing variant product.
+ * Basalam rejects product-level price/stock/status even when valid destination
+ * variant IDs are supplied; those values belong exclusively to each variant. */
+function bslBuildVariantRepairBatch(int $pid,array $basePayload,array $remote,array $sourceVariants=[]): array {
     $hasPrice=array_key_exists('primary_price',$basePayload);$hasStock=array_key_exists('stock',$basePayload);
     $fallbackPrice=max(10000,(int)($basePayload['primary_price']??0));
-    $fallbackStock=max(0,(int)($basePayload['stock']??0));
-    $variants=[];
+    $fallbackStock=max(0,(int)($basePayload['stock']??0));$variants=[];
     foreach($remote as $i=>$rv){
-        $src=is_array($sourceVariants[$i]??null)?$sourceVariants[$i]:[];$one=['id'=>(int)$rv['id']];
+        $rid=(int)($rv['id']??0);if($rid<=0)continue;
+        $src=is_array($sourceVariants[$i]??null)?$sourceVariants[$i]:[];$one=['id'=>$rid];
         if($hasPrice||array_key_exists('primary_price',$src))$one['primary_price']=max(10000,(int)($src['primary_price']??$fallbackPrice));
         if($hasStock||array_key_exists('stock',$src))$one['stock']=max(0,(int)($src['stock']??$fallbackStock));
         $variants[]=$one;
     }
-    $batch=$basePayload;unset($batch['variants']);$batch['id']=$pid;$batch['variants']=$variants;
+    $batch=$basePayload;
+    unset($batch['variants'],$batch['primary_price'],$batch['stock'],$batch['status']);
+    $batch['id']=$pid;$batch['variants']=$variants;return $batch;
+}
+/** v10.534/v10.607: Basalam requires destination variant IDs and no base price/stock fields. */
+function bslRepairExistingVariantUpdate(string $tk,int $vid,int $pid,array $basePayload,array $sourceVariants=[]): array {
+    $row=bslGetProductRow($tk,$vid,$pid,2);
+    $remote=is_array($row)?bslRemoteVariantRows($row):[];
+    if(!$remote)return ['ok'=>false,'code'=>422,'error'=>'destination_variant_ids_not_found'];
+    $batch=bslBuildVariantRepairBatch($pid,$basePayload,$remote,$sourceVariants);
+    if(empty($batch['variants']))return ['ok'=>false,'code'=>422,'error'=>'destination_variant_ids_not_found'];
     $r=bslReq($tk,'PATCH','vendors/'.$vid.'/products/batch-updates',['data'=>[$batch]]);
     if(!empty($r['ok'])){if(!is_array($r['body']??null))$r['body']=[];$r['body']['id']=$pid;$r['variant_ids_repaired']=count($variants);}
     return $r;
@@ -48756,6 +48765,22 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"if (\$matrixCp === null && function_exists('matrixFetchCursorFile')) @unlink(matrixFetchCursorFile());")!==false
         &&strpos($selfSrc,"{v:'10." . "606'")!==false
         &&version_compare(APP_VERSION,'10.606','>='));
+    $__variantBatch607=bslBuildVariantRepairBatch(61840819,
+        ['primary_price'=>682000,'stock'=>240,'status'=>2976,'preparation_days'=>5,'description'=>'safe'],
+        [['id'=>88780928],['id'=>88780929]],[]);
+    $add('10.607','لین ۱ محصول تنوع‌دار را فقط با شناسه و قیمت/موجودی خود تنوع‌ها batch می‌کند',
+        ($__variantBatch607['id']??0)===61840819
+        &&count($__variantBatch607['variants']??[])===2
+        &&($__variantBatch607['variants'][0]['id']??0)===88780928
+        &&($__variantBatch607['variants'][0]['primary_price']??0)===682000
+        &&($__variantBatch607['variants'][0]['stock']??-1)===240
+        &&!array_key_exists('primary_price',$__variantBatch607)
+        &&!array_key_exists('stock',$__variantBatch607)
+        &&!array_key_exists('status',$__variantBatch607)
+        &&($__variantBatch607['preparation_days']??0)===5
+        &&strpos($selfSrc,"bslRepairExistingVariantUpdate(\$tk,\$vid,(int)\$exId,\$bu,\$_bslVarsUpd)")!==false
+        &&strpos($selfSrc,"{v:'10." . "607'")!==false
+        &&version_compare(APP_VERSION,'10.607','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -82118,7 +82143,8 @@ $updateImgNote=$imgU?($needsUpdateImage?'گالری تغییر کرده و آپ�
 if($needsUpdateImage&&$imgU){$umU2=bslUploadMany($tk,$imgU,(int)($cn['basalam']['max_photos']??10));if(!empty($umU2['ok'])){$pid=$umU2['main'];$galU=$umU2['ids'];$updateImgNote=$umU2['note']??'تصویر آپلود شد';}else{$updateImgNote='اختلاف گالری بود ولی آپلود تصویر ناموفق شد؛ ادامه بدون تغییر تصویر';}}
 if($pid){$bu['photo']=$pid;$bu['photos']=(!empty($galU)?$galU:[$pid]);}
 $r=bslReqWithVariantsFallback($tk,'PATCH','products/'.$exId,$bu);if($r['code']===404)$r=bslReqWithVariantsFallback($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,$bu);
-if($r['ok']&&!empty($r['body']['id'])){ bslShopMapRecord($p,['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName],(int)$exId,$pTitle,(int)$pn,(int)$newStock);$updated++;bslShopStatBumpDefault('u');$__chg=implode('، ',$updateChanges);$bslUpdatedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,
+if(empty($r['ok'])&&bslIsVariantUpdateMethodError($r))$r=bslRepairExistingVariantUpdate($tk,$vid,(int)$exId,$bu,$_bslVarsUpd);
+if($r['ok']&&(!empty($r['body']['id'])||!empty($r['variant_ids_repaired']))){ bslShopMapRecord($p,['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName],(int)$exId,$pTitle,(int)$pn,(int)$newStock);$updated++;bslShopStatBumpDefault('u');$__chg=implode('، ',$updateChanges);$bslUpdatedList[]=array_merge(['title'=>$pTitle,'key'=>$pKey,'remote_id'=>$exId,
 'changes'=>$__chg!==''?$__chg:'آپدیت','update_reason'=>$__chg!==''?$__chg:'آپدیت',
 'changes_detail'=>'قیمت '.($exPrice/10).'→'.($pn/10).' تومان؛ موجودی '.$exStock.'→'.$newStock.'؛ وضعیت '.$exStatusVal.'→'.($newStock<=0?3790:2976),
 'before_price_toman'=>$exPrice/10,'after_price_toman'=>$pn/10,'before_stock'=>$exStock,'after_stock'=>$newStock,
@@ -101259,6 +101285,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.607', t:'🧩 ترمیم آپدیت محصولات تنوع‌دار در لین ۱', items:[
+    'پیلود batch محصول تنوع‌دار دیگر قیمت، موجودی و وضعیت را روی محصول والد نمی‌فرستد؛ این مقادیر فقط با شناسهٔ واقعی هر تنوع مقصد ارسال می‌شوند.',
+    'مسیر مستقیم لین ۱ نیز خطای 422 روش آپدیت تنوع را پیش از جایگزینی/ایجاد مجدد به ترمیم امن batch هدایت می‌کند.',
+    'توضیحات، وزن و زمان آماده‌سازی محصول والد حفظ می‌شوند و شناسه‌های مقصد از خود محصول باسلام خوانده می‌شوند.'
+  ]},
   {v:'10.606', t:'🧭 حفظ checkpoint در ادامهٔ وبی سرور', items:[
     'مسیر ادامهٔ داخلی روی هاست بدون exec اکنون اشاره‌گر checkpoint را از فایل gzip hydrate می‌کند و آن را با JSON کوچک progress اشتباه نمی‌گیرد.',
     'هر برش ادامه، ردیف‌های ناقص و cursor صفحهٔ قبلی را نگه می‌دارد؛ بنابراین شروع تازه و حذف cursor میان برش‌ها رخ نمی‌دهد.'
