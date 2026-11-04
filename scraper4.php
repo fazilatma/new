@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.601';
+const APP_VERSION = '10.602';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48645,6 +48645,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"shops_queried")!==false
         &&strpos($selfSrc,"{v:'10." . "601'")!==false
         &&version_compare(APP_VERSION,'10.601','>='));
+    $add('10.602','جدول سرعت پاسخ از سریع‌ترین غرفه به کندترین مرتب است',
+        strpos($selfSrc,"const speedRows=[...(x.shops||[])]")!==false
+        &&strpos($selfSrc,"const speedScore=v=>")!==false
+        &&strpos($selfSrc,"speedScore(a)-speedScore(b)")!==false
+        &&strpos($selfSrc,"<th style=\"text-align:center;width:48px\">رتبه</th>")!==false
+        &&strpos($selfSrc,"{v:'10." . "602'")!==false
+        &&version_compare(APP_VERSION,'10.602','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101096,6 +101103,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.602', t:'🏆 مرتب‌سازی سرعت پاسخ غرفه‌دارها', items:[
+    'جدول سرعت پاسخ به‌صورت خودکار از سریع‌ترین غرفه به کندترین مرتب می‌شود؛ میانگین ماهانه معیار اصلی و هفتگی و روزانه معیارهای بعدی هستند.',
+    'رتبهٔ هر غرفه به جدول اضافه شده و غرفه‌های فاقد دادهٔ کافی یا دارای خطای دریافت در انتهای جدول قرار می‌گیرند.'
+  ]},
   {v:'10.601', t:'💬 گفتگوی چندغرفه‌ای، مسیر اعلان و سرعت پاسخ', items:[
     'استعلام گفتگوها اکنون هر غرفهٔ دارای توکن را جداگانه می‌خواند، نتایج را با نام و شناسهٔ غرفه ادغام می‌کند و خطای یک غرفه مانع نمایش بقیه نمی‌شود.',
     'مودال «تنظیم ارسال پیام‌ها» برای هر غرفه دو کنترل مستقل دارد: ارسال پیام مشتری و ارسال پیام ادمین غرفه‌دار به پیام‌رسان‌ها.',
@@ -110266,9 +110277,13 @@ function openChatSpeedModal(fresh){
   fetch('?bsl_chat_response_stats=1'+(fresh?'&fresh=1':'')).then(r=>r.json()).then(x=>{
     if(!b)return;if(!x.ok){b.innerHTML='<div style="padding:20px;color:#fca5a5">'+esc(x.error||'خطا')+'</div>';return;}
     let h='<div style="padding:10px 12px;background:linear-gradient(135deg,#0f2847,#172554);border:1px solid #1d4ed8;border-radius:10px;margin:10px;color:#bfdbfe;font-size:11px;line-height:1.8">'
-      +'مبنای محاسبه: فاصلهٔ اولین پیام مشتریِ بی‌پاسخ تا اولین پیام بعدی ادمین. پاسخ‌های امروز، ۷ روز و ۳۰ روز گذشته جداگانه میانگین‌گیری شده‌اند.'+(x.cached?' <b style="color:#fbbf24">(کش ۱۵ دقیقه‌ای)</b>':'')+'</div>';
-    h+='<table class="bsl-modal-table"><thead><tr><th>غرفه</th><th style="text-align:center">روزانه<br><small>۲۴ ساعت</small></th><th style="text-align:center">هفتگی<br><small>۷ روز</small></th><th style="text-align:center">ماهانه<br><small>۳۰ روز</small></th><th style="text-align:center">گفتگوهای بررسی‌شده</th></tr></thead><tbody>';
-    (x.shops||[]).forEach(v=>{const p=v.periods||{};const cell=k=>{const z=p[k]||{};return chatSpeedText(z.avg_seconds)+'<div style="font-size:9px;color:#64748b;margin-top:3px">'+toFa(z.responses||0)+' پاسخ</div>';};h+='<tr><td><b style="color:#67e8f9">'+esc(v.shop_name||'غرفه')+'</b><div style="font-size:9px;color:#64748b;direction:ltr;text-align:right">#'+toFa(v.vendor_id)+'</div></td>'+(v.ok?'<td style="text-align:center">'+cell('day')+'</td><td style="text-align:center">'+cell('week')+'</td><td style="text-align:center">'+cell('month')+'</td><td style="text-align:center;color:#cbd5e1">'+toFa(v.chats_scanned||0)+'</td>':'<td colspan="4" style="color:#fca5a5;text-align:center">دریافت اطلاعات این غرفه ناموفق بود</td>')+'</tr>';});
+      +'مبنای محاسبه: فاصلهٔ اولین پیام مشتریِ بی‌پاسخ تا اولین پیام بعدی ادمین. پاسخ‌های امروز، ۷ روز و ۳۰ روز گذشته جداگانه میانگین‌گیری شده‌اند. <b style="color:#86efac">جدول بر اساس میانگین ماهانه از سریع‌ترین به کندترین مرتب است.</b>'+(x.cached?' <b style="color:#fbbf24">(کش ۱۵ دقیقه‌ای)</b>':'')+'</div>';
+    h+='<table class="bsl-modal-table"><thead><tr><th style="text-align:center;width:48px">رتبه</th><th>غرفه</th><th style="text-align:center">روزانه<br><small>۲۴ ساعت</small></th><th style="text-align:center">هفتگی<br><small>۷ روز</small></th><th style="text-align:center">ماهانه<br><small>۳۰ روز</small></th><th style="text-align:center">گفتگوهای بررسی‌شده</th></tr></thead><tbody>';
+    const speedScore=v=>{const p=v&&v.periods||{};for(const k of ['month','week','day']){const z=p[k]||{};if(v.ok&&Number(z.responses)>0&&Number.isFinite(Number(z.avg_seconds)))return Number(z.avg_seconds);}return Number.POSITIVE_INFINITY;};
+    const speedTie=(v,k)=>{const z=((v&&v.periods||{})[k]||{});return Number(z.responses)>0&&Number.isFinite(Number(z.avg_seconds))?Number(z.avg_seconds):Number.POSITIVE_INFINITY;};
+    const speedRows=[...(x.shops||[])].sort((a,b)=>speedScore(a)-speedScore(b)||speedTie(a,'week')-speedTie(b,'week')||speedTie(a,'day')-speedTie(b,'day')||String(a.shop_name||'').localeCompare(String(b.shop_name||''),'fa'));
+    let speedRank=0;
+    speedRows.forEach(v=>{const p=v.periods||{};const ranked=Number.isFinite(speedScore(v));const rank=ranked?++speedRank:'—';const medal=rank===1?'🥇':rank===2?'🥈':rank===3?'🥉':toFa(rank);const cell=k=>{const z=p[k]||{};return chatSpeedText(z.avg_seconds)+'<div style="font-size:9px;color:#64748b;margin-top:3px">'+toFa(z.responses||0)+' پاسخ</div>';};h+='<tr><td style="text-align:center;font-size:16px;font-weight:800;color:#fbbf24">'+medal+'</td><td><b style="color:#67e8f9">'+esc(v.shop_name||'غرفه')+'</b><div style="font-size:9px;color:#64748b;direction:ltr;text-align:right">#'+toFa(v.vendor_id)+'</div></td>'+(v.ok?'<td style="text-align:center">'+cell('day')+'</td><td style="text-align:center">'+cell('week')+'</td><td style="text-align:center">'+cell('month')+'</td><td style="text-align:center;color:#cbd5e1">'+toFa(v.chats_scanned||0)+'</td>':'<td colspan="4" style="color:#fca5a5;text-align:center">دریافت اطلاعات این غرفه ناموفق بود</td>')+'</tr>';});
     h+='</tbody></table>';if((x.errors||[]).length)h+='<div style="margin:10px;padding:8px;color:#fca5a5;background:#7f1d1d22;border-radius:8px;font-size:10px">'+(x.errors||[]).map(esc).join('<br>')+'</div>';b.innerHTML=h;
   }).catch(()=>{if(b)b.innerHTML='<div style="padding:20px;color:#fca5a5">خطا در ارتباط</div>';});
 }
