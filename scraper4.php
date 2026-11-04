@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.616';
+const APP_VERSION = '10.617';
 
 
 if (!function_exists('str_starts_with')) {
@@ -12496,7 +12496,7 @@ for($attempt=1;$attempt<=$maxRetries;$attempt++){
 if(!$skipStop&&bslStopRequestedForQueue()){
 return $traceReturn(['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 }
-if(!bslAdaptiveWait($__adaptiveKind,$skipStop))return $traceReturn(bslProductDeadlineExceeded()?bslProductTimeoutResult():['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
+if(empty($GLOBALS['_bslAdaptiveBypassWait'])&&!bslAdaptiveWait($__adaptiveKind,$skipStop))return $traceReturn(bslProductDeadlineExceeded()?bslProductTimeoutResult():['ok'=>false,'code'=>0,'error'=>'stopped','body'=>null,'raw'=>'']);
 $r=bslReqMode($url,$tk,$m,$d,$mp,$net,$mode);
 bslAdaptiveObserve($__adaptiveKind,[$r],8);
 if(bslProductDeadlineExceeded())return $traceReturn(bslProductTimeoutResult());
@@ -48892,6 +48892,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$__requestTimeout>0')!==false
         &&strpos($selfSrc,"{v:'10." . "616'")!==false
         &&version_compare(APP_VERSION,'10.616','>='));
+    $add('10.617','cooldown مشترک عمر web worker ماتریس را مصرف نمی‌کند',
+        strpos($selfSrc,"_bslAdaptiveBypassWait']=true")!==false
+        &&strpos($selfSrc,"empty(\$GLOBALS['_bslAdaptiveBypassWait'])")!==false
+        &&strpos($selfSrc,"{v:'10." . "617'")!==false
+        &&version_compare(APP_VERSION,'10.617','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -71084,10 +71089,13 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
             }
         } else {
             $stQ = $customerVisibleOnly ? bslActiveStatusQuery() : '&statuses=2976&statuses=3790';
-            $__prevReqTimeout=$GLOBALS['_bslRequestTimeoutSec']??null;
-            if($stopScope==='matrix')$GLOBALS['_bslRequestTimeoutSec']=12;
+            $__prevReqTimeout=$GLOBALS['_bslRequestTimeoutSec']??null;$__prevBypassWait=$GLOBALS['_bslAdaptiveBypassWait']??null;
+            if($stopScope==='matrix'){$GLOBALS['_bslRequestTimeoutSec']=12;$GLOBALS['_bslAdaptiveBypassWait']=true;}
             try{$r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page . '&per_page=100' . $stQ, null, false, null, $stopScope === 'matrix', $stopScope === 'matrix' ? 1 : 3);}
-            finally{if($__prevReqTimeout===null)unset($GLOBALS['_bslRequestTimeoutSec']);else $GLOBALS['_bslRequestTimeoutSec']=$__prevReqTimeout;}
+            finally{
+                if($__prevReqTimeout===null)unset($GLOBALS['_bslRequestTimeoutSec']);else $GLOBALS['_bslRequestTimeoutSec']=$__prevReqTimeout;
+                if($__prevBypassWait===null)unset($GLOBALS['_bslAdaptiveBypassWait']);else $GLOBALS['_bslAdaptiveBypassWait']=$__prevBypassWait;
+            }
 
             if (empty($r['ok']) || !is_array($r['body']['data'] ?? null)) {
                 $meta['partial']=true;$meta['reason']='http';$meta['page']=max(0,$page-1);
@@ -101406,6 +101414,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.617', t:'🚦 خروج ماتریس از انتظار cooldown', items:[
+    'GET صفحهٔ ماتریس پیش از درخواست در cooldown مشترک ارسال متوقف نمی‌ماند؛ web worker مستقیماً یک تلاش محدود انجام می‌دهد.',
+    'پاسخ 429 همچنان در کنترل تطبیقی ثبت می‌شود و درخواست فقط یک‌بار در هر cron و با timeout دوازده‌ثانیه‌ای اجرا می‌گردد.',
+    'override در finally پاک می‌شود و رفتار backoff لین‌های ارسال بدون تغییر باقی می‌ماند.'
+  ]},
   {v:'10.616', t:'⏲️ timeout ماتریس پایین‌تر از قطع LiteSpeed', items:[
     'هر GET صفحهٔ باسلام در ساخت جدول حداکثر ۱۲ ثانیه منتظر شبکه می‌ماند تا PHP پیش از سقف ۳۰ ثانیه‌ای هاست کنترل را پس بگیرد.',
     'پس از timeout، علت و checkpoint ذخیره و ادامه به اولین کران واگذار می‌شود؛ timeout عمومی ارسال محصولات همچنان ۳۰ ثانیه است.',
