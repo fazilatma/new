@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.607';
+const APP_VERSION = '10.608';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48781,6 +48781,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"bslRepairExistingVariantUpdate(\$tk,\$vid,(int)\$exId,\$bu,\$_bslVarsUpd)")!==false
         &&strpos($selfSrc,"{v:'10." . "607'")!==false
         &&version_compare(APP_VERSION,'10.607','>='));
+    $add('10.608','بازیابی ردیف پایان‌یافته، مالکیت همان لین را حفظ می‌کند',
+        strpos($selfSrc,"'profile_lane'=>bslRowLane(\$__rqRow)")!==false
+        &&strpos($selfSrc,"if(\$_laneRequested&&!bslParallelProfileLanesEnabled(\$cn))")!==false
+        &&strpos($selfSrc,"{v:'10." . "608'")!==false
+        &&version_compare(APP_VERSION,'10.608','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -80330,7 +80335,8 @@ if(isset($_GET['bsl_queue_requeue_profile'])){
     if($__rqKey===''){echo json_encode(['ok'=>false,'error'=>'پروفایل ردیف مشخص نیست'],JSON_UNESCAPED_UNICODE);exit;}
     $__rqCfg=is_array($__rqRow['config']??null)?$__rqRow['config']:[];
     $_POST=['queue_id'=>'q_'.round(microtime(true)*1000).'_recover','total'=>'0','profile_key'=>$__rqKey,
-      'profile_name'=>(string)($__rqRow['profile_name']??$__rqKey),'from_profile'=>'1','start_immediately'=>'1','force'=>'1',
+      'profile_name'=>(string)($__rqRow['profile_name']??$__rqKey),'profile_lane'=>bslRowLane($__rqRow),
+      'from_profile'=>'1','start_immediately'=>'1','force'=>'1',
       'category_id'=>(string)($__rqCfg['category_id']??0),'auto_category'=>!empty($__rqCfg['auto_category'])?'1':'0',
       'title_suffix'=>(string)($__rqCfg['title_suffix']??''),'delay_ms'=>(string)($__rqCfg['delay_ms']??500),
       'retry_delay_ms'=>(string)($__rqCfg['retry_delay_ms']??1000),'product_timeout_sec'=>(string)($__rqCfg['product_timeout_sec']??180),'shop_send_mode'=>(string)($__rqCfg['shop_send_mode']??'parallel'),
@@ -101285,6 +101291,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.608', t:'🛣️ بازیابی خطا در همان لین ارسال', items:[
+    'بازسازی یک ردیف پایان‌یافته از پروفایل، lane اصلی ردیف را صریحاً به مسیر صف‌سازی منتقل می‌کند.',
+    'بازیابی خطاهای لین ۱ دیگر با تنظیم قدیمیِ خاموش بودن دو لین به صف legacy منحرف نمی‌شود و همان مالکیت یکتای پروفایل حفظ می‌گردد.'
+  ]},
   {v:'10.607', t:'🧩 ترمیم آپدیت محصولات تنوع‌دار در لین ۱', items:[
     'پیلود batch محصول تنوع‌دار دیگر قیمت، موجودی و وضعیت را روی محصول والد نمی‌فرستد؛ این مقادیر فقط با شناسهٔ واقعی هر تنوع مقصد ارسال می‌شوند.',
     'مسیر مستقیم لین ۱ نیز خطای 422 روش آپدیت تنوع را پیش از جایگزینی/ایجاد مجدد به ترمیم امن batch هدایت می‌کند.',
