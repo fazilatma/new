@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.613';
+const APP_VERSION = '10.614';
 
 
 if (!function_exists('str_starts_with')) {
@@ -43692,7 +43692,9 @@ function matrixBuild(array $opts = []): array {
                points, not completed failures. Persist rows/page and let cron retry. */
             $reason=(string)($shopMeta['reason']??'partial');
             $why = $bslErr ?: ('برداشت غرفهٔ ' . $sname . ' موقتاً ناقص ماند');
-            matrixProgress(['log_add'=>['↻ '.$why.' ('.$reason.') — ادامه از checkpoint در تیک بعدی']]);
+            $httpNote=$reason==='http'?(' · صفحه '.(int)($shopMeta['failed_page']??0).' · HTTP '.(int)($shopMeta['http_code']??0)
+                .(((string)($shopMeta['http_error']??''))!==''?(' · '.(string)$shopMeta['http_error']):'')):'';
+            matrixProgress(['log_add'=>['↻ '.$why.' ('.$reason.$httpNote.') — ادامه از checkpoint در تیک بعدی']]);
             return $yieldMatrix('bsl_fetch', $reason==='http'?15:0);
         }
         /* Product rows stay in the reconciliation matrix only; no catalog copy is written. */
@@ -48872,6 +48874,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"fireAndForget('internal_matrix_feedback=1',1800)")!==false
         &&strpos($selfSrc,"{v:'10." . "613'")!==false
         &&version_compare(APP_VERSION,'10.613','>='));
+    $add('10.614','خطای صفحهٔ باسلام با کد و پاسخ واقعی گزارش می‌شود',
+        strpos($selfSrc,"\$meta['failed_page']=\$page")!==false
+        &&strpos($selfSrc,"\$meta['http_code']")!==false
+        &&strpos($selfSrc,"\$shopMeta['http_error']")!==false
+        &&strpos($selfSrc,"{v:'10." . "614'")!==false
+        &&version_compare(APP_VERSION,'10.614','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -71065,7 +71073,12 @@ function reconFetchResumable(string $target, array $w, string $tk, int $vid, ?ar
         } else {
             $stQ = $customerVisibleOnly ? bslActiveStatusQuery() : '&statuses=2976&statuses=3790';
             $r = bslReq($tk, 'GET', 'vendors/' . $vid . '/products?page=' . $page . '&per_page=100' . $stQ);
-            if (empty($r['ok']) || !is_array($r['body']['data'] ?? null)) { $meta['partial'] = true; $meta['reason'] = 'http'; $meta['page'] = max(0, $page - 1); break; }
+            if (empty($r['ok']) || !is_array($r['body']['data'] ?? null)) {
+                $meta['partial']=true;$meta['reason']='http';$meta['page']=max(0,$page-1);
+                $meta['failed_page']=$page;$meta['http_code']=(int)($r['code']??0);
+                $meta['http_error']=mb_substr(function_exists('bslErrText')?bslErrText($r):(string)($r['error']??''),0,240);
+                break;
+            }
             $batch = $r['body']['data'];
             if (!$batch) { $meta['complete'] = true; $meta['page'] = max(0, $page - 1); break; }
             $pageRows = [];
@@ -101377,6 +101390,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.614', t:'🔎 تشخیص دقیق توقف صفحهٔ باسلام', items:[
+    'شمارهٔ صفحهٔ ناموفق، HTTP status و پیام کوتاه واقعی باسلام در metadata واکشی حفظ می‌شود.',
+    'log جدول به‌جای عبارت مبهم http، علت دقیق توقف cursor را نشان می‌دهد تا retry یا پایان صفحه درست تصمیم‌گیری شود.'
+  ]},
   {v:'10.613', t:'🔁 بیدارسازی web worker در هر کران', items:[
     'وجود ردیف running دیگر روی هاست بدون worker دائمی باعث خروج زودهنگام cron نمی‌شود.',
     'هر کران web claimant را بیدار می‌کند؛ claimant فقط با flock آزاد همان owner را از checkpoint ادامه می‌دهد.',
