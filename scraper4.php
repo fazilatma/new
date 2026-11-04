@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.602';
+const APP_VERSION = '10.603';
 
 
 if (!function_exists('str_starts_with')) {
@@ -48652,6 +48652,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"<th style=\"text-align:center;width:48px\">رتبه</th>")!==false
         &&strpos($selfSrc,"{v:'10." . "602'")!==false
         &&version_compare(APP_VERSION,'10.602','>='));
+    $add('10.603','پیام مشتری و غرفه‌دار در پیام‌رسان برچسب و مسیر متمایز دارند',
+        strpos($selfSrc,'function bslChatCustomerMessengerMsg(')!==false
+        &&strpos($selfSrc,'function bslChatAdminMessengerMsg(')!==false
+        &&strpos($selfSrc,'🔵 پیام مشتری')!==false
+        &&strpos($selfSrc,'مسیر: مشتری به غرفه')!==false
+        &&strpos($selfSrc,'🟣 پیام غرفه‌دار')!==false
+        &&strpos($selfSrc,'مسیر: غرفه‌دار به مشتری')!==false
+        &&strpos($selfSrc,"{v:'10." . "603'")!==false
+        &&version_compare(APP_VERSION,'10.603','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -64160,6 +64169,21 @@ function bslChatMsg(array $n, string $head = '💬 پیام مشتری باسل�
     return $s . "\nپیام: " . $body;
 }
 
+/** v10.603: قالب‌های کاملاً متمایز برای دو جهت گفتگو در پیام‌رسان. */
+function bslChatCustomerMessengerMsg(array $n, string $shopName, array $msgs = [], string $why = '', int $remindN = 0): string {
+    $shopName = trim($shopName) !== '' ? trim($shopName) : 'غرفهٔ باسلام';
+    $head = "🔵━━━━━━━━━━🔵\n🔵 پیام مشتری\nمسیر: مشتری به غرفه\n🏪 غرفه: " . $shopName . "\n🔵━━━━━━━━━━🔵";
+    if ($why === 'remind') $head = '🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '') . "\n" . $head;
+    return bslChatMsg($n, $head, $msgs);
+}
+function bslChatAdminMessengerMsg(array $n, string $shopName): string {
+    $shopName = trim($shopName) !== '' ? trim($shopName) : 'غرفهٔ باسلام';
+    $who = trim((string)($n['who'] ?? '')) ?: 'مشتری';
+    $text = trim((string)($n['text'] ?? '')) ?: '—';
+    return "🟣━━━━━━━━━━🟣\n🟣 پیام غرفه‌دار\nمسیر: غرفه‌دار به مشتری\n🏪 غرفه: " . $shopName
+         . "\n👤 مخاطب: " . $who . "\n🟣━━━━━━━━━━🟣\nپیام: " . mb_substr($text, 0, 1200);
+}
+
 /**
  * v10.109: جمع‌آوری آیتم‌های رسانه از لیست پیام‌های fetch‌شده + نرمال‌گفتگو.
  * @return list<array{kind:string,url:string,caption:string,name:string}>
@@ -65085,7 +65109,7 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             if ($norm) {
                 $f = $norm[0];
                 $body = $f['pending'] ? bslFetchChatMessages($tk, $f['nc']['chat_id'], min(10, max(1, $f['nc']['unseen']))) : [];
-                $samples[] = bslChatMsg($f['nc'], '💬 پیام مشتری باسلام', $body);
+                $samples[] = bslChatCustomerMessengerMsg($f['nc'], $name, $body);
             }
             continue;   // حالت تست: وضعیت ذخیره نمی‌شود
         }
@@ -65128,10 +65152,9 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             $n = (int)($st['items'][$f['key']]['n'] ?? 1);
             $body = $f['pending'] ? bslFetchChatMessages($tk, $f['nc']['chat_id'], min(10, max(1, $f['nc']['unseen']))) : [];
             if (!empty($f['is_admin'])) {
-                $msg='🧑‍💼 پیام ادمین غرفه‌دار'.($suffix!==''?$suffix:(' — '.$name))
-                    ."\nمخاطب: ".(string)$f['nc']['who']."\n".(string)$f['nc']['text'];
+                $msg = bslChatAdminMessengerMsg($f['nc'], $name);
             } else {
-                $msg = bslChatMsg($f['nc'], notifHead($why, '💬 پیام مشتری باسلام' . $suffix, $n - 1), $body);
+                $msg = bslChatCustomerMessengerMsg($f['nc'], $name, $body, $why, $n - 1);
             }
             $samples[] = $msg;
             if ($why === 'remind') { $shopRemind++; $reminded++; } else { $shopFound++; $found++; }
@@ -72810,7 +72833,7 @@ if (isset($_GET['bsl_notify_selected'])) {
             } else {
                 // v8.33: متن کامل پیام‌های مشتری، نه فقط آخرین پیام
                 $body = bslFetchChatMessages((string)($n['_token'] ?? $tk), $n['chat_id'], max(1, min(10, $n['unseen'] ?: 1)));
-                $msg = bslChatMsg($n, '💬 پیام خوانده‌نشده', $body);
+                $msg = bslChatCustomerMessengerMsg($n, (string)($n['shop_name'] ?? ''), $body);
                 $_mediaSel = bslChatCollectMedia($n, $body);
                 $delivery = notifSend($cn, $msg, 'remind', $_mediaSel);
                 $sent++;
@@ -101103,6 +101126,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.603', t:'🔵🟣 تمایز روشن پیام مشتری و غرفه‌دار', items:[
+    'اعلان پیام مشتری با نوار آبی، عنوان «پیام مشتری» و مسیر صریح «مشتری به غرفه» نمایش داده می‌شود.',
+    'اعلان پیام غرفه‌دار با نوار بنفش، عنوان «پیام غرفه‌دار» و مسیر صریح «غرفه‌دار به مشتری» نمایش داده می‌شود؛ نام غرفه و مخاطب نیز جداگانه درج می‌شوند.',
+    'قالب متمایز در اعلان‌های خودکار، یادآوری‌ها، تست اعلان و ارسال دستی گفتگو به پیام‌رسان یکسان اعمال می‌شود.'
+  ]},
   {v:'10.602', t:'🏆 مرتب‌سازی سرعت پاسخ غرفه‌دارها', items:[
     'جدول سرعت پاسخ به‌صورت خودکار از سریع‌ترین غرفه به کندترین مرتب می‌شود؛ میانگین ماهانه معیار اصلی و هفتگی و روزانه معیارهای بعدی هستند.',
     'رتبهٔ هر غرفه به جدول اضافه شده و غرفه‌های فاقد دادهٔ کافی یا دارای خطای دریافت در انتهای جدول قرار می‌گیرند.'
