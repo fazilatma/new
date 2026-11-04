@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.612';
+const APP_VERSION = '10.613';
 
 
 if (!function_exists('str_starts_with')) {
@@ -2427,7 +2427,15 @@ function matrixWakeWaitingBuild(): array {
     $p=matrixProgressRead(false);$q=s4WorkerLoadQueue();
     /* An active queue owner is authoritative, including the tiny unlocked gap
        between checkpointed child slices. Never create a parallel owner there. */
-    foreach((array)($q['entries']??[])as $e)if(is_array($e)&&(string)($e['type']??'')==='matrix_build'&&in_array((string)($e['status']??''),['pending','running','paused'],true))return ['woken'=>false,'reason'=>'queue_owner_exists'];
+    foreach((array)($q['entries']??[])as $e)if(is_array($e)&&(string)($e['type']??'')==='matrix_build'&&in_array((string)($e['status']??''),['pending','running','paused'],true)){
+        /* On exec-disabled hosting a web request may die while its row still
+           says running. Every cron gives the web claimant a chance to verify
+           the authoritative flock and reclaim that exact row. */
+        $webKick=false;
+        if((string)($e['status']??'')!=='paused'&&function_exists('s4WorkerIsActive')&&!s4WorkerIsActive())
+            $webKick=function_exists('fireAndForget')?fireAndForget('internal_matrix_feedback=1',1800):false;
+        return ['woken'=>(bool)$webKick,'reason'=>'queue_owner_exists','web_kick'=>$webKick,'job_id'=>(string)($e['id']??'')];
+    }
     $waiting=empty($p['running'])&&!empty($p['yielded'])&&(string)($p['phase']??'')==='waiting_cron';
     /* Hosting may kill the child/daemon after several hours. Its progress file
        can still say running while the queue owner is failed and the matrix lock
@@ -48859,6 +48867,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"SYNC_MATRIX_LOCK_FILE:SYNC_MATRIX_FIX_LOCK_FILE")!==false
         &&strpos($selfSrc,"{v:'10." . "612'")!==false
         &&version_compare(APP_VERSION,'10.612','>='));
+    $add('10.613','کران owner وبی ماتریس را حتی با ردیف running بیدار می‌کند',
+        strpos($selfSrc,"'reason'=>'queue_owner_exists','web_kick'")!==false
+        &&strpos($selfSrc,"fireAndForget('internal_matrix_feedback=1',1800)")!==false
+        &&strpos($selfSrc,"{v:'10." . "613'")!==false
+        &&version_compare(APP_VERSION,'10.613','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101364,6 +101377,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.613', t:'🔁 بیدارسازی web worker در هر کران', items:[
+    'وجود ردیف running دیگر روی هاست بدون worker دائمی باعث خروج زودهنگام cron نمی‌شود.',
+    'هر کران web claimant را بیدار می‌کند؛ claimant فقط با flock آزاد همان owner را از checkpoint ادامه می‌دهد.',
+    'ردیف paused همچنان محترم است و هیچ اجرای همزمان یا شروع مجددی ساخته نمی‌شود.'
+  ]},
   {v:'10.612', t:'⏱️ بازیابی جدول در اولین کران', items:[
     'web worker ماتریس که درخواستش روی LiteSpeed قطع شده، پس از ۲۰ ثانیه و فقط با اثبات آزاد بودن flock دوباره pending می‌شود.',
     'مرز امن همچنان از اجرای همزمان جلوگیری می‌کند، اما انتظار کاذب ۱۲۰ ثانیه‌ای حذف شده است.',
