@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.603';
+const APP_VERSION = '10.604';
 
 
 if (!function_exists('str_starts_with')) {
@@ -35384,6 +35384,31 @@ function backupRun(?array $cfg = null): array {
     return $res;
 }
 
+/** v10.604: پروفایلِ صریحاً درون‌ریزی‌شده نباید با tombstone قدیمی مقصد پنهان بماند. */
+function backupPruneImportedProfileTombstones(array $profiles, array $tombstones): array {
+    $before = count($tombstones);
+    foreach ($profiles as $key => $profile) {
+        $key = trim((string)$key);
+        if ($key !== '') unset($tombstones[$key]);
+        if (is_array($profile)) {
+            $url = trim((string)($profile['url'] ?? ''));
+            if ($url !== '') {
+                $normalizedKey = profileKey(function_exists('s4NormalizeInputUrl') ? s4NormalizeInputUrl($url) : $url);
+                if ($normalizedKey !== '') unset($tombstones[$normalizedKey]);
+            }
+        }
+    }
+    return ['map'=>$tombstones,'cleared'=>max(0,$before-count($tombstones))];
+}
+function backupFinalizeImportedProfiles(array $profiles, array $restoreIntent = []): array {
+    $pruned = backupPruneImportedProfileTombstones($restoreIntent ?: $profiles, s4DeletedProfilesLoad());
+    if ((int)$pruned['cleared'] > 0) s4DeletedProfilesSave((array)$pruned['map']);
+    /* saveProfiles/writeJsonFile already writes the sidecar; rewrite after tombstone
+       cleanup so its source stamp and visible rows are unquestionably current. */
+    s4ProfileSummaryCacheWrite($profiles);
+    return ['profile_count'=>count($profiles),'tombstones_cleared'=>(int)$pruned['cleared']];
+}
+
 /** بازیابی از یک بسته */
 function backupRestoreBundle(array $bundle, array $only = [], array $sections = []): array {
     /* v10.13 (۲۶): درون‌ریزیِ گزینشی.
@@ -35396,7 +35421,8 @@ function backupRestoreBundle(array $bundle, array $only = [], array $sections = 
        فعلی‌اش پاک شوند. برای همین برشِ انتخاب‌شده با فایلِ روی دیسک
        ادغام می‌شود، نه جایگزینِ آن. */
     $subs = $sections ? backupExpandSections($sections) : [];
-    $done = []; $skipped = []; $merged = [];
+    $done = []; $skipped = []; $merged = []; $restoreErrors = [];
+    $profileCount = 0; $profileTombstonesCleared = 0;
     foreach ((array)($bundle['files'] ?? []) as $name => $meta) {
         $safe = basename((string)$name);
         if ($safe === '' || $safe !== $name) { $skipped[] = $name; continue; }
@@ -35408,10 +35434,16 @@ function backupRestoreBundle(array $bundle, array $only = [], array $sections = 
         if (!$subs && in_array($safe, backupSystemFiles(), true)) { $skipped[] = $safe; continue; }
         $data = b64dec((string)($meta['b64'] ?? ''));
         if ($data === false) { $skipped[] = $safe; continue; }
+        $profileRestoreIntent = $safe === 'profiles.json' ? json_decode((string)$data, true) : [];
+        if (!is_array($profileRestoreIntent)) $profileRestoreIntent = [];
         $dst = __DIR__ . '/' . $safe;
         if ($subs) {
             $cut = backupFilterFileContent($safe, (string)$data, $subs);
             if ($cut === null) continue;                       // این فایل انتخاب نشده
+            if ($safe === 'profiles.json') {
+                $profileRestoreIntent = json_decode((string)$cut, true);
+                if (!is_array($profileRestoreIntent)) $profileRestoreIntent = [];
+            }
             if ($cut !== (string)$data) {
                 // برشِ ناقص ⇒ باید با محتوای فعلی ادغام شود
                 $data = backupMergeSlice($dst, (string)$cut);
@@ -35419,7 +35451,28 @@ function backupRestoreBundle(array $bundle, array $only = [], array $sections = 
             } else { $data = $cut; }
         }
         // نسخهٔ فعلی کنار گذاشته شود تا بازیابیِ اشتباه هم برگشت‌پذیر باشد
-        if (is_file($dst)) @copy($dst, $dst . '.before-restore');
+        if (is_file($dst)) {
+            if (function_exists('s4AtomicCopyVerified')) s4AtomicCopyVerified($dst, $dst . '.before-restore');
+            else @copy($dst, $dst . '.before-restore');
+        }
+        if ($safe === 'profiles.json') {
+            $decodedProfiles = json_decode((string)$data, true);
+            if (!is_array($decodedProfiles)) {
+                $skipped[] = $safe; $restoreErrors[] = 'profiles.json در بسته JSON معتبر نیست';
+                continue;
+            }
+            /* نوشتن مستقیم قبلی cache فهرست، پشتیبان امن و محافظ سهمیهٔ دیسک را
+               دور می‌زد. مسیر رسمی ذخیره تمام این تضمین‌ها را یکجا اجرا می‌کند. */
+            if (saveProfiles($decodedProfiles, true)) {
+                $profileMeta = backupFinalizeImportedProfiles($decodedProfiles, $profileRestoreIntent);
+                $profileCount = (int)$profileMeta['profile_count'];
+                $profileTombstonesCleared = (int)$profileMeta['tombstones_cleared'];
+                $done[] = $safe;
+            } else {
+                $skipped[] = $safe; $restoreErrors[] = 'نوشتن امن profiles.json ناموفق بود';
+            }
+            continue;
+        }
         if (@file_put_contents($dst, $data, LOCK_EX) !== false) {
             /* v10.14: فایل‌های سیستمیِ توکن‌دار با 0600 نوشته می‌شوند —
                دقیقاً مثل vc_save(). بدونِ این، بازیابی توکن را با مجوزِ
@@ -35433,6 +35486,11 @@ function backupRestoreBundle(array $bundle, array $only = [], array $sections = 
     $res = ['ok' => !empty($done), 'restored' => $done, 'skipped' => $skipped];
     if ($subs)   $res['sections'] = array_values($subs);
     if ($merged) $res['merged'] = array_values(array_unique($merged));
+    if (in_array('profiles.json', $done, true)) {
+        $res['profile_count'] = $profileCount;
+        $res['profile_tombstones_cleared'] = $profileTombstonesCleared;
+    }
+    if ($restoreErrors) $res['errors'] = $restoreErrors;
     return $res;
 }
 
@@ -48661,6 +48719,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'مسیر: غرفه‌دار به مشتری')!==false
         &&strpos($selfSrc,"{v:'10." . "603'")!==false
         &&version_compare(APP_VERSION,'10.603','>='));
+    $__restoreProfiles604=['shop_a'=>['url'=>'https://shop-a.test/list'],'shop_b'=>['url'=>'https://shop-b.test/list']];
+    $__restoreTombs604=['shop_a'=>100,profileKey('https://shop-b.test/list')=>101,'unrelated'=>102];
+    $__restorePruned604=backupPruneImportedProfileTombstones($__restoreProfiles604,$__restoreTombs604);
+    $add('10.604','درون‌ریزی پروفایل‌ها نوشتن امن، رفع tombstone و تازه‌سازی فهرست دارد',
+        ($__restorePruned604['cleared']??0)===2
+        &&($thisMap604=$__restorePruned604['map']??[])===['unrelated'=>102]
+        &&strpos($selfSrc,"if (\$safe === 'profiles.json')")!==false
+        &&strpos($selfSrc,'saveProfiles($decodedProfiles, true)')!==false
+        &&strpos($selfSrc,"\$res['profile_count']")!==false
+        &&strpos($selfSrc,"{v:'10." . "604'")!==false
+        &&version_compare(APP_VERSION,'10.604','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101126,6 +101195,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.604', t:'♻️ بازیابی واقعی پروفایل‌ها در درون‌ریزی تنظیمات', items:[
+    'علت دیده‌نشدن پروفایل‌ها رفع شد: profiles.json قبلاً مستقیم نوشته می‌شد اما tombstoneهای حذف قدیمیِ سایت مقصد همچنان پروفایل‌های واردشده را از فهرست پنهان می‌کردند.',
+    'درون‌ریزی پروفایل اکنون از نویسندهٔ اتمیک و محافظ سهمیهٔ دیسک استفاده می‌کند، پشتیبان و کش فهرست را تازه می‌سازد و فقط tombstoneهای متناظر با پروفایل‌های صریحاً واردشده را پاک می‌کند.',
+    'پاسخ درون‌ریزی تعداد دقیق پروفایل‌های بازیابی‌شده را برمی‌گرداند و رابط همان تعداد را پس از موفقیت نمایش می‌دهد.'
+  ]},
   {v:'10.603', t:'🔵🟣 تمایز روشن پیام مشتری و غرفه‌دار', items:[
     'اعلان پیام مشتری با نوار آبی، عنوان «پیام مشتری» و مسیر صریح «مشتری به غرفه» نمایش داده می‌شود.',
     'اعلان پیام غرفه‌دار با نوار بنفش، عنوان «پیام غرفه‌دار» و مسیر صریح «غرفه‌دار به مشتری» نمایش داده می‌شود؛ نام غرفه و مخاطب نیز جداگانه درج می‌شوند.',
@@ -111290,7 +111364,8 @@ function bkRestore(src,name){
     bkSet('⏳ در حال بازیابی...','#67e8f9');
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
         if(!d||!d.ok){bkSet('❌ '+esc((d&&d.error)||'بازیابی نشد'),'#f87171');return;}
-        bkSet('✅ '+toFa((d.restored||[]).length)+' فایل برگردانده شد — صفحه را تازه کنید','#4ade80');
+        const pc=d.profile_count!==undefined?(' · '+toFa(d.profile_count)+' پروفایل'):'';
+        bkSet('✅ '+toFa((d.restored||[]).length)+' فایل برگردانده شد'+pc+' — صفحه را تازه کنید','#4ade80');
         showToast('✅ بازیابی شد — صفحه را رفرش کنید');
         bkRefresh();
     }).catch(()=>bkSet('❌ خطای شبکه','#f87171'));
@@ -111307,7 +111382,8 @@ function bkRestoreUpload(){
     bkSet('⏳ در حال بازیابی...','#67e8f9');
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
         if(!d||!d.ok){bkSet('❌ '+esc((d&&d.error)||'بازیابی نشد'),'#f87171');return;}
-        bkSet('✅ '+toFa((d.restored||[]).length)+' فایل برگردانده شد — صفحه را تازه کنید','#4ade80');
+        const pc=d.profile_count!==undefined?(' · '+toFa(d.profile_count)+' پروفایل'):'';
+        bkSet('✅ '+toFa((d.restored||[]).length)+' فایل برگردانده شد'+pc+' — صفحه را تازه کنید','#4ade80');
         bkRefresh();
     }).catch(()=>bkSet('❌ خطای شبکه','#f87171'));
 }
@@ -111485,7 +111561,8 @@ function sxRestoreAll(){
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
         if(!d||!d.ok){sxSet('❌ '+esc((d&&d.error)||'بازیابی نشد'),'#f87171');return;}
         const mg=(d.merged||[]).length?(' ('+toFa((d.merged||[]).length)+' فایل ادغام شد تا بقیهٔ داده‌ها نپرد)'):'';
-        sxSet('✅ '+toFa((d.restored||[]).length)+' فایل بارگذاری شد'+mg+' — صفحه را رفرش کنید','#4ade80');
+        const pc=d.profile_count!==undefined?(' · <b>'+toFa(d.profile_count)+' پروفایل بازیابی شد</b>'):'';
+        sxSet('✅ '+toFa((d.restored||[]).length)+' فایل بارگذاری شد'+pc+mg+' — صفحه را رفرش کنید','#4ade80');
         showToast('✅ تنظیمات بازیابی شد — صفحه را رفرش کنید');
         setTimeout(()=>location.reload(),1600);
     }).catch(()=>sxSet('❌ خطای شبکه','#f87171'));
