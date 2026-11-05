@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.621';
+const APP_VERSION = '10.622';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26530,10 +26530,10 @@ function basalamApiCategoryPath($cat): string {
     return implode(' > ',array_values(array_unique($parts)));
 }
 function basalamApiVariantRows(array $row): array {
-    $raw=$row['variations']??$row['product_variations']??$row['selectable_variations']??[];
+    $raw=$row['variants']??$row['variations']??$row['product_variations']??$row['selectable_variations']??[];
     if(is_array($raw)&&isset($raw['data'])&&is_array($raw['data']))$raw=$raw['data'];
     $out=[];foreach((array)$raw as$v){if(!is_array($v))continue;$attrs=[];
-        foreach(['attributes','properties','attribute_values'] as$ak)foreach((array)($v[$ak]??[])as$a){if(!is_array($a))continue;$n=normalize_text((string)($a['title']??$a['name']??$a['attribute']['title']??''));$val=normalize_text((string)($a['value']??$a['value_title']??$a['title']??''));if($n!==''&&$val!=='')$attrs[$n]=$val;}
+        foreach(['attributes','properties','attribute_values'] as$ak)foreach((array)($v[$ak]??[])as$a){if(!is_array($a))continue;$n=normalize_text((string)($a['property']['title']??$a['attribute']['title']??$a['title']??$a['name']??''));$av=$a['value']??null;$val=is_array($av)?normalize_text((string)($av['title']??$av['value']??'')):normalize_text((string)($av??$a['value_title']??$a['title']??''));if($n!==''&&$val!=='')$attrs[$n]=$val;}
         foreach(['color'=>'رنگ','size'=>'سایز']as$vk=>$label)if(is_array($v[$vk]??null)){$_vv=normalize_text((string)($v[$vk]['title']??$v[$vk]['name']??''));if($_vv!=='')$attrs[$label]=$_vv;}
         $price=(int)round(((float)($v['primary_price']??$v['price']??0))/10);$stock=max(0,(int)($v['inventory']??$v['stock']??0));
         $out[]=['id'=>(int)($v['id']??0),'variation_id'=>(int)($v['id']??0),'title'=>normalize_text((string)($v['title']??$v['name']??implode(' / ',$attrs))),
@@ -49060,6 +49060,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"strcasecmp((string)(\$vendor['identifier']??''),\$identifier)===0")!==false
         &&strpos($selfSrc,"{v:'10." . "621'")!==false
         &&version_compare(APP_VERSION,'10.621','>='));
+    $__bslVars622=basalamApiVariantRows(['variants'=>[['id'=>91,'primary_price'=>990000,'stock'=>4,'properties'=>[
+        ['property'=>['title'=>'رنگ'],'value'=>['title'=>'قرمز']],['property'=>['title'=>'سایز'],'value'=>['value'=>'بزرگ']]
+    ]]]]);
+    $add('10.622','تنوع‌های واقعی Core v4 با شناسه و ویژگی استخراج می‌شوند',
+        count($__bslVars622)===1&&(int)($__bslVars622[0]['variation_id']??0)===91
+        &&(int)($__bslVars622[0]['display_price']??0)===99000&&(int)($__bslVars622[0]['stock']??0)===4
+        &&(string)($__bslVars622[0]['attributes']['رنگ']??'')==='قرمز'
+        &&(string)($__bslVars622[0]['attributes']['سایز']??'')==='بزرگ'
+        &&strpos($selfSrc,"\$row['variants']??\$row['variations']")!==false
+        &&strpos($selfSrc,"{v:'10." . "622'")!==false
+        &&version_compare(APP_VERSION,'10.622','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101586,6 +101597,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.622', t:'🎨 نگاشت تنوع‌های واقعی API باسلام', items:[
+    'آرایهٔ variants پاسخ Core v4 همراه با variation ID، قیمت تومانی، موجودی و ترکیب ویژگی‌های تو‌در‌تو استخراج می‌شود.',
+    'نام و مقدار property/value هر تنوع بدون تبدیل اشتباه آرایه به متن، در ساختار استاندارد پروفایل نگه‌داری می‌شود.'
+  ]},
   {v:'10.621', t:'✅ آزمون نصب موتور API باسلام', items:[
     'خودآزمون متمرکز تشخیص identifier با رشتهٔ واقعی endpoint عمومی vendors هم‌تراز شد تا نصب سالم نسخه را درست تأیید کند.'
   ]},
