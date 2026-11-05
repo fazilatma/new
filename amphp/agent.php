@@ -376,6 +376,11 @@ class Scraper_Auto_Shop_Plugin {
 		add_filter( 'woocommerce_variation_is_in_stock', array( __CLASS__, 'profile_only_wc_filter' ), 10000, 2 );
 		add_filter( 'woocommerce_product_is_visible', array( __CLASS__, 'profile_only_wc_filter' ), 10000, 2 );
 		add_action( 'woocommerce_check_cart_items', array( __CLASS__, 'profile_only_check_cart' ), 100 );
+		add_filter( 'posts_where', array( __CLASS__, 'profile_public_products_where' ), 1000, 2 );
+		add_action( 'template_redirect', array( __CLASS__, 'profile_hide_direct_product' ), 0 );
+		add_filter( 'rest_request_before_callbacks', array( __CLASS__, 'profile_filter_torob_request' ), 10, 3 );
+		add_filter( 'rest_pre_dispatch', array( __CLASS__, 'profile_hide_store_api_item' ), 10, 3 );
+		add_filter( 'rest_request_after_callbacks', array( __CLASS__, 'profile_finish_torob_request' ), 10, 3 );
 
 		// Enqueue scripts & styles for storefront
 		add_action( 'wp_enqueue_scripts', array( __CLASS__, 'enqueue_front_assets' ) );
@@ -1349,6 +1354,105 @@ class Scraper_Auto_Shop_Plugin {
 			if ( ! isset( $item['title'] ) || trim( (string) $item['title'] ) !== $index['ids'][$id] ) { return false; }
 		}
 		return true;
+	}
+
+
+	/** Public restrictions must not interfere with product management or background sync. */
+	public static function profile_public_restrictions_active() {
+		if ( self::resolve_catalog_source() !== 'scraper' ) { return false; }
+		if ( defined( 'WP_CLI' ) && WP_CLI || function_exists( 'wp_doing_cron' ) && wp_doing_cron() ) { return false; }
+		if ( ! empty( $GLOBALS['amphp_torob_feed_request'] ) ) { return true; }
+		if ( function_exists( 'current_user_can' ) && current_user_can( 'manage_woocommerce' ) ) { return false; }
+		if ( function_exists( 'is_admin' ) && is_admin() && ! ( function_exists( 'wp_doing_ajax' ) && wp_doing_ajax() ) ) { return false; }
+		return true;
+	}
+
+	/** Index WC parents in one database read; used before pagination, never stored as a stale cache. */
+	public static function profile_public_wc_ids() {
+		static $allowed = null;
+		if ( null !== $allowed ) { return $allowed; }
+		$allowed = array();
+		global $wpdb;
+		$index = self::profile_purchase_index();
+		if ( empty( $index['ids'] ) || ! isset( $wpdb->posts, $wpdb->postmeta ) ) { return $allowed; }
+		$sql = "SELECT p.ID, p.post_title, pm.meta_key, pm.meta_value FROM {$wpdb->posts} p INNER JOIN {$wpdb->postmeta} pm ON pm.post_id=p.ID AND pm.meta_key IN ('_amphp_profile_id','_scraped_hash','_amphp_sync_via') WHERE p.post_type='product' AND p.post_status='publish'";
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+		if ( ! is_array( $rows ) ) { return $allowed; }
+		foreach ( $rows as $row ) {
+			$id = (int) $row['ID']; $title = trim( (string) $row['post_title'] ); $value = (string) $row['meta_value'];
+			if ( $id <= 0 || $title === '' ) { continue; }
+			if ( ( $row['meta_key'] === '_amphp_profile_id' || $row['meta_key'] === '_scraped_hash' ) && isset( $index['ids'][$value] ) && $index['ids'][$value] === $title ) { $allowed[$id] = $id; }
+			if ( $row['meta_key'] === '_amphp_sync_via' && $value === 'direct' && ( $index['titles'][$title] ?? 0 ) === 1 ) { $allowed[$id] = $id; }
+		}
+		return array_values( $allowed );
+	}
+
+	/** Restrict SQL before LIMIT and counts; supports mixed searches and product variations. */
+	public static function profile_public_products_where( $where, $query ) {
+		if ( ! self::profile_public_restrictions_active() || ! is_object( $query ) || ! method_exists( $query, 'get' ) ) { return $where; }
+		$type = $query->get( 'post_type' );
+		$types = is_array( $type ) ? $type : array( $type );
+		$is_search = method_exists( $query, 'is_search' ) && $query->is_search();
+		if ( ! $is_search && ! in_array( 'product', $types, true ) && ! in_array( 'product_variation', $types, true ) && ! in_array( 'any', $types, true ) ) { return $where; }
+		// Let direct product pages resolve, then return an explicit non-redirecting 404.
+		if ( method_exists( $query, 'is_singular' ) && $query->is_singular( 'product' ) && empty( $GLOBALS['amphp_torob_feed_request'] ) ) { return $where; }
+		global $wpdb;
+		$ids = self::profile_public_wc_ids();
+		$ids_sql = empty( $ids ) ? '0' : implode( ',', array_map( 'intval', $ids ) );
+		return $where . " AND ({$wpdb->posts}.post_type NOT IN ('product','product_variation') OR ({$wpdb->posts}.post_type='product' AND {$wpdb->posts}.ID IN ({$ids_sql})) OR ({$wpdb->posts}.post_type='product_variation' AND {$wpdb->posts}.post_parent IN ({$ids_sql})))";
+	}
+
+	/** Do not let the plugin's optional 404-to-shop redirect expose product information. */
+	public static function profile_hide_direct_product() {
+		if ( ! self::profile_public_restrictions_active() || ! function_exists( 'is_singular' ) || ! is_singular( 'product' ) ) { return; }
+		if ( self::profile_wc_product_allowed( get_queried_object_id() ) ) { return; }
+		global $wp_query;
+		$wp_query->set_404();
+		status_header( 404 ); nocache_headers();
+		header( 'X-Robots-Tag: noindex, nofollow', true );
+		$template = get_404_template();
+		if ( $template ) { include $template; }
+		exit;
+	}
+
+	/** Official WCPE feed also supports individual ID/slug lookups outside WP_Query. */
+	public static function profile_filter_torob_request( $response, $handler, $request ) {
+		if ( ! is_object( $request ) || rtrim( $request->get_route(), '/' ) !== '/wcpe/v1/products' || self::resolve_catalog_source() !== 'scraper' ) { return $response; }
+		$GLOBALS['amphp_torob_feed_request'] = true;
+		$ids = $request->get_param( 'products' );
+		if ( is_scalar( $ids ) && (string) $ids !== '' ) {
+			$allowed = array();
+			foreach ( explode( ',', (string) $ids ) as $id ) {
+				$id = (int) trim( $id );
+				if ( $id > 0 && self::profile_wc_product_allowed( $id ) ) { $allowed[] = $id; }
+			}
+			// -1 makes WCPE choose the list-lookup path but resolves to no product.
+			$request->set_param( 'products', $allowed ? implode( ',', $allowed ) : '-1' );
+		}
+		$slugs = $request->get_param( 'slugs' );
+		if ( is_scalar( $slugs ) && (string) $slugs !== '' && empty( $ids ) ) {
+			$allowed = array();
+			foreach ( explode( ',', urldecode( (string) $slugs ) ) as $slug ) {
+				$post = get_page_by_path( trim( $slug ), OBJECT, 'product' );
+				if ( $post && self::profile_wc_product_allowed( $post->ID ) ) { $allowed[] = trim( $slug ); }
+			}
+			if ( $allowed ) { $request->set_param( 'slugs', implode( ',', $allowed ) ); }
+			else { $request->set_param( 'products', '-1' ); }
+		}
+		return $response;
+	}
+
+	public static function profile_finish_torob_request( $response, $handler, $request ) {
+		if ( is_object( $request ) && rtrim( $request->get_route(), '/' ) === '/wcpe/v1/products' ) { unset( $GLOBALS['amphp_torob_feed_request'] ); }
+		return $response;
+	}
+
+	public static function profile_hide_store_api_item( $result, $server, $request ) {
+		if ( null !== $result || ! self::profile_public_restrictions_active() || ! is_object( $request ) ) { return $result; }
+		if ( preg_match( '#^/wc/store(?:/v1)?/products/(\d+)/?$#', $request->get_route(), $match ) && ! self::profile_wc_product_allowed( (int) $match[1] ) ) {
+			return new WP_Error( 'woocommerce_rest_product_invalid_id', 'محصول یافت نشد.', array( 'status' => 404 ) );
+		}
+		return $result;
 	}
 
 	public static function get_all_scraped_products() {
@@ -12144,7 +12248,7 @@ public static function get_embedded_storefront_assets() {
 								</label>
 								<div style="background:#ffffff; border:1.5px solid #a78bfa; border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:12px;" id="labelCatalogSource">
 									<strong style="font-size:1rem; color:#0f172a;">📦 منبع محصولات ویترین</strong>
-									<p style="margin:0; font-size:0.8rem; color:#64748b; line-height:1.6;">کدام کالاها در فروشگاه React نمایش داده شوند؟ در حالت فقط پروفایل، خرید ووکامرس نیز به کالاهای قابل شناسایی در پروفایل‌های فعلی محدود می‌شود؛ پیوندهای قدیمی ترب ممکن است تا به‌روزرسانی فهرست آن باقی بمانند.</p>
+									<p style="margin:0; font-size:0.8rem; color:#64748b; line-height:1.6;">کدام کالاها در فروشگاه React نمایش داده شوند؟ در حالت فقط پروفایل، نمایش عمومی و خرید ووکامرس نیز به کالاهای قابل شناسایی در پروفایل‌های فعلی محدود می‌شود؛ فهرست ترب ممکن است تا بازخوانی یا پاک‌سازی کش به‌روز نشود.</p>
 									<label style="display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:10px; border:1.5px solid <?php echo ( 'scraper' === $catalog_src ) ? '#10b981' : '#e2e8f0'; ?>; background:<?php echo ( 'scraper' === $catalog_src ) ? '#ecfdf5' : '#f8fafc'; ?>; cursor:pointer;">
 										<input type="radio" name="catalog_source" id="catSrcScraper" value="scraper" <?php checked( $catalog_src, 'scraper' ); ?> style="margin-top:3px; accent-color:#10b981;">
 										<span><strong style="color:#047857;">فقط پروفایل‌های اسکرپر</strong><span style="display:block; font-size:0.78rem; color:#64748b; margin-top:2px;">محصولات profiles.json با ضریب سود اسکرپر</span></span>
