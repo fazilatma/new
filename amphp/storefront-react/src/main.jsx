@@ -2402,7 +2402,16 @@ function StoreApp({ boot }) {
       const fd = new FormData();
       fd.append('action', 'scraper_track_event');
       fd.append('event_type', 'site_visit');
-      fetch(ajax.ajaxUrl || '/wp-admin/admin-ajax.php', { method: 'POST', body: fd, credentials: 'same-origin' }).catch(() => {});
+      const url = new URL(window.location.href);
+      const pageType = url.searchParams.has('product') || /\/product\//i.test(url.pathname) ? 'product' : (url.pathname === '/' ? 'home' : 'other');
+      let referrerHost = '';
+      try { referrerHost = document.referrer ? new URL(document.referrer).hostname : ''; } catch (_) { /* unavailable */ }
+      fd.append('visit_page_type', pageType);
+      fd.append('visit_referrer_host', referrerHost);
+      fd.append('visit_language', navigator.language || '');
+      fd.append('visit_screen', window.innerWidth <= 600 ? 'small' : (window.innerWidth <= 1024 ? 'medium' : 'large'));
+      window.__amphpVisitTracked = true;
+      fetch(ajax.ajaxUrl || '/wp-admin/admin-ajax.php', { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true }).catch(() => {});
     } catch {}
   }, [settings.shop_title_font, settings.app_font, accent, palette, template]);
 
