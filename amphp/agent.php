@@ -6623,7 +6623,7 @@ class Scraper_Auto_Shop_Plugin {
 		return $data;
 	}
 
-	/** Coarse, untrusted client information only; never send URL queries, cookies or full IP. */
+	/** The connection IP is validated; browser metadata is untrusted. Never send URL queries or cookies. */
 	public static function visitor_notice_details( $meta, $server = null ) {
 		$server = is_array( $server ) ? $server : $_SERVER;
 		$ua = substr( (string) ( $server['HTTP_USER_AGENT'] ?? '' ), 0, 1000 );
@@ -6641,13 +6641,7 @@ class Scraper_Auto_Shop_Plugin {
 			if ( preg_match( $pattern, $ua, $m ) ) { $browser = $name . ' ' . $m[1]; break; }
 		}
 		$ip = trim( (string) ( $server['REMOTE_ADDR'] ?? '' ) );
-		$ip_hint = '';
-		if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
-			$octets = explode( '.', $ip ); $ip_hint = $octets[0] . '.' . $octets[1] . '.x.x';
-		} elseif ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 ) && function_exists( 'inet_pton' ) ) {
-			$packed = @inet_pton( $ip );
-			if ( $packed !== false ) $ip_hint = @inet_ntop( substr( $packed, 0, 6 ) . str_repeat( "\0", 10 ) ) . '/48';
-		}
+		$ip_address = filter_var( $ip, FILTER_VALIDATE_IP ) ? $ip : '';
 		$type = (string) ( $meta['visit_page_type'] ?? '' );
 		$pages = array( 'home' => 'صفحه اصلی / ویترین', 'product' => 'صفحه محصول', 'other' => 'صفحه دیگر سایت' );
 		$page = $pages[$type] ?? 'نامشخص';
@@ -6659,7 +6653,7 @@ class Scraper_Auto_Shop_Plugin {
 		if ( ! preg_match( '/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/D', $lang ) ) $lang = '';
 		$screen = array( 'small' => 'کوچک', 'medium' => 'متوسط', 'large' => 'بزرگ' );
 		$screen_key = (string) ( $meta['visit_screen'] ?? '' );
-		return array( 'device' => $device, 'os' => $os, 'browser' => $browser, 'ip_hint' => $ip_hint, 'page' => $page,
+		return array( 'device' => $device, 'os' => $os, 'browser' => $browser, 'ip_address' => $ip_address, 'page' => $page,
 			'referrer' => $ref, 'language' => $lang, 'screen' => $screen[$screen_key] ?? '',
 			'account' => function_exists( 'is_user_logged_in' ) && is_user_logged_in() ? 'وارد حساب شده' : 'مهمان / ناشناس' );
 	}
@@ -6718,7 +6712,7 @@ class Scraper_Auto_Shop_Plugin {
 				if ( $info['screen'] !== '' ) $msg .= "\n📐 اندازه تقریبی صفحه: {$info['screen']}";
 				if ( $info['language'] !== '' ) $msg .= "\n🗣 زبان مرورگر: {$info['language']}";
 				$msg .= "\n↪️ دامنه ارجاع: " . ( $info['referrer'] !== '' ? $info['referrer'] : 'نامشخص' );
-				if ( $info['ip_hint'] !== '' ) $msg .= "\n🔒 شبکه اتصال (ناشناس‌شده، ممکن است پراکسی باشد): {$info['ip_hint']}";
+				$msg .= "\n🌐 IP اتصال (ممکن است پراکسی باشد): " . ( $info['ip_address'] !== '' ? $info['ip_address'] : 'نامشخص' );
 				$msg .= "\nℹ️ اطلاعات دستگاه و ارجاع تقریبی و قابل تغییرند.";
 				break;
 
@@ -14752,7 +14746,7 @@ public static function get_embedded_storefront_assets() {
 									<input type="checkbox" name="notif_event_site_visit" value="1" <?php checked( ! empty( $opts['notif_event_site_visit'] ) ); ?> style="width:18px; height:18px; accent-color:#2563eb; margin-top:2px;">
 									<div>
 										<strong style="font-size:0.92rem; color:#0f172a; display:block;">🌐 اعلان بازدید از سایت</strong>
-										<span style="font-size:0.78rem; color:#64748b;">ارسال نوع صفحه، دستگاه، مرورگر، سیستم‌عامل، زبان، دامنه ارجاع و شبکه اتصال به‌شکل ناشناس‌شده؛ اطلاعات تقریبی است. اعلان‌های بسیار نزدیک ممکن است ادغام شوند.</span>
+										<span style="font-size:0.78rem; color:#64748b;">ارسال نوع صفحه، دستگاه، مرورگر، سیستم‌عامل، زبان، دامنه ارجاع و IP کامل اتصال به پیام‌رسان؛ IP ممکن است متعلق به پراکسی باشد و ارجاع ممکن است در دسترس نباشد. اعلان‌های بسیار نزدیک ممکن است ادغام شوند.</span>
 									</div>
 								</label>
 
