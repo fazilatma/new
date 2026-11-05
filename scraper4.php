@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.620';
+const APP_VERSION = '10.621';
 
 
 if (!function_exists('str_starts_with')) {
@@ -49055,11 +49055,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$extractEngine==='basalam_api'&&array_key_exists('basalam_next_url',\$res)")!==false
         &&strpos($selfSrc,"{v:'10." . "619'")!==false
         &&version_compare(APP_VERSION,'10.619','>='));
-    $add('10.620','شناسهٔ غرفهٔ عمومی از API vendors و identifier حل می‌شود',
-        strpos($selfSrc,"'/v3/vendors?identifiers='.rawurlencode(\$identifier)")!==false
+    $add('10.621','شناسهٔ غرفهٔ عمومی از API vendors و identifier حل می‌شود',
+        strpos($selfSrc,"v3/vendors?identifiers='.rawurlencode(\$identifier)")!==false
         &&strpos($selfSrc,"strcasecmp((string)(\$vendor['identifier']??''),\$identifier)===0")!==false
-        &&strpos($selfSrc,"{v:'10." . "620'")!==false
-        &&version_compare(APP_VERSION,'10.620','>='));
+        &&strpos($selfSrc,"{v:'10." . "621'")!==false
+        &&version_compare(APP_VERSION,'10.621','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101586,6 +101586,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.621', t:'✅ آزمون نصب موتور API باسلام', items:[
+    'خودآزمون متمرکز تشخیص identifier با رشتهٔ واقعی endpoint عمومی vendors هم‌تراز شد تا نصب سالم نسخه را درست تأیید کند.'
+  ]},
   {v:'10.620', t:'🔎 تشخیص مستقیم شناسهٔ غرفهٔ عمومی باسلام', items:[
     'شناسهٔ متنی آدرس‌هایی مانند basalam.com/shakilsanat مستقیماً با API عمومی vendors به vendor ID تبدیل می‌شود.',
     'تشخیص غرفه دیگر به HTML رندرشدهٔ صفحه وابسته نیست؛ بنابراین روی LiteSpeed و پاسخ پوسته‌ای SPA نیز پایدار است.'
