@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.619';
+const APP_VERSION = '10.620';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26564,7 +26564,8 @@ function basalamApiResolveVendorId(string $sourceUrl,int $timeout=20): int {
     if($vid<=0&&preg_match('~^\s*(\d+)\s*$~',$sourceUrl,$m))$vid=(int)$m[1];
     if($vid<=0&&preg_match('~/(?:vendors?|vendor)/(\d+)(?:/|$)~i',$sourceUrl,$m))$vid=(int)$m[1];
     $pid=0;if($vid<=0&&preg_match('~/(?:product|p)/(\d+)(?:/|$|[?#])~i',$sourceUrl,$m))$pid=(int)$m[1];
-    if($vid<=0&&$pid<=0){$page=fetch_html_smart($sourceUrl,$timeout);if(!empty($page['ok'])&&preg_match('~/(?:product|p)/(\d+)(?:[/?#"\']|$)~i',(string)($page['html']??''),$m))$pid=(int)$m[1];}
+    $identifier='';if($vid<=0&&$pid<=0){$path=trim((string)(parse_url($sourceUrl,PHP_URL_PATH)?:''),'/');$seg=explode('/',$path);$identifier=preg_match('~^[a-z0-9_-]{2,100}$~i',(string)($seg[0]??''))?(string)$seg[0]:'';}
+    if($vid<=0&&$identifier!==''){$vr=basalamApiFetchJson('https://core.basalam.com/v3/vendors?identifiers='.rawurlencode($identifier),$timeout);foreach((array)($vr['body']['data']??[])as$vendor)if(is_array($vendor)&&strcasecmp((string)($vendor['identifier']??''),$identifier)===0){$vid=(int)($vendor['id']??0);break;}}
     if($vid<=0&&$pid>0){$one=basalamApiFetchJson('https://core.basalam.com/v4/products/'.$pid,$timeout);if(!empty($one['ok']))$vid=(int)($one['body']['vendor']['id']??0);}
     $GLOBALS['_basalamApiVendorCache'][$sourceUrl]=$vid;return$vid;
 }
@@ -49054,6 +49055,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$extractEngine==='basalam_api'&&array_key_exists('basalam_next_url',\$res)")!==false
         &&strpos($selfSrc,"{v:'10." . "619'")!==false
         &&version_compare(APP_VERSION,'10.619','>='));
+    $add('10.620','شناسهٔ غرفهٔ عمومی از API vendors و identifier حل می‌شود',
+        strpos($selfSrc,"'/v3/vendors?identifiers='.rawurlencode(\$identifier)")!==false
+        &&strpos($selfSrc,"strcasecmp((string)(\$vendor['identifier']??''),\$identifier)===0")!==false
+        &&strpos($selfSrc,"{v:'10." . "620'")!==false
+        &&version_compare(APP_VERSION,'10.620','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101580,6 +101586,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.620', t:'🔎 تشخیص مستقیم شناسهٔ غرفهٔ عمومی باسلام', items:[
+    'شناسهٔ متنی آدرس‌هایی مانند basalam.com/shakilsanat مستقیماً با API عمومی vendors به vendor ID تبدیل می‌شود.',
+    'تشخیص غرفه دیگر به HTML رندرشدهٔ صفحه وابسته نیست؛ بنابراین روی LiteSpeed و پاسخ پوسته‌ای SPA نیز پایدار است.'
+  ]},
   {v:'10.619', t:'🟠 موتور استخراج API عمومی باسلام', items:[
     'موتور basalam_api محصولات فعال هر غرفهٔ عمومی را بدون توکن و بدون سلکتور از Core v4 دریافت می‌کند؛ آدرس عمومی غرفه یا محصول برای تشخیص vendor کافی است.',
     'عنوان، قیمتِ تبدیل‌شده از ریال به تومان، موجودی، وضعیت، لینک، گالری، توضیحات، مسیر دسته‌بندی، وزن‌ها، SKU و تنوع‌ها به قالب کامل پروفایل نگاشت می‌شوند.',
