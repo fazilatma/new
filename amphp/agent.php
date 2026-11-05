@@ -369,8 +369,13 @@ class Scraper_Auto_Shop_Plugin {
 		// Filters for WooCommerce Cart & Checkout guarantees
 		add_action( 'woocommerce_before_calculate_totals', array( __CLASS__, 'fix_cart_item_prices' ), 20, 1 );
 		add_filter( 'woocommerce_cart_item_thumbnail', array( __CLASS__, 'filter_cart_item_thumbnail' ), 10, 3 );
-		add_filter( 'woocommerce_is_purchasable', '__return_true', 999 );
-		add_filter( 'woocommerce_product_is_in_stock', '__return_true', 999 );
+		// The storefront source must also constrain direct WooCommerce purchases and feeds.
+		add_filter( 'woocommerce_is_purchasable', array( __CLASS__, 'profile_only_wc_filter' ), 10000, 2 );
+		add_filter( 'woocommerce_variation_is_purchasable', array( __CLASS__, 'profile_only_wc_filter' ), 10000, 2 );
+		add_filter( 'woocommerce_product_is_in_stock', array( __CLASS__, 'profile_only_wc_filter' ), 10000, 2 );
+		add_filter( 'woocommerce_variation_is_in_stock', array( __CLASS__, 'profile_only_wc_filter' ), 10000, 2 );
+		add_filter( 'woocommerce_product_is_visible', array( __CLASS__, 'profile_only_wc_filter' ), 10000, 2 );
+		add_action( 'woocommerce_check_cart_items', array( __CLASS__, 'profile_only_check_cart' ), 100 );
 
 		// Enqueue scripts & styles for storefront
 		add_action( 'wp_enqueue_scripts', array( __CLASS__, 'enqueue_front_assets' ) );
@@ -1265,6 +1270,87 @@ class Scraper_Auto_Shop_Plugin {
 		return 'sp_' . md5( wp_json_encode( array( (string) $profile_key, $key, $duplicate_index ), JSON_UNESCAPED_UNICODE ) );
 	}
 
+
+	/** Build an authoritative, request-local index from current profiles, never from WC or temp caches. */
+	public static function profile_purchase_index() {
+		static $index = null;
+		if ( null !== $index ) { return $index; }
+		$index = array( 'ids' => array(), 'titles' => array() );
+		$path = self::find_profiles_json_path();
+		$data = $path !== '' && is_readable( $path ) ? json_decode( (string) file_get_contents( $path ), true ) : null;
+		if ( ! is_array( $data ) ) { return $index; }
+		foreach ( $data as $profile => $group ) {
+			$entries = is_array( $group['products'] ?? null ) ? $group['products'] : array();
+			$keys = self::profile_product_key_map( $entries );
+			foreach ( $entries as $key => $entry ) {
+				$raw = is_array( $entry ) && isset( $entry[1] ) && is_array( $entry[1] ) ? $entry[1] : $entry;
+				if ( ! is_array( $raw ) ) { continue; }
+				$title = trim( (string) ( $raw['title'] ?? $raw['name'] ?? '' ) );
+				if ( $title === '' ) { continue; }
+				$legacy = md5( $title . (string) ( $raw['link'] ?? $raw['url'] ?? '' ) );
+				$stable = self::profile_product_id( $profile, $key, $entry, $keys );
+				$index['ids'][$legacy] = $title;
+				$index['ids'][$stable] = $title;
+				$index['titles'][$title] = ( $index['titles'][$title] ?? 0 ) + 1;
+			}
+		}
+		return $index;
+	}
+
+	public static function profile_purchase_id_allowed( $id ) {
+		$index = self::profile_purchase_index();
+		return is_scalar( $id ) && isset( $index['ids'][(string) $id] );
+	}
+
+	public static function profile_wc_product_allowed( $product ) {
+		if ( self::resolve_catalog_source() !== 'scraper' ) { return true; }
+		if ( is_numeric( $product ) && function_exists( 'wc_get_product' ) ) { $product = wc_get_product( $product ); }
+		if ( ! is_object( $product ) || ! method_exists( $product, 'get_id' ) ) { return false; }
+		$id = (int) $product->get_id();
+		if ( method_exists( $product, 'get_parent_id' ) && $product->get_parent_id() ) { $id = (int) $product->get_parent_id(); }
+		foreach ( array( '_amphp_profile_id', '_scraped_hash' ) as $key ) {
+			$profile_id = get_post_meta( $id, $key, true );
+			if ( self::profile_purchase_id_allowed( $profile_id ) ) {
+				$index = self::profile_purchase_index();
+				if ( trim( (string) get_the_title( $id ) ) === $index['ids'][(string) $profile_id] ) { return true; }
+			}
+		}
+		// Compatibility for older direct syncs, which stored no profile ID. Never infer
+		// membership from title for unrelated WC products; ambiguous titles fail closed.
+		if ( get_post_meta( $id, '_amphp_sync_via', true ) === 'direct' ) {
+			$title = trim( (string) get_the_title( $id ) );
+			$index = self::profile_purchase_index();
+			return $title !== '' && ( $index['titles'][$title] ?? 0 ) === 1;
+		}
+		return false;
+	}
+
+	public static function profile_only_wc_filter( $value, $product ) {
+		return self::profile_wc_product_allowed( $product ) ? $value : false;
+	}
+
+	public static function profile_only_check_cart() {
+		if ( self::resolve_catalog_source() !== 'scraper' || ! function_exists( 'WC' ) || ! WC()->cart ) { return; }
+		foreach ( WC()->cart->get_cart() as $item ) {
+			if ( ! self::profile_wc_product_allowed( $item['data'] ?? null ) ) {
+				wc_add_notice( 'یکی از کالاهای سبد در محصولات فعلی پروفایل‌ها نیست. برای ادامه آن را حذف کنید.', 'error' );
+				return;
+			}
+		}
+	}
+
+	/** Reject stale or forged storefront carts before creating an order or clearing the WC cart. */
+	public static function profile_cart_items_allowed( $items ) {
+		if ( self::resolve_catalog_source() !== 'scraper' ) { return true; }
+		foreach ( $items as $item ) {
+			if ( ! is_array( $item ) || ! self::profile_purchase_id_allowed( $item['id'] ?? $item['hash'] ?? '' ) ) { return false; }
+			$index = self::profile_purchase_index();
+			$id = (string) ( $item['id'] ?? $item['hash'] ?? '' );
+			if ( ! isset( $item['title'] ) || trim( (string) $item['title'] ) !== $index['ids'][$id] ) { return false; }
+		}
+		return true;
+	}
+
 	public static function get_all_scraped_products() {
 		$settings = self::get_settings();
 		$source   = self::resolve_catalog_source( $settings );
@@ -1765,6 +1851,7 @@ class Scraper_Auto_Shop_Plugin {
 				update_post_meta( $product_id, '_manage_stock', 'no' );
 				update_post_meta( $product_id, '_stock_status', 'instock' );
 				update_post_meta( $product_id, '_amphp_sync_via', 'direct' );
+				if ( isset( $p['id'] ) && ( $p['source'] ?? '' ) === 'scraper' ) { update_post_meta( $product_id, '_amphp_profile_id', (string) $p['id'] ); }
 				update_post_meta( $product_id, '_amphp_sync_at', time() );
 				if ( $cat !== '' ) {
 					wp_set_object_terms( $product_id, $cat, 'product_cat' );
@@ -8250,6 +8337,8 @@ class Scraper_Auto_Shop_Plugin {
 			return 0;
 		}
 
+		if ( ! self::profile_cart_items_allowed( array( $item_data ) ) ) { return 0; }
+
 		$hash  = sanitize_text_field( $item_data['id'] ?? $item_data['hash'] ?? '' );
 		$title = sanitize_text_field( $item_data['title'] ?? '' );
 		$price = floatval( $item_data['price'] ?? 0 );
@@ -8414,6 +8503,7 @@ class Scraper_Auto_Shop_Plugin {
 		if ( empty( $title ) && empty( $hash ) ) {
 			wp_send_json_error( 'اطلاعات محصول نامعتبر است.' );
 		}
+		if ( ! self::profile_cart_items_allowed( array( array( 'id' => $hash, 'title' => $title ) ) ) ) { wp_send_json_error( 'این محصول در پروفایل‌های فعلی نیست.' ); }
 
 		if ( ! self::init_wc_cart() ) {
 			wp_send_json_error( 'ووکامرس فعال نیست.' );
@@ -8542,6 +8632,7 @@ class Scraper_Auto_Shop_Plugin {
 		if ( ! is_array( $items ) || empty( $items ) ) {
 			wp_send_json_error( 'سبد خرید خالی است.' );
 		}
+		if ( ! self::profile_cart_items_allowed( $items ) ) { wp_send_json_error( 'یکی از کالاهای سبد در پروفایل‌های فعلی نیست؛ سبد را به‌روز کنید.' ); }
 
 		if ( ! self::init_wc_cart() ) {
 			wp_send_json_error( 'ووکامرس فعال نیست.' );
@@ -9318,6 +9409,7 @@ class Scraper_Auto_Shop_Plugin {
 		if ( ! is_array( $items ) || empty( $items ) ) {
 			wp_send_json_error( 'سبد خرید خالی است.' );
 		}
+		if ( ! self::profile_cart_items_allowed( $items ) ) { wp_send_json_error( 'یکی از کالاهای سبد در پروفایل‌های فعلی نیست؛ سبد را به‌روز کنید.' ); }
 
 		$customer = array(
 			'name'     => sanitize_text_field( wp_unslash( $_POST['name'] ?? '' ) ),
@@ -12052,7 +12144,7 @@ public static function get_embedded_storefront_assets() {
 								</label>
 								<div style="background:#ffffff; border:1.5px solid #a78bfa; border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:12px;" id="labelCatalogSource">
 									<strong style="font-size:1rem; color:#0f172a;">📦 منبع محصولات ویترین</strong>
-									<p style="margin:0; font-size:0.8rem; color:#64748b; line-height:1.6;">کدام کالاها در فروشگاه React نمایش داده شوند؟</p>
+									<p style="margin:0; font-size:0.8rem; color:#64748b; line-height:1.6;">کدام کالاها در فروشگاه React نمایش داده شوند؟ در حالت فقط پروفایل، خرید ووکامرس نیز به کالاهای قابل شناسایی در پروفایل‌های فعلی محدود می‌شود؛ پیوندهای قدیمی ترب ممکن است تا به‌روزرسانی فهرست آن باقی بمانند.</p>
 									<label style="display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:10px; border:1.5px solid <?php echo ( 'scraper' === $catalog_src ) ? '#10b981' : '#e2e8f0'; ?>; background:<?php echo ( 'scraper' === $catalog_src ) ? '#ecfdf5' : '#f8fafc'; ?>; cursor:pointer;">
 										<input type="radio" name="catalog_source" id="catSrcScraper" value="scraper" <?php checked( $catalog_src, 'scraper' ); ?> style="margin-top:3px; accent-color:#10b981;">
 										<span><strong style="color:#047857;">فقط پروفایل‌های اسکرپر</strong><span style="display:block; font-size:0.78rem; color:#64748b; margin-top:2px;">محصولات profiles.json با ضریب سود اسکرپر</span></span>
