@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.618';
+const APP_VERSION = '10.619';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26513,11 +26513,102 @@ if (!isset($products[$key])) $products[$key] = $p;
 return $products;
 }
 
+
+/* v10.619: token-free extraction from Basalam's public Core v4 catalogue. */
+function isBasalamUrl(string $url): bool {
+    $host=strtolower((string)(parse_url($url,PHP_URL_HOST)?:''));
+    return $host==='basalam.com'||str_ends_with($host,'.basalam.com')||preg_match('~^\d+$~',trim($url));
+}
+function basalamApiImageUrl($photo): string {
+    if(is_string($photo))return trim($photo);
+    if(!is_array($photo))return '';
+    foreach(['original','lg','md','sm','url'] as$k){$v=$photo[$k]??'';if(is_array($v))$v=$v[0]??'';if(is_string($v)&&trim($v)!=='')return trim($v);}
+    return '';
+}
+function basalamApiCategoryPath($cat): string {
+    $parts=[];$guard=0;while(is_array($cat)&&$guard++<12){$t=normalize_text((string)($cat['title']??$cat['name']??''));if($t!=='')array_unshift($parts,$t);$cat=$cat['parent']??null;}
+    return implode(' > ',array_values(array_unique($parts)));
+}
+function basalamApiVariantRows(array $row): array {
+    $raw=$row['variations']??$row['product_variations']??$row['selectable_variations']??[];
+    if(is_array($raw)&&isset($raw['data'])&&is_array($raw['data']))$raw=$raw['data'];
+    $out=[];foreach((array)$raw as$v){if(!is_array($v))continue;$attrs=[];
+        foreach(['attributes','properties','attribute_values'] as$ak)foreach((array)($v[$ak]??[])as$a){if(!is_array($a))continue;$n=normalize_text((string)($a['title']??$a['name']??$a['attribute']['title']??''));$val=normalize_text((string)($a['value']??$a['value_title']??$a['title']??''));if($n!==''&&$val!=='')$attrs[$n]=$val;}
+        foreach(['color'=>'رنگ','size'=>'سایز']as$vk=>$label)if(is_array($v[$vk]??null)){$_vv=normalize_text((string)($v[$vk]['title']??$v[$vk]['name']??''));if($_vv!=='')$attrs[$label]=$_vv;}
+        $price=(int)round(((float)($v['primary_price']??$v['price']??0))/10);$stock=max(0,(int)($v['inventory']??$v['stock']??0));
+        $out[]=['id'=>(int)($v['id']??0),'variation_id'=>(int)($v['id']??0),'title'=>normalize_text((string)($v['title']??$v['name']??implode(' / ',$attrs))),
+            'price'=>$price,'display_price'=>$price,'stock'=>$stock,'is_in_stock'=>$stock>0,'attributes'=>$attrs,'sku'=>(string)($v['sku']??'')];
+    }return $out;
+}
+function basalamApiProductMap(array $r): array {
+    $id=(int)($r['id']??0);$photos=[];foreach(array_merge([$r['photo']??null],(array)($r['photos']??[]))as$ph){$u=basalamApiImageUrl($ph);if($u!==''&&!in_array($u,$photos,true))$photos[]=$u;}
+    $status=(int)($r['status']['value']??$r['status']??0);$stock=max(0,(int)($r['inventory']??$r['stock']??0));$price=(int)round(((float)($r['primary_price']??$r['price']??0))/10);
+    $p=['title'=>normalize_text((string)($r['title']??$r['name']??'')),'price'=>$price>0?($price.' تومان'):'','price_num'=>$price,
+        'link'=>(string)($r['url']??($id>0?'https://basalam.com/p/'.$id:'')),'image'=>$photos[0]??'','images'=>$photos,
+        'sku'=>(string)($r['sku']??''),'source_id'=>$id,'basalam_product_id'=>$id,'stock'=>$stock,'inventory'=>$stock,
+        'stock_status'=>$stock>0?'instock':'outofstock','in_stock'=>$stock>0,'status'=>$status,'description'=>(string)($r['description']??''),
+        'longDesc'=>(string)($r['description']??''),'shortDesc'=>(string)($r['summary']??''),'category'=>basalamApiCategoryPath($r['category']??null),
+        'category_id'=>(int)($r['category']['id']??0),'weight'=>(int)round((float)($r['net_weight']??$r['net_weight_decimal']??0)),
+        'packaged_weight'=>(int)round((float)($r['packaged_weight']??0)),'vendor_id'=>(int)($r['vendor']['id']??0),
+        'vendor_name'=>(string)($r['vendor']['title']??''),'variations'=>basalamApiVariantRows($r),'_basalam_api'=>true];
+    if(!$p['variations'])unset($p['variations']);return $p;
+}
+function basalamApiFetchJson(string $url,int $timeout=20): array {
+    $r=fetch_html_smart($url,$timeout);if(empty($r['ok']))return ['ok'=>false,'code'=>(int)($r['code']??0),'error'=>(string)($r['error']??'Basalam API request failed')];
+    $body=@json_decode((string)($r['html']??''),true);if(!is_array($body))return ['ok'=>false,'code'=>(int)($r['code']??0),'error'=>'پاسخ JSON باسلام نامعتبر است'];
+    return ['ok'=>true,'code'=>(int)($r['code']??200),'body'=>$body,'url'=>(string)($r['url']??$url)];
+}
+function basalamApiResolveVendorId(string $sourceUrl,int $timeout=20): int {
+    if(isset($GLOBALS['_basalamApiVendorCache'][$sourceUrl]))return(int)$GLOBALS['_basalamApiVendorCache'][$sourceUrl];
+    $q=[];parse_str((string)(parse_url($sourceUrl,PHP_URL_QUERY)?:''),$q);$vid=(int)($q['s4_bsl_vendor_id']??$q['vendor_id']??0);
+    if($vid<=0&&preg_match('~^\s*(\d+)\s*$~',$sourceUrl,$m))$vid=(int)$m[1];
+    if($vid<=0&&preg_match('~/(?:vendors?|vendor)/(\d+)(?:/|$)~i',$sourceUrl,$m))$vid=(int)$m[1];
+    $pid=0;if($vid<=0&&preg_match('~/(?:product|p)/(\d+)(?:/|$|[?#])~i',$sourceUrl,$m))$pid=(int)$m[1];
+    if($vid<=0&&$pid<=0){$page=fetch_html_smart($sourceUrl,$timeout);if(!empty($page['ok'])&&preg_match('~/(?:product|p)/(\d+)(?:[/?#"\']|$)~i',(string)($page['html']??''),$m))$pid=(int)$m[1];}
+    if($vid<=0&&$pid>0){$one=basalamApiFetchJson('https://core.basalam.com/v4/products/'.$pid,$timeout);if(!empty($one['ok']))$vid=(int)($one['body']['vendor']['id']??0);}
+    $GLOBALS['_basalamApiVendorCache'][$sourceUrl]=$vid;return$vid;
+}
+function basalamApiSyntheticHtml(array $products): string {
+    return '<!doctype html><html><body data-basalam-api="1"><script type="application/json" id="s4-basalam-api-json">'.str_replace('</','<\\/',json_encode(array_values($products),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE)).'</script></body></html>';
+}
+function parse_basalam_api_html(string $html,string $baseUrl): array {
+    if(!preg_match('~<script[^>]+id="s4-basalam-api-json"[^>]*>(.*?)</script>~isu',$html,$m))return[];$arr=@json_decode((string)$m[1],true);$out=[];
+    foreach((array)$arr as$p)if(is_array($p)){if(!empty($p['link']))$p['link']=make_absolute_url((string)$p['link'],$baseUrl);$k=productKey($p);if($k!=='')$out[$k]=$p;}return$out;
+}
+
+function basalamApiFetchProductDetails(array $ids,int $timeout=8): array {
+    $ids=array_values(array_unique(array_filter(array_map('intval',$ids),static fn($id)=>$id>0)));$out=[];if(!$ids)return$out;
+    if(!function_exists('curl_multi_init')){foreach($ids as$id){$r=basalamApiFetchJson('https://core.basalam.com/v4/products/'.$id,$timeout);if(!empty($r['ok']))$out[$id]=$r['body'];}return$out;}
+    foreach(array_chunk($ids,8)as$batch){$mh=curl_multi_init();$hs=[];foreach($batch as$id){$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://core.basalam.com/v4/products/'.$id,CURLOPT_RETURNTRANSFER=>1,CURLOPT_FOLLOWLOCATION=>1,CURLOPT_CONNECTTIMEOUT=>min(5,$timeout),CURLOPT_TIMEOUT=>$timeout,CURLOPT_SSL_VERIFYPEER=>0,CURLOPT_SSL_VERIFYHOST=>0,CURLOPT_HTTPHEADER=>['Accept: application/json','User-Agent: Mozilla/5.0 (compatible; S4 Basalam Public Extractor)']]);curl_multi_add_handle($mh,$ch);$hs[]=['id'=>$id,'ch'=>$ch];}
+        $running=null;do{$st=curl_multi_exec($mh,$running);if($running){$sel=curl_multi_select($mh,.3);if($sel===-1)usleep(10000);}}while($running>0&&$st===CURLM_OK);
+        foreach($hs as$h){$raw=(string)curl_multi_getcontent($h['ch']);$code=(int)curl_getinfo($h['ch'],CURLINFO_RESPONSE_CODE);$body=@json_decode($raw,true);if($code>=200&&$code<300&&is_array($body))$out[$h['id']]=$body;curl_multi_remove_handle($mh,$h['ch']);curl_close($h['ch']);}curl_multi_close($mh);
+    }return$out;
+}
+
+function fetch_html_basalam_api(string $sourceUrl,int $timeout=20): array {
+    $vid=basalamApiResolveVendorId($sourceUrl,$timeout);if($vid<=0)return['ok'=>false,'code'=>422,'error'=>'شناسهٔ غرفه از آدرس عمومی باسلام پیدا نشد','url'=>$sourceUrl,'html'=>''];
+    $q=[];parse_str((string)(parse_url($sourceUrl,PHP_URL_QUERY)?:''),$q);$cursor=max(0,(int)($q['s4_bsl_cursor']??0));
+    $api='https://core.basalam.com/v4/products?vendor_ids='.$vid.'&per_page=20&status=2976'.($cursor>0?'&cursor='.$cursor:'');
+    $r=basalamApiFetchJson($api,$timeout);if(empty($r['ok']))return['ok'=>false,'code'=>(int)($r['code']??0),'error'=>(string)($r['error']??'Basalam API failed'),'url'=>$sourceUrl,'html'=>''];
+    $rawRows=[];$variantIds=[];foreach((array)($r['body']['data']??[])as$row){if(!is_array($row)||(int)($row['status']['value']??0)!==2976)continue;$rawRows[]=$row;if(!empty($row['has_variation'])&&(int)($row['id']??0)>0)$variantIds[]=(int)$row['id'];}
+    $details=basalamApiFetchProductDetails($variantIds,min(8,$timeout));$rows=[];foreach($rawRows as$row){$id=(int)($row['id']??0);if(isset($details[$id])&&is_array($details[$id]))$row=array_replace($row,$details[$id]);$mapped=basalamApiProductMap($row);if(!empty($row['has_variation'])&&empty($mapped['variations']))$mapped['_variation_detail_unavailable']=true;$rows[]=$mapped;}
+    $next=max(0,(int)($r['body']['next_cursor']??0));$nextUrl='';if($next>0&&$rows){$parts=parse_url($sourceUrl);$base=(string)($parts['scheme']??'https').'://'.(string)($parts['host']??'basalam.com').(string)($parts['path']??'/');$nextUrl=$base.'?s4_bsl_vendor_id='.$vid.'&s4_bsl_cursor='.$next;}
+    return['ok'=>true,'code'=>200,'error'=>'','url'=>$sourceUrl,'html'=>basalamApiSyntheticHtml($rows),'basalam_vendor_id'=>$vid,
+        'basalam_next_url'=>$nextUrl,'basalam_last_page'=>$nextUrl===''||!$rows,'basalam_product_count'=>count($rows)];
+}
+if(isset($_GET['basalam_api_probe'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');$u=trim((string)($_GET['url']??''));
+    if(!isBasalamUrl($u)){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'یک آدرس عمومی basalam.com وارد کنید'],JSON_UNESCAPED_UNICODE);exit;}
+    $r=fetch_html_basalam_api($u,20);$rows=!empty($r['ok'])?array_values(parse_basalam_api_html((string)$r['html'],$u)):[];
+    echo json_encode(['ok'=>!empty($r['ok']),'version'=>APP_VERSION,'vendor_id'=>(int)($r['basalam_vendor_id']??0),'count'=>count($rows),
+        'next_url'=>(string)($r['basalam_next_url']??''),'last_page'=>!empty($r['basalam_last_page']),'sample'=>array_slice($rows,0,3),'error'=>(string)($r['error']??'')],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
+}
+
 /* v10.185: Extraction engines. Browser engines are still PHP-controlled:
    Playwright = the render service's CDP/Playwright-compatible driver, Selenium =
    raw W3C WebDriver HTTP. No Node/Python dependency is required by scraper4.php. */
 function extractionEngineAllowed(): array {
-    return ['selectors', 'auto', 'heuristic', 'jsonld', 'jina', 'digikala_api', 'playwright', 'selenium'];
+    return ['selectors', 'auto', 'heuristic', 'jsonld', 'jina', 'digikala_api', 'basalam_api', 'playwright', 'selenium'];
 }
 function normalizeExtractionEngine($v): string {
     $v = strtolower(trim((string)$v));
@@ -26525,6 +26616,7 @@ function normalizeExtractionEngine($v): string {
     if (in_array($v, ['browser','render','js','cdp','chrome','chromium','puppeteer'], true)) return 'playwright';
     if (in_array($v, ['reader','jina-reader','jina_reader','rjina','r.jina.ai'], true)) return 'jina';
     if (in_array($v, ['digikala','digikala-api','digikala_api','dk-api','dk_api'], true)) return 'digikala_api';
+    if (in_array($v, ['basalam','basalam-api','basalam_api','bsl-api','bsl_api'], true)) return 'basalam_api';
     if (in_array($v, ['webdriver','chromedriver'], true)) return 'selenium';
     if (!in_array($v, extractionEngineAllowed(), true)) return 'selectors';
     return $v;
@@ -26553,6 +26645,7 @@ function extractionEngineLabel(string $engine): string {
         'jsonld'       => 'JSON-LD Product',
         'jina'         => 'Jina Reader (r.jina.ai) → Auto parser',
         'digikala_api' => 'Digikala Official API (api.digikala.com)',
+        'basalam_api'  => 'Basalam Public API (core.basalam.com)',
         'playwright'   => 'Playwright/CDP render (Selenium fallback) → Auto parser',
         'selenium'     => 'Selenium WebDriver render → Auto parser',
     ];
@@ -26561,6 +26654,7 @@ function extractionEngineLabel(string $engine): string {
 function fetch_html_for_engine(string $url, int $timeout, string $engine, array $sel = []): array {
     $engine = normalizeExtractionEngine($engine);
     if ($engine === 'digikala_api') return fetch_html_digikala_api($url, $timeout);
+    if ($engine === 'basalam_api') return fetch_html_basalam_api($url, $timeout);
     if ($engine === 'jina') return fetch_html_jina_reader($url, $timeout);
     if (!extractionEngineUsesRender($engine)) return fetch_html_smart($url, $timeout);
     $rc = renderCfg();
@@ -26712,6 +26806,10 @@ function parse_list_by_engine(string $html, string $baseUrl, array $sel, string 
     if ($engine === 'digikala_api') {
         $usedEngine = 'Digikala API';
         return parse_digikala_api_html($html, $baseUrl);
+    }
+    if ($engine === 'basalam_api') {
+        $usedEngine = 'Basalam Public API';
+        return parse_basalam_api_html($html, $baseUrl);
     }
     if ($engine === 'jina') {
         $usedEngine = 'Jina Reader';
@@ -30332,6 +30430,9 @@ $extractEngine=normalizeExtractionEngine((string)($profile['extractionEngine'] ?
 if(function_exists('isDigikalaUrl') && isDigikalaUrl($url) && $extractEngine==='selectors' && (empty($selectors) || empty($selectors['container']))){
     $extractEngine='digikala_api';
 }
+if(function_exists('isBasalamUrl') && isBasalamUrl($url) && $extractEngine==='selectors' && (empty($selectors) || empty($selectors['container']))){
+    $extractEngine='basalam_api';
+}
 $GLOBALS['_s4ActiveDigikalaApiEngine']=($extractEngine==='digikala_api');
 $pagType=$profile['pagType']??'query_page';
 $pagVal=$profile['pagVal']??'';
@@ -30759,19 +30860,24 @@ if($pkFinal!==''){
         '_extract_list_page_try'=>$page,
     ]);
 }
-if($page===1){$pageUrl=$url;}
+if($extractEngine==='basalam_api'){
+    if($page===1)$pageUrl=$url;
+    elseif($nextUrl)$pageUrl=$nextUrl;
+    else{if(count($allProducts)>0){$totalPages=max(1,$page-1);$_listReachedLastPage=true;}break;}
+}elseif($page===1){$pageUrl=$url;}
 elseif($pagType==='next_selector'&&$nextUrl){$pageUrl=$nextUrl;}
 elseif($pagType==='next_selector'&&!$nextUrl){if($page>1&&count($allProducts)>0){$totalPages=max(1,$page-1);$_listReachedLastPage=true;}break;}
 else{$pageUrl=build_page_url_custom($url,$url,$page,$pagType,$pagVal);}
 /* روی resume با next_selector: اگر last_url ذخیره شده و page==start، از آن شروع کن */
-if($_listResume && $page===$_startPage && $pagType==='next_selector'){
-    $_lu=trim((string)($profile['_extract_list_last_url']??''));
+if($_listResume && $page===$_startPage && ($pagType==='next_selector'||$extractEngine==='basalam_api')){
+    $_lu=trim((string)($profile[$extractEngine==='basalam_api'?'_extract_list_next_url':'_extract_list_last_url']??''));
     if($_lu!=='')$pageUrl=$_lu;
 }
 
 /* v10.173: مانند مسیر SSE — فهرست با fetch_html_smart واکشی می‌شود تا
    سایت‌های SPA (پوستهٔ خالی بدون رندر) هم محصول بدهند. */
 $res=fetch_html_for_engine($pageUrl,20,$extractEngine,$selectors);
+if($extractEngine==='basalam_api'&&array_key_exists('basalam_next_url',$res))$nextUrl=trim((string)$res['basalam_next_url'])?:null;
 $totalPages=$page;
 /* v10.177: نشانیِ کامل + کدِ HTTP در لاگ — نشانی‌های بلندِ پارسی ۶۰ کاراکترِ
    اول هیچ‌چیزی نشان نمی‌دادند و دیباگِ صفحه‌بندی کور می‌ماند.
@@ -31039,6 +31145,13 @@ foreach($_qLive['entries'] as &$_qeL){
     }
 }unset($_qeL);
 extractWriteQueue($_qLive);
+if($extractEngine==='basalam_api'&&!empty($res['basalam_last_page'])){
+    $totalPages=$page;$_listReachedLastPage=true;
+    $logs[]='🏁 آخرین cursor غرفهٔ باسلام در صفحهٔ '.$page.' کامل شد — استخراج API کامل است.';
+    $_qBslEnd=extractReadQueue();foreach($_qBslEnd['entries']as&$_qeBslEnd){if(($_qeBslEnd['id']??'')!==$queueId)continue;$_qeBslEnd['pag_stop_reason']='پایان طبیعی cursor API باسلام در صفحهٔ '.$page;$_qeBslEnd['pag_stop_url']=$pageUrl;$_qeBslEnd['resumable']=false;$_qeBslEnd['resume_page']=0;break;}unset($_qeBslEnd);extractWriteQueue($_qBslEnd);
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,'last_progress_ts'=>time(),'queue_id'=>$queueId,'recent_log'=>$logs,'total_log_count'=>$page+1,'extracted'=>count($allProducts),'page'=>$page,'page_ok'=>true,'resumable'=>false,'resume_page'=>0,'natural_end'=>true,'profile_key'=>$pkFinal]);
+    unset($_qBslEnd);break;
+}
 $_apiTotPagesNow = max((int)($res['snappshop_total_pages']??0), (int)($res['digikala_total_pages']??0));
 if($_apiTotPagesNow>$_knownApiTotalPages) $_knownApiTotalPages=$_apiTotPagesNow;
 if($newCount>0) $_lastGoodListPage=$page;
@@ -48928,6 +49041,19 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"fetch('?start_misc_products=1&destination='")!==false
         &&strpos($selfSrc,"{v:'10." . "618'")!==false
         &&version_compare(APP_VERSION,'10.618','>='));
+    $__bslApi619=basalamApiProductMap(['id'=>44,'title'=>'کالای API','primary_price'=>1250000,'inventory'=>3,'status'=>['value'=>2976],
+        'photo'=>['original'=>'https://statics.basalam.com/p.webp'],'photos'=>[['original'=>'https://statics.basalam.com/g.webp']],
+        'description'=>'شرح','category'=>['id'=>2,'title'=>'فرزند','parent'=>['id'=>1,'title'=>'والد']],'net_weight'=>250,'packaged_weight'=>300,
+        'vendor'=>['id'=>77,'title'=>'غرفه'],'variations'=>[['id'=>9,'price'=>1260000,'inventory'=>2,'color'=>['title'=>'قرمز']]]]);
+    $add('10.619','موتور API عمومی باسلام کامل و checkpointدار است',
+        normalizeExtractionEngine('basalam-api')==='basalam_api'&&in_array('basalam_api',extractionEngineAllowed(),true)
+        &&(int)($__bslApi619['price_num']??0)===125000&&(int)($__bslApi619['stock']??0)===3
+        &&count((array)($__bslApi619['images']??[]))===2&&count((array)($__bslApi619['variations']??[]))===1
+        &&(string)($__bslApi619['category']??'')==='والد > فرزند'
+        &&strpos($selfSrc,"isset(\$_GET['basalam_api_probe'])")!==false
+        &&strpos($selfSrc,"\$extractEngine==='basalam_api'&&array_key_exists('basalam_next_url',\$res)")!==false
+        &&strpos($selfSrc,"{v:'10." . "619'")!==false
+        &&version_compare(APP_VERSION,'10.619','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -93030,13 +93156,14 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <option value="heuristic">Structural / heuristic — کارت‌های محصول بدون تکیه به سلکتور (مناسب گرید ایمالز)</option>
                 <option value="jsonld">JSON-LD Product — فقط دادهٔ ساخت‌یافته</option>
                 <option value="digikala_api">🔴 Digikala API — موتور مستقیم API دیجی‌کالا (سریع، بدون سلکتور، تبدیل خودکار ریال به تومان)</option>
+                <option value="basalam_api">🟠 Basalam Public API — محصولات فعال هر غرفهٔ عمومی، بدون توکن و سلکتور</option>
                 <option value="jina">Jina Reader / r.jina.ai — مناسب سایت‌های SPA/بلاک‌شده مثل SnappShop و Digikala</option>
                 <option value="playwright">Playwright render — CDP/مرورگر واقعی، با fallback به Selenium سپس Auto parser</option>
                 <option value="selenium">Selenium render — WebDriver سپس Auto parser</option>
             </select>
         </div>
         <div style="font-size:10px;color:#64748b;line-height:1.7;margin:-2px 0 6px">
-            برای آدرس‌های دیجی‌کالا (مثل <code>digikala.com/search/category-diaper/</code>) موتور «🔴 Digikala API» مستقیم به <code>api.digikala.com</code> متصل می‌شود و بدون نیاز به سلکتور، همهٔ صفحات، تصاویر اصلی و جزئیات محصول را به تومان استخراج می‌کند. Jina Reader و Playwright/Selenium نیز برای سایر سایت‌های SPA در دسترس‌اند.
+            برای آدرس‌های دیجی‌کالا موتور «🔴 Digikala API» و برای آدرس عمومی هر غرفهٔ باسلام موتور «🟠 Basalam Public API» خودکار انتخاب می‌شود. موتور باسلام بدون توکن و سلکتور فقط محصولات فعال را با گالری، توضیحات، وزن و تنوع‌ها از <code>core.basalam.com</code> می‌گیرد. Jina Reader و Playwright/Selenium نیز برای سایر سایت‌های SPA در دسترس‌اند.
         </div>
 
         <div class="row" style="align-items:center;margin-top:4px">
@@ -93497,6 +93624,7 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
                 <option value="heuristic">Structural / heuristic — کارت‌های محصول بدون تکیه به سلکتور (مناسب گرید ایمالز)</option>
                 <option value="jsonld">JSON-LD Product — فقط دادهٔ ساخت‌یافته</option>
                 <option value="digikala_api">🔴 Digikala API — موتور مستقیم API دیجی‌کالا (سریع، بدون سلکتور، تبدیل خودکار ریال به تومان)</option>
+                <option value="basalam_api">🟠 Basalam Public API — محصولات فعال هر غرفهٔ عمومی، بدون توکن و سلکتور</option>
                 <option value="jina">Jina Reader / r.jina.ai — مناسب سایت‌های SPA/بلاک‌شده مثل SnappShop و Digikala</option>
                 <option value="playwright">Playwright render — CDP/مرورگر واقعی، با fallback به Selenium سپس Auto parser</option>
                 <option value="selenium">Selenium render — WebDriver سپس Auto parser</option>
@@ -96419,12 +96547,11 @@ function updateUrlTargetProfileHint() {
 }
 
 function maybeAutoSelectDigikalaEngine(urlStr) {
-    if (!urlStr || !/(?:^https?:\/\/)(?:[^\/?#]+\.)?digikala\.com(?:[\/:?#]|$)/i.test(urlStr)) return;
-    const engEl = $('extractionEngine');
-    const contEl = $('selContainer');
-    if (engEl && engEl.value === 'selectors' && (!contEl || !contEl.value.trim())) {
-        syncExtractionEngine('digikala_api', '');
-    }
+    if (!urlStr) return;
+    const engEl = $('extractionEngine'),contEl = $('selContainer');
+    if (!engEl || engEl.value !== 'selectors' || (contEl && contEl.value.trim())) return;
+    if (/(?:^https?:\/\/)(?:[^\/?#]+\.)?digikala\.com(?:[\/:?#]|$)/i.test(urlStr)) syncExtractionEngine('digikala_api', '');
+    else if (/(?:^https?:\/\/)(?:[^\/?#]+\.)?basalam\.com(?:[\/:?#]|$)/i.test(urlStr)) syncExtractionEngine('basalam_api', '');
 }
 
 function onUrlChange() {
@@ -101453,6 +101580,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.619', t:'🟠 موتور استخراج API عمومی باسلام', items:[
+    'موتور basalam_api محصولات فعال هر غرفهٔ عمومی را بدون توکن و بدون سلکتور از Core v4 دریافت می‌کند؛ آدرس عمومی غرفه یا محصول برای تشخیص vendor کافی است.',
+    'عنوان، قیمتِ تبدیل‌شده از ریال به تومان، موجودی، وضعیت، لینک، گالری، توضیحات، مسیر دسته‌بندی، وزن‌ها، SKU و تنوع‌ها به قالب کامل پروفایل نگاشت می‌شوند.',
+    'صفحه‌بندی cursor با checkpoint و ادامهٔ خودکار هماهنگ است؛ جزئیات محصولات تنوع‌دار به‌صورت موازی و محدود خوانده می‌شود و انتخاب موتور برای لینک باسلام خودکار است.'
+  ]},
   {v:'10.618', t:'📋 بارگذاری سریع جدول غرفه‌ها و پروفایل‌ها', items:[
     'پاسخ عادی جدول صفحهٔ شروع فقط شمارش‌های پروفایل و مقصد را برمی‌گرداند و دیگر هزاران ردیف محصول متفرقه را همراه خود حمل نمی‌کند.',
     'فهرست کامل محصولات متفرقه فقط هنگام بازکردن مودال همان غرفه یا ردیف مجموع، از آخرین ماتریس بارگذاری می‌شود.',
