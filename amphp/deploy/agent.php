@@ -329,6 +329,9 @@ class Scraper_Auto_Shop_Plugin {
 		add_action( 'wp_ajax_nopriv_scraper_track_event', array( __CLASS__, 'ajax_track_analytics_event' ) );
 		add_action( 'wp_ajax_scraper_reset_analytics', array( __CLASS__, 'ajax_reset_analytics' ) );
 		add_action( 'woocommerce_new_order', array( __CLASS__, 'on_wc_order_created' ), 10, 2 );
+		add_action( 'woocommerce_checkout_order_created', array( __CLASS__, 'on_wc_order_ready' ), 20, 1 );
+		add_action( 'woocommerce_store_api_checkout_order_processed', array( __CLASS__, 'on_wc_order_ready' ), 20, 1 );
+		add_action( 'amphp_wc_order_notice_fallback', array( __CLASS__, 'on_wc_order_notice_fallback' ), 10, 1 );
 		self::sync_wp_cron_schedule();
 		self::sync_ai_image_cron_schedule();
 
@@ -480,7 +483,7 @@ class Scraper_Auto_Shop_Plugin {
 	/** All requests are fixed to GitHub's API. A single commit SHA pins all downloaded files. */
 	public static function github_update_fetch( $url, $raw = false ) {
 		$result = wp_safe_remote_get( $url, array(
-			'timeout' => 45, 'redirection' => 0, 'limit_response_size' => 8 * 1024 * 1024,
+			'timeout' => 45, 'redirection' => 0, 'limit_response_size' => 16 * 1024 * 1024,
 			'headers' => array( 'Accept' => $raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json', 'User-Agent' => 'AMPHP-WordPress-Updater' ),
 		) );
 		if ( is_wp_error( $result ) ) { return $result; }
@@ -558,7 +561,7 @@ class Scraper_Auto_Shop_Plugin {
 				$url = $base . '/contents/' . implode( '/', array_map( 'rawurlencode', explode( '/', $remote_path ) ) ) . '?ref=' . rawurlencode( $sha );
 				$body = self::github_update_fetch( $url, true );
 				if ( is_wp_error( $body ) ) { throw new \RuntimeException( $file . ': ' . $body->get_error_message() ); }
-				if ( $body === '' || strlen( $body ) >= 8 * 1024 * 1024 ) { throw new \RuntimeException( 'Empty or oversized file: ' . $file ); }
+				if ( $body === '' || strlen( $body ) >= 16 * 1024 * 1024 ) { throw new \RuntimeException( 'Empty or oversized file: ' . $file ); }
 				if ( substr( $file, -4 ) === '.php' && strpos( ltrim( $body ), '<?php' ) !== 0 ) { throw new \RuntimeException( 'Invalid PHP file: ' . $file ); }
 				if ( $file === 'agent.php' && strpos( substr( $body, 0, 4096 ), 'Plugin Name: Scraper & Auto Shop Pro' ) === false ) { throw new \RuntimeException( 'Unexpected plugin header.' ); }
 				$tmp = tempnam( $parent, '.amphp-stage-' );
@@ -2930,6 +2933,28 @@ class Scraper_Auto_Shop_Plugin {
 	 *
 	 * @return bool
 	 */
+	/** Load the standalone scraper as a module, never dispatching its HTTP/CLI routes. */
+	public static function require_scraper_module( $scraper_file ) {
+		// The upstream scraper defaults to running cron in CLI before its no-render guard.
+		if ( PHP_SAPI === 'cli' || PHP_SAPI === 'phpdbg' ) return false;
+		if ( ! defined( 'SCRAPER4_NO_RENDER' ) ) define( 'SCRAPER4_NO_RENDER', true );
+		$get = $_GET; $post = $_POST; $request = $_REQUEST;
+		$ob = ob_get_level(); $errors = error_reporting();
+		$display = ini_get( 'display_errors' ); $execution = ini_get( 'max_execution_time' ); $memory = ini_get( 'memory_limit' );
+		$_GET = array(); $_POST = array(); $_REQUEST = array();
+		@ob_start();
+		try { require_once $scraper_file; return true; }
+		catch ( \Throwable $e ) { error_log( 'AMPHP scraper module: ' . $e->getMessage() ); return false; }
+		finally {
+			$_GET = $get; $_POST = $post; $_REQUEST = $request;
+			error_reporting( $errors );
+			@ini_set( 'display_errors', (string) $display );
+			@ini_set( 'max_execution_time', (string) $execution );
+			@ini_set( 'memory_limit', (string) $memory );
+			while ( ob_get_level() > $ob ) @ob_end_clean();
+		}
+	}
+
 	public static function load_scraper_matrix_engine() {
 		static $ok = null;
 		if ( null !== $ok ) {
@@ -2944,21 +2969,7 @@ class Scraper_Auto_Shop_Plugin {
 			$ok = false;
 			return false;
 		}
-		if ( ! defined( 'SCRAPER4_NO_RENDER' ) ) {
-			define( 'SCRAPER4_NO_RENDER', true );
-		}
-		$ob = ob_get_level();
-		@ob_start();
-		try {
-			require_once $scraper_file;
-			$ok = function_exists( 'matrixBuild' ) && function_exists( 'matrixQueryPage' );
-		} catch ( \Throwable $e ) {
-			error_log( 'matrix engine load: ' . $e->getMessage() );
-			$ok = false;
-		}
-		while ( ob_get_level() > $ob ) {
-			@ob_end_clean();
-		}
+		$ok = self::require_scraper_module( $scraper_file ) && function_exists( 'matrixBuild' ) && function_exists( 'matrixQueryPage' );
 		return (bool) $ok;
 	}
 
@@ -3448,7 +3459,7 @@ class Scraper_Auto_Shop_Plugin {
 					'Content-Type' => 'application/json; charset=utf-8',
 				),
 				'body'        => wp_json_encode( $body ),
-				'sslverify'   => false,
+				'sslverify'   => true,
 			);
 
 			$response = wp_remote_post( $m['url'], $args );
@@ -3966,25 +3977,8 @@ class Scraper_Auto_Shop_Plugin {
 			return false;
 		}
 
-		if ( ! defined( 'SCRAPER4_NO_RENDER' ) ) {
-			define( 'SCRAPER4_NO_RENDER', true );
-		}
-
-		$ob_level = ob_get_level();
-		@ob_start();
-		try {
-			require_once $scraper_file;
-			$loaded = function_exists( 'aiMasterKey' )
-				|| function_exists( 'aiCandidates' )
-				|| function_exists( 'aiProviderCall' );
-		} catch ( \Throwable $e ) {
-			error_log( 'Error loading scraper4 AI engine: ' . $e->getMessage() );
-			$loaded = false;
-		}
-		while ( ob_get_level() > $ob_level ) {
-			@ob_end_clean();
-		}
-
+		$loaded = self::require_scraper_module( $scraper_file )
+			&& ( function_exists( 'aiMasterKey' ) || function_exists( 'aiCandidates' ) || function_exists( 'aiProviderCall' ) );
 		return $loaded;
 	}
 
@@ -6368,7 +6362,7 @@ class Scraper_Auto_Shop_Plugin {
 
 		// Check and dispatch messenger notifications
 		$settings = self::get_settings();
-		self::maybe_send_analytics_messenger_notification( $event_type, $meta, $settings );
+		if ( empty( $meta['_skip_notification'] ) ) self::maybe_send_analytics_messenger_notification( $event_type, $meta, $settings );
 
 		return $data;
 	}
@@ -6463,7 +6457,7 @@ class Scraper_Auto_Shop_Plugin {
 	 */
 	public static function ajax_track_analytics_event() {
 		$event_type = sanitize_text_field( $_POST['event_type'] ?? '' );
-		$allowed    = array( 'site_visit', 'product_view', 'add_to_cart', 'checkout_step', 'order_placed' );
+		$allowed    = array( 'site_visit', 'product_view', 'add_to_cart', 'checkout_step' );
 		if ( ! in_array( $event_type, $allowed, true ) ) {
 			wp_send_json_error( 'نوع رویداد نامعتبر است.' );
 		}
@@ -6507,24 +6501,168 @@ class Scraper_Auto_Shop_Plugin {
 		wp_send_json_success( array( 'ok' => true, 'message' => 'آمار فروشگاه با موفقیت بازنشانی شد.' ) );
 	}
 
-	/**
-	 * WooCommerce hook when a real order is placed.
-	 */
-	public static function on_wc_order_created( $order_id, $order = null ) {
-		if ( ! $order && function_exists( 'wc_get_order' ) ) {
-			$order = wc_get_order( $order_id );
-		}
-		$total = $order ? $order->get_total() : 0;
-		$name  = $order ? ( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ) : '';
-		$phone = $order ? $order->get_billing_phone() : '';
-		self::record_analytics_event( 'order_placed', array(
-			'order_id'       => '#' . $order_id,
-			'amount'         => $total,
-			'customer_name'  => trim( $name ),
-			'customer_phone' => $phone,
-			'details'        => 'سفارش آنلاین ووکامرس',
-		) );
+	/** Format untrusted order fields as bounded plain text, not messenger markup. */
+	public static function order_notice_text( $value, $limit = 250 ) {
+		if ( ! is_scalar( $value ) ) return '';
+		$text = html_entity_decode( wp_strip_all_tags( (string) $value ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+		$text = trim( preg_replace( '/[\s\x{00A0}]+/u', ' ', $text ) );
+		return mb_strlen( $text, 'UTF-8' ) > $limit ? mb_substr( $text, 0, $limit, 'UTF-8' ) . '…' : $text;
 	}
+
+	public static function order_notice_money( $value, $currency ) {
+		if ( ! is_numeric( $value ) ) return '';
+		if ( function_exists( 'wc_price' ) ) return self::order_notice_text( wc_price( (float) $value, array( 'currency' => $currency ) ), 100 );
+		return number_format( (float) $value, 2 ) . ' ' . self::order_notice_text( $currency, 20 );
+	}
+
+	/** Full order details come only from the WooCommerce order object, never the browser. */
+	public static function wc_order_notice_lines( $order, $settings ) {
+		$currency = $order->get_currency();
+		$money = function( $n ) use ( $currency ) { return self::order_notice_money( $n, $currency ); };
+		$shop = self::order_notice_text( $settings['shop_title'] ?? 'فروشگاه آنلاین', 100 );
+		$number = self::order_notice_text( $order->get_order_number(), 50 );
+		$status = $order->get_status();
+		$status_name = function_exists( 'wc_get_order_status_name' ) ? wc_get_order_status_name( $status ) : $status;
+		$date = $order->get_date_created();
+		$lines = array( '🎉 سفارش جدید ووکامرس — ' . $shop, '🔖 شماره سفارش: #' . $number, '📌 وضعیت سفارش: ' . self::order_notice_text( $status_name ) );
+		if ( $date ) $lines[] = '🗓 تاریخ ثبت: ' . self::order_notice_text( method_exists( $date, 'date_i18n' ) ? $date->date_i18n( 'Y/m/d H:i' ) : $date->date( 'Y/m/d H:i' ) );
+		$lines[] = '💳 وضعیت پرداخت: ' . ( $order->get_date_paid() ? 'پرداخت ثبت شده' : 'پرداخت ثبت نشده / در انتظار بررسی' );
+		$method = self::order_notice_text( $order->get_payment_method_title() );
+		if ( $method !== '' ) $lines[] = 'روش پرداخت: ' . $method;
+		$lines[] = '';
+		$lines[] = '👤 اطلاعات خریدار';
+		$billing = $order->get_address( 'billing' );
+		$shipping = $order->get_address( 'shipping' );
+		$billing = is_array( $billing ) ? $billing : array();
+		$shipping = is_array( $shipping ) ? $shipping : array();
+		$fields = array( 'first_name' => 'نام', 'last_name' => 'نام خانوادگی', 'company' => 'شرکت', 'phone' => 'تلفن', 'email' => 'ایمیل', 'country' => 'کشور', 'state' => 'استان', 'city' => 'شهر', 'address_1' => 'آدرس', 'address_2' => 'جزئیات آدرس', 'postcode' => 'کد پستی' );
+		foreach ( $fields as $key => $label ) {
+			$value = self::order_notice_text( $billing[$key] ?? '', 350 );
+			if ( $value !== '' ) $lines[] = $label . ': ' . $value;
+		}
+		$has_shipping = false;
+		foreach ( $fields as $key => $label ) if ( self::order_notice_text( $shipping[$key] ?? '' ) !== '' ) { $has_shipping = true; break; }
+		if ( $has_shipping ) {
+			$lines[] = ''; $lines[] = '📍 اطلاعات گیرنده و ارسال';
+			foreach ( $fields as $key => $label ) {
+				$value = self::order_notice_text( $shipping[$key] ?? '', 350 );
+				if ( $value !== '' ) $lines[] = $label . ': ' . $value;
+			}
+		}
+		$shipping_method = self::order_notice_text( $order->get_shipping_method(), 250 );
+		if ( $shipping_method !== '' ) $lines[] = 'روش ارسال: ' . $shipping_method;
+		$note = self::order_notice_text( $order->get_customer_note(), 500 );
+		if ( $note !== '' ) $lines[] = '📝 یادداشت مشتری: ' . $note;
+		$lines[] = ''; $lines[] = '🛍 اقلام سفارش (مبالغ کالا پیش از مالیات)';
+		foreach ( $order->get_items( 'line_item' ) as $item ) {
+			if ( ! is_object( $item ) ) continue;
+			$name = self::order_notice_text( $item->get_name(), 220 );
+			$qty = $item->get_quantity();
+			$lines[] = '• ' . $name . ' × ' . self::order_notice_text( $qty, 30 );
+			$product = $item->get_product();
+			if ( $product && method_exists( $product, 'get_sku' ) ) {
+				$sku = self::order_notice_text( $product->get_sku(), 100 );
+				if ( $sku !== '' ) $lines[] = '  شناسه کالا (SKU): ' . $sku;
+			}
+			foreach ( $item->get_formatted_meta_data() as $meta ) {
+				if ( ! is_object( $meta ) ) continue;
+				$key = self::order_notice_text( $meta->display_key ?? '', 80 );
+				$value = self::order_notice_text( $meta->display_value ?? '', 250 );
+				if ( $key !== '' && $value !== '' ) $lines[] = '  ' . $key . ': ' . $value;
+			}
+			$lines[] = '  جمع پیش از تخفیف: ' . $money( $item->get_subtotal() ) . ' | پس از تخفیف: ' . $money( $item->get_total() );
+			if ( (float) $item->get_total_tax() != 0 ) $lines[] = '  مالیات کالا: ' . $money( $item->get_total_tax() );
+		}
+		$lines[] = ''; $lines[] = '💰 خلاصه مالی';
+		$lines[] = 'جمع کالاها پیش از تخفیف و مالیات: ' . $money( $order->get_subtotal() );
+		$lines[] = 'تخفیف: ' . $money( $order->get_discount_total() );
+		$lines[] = 'هزینه ارسال: ' . $money( $order->get_shipping_total() );
+		foreach ( $order->get_items( 'fee' ) as $fee ) {
+			if ( is_object( $fee ) ) $lines[] = 'هزینه ' . self::order_notice_text( $fee->get_name(), 100 ) . ': ' . $money( $fee->get_total() );
+		}
+		$lines[] = 'مالیات کل: ' . $money( $order->get_total_tax() );
+		$lines[] = 'مبلغ نهایی سفارش: ' . $money( $order->get_total() );
+		$codes = array();
+		foreach ( $order->get_coupon_codes() as $code ) { $code = self::order_notice_text( $code, 80 ); if ( $code !== '' ) $codes[] = $code; }
+		if ( $codes ) $lines[] = 'کدهای تخفیف: ' . implode( '، ', array_slice( $codes, 0, 20 ) );
+		if ( method_exists( $order, 'get_edit_order_url' ) ) {
+			$admin_url = $order->get_edit_order_url();
+			if ( is_string( $admin_url ) && $admin_url !== '' ) $lines[] = 'مدیریت سفارش: ' . $admin_url;
+		}
+		return $lines;
+	}
+
+	/** Split before provider limits; number parts so recipients can reassemble them. */
+	public static function wc_order_notice_chunks( $lines, $number ) {
+		$chunks = array(); $current = '';
+		foreach ( $lines as $line ) {
+			$line = (string) $line;
+			while ( mb_strlen( $line, 'UTF-8' ) > 1800 ) {
+				$piece = mb_substr( $line, 0, 1800, 'UTF-8' );
+				$line = mb_substr( $line, 1800, null, 'UTF-8' );
+				if ( $current !== '' ) { $chunks[] = $current; $current = ''; }
+				$chunks[] = $piece;
+			}
+			if ( $current !== '' && mb_strlen( $current . "\n" . $line, 'UTF-8' ) > 1800 ) { $chunks[] = $current; $current = ''; }
+			$current .= ( $current === '' ? '' : "\n" ) . $line;
+		}
+		if ( $current !== '' ) $chunks[] = $current;
+		if ( count( $chunks ) > 12 ) {
+			$chunks = array_slice( $chunks, 0, 12 );
+			$chunks[11] .= "\nادامه جزئیات در پنل مدیریت سفارش است؛ فهرست پیام کامل نیست.";
+		}
+		$total = count( $chunks );
+		if ( $total > 1 ) foreach ( $chunks as $i => &$chunk ) $chunk = '🧾 سفارش #' . $number . ' — بخش ' . ( $i + 1 ) . '/' . $total . "\n" . $chunk;
+		return $chunks;
+	}
+
+	/** New-order fires before line items exist; schedule only a fallback, not an early message. */
+	public static function on_wc_order_created( $order_id, $order = null ) {
+		$order_id = absint( $order_id );
+		if ( $order_id && function_exists( 'wp_next_scheduled' ) && ! wp_next_scheduled( 'amphp_wc_order_notice_fallback', array( $order_id ) ) ) {
+			wp_schedule_single_event( time() + 60, 'amphp_wc_order_notice_fallback', array( $order_id ) );
+		}
+	}
+
+	public static function on_wc_order_notice_fallback( $order_id ) {
+		if ( function_exists( 'wc_get_order' ) ) self::on_wc_order_ready( wc_get_order( $order_id ) );
+	}
+
+	/** Called after line items are saved, on classic, block and storefront checkouts. */
+	public static function on_wc_order_ready( $order ) {
+		if ( ! is_object( $order ) || ! method_exists( $order, 'get_id' ) ) return;
+		$id = absint( $order->get_id() );
+		if ( ! $id ) return;
+		$lock = 'amphp_order_notice_lock_' . $id;
+		if ( ! add_option( $lock, time(), '', false ) ) {
+			$locked_at = (int) get_option( $lock, 0 );
+			if ( ! $locked_at || time() - $locked_at < 300 ) return;
+			delete_option( $lock );
+			if ( ! add_option( $lock, time(), '', false ) ) return;
+		}
+		try {
+			$fresh = function_exists( 'wc_get_order' ) ? wc_get_order( $id ) : null;
+			if ( $fresh ) $order = $fresh;
+			if ( $order->get_meta( '_amphp_order_notice_recorded', true ) || in_array( $order->get_status(), array( 'checkout-draft', 'auto-draft', 'draft', 'trash' ), true ) || ! $order->get_items( 'line_item' ) ) return;
+			$settings = self::get_settings();
+			$lines = ! empty( $settings['notif_event_order_placed'] ) ? self::wc_order_notice_lines( $order, $settings ) : array();
+			// Mark before dispatch: queued non-blocking requests cannot be safely retried without duplication.
+			$order->update_meta_data( '_amphp_order_notice_recorded', '1' );
+			$order->save_meta_data();
+			try { self::record_analytics_event( 'order_placed', array(
+				'order_id' => '#' . $id, 'amount' => $order->get_total(),
+				'customer_name' => trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ),
+				'customer_phone' => $order->get_billing_phone(), 'details' => 'سفارش آنلاین ووکامرس',
+				'_skip_notification' => true,
+			) ); } catch ( \Throwable $analytics_error ) { error_log( 'AMPHP order analytics: ' . $analytics_error->getMessage() ); }
+			foreach ( self::wc_order_notice_chunks( $lines, self::order_notice_text( $order->get_order_number(), 50 ) ) as $chunk ) self::send_message_to_messengers( $chunk, $settings );
+		} catch ( \Throwable $e ) {
+			error_log( 'AMPHP order notification: ' . $e->getMessage() );
+		} finally {
+			delete_option( $lock );
+		}
+	}
+
 
 
 	/**
@@ -9281,13 +9419,8 @@ class Scraper_Auto_Shop_Plugin {
 				}
 				$thankyou_url = $shop_return;
 
-				// Track analytics
-				try {
-					self::ajax_track_analytics_event_internal( 'order_placed', array(
-						'order_id' => $order_id,
-						'total'    => $total,
-					) );
-				} catch ( \Throwable $e ) {}
+				// Send the same complete, deduplicated WooCommerce order notification.
+				self::on_wc_order_ready( $order );
 
 			} catch ( \Throwable $e ) {
 				wp_send_json_error( 'خطا در ثبت سفارش: ' . $e->getMessage() );
