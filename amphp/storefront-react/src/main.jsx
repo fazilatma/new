@@ -2479,6 +2479,15 @@ function StoreApp({ boot }) {
       if (!q) return true;
       return productMatchesQuery(p, q);
     });
+    if (sort === 'newest' || sort === 'oldest') {
+      const direction = sort === 'newest' ? -1 : 1;
+      list = list.map((product, index) => ({ product, index })).sort((a, b) => {
+        const at = Number(a.product.created_ts) || 0;
+        const bt = Number(b.product.created_ts) || 0;
+        if (!at || !bt) return at ? -1 : (bt ? 1 : a.index - b.index);
+        return direction * (at - bt) || a.index - b.index;
+      }).map(({ product }) => product);
+    }
     if (sort === 'price-asc') list = [...list].sort((a, b) => (a.price || 0) - (b.price || 0));
     if (sort === 'price-desc') list = [...list].sort((a, b) => (b.price || 0) - (a.price || 0));
     if (sort === 'title') list = [...list].sort((a, b) => String(a.title || '').localeCompare(String(b.title || ''), 'fa'));
@@ -3106,14 +3115,17 @@ function StoreApp({ boot }) {
             <span style={{ color: '#94a3b8', fontWeight: 800, fontSize: '.9rem' }}> ({toFa(filtered.length)}{catalogTotal > filtered.length ? ` از ${toFa(catalogTotal)}` : ''})</span>
           </h3>
           <div className="sf-toolbar-controls">
-            <select className="sf-select" value={sort} onChange={(e) => setSort(e.target.value)}>
+            <select className="sf-select" aria-label="مرتب‌سازی محصولات" value={sort} onChange={(e) => setSort(e.target.value)}>
               <option value="default">مرتب‌سازی پیش‌فرض</option>
+              <option value="newest">جدیدترین</option>
+              <option value="oldest">قدیمی‌ترین</option>
               <option value="price-asc">ارزان‌ترین</option>
               <option value="price-desc">گران‌ترین</option>
               <option value="title">بر اساس نام</option>
               <option value="popular">پرفروش‌ترین</option>
               <option value="discount">بیشترین تخفیف</option>
             </select>
+            {(sort === 'newest' || sort === 'oldest') ? <span className="sf-sort-hint">بر اساس تاریخ ثبت یا نخستین مشاهده؛ موارد بدون تاریخ در انتها</span> : null}
             {['2', '3', '4', '5'].map((c) => (
               <button key={c} type="button" className={`sf-col-btn ${cols === c ? 'active' : ''}`} onClick={() => setCols(c)} title={`${c} ستونه`}>
                 {toFa(c)}
