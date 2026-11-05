@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.617';
+const APP_VERSION = '10.618';
 
 
 if (!function_exists('str_starts_with')) {
@@ -429,7 +429,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/12';
+const APP_VERSION_DATE = '1405/08/14';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -21698,7 +21698,7 @@ function startMatrixMiscBslCellIsSellable(array $cell):bool{
 }
 /** v10.426: destination inventory per saved profile, derived only from the
  * latest completed discrepancy matrix (no destination network requests). */
-function startMatrixDestinationStats(array $matrix,array $profiles):array{
+function startMatrixDestinationStats(array $matrix,array $profiles,bool $includeUncodedProducts=true):array{
     $selected=array_values((array)($matrix['selected_destinations']??[]));$selectedSet=array_fill_keys($selected,true);
     $dest=[];
     if(isset($selectedSet['woo']))$dest['woo']=['key'=>'woo','type'=>'woo','label'=>'ووکامرس'];
@@ -21717,11 +21717,13 @@ function startMatrixDestinationStats(array $matrix,array $profiles):array{
             foreach((array)($row['shop_extra'][$vid]??$row['shop_extra'][(string)$vid]??[])as$ex)if(is_array($ex))$cells[]=$ex;
             foreach($cells as$c){$id=(int)($c['id']??0);$title=(string)($c['title']??$row['title']??'');
                 $coded=matrixTitleHasCode($title)||matrixRowHasCode($row);
-                if($id>0&&startMatrixMiscBslCellIsSellable($c)&&!$coded)$uncoded[$dk][(string)$id]=[
-                'id'=>$id,'title'=>$title!==''?$title:'بدون عنوان','price'=>(int)($c['price']??0),
-                'stock'=>(int)($c['stock']??0),'status'=>(string)($c['status']??''),
-                'destination'=>$dk,'shop'=>(string)($meta['label']??''),
-                'url'=>'https://basalam.com/p/'.$id];}
+                if($id>0&&startMatrixMiscBslCellIsSellable($c)&&!$coded){
+                    $uncoded[$dk][(string)$id]=$includeUncodedProducts?[
+                        'id'=>$id,'title'=>$title!==''?$title:'بدون عنوان','price'=>(int)($c['price']??0),
+                        'stock'=>(int)($c['stock']??0),'status'=>(string)($c['status']??''),
+                        'destination'=>$dk,'shop'=>(string)($meta['label']??''),
+                        'url'=>'https://basalam.com/p/'.$id]:true;
+                }}
         }
         $pk=matrixRowProfileScopeKey($row,$profiles);if($pk===''||!isset($known[$pk]))continue;
         if(isset($dest['woo'])&&is_array($row['woo']??null)){
@@ -21744,11 +21746,28 @@ function startMatrixDestinationStats(array $matrix,array $profiles):array{
         $mn=count($priceMismatch[$pk][$dk]??[]);$mismatchCounts[$pk][$dk]=$mn;$mismatchTotals[$dk]+=$mn;
     }}
     foreach($dest as$dk=>&$meta)$meta['uncoded']=count($uncoded[$dk]??[]);unset($meta);
-    $uncodedProducts=[];foreach($uncoded as$dk=>$items)$uncodedProducts[$dk]=array_values($items);
+    $uncodedProducts=[];if($includeUncodedProducts)foreach($uncoded as$dk=>$items)$uncodedProducts[$dk]=array_values($items);
     return ['generated_at'=>(int)($matrix['generated_at']??0),'source'=>(string)($matrix['source']??''),
         'destinations'=>array_values($dest),'counts'=>$counts,'totals'=>$totals,
         'price_mismatch_counts'=>$mismatchCounts,'price_mismatch_totals'=>$mismatchTotals,
         'uncoded'=>array_map('count',$uncoded),'uncoded_products'=>$uncodedProducts];
+}
+
+/* v10.618: keep the ordinary Start table response small. Full miscellaneous
+   product rows are loaded only when their modal is opened. */
+if(isset($_GET['start_misc_products'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $destination=trim((string)($_GET['destination']??'all'));
+    $stats=startMatrixDestinationStats(matrixResultLoad(),loadProfiles(),true);
+    $allowed=[];foreach((array)($stats['destinations']??[])as$d)if(($d['type']??'')==='bsl')$allowed[(string)($d['key']??'')]=true;
+    if($destination!=='all'&&!isset($allowed[$destination])){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'destination_not_enabled'],JSON_UNESCAPED_UNICODE);exit;}
+    $products=[];foreach((array)($stats['uncoded_products']??[])as$dk=>$items){
+        if(!isset($allowed[(string)$dk])||($destination!=='all'&&(string)$dk!==$destination))continue;
+        $products[(string)$dk]=array_values((array)$items);
+    }
+    if($destination!=='all'&&!isset($products[$destination]))$products[$destination]=[];
+    echo json_encode(['ok'=>true,'destination'=>$destination,'generated_at'=>(int)($stats['generated_at']??0),'products'=>$products],
+        JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 
 /* v10.434: one safe, independently retriable action for the Start-tab
@@ -21846,7 +21865,9 @@ if (isset($_GET['start_product_stats'])) {
         'gallery','variations','linked','sku','description','category','brand','ready'];
     $totals = array_fill_keys($defs, 0); $byProfile = []; $samples = array_fill_keys($defs, []);
     $profiles = loadProfiles();
-    $matrixStats=startMatrixDestinationStats(function_exists('matrixResultLoad')?matrixResultLoad():[],$profiles);
+    /* The Start table needs counts only. Returning every uncoded product made
+       this ordinary refresh multi-megabyte after a large matrix build. */
+    $matrixStats=startMatrixDestinationStats(function_exists('matrixResultLoad')?matrixResultLoad():[],$profiles,false);
     foreach ($profiles as $pk => $profile) {
         if (!is_array($profile)) continue;
         $pn = trim((string)($profile['name'] ?? $pk)); $pm = array_fill_keys($defs, 0);
@@ -48897,6 +48918,16 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"empty(\$GLOBALS['_bslAdaptiveBypassWait'])")!==false
         &&strpos($selfSrc,"{v:'10." . "617'")!==false
         &&version_compare(APP_VERSION,'10.617','>='));
+    $__startStats618=startMatrixDestinationStats(['generated_at'=>1,'selected_destinations'=>['bsl:77'],'shops'=>[['vendor_id'=>77,'name'=>'T']],
+        'rows'=>[['title'=>'بدون کد','shops'=>[77=>['id'=>9,'title'=>'بدون کد','status'=>2976,'stock'=>2]]]]],[],false);
+    $add('10.618','جدول شروع بدون محمولهٔ حجیم متفرقه فوراً ساخته می‌شود',
+        (($__startStats618['destinations'][0]['uncoded']??0)===1)
+        &&empty($__startStats618['uncoded_products']??[])
+        &&strpos($selfSrc,"isset(\$_GET['start_misc_products'])")!==false
+        &&strpos($selfSrc,'startMatrixDestinationStats(function_exists(\'matrixResultLoad\')?matrixResultLoad():[],$profiles,false)')!==false
+        &&strpos($selfSrc,"fetch('?start_misc_products=1&destination='")!==false
+        &&strpos($selfSrc,"{v:'10." . "618'")!==false
+        &&version_compare(APP_VERSION,'10.618','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -94634,10 +94665,18 @@ function openStartOverviewModal(){
   m.classList.add('open');document.body.style.overflow='hidden';
 }
 function openStartMiscProducts(destination){
-  const d=startProductOverviewData,mx=(d&&d.matrix)||{},map=mx.uncoded_products||{},dests=Array.isArray(mx.destinations)?mx.destinations:[];if(!d)return;
+  const d=startProductOverviewData,mx=(d&&d.matrix)||{},map=mx.uncoded_products||(mx.uncoded_products={}),dests=Array.isArray(mx.destinations)?mx.destinations:[];if(!d)return;
+  const keys=destination==='all'?dests.filter(x=>x.type==='bsl').map(x=>x.key):[destination],loaded=keys.every(k=>Array.isArray(map[k]));
+  if(!loaded){
+    $('spoDetailTitle').textContent='🧩 محصولات متفرقهٔ بدون کد';$('spoDetailSub').textContent='در حال خواندن فهرست از آخرین جدول مغایرت…';
+    $('spoDetailBody').innerHTML='<div class="spo-empty">لطفاً منتظر بمانید؛ جزئیات فقط هنگام بازکردن این پنجره بارگذاری می‌شود.</div>';openStartOverviewModal();
+    fetch('?start_misc_products=1&destination='+encodeURIComponent(destination)+'&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(rep=>{
+      if(!rep||!rep.ok)throw new Error((rep&&rep.error)||'پاسخ نامعتبر');const got=rep.products||{};keys.forEach(k=>map[k]=Array.isArray(got[k])?got[k]:[]);openStartMiscProducts(destination);
+    }).catch(e=>{$('spoDetailSub').textContent='بارگذاری ناموفق';$('spoDetailBody').innerHTML='<div class="spo-error">'+esc(e.message||String(e))+'</div>'});return;
+  }
   let items=[],label='همهٔ غرفه‌ها';
-  if(destination==='all'){dests.forEach(x=>{if(Array.isArray(map[x.key]))items=items.concat(map[x.key])});}
-  else{items=Array.isArray(map[destination])?map[destination]:[];const md=dests.find(x=>x.key===destination);if(md)label=md.label||md.key||label;}
+  if(destination==='all'){keys.forEach(k=>{items=items.concat(map[k])});}
+  else{items=map[destination];const md=dests.find(x=>x.key===destination);if(md)label=md.label||md.key||label;}
   startMiscModalItems=items.map(p=>Object.assign({},p,{_key:String(p.destination||destination)+'|'+String(p.id||0)}));
   startMiscSelected=new Set();startMiscDrafts={};startMiscEditing=false;startMiscBusy=false;startMiscLabel=label;
   $('spoDetailTitle').textContent='🧩 محصولات متفرقهٔ بدون کد';renderStartMiscProducts();openStartOverviewModal();
@@ -101414,6 +101453,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.618', t:'📋 بارگذاری سریع جدول غرفه‌ها و پروفایل‌ها', items:[
+    'پاسخ عادی جدول صفحهٔ شروع فقط شمارش‌های پروفایل و مقصد را برمی‌گرداند و دیگر هزاران ردیف محصول متفرقه را همراه خود حمل نمی‌کند.',
+    'فهرست کامل محصولات متفرقه فقط هنگام بازکردن مودال همان غرفه یا ردیف مجموع، از آخرین ماتریس بارگذاری می‌شود.',
+    'جدول مغایرت تکمیل‌شده و شمارش‌های آن حفظ می‌شوند؛ هیچ برداشت مقصد یا rebuild تازه‌ای برای نمایش جدول شروع اجرا نمی‌شود.'
+  ]},
   {v:'10.617', t:'🚦 خروج ماتریس از انتظار cooldown', items:[
     'GET صفحهٔ ماتریس پیش از درخواست در cooldown مشترک ارسال متوقف نمی‌ماند؛ web worker مستقیماً یک تلاش محدود انجام می‌دهد.',
     'پاسخ 429 همچنان در کنترل تطبیقی ثبت می‌شود و درخواست فقط یک‌بار در هر cron و با timeout دوازده‌ثانیه‌ای اجرا می‌گردد.',
