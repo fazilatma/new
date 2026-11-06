@@ -49071,6 +49071,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$row['variants']??\$row['variations']")!==false
         &&strpos($selfSrc,"{v:'10." . "622'")!==false
         &&version_compare(APP_VERSION,'10.622','>='));
+    $__laneFirst623=bslPeriodicBalancedLane(['entries'=>[]],[],'profile-a');
+    $__laneNext623=bslPeriodicBalancedLane(['entries'=>[['id'=>'q-detail','status'=>'waiting','lane'=>'detail','profile_key'=>'profile-b']]],[],'profile-a');
+    $add('10.623','لین ۲ ابتدا پر می‌شود و progress پایانی کاذب پاک‌سازی‌پذیر است',
+        (string)($__laneFirst623['lane']??'')==='detail'&&(string)($__laneNext623['lane']??'')==='fast'
+        &&strpos($selfSrc,'function bslReconcileTerminalLaneProgress')!==false
+        &&strpos($selfSrc,"['done','failed','cancelled']")!==false
+        &&strpos($selfSrc,"if(!empty(\$_GET['summary']))")!==false
+        &&strpos($selfSrc,"{v:'10." . "623'")!==false
+        &&version_compare(APP_VERSION,'10.623','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79890,6 +79899,34 @@ function bslLaneIsLive(string $lane,int $fresh=180): bool {
     $p=readProgress(bslLaneProgressFile($lane));if(empty($p['running']))return false;
     $beat=max((int)($p['last_progress_ts']??0),(int)($p['started_at']??0));return $beat>0&&time()-$beat<$fresh;
 }
+/** A terminal queue row can never own a running lane progress file. Clear only
+ * that false running flag while holding the physical lane flock; all counters
+ * and checkpoint data remain available for history/diagnostics. */
+function bslReconcileTerminalLaneProgress(string $lane,?array $queue=null): array {
+    $lane=bslNormalizeProfileLane($lane);if($lane==='legacy')return ['changed'=>false,'reason'=>'legacy'];
+    if($queue===null)$queue=bslReadQueue();$file=bslLaneProgressFile($lane);$progress=readProgress($file);
+    $qid=trim((string)($progress['queue_id']??$progress['checkpoint']['queue_id']??''));
+    if($qid===''||empty($progress['running']))return ['changed'=>false,'queue_id'=>$qid,'reason'=>'not_running'];
+    $row=null;foreach((array)($queue['entries']??[]) as $candidate){
+        if(is_array($candidate)&&(string)($candidate['id']??'')===$qid){$row=$candidate;break;}
+    }
+    $status=(string)($row['status']??'missing');
+    if(!in_array($status,['done','failed','cancelled'],true))return ['changed'=>false,'queue_id'=>$qid,'status'=>$status,'reason'=>'non_terminal'];
+    $lock=@fopen(bslLaneLockFile($lane),'c');$free=is_resource($lock)&&@flock($lock,LOCK_EX|LOCK_NB);
+    if(!$free){if(is_resource($lock))@fclose($lock);return ['changed'=>false,'queue_id'=>$qid,'status'=>$status,'reason'=>'worker_lock_held'];}
+    /* Re-read after taking the lock so a just-finished worker cannot be
+       overwritten with an older snapshot. */
+    $latest=readProgress($file);$latestQid=trim((string)($latest['queue_id']??$latest['checkpoint']['queue_id']??''));
+    $changed=false;
+    if($latestQid===$qid&&!empty($latest['running'])){
+        $latest['running']=false;$latest['stale']=true;$latest['orphaned_terminal']=true;
+        $latest['terminal_queue_status']=$status;$latest['reconciled_at']=time();
+        if($status==='done')$latest['done']=true;
+        writeProgress($file,$latest);$changed=true;
+    }
+    @flock($lock,LOCK_UN);@fclose($lock);
+    return ['changed'=>$changed,'queue_id'=>$qid,'status'=>$status,'reason'=>$changed?'terminal_progress_cleared':'progress_changed'];
+}
 /** Assign one periodic-sync profile to exactly one physical lane. Lane 2 wins
  * an equal-load tie; once it owns a profile the next profile fills Lane 1. */
 function bslPeriodicBalancedLane(array $queue,array $profile,string $profileKey): array {
@@ -79901,10 +79938,13 @@ function bslPeriodicBalancedLane(array $queue,array $profile,string $profileKey)
         if($profileKey!==''&&$rk!==''&&($rk===$profileKey||profileKey($rk)===profileKey($profileKey)))$existing=$row;
     }
     if($existing)return ['lane'=>bslRowLane($existing),'existing'=>$existing,'eligible_detail'=>!empty($existing['with_details'])];
-    $summary=extractProfileDetailSummary($profile);$eligible=!empty($summary['enabled'])&&extractProfileHasAnyDetailData($summary);
-    if(!$eligible)return ['lane'=>'fast','existing'=>null,'eligible_detail'=>false,'detail_summary'=>$summary,'loads'=>['fast'=>count($active['fast']),'detail'=>count($active['detail'])]];
+    $summary=extractProfileDetailSummary($profile);$configuredDetail=!empty($summary['enabled'])&&extractProfileHasAnyDetailData($summary);
+    /* Periodic distribution is a lane-capacity decision, not a selector
+       eligibility decision. The first profile must fill Lane 2 and the next
+       one Lane 1 even when this profile has no optional detail selectors. Lane
+       1 still strips its payload; Lane 2 preserves every extracted field. */
     $fast=count($active['fast']);$detail=count($active['detail']);$lane=$detail<=$fast?'detail':'fast';
-    return ['lane'=>$lane,'existing'=>null,'eligible_detail'=>true,'detail_summary'=>$summary,'loads'=>['fast'=>$fast,'detail'=>$detail]];
+    return ['lane'=>$lane,'existing'=>null,'eligible_detail'=>$configuredDetail,'detail_summary'=>$summary,'loads'=>['fast'=>$fast,'detail'=>$detail]];
 }
 /** With a free lane flock, no sender can legitimately own a running row.
  * Recover every orphan (and non-user pause) to waiting in one sweep so the
@@ -79961,11 +80001,15 @@ function bslRecoverOrphanedLaneRows(array &$queue): array {
 /** Every cron arrival pumps both physical send lanes before the generic cron
  * mutex. This path is deliberately independent of watchdog/auto-resume flags. */
 function bslCronPumpProfileLanes(): array {
-    if(!bslParallelProfileLanesEnabled())return ['enabled'=>false];
+    /* Reconcile false activity before checking whether split mode currently has
+       work. This also repairs a stale Lane 2 display when only Lane 1 remains. */
+    $queue=bslReadQueue();$staleProgress=[];
+    foreach(['fast','detail'] as $__lane)$staleProgress[$__lane]=bslReconcileTerminalLaneProgress($__lane,$queue);
+    if(!bslParallelProfileLanesEnabled())return ['enabled'=>false,'stale_progress'=>$staleProgress];
     $gate=@fopen(__DIR__.'/.bsl-lane-dispatch.lock','c');
-    if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['enabled'=>true,'busy'=>true];}
+    if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['enabled'=>true,'busy'=>true,'stale_progress'=>$staleProgress];}
     $queue=bslReadQueue();$recovered=bslRecoverOrphanedLaneRows($queue);
-    $now=time();$out=['enabled'=>true,'at'=>$now,'recovered'=>$recovered,'lanes'=>[]];
+    $now=time();$out=['enabled'=>true,'at'=>$now,'recovered'=>$recovered,'stale_progress'=>$staleProgress,'lanes'=>[]];
     foreach(['fast','detail'] as $lane){
         $row=null;foreach((array)($queue['entries']??[]) as $candidate){
             if(!is_array($candidate)||bslRowLane($candidate)!==$lane||!in_array((string)($candidate['status']??''),['running','waiting'],true))continue;
@@ -80543,6 +80587,7 @@ header('Content-Type: application/json; charset=UTF-8');
    رندرِ رابط، یک بار بچکش تا کاربر دیگر وظیفهٔ تمام‌شدهٔ «فعال» نبیند. */
 try { if(!bslParallelProfileLanesEnabled())queueStallCheck('bsl', BSL_SEND_STALL_SEC); } catch (Throwable $eB) {}
 $queue=bslReadQueue();
+foreach(['fast','detail'] as $__reconcileLane)bslReconcileTerminalLaneProgress($__reconcileLane,$queue);
 $progressByLane=['legacy'=>readProgress(BSL_PROGRESS_FILE),'fast'=>readProgress(BSL_FAST_PROGRESS_FILE),'detail'=>readProgress(BSL_DETAIL_PROGRESS_FILE)];
 $workerLiveByLane=[];foreach(['legacy','fast','detail'] as $__ln){$__fp=@fopen(bslLaneLockFile($__ln),'c');$__live=true;if($__fp){$__live=!@flock($__fp,LOCK_EX|LOCK_NB);if(!$__live)@flock($__fp,LOCK_UN);@fclose($__fp);}$workerLiveByLane[$__ln]=$__live;}
 $progress=$progressByLane['legacy'];foreach(['fast','detail'] as $__ln)if(!empty($progressByLane[$__ln]['running'])){$progress=$progressByLane[$__ln];break;}
@@ -80592,6 +80637,22 @@ foreach($queue['entries'] as &$e){
     }
 }unset($e);
 $queue['profile_lanes']=['enabled'=>bslParallelProfileLanesEnabled(),'priority'=>'lane_1_no_detail','workers'=>$workerLiveByLane,'progress'=>$progressByLane];
+if(!empty($_GET['summary'])){
+    $rows=[];$counts=[];$laneCounts=[];
+    foreach((array)($queue['entries']??[]) as $row){
+        if(!is_array($row))continue;$status=(string)($row['status']??'unknown');$lane=bslRowLane($row);
+        $counts[$status]=($counts[$status]??0)+1;$laneCounts[$lane][$status]=($laneCounts[$lane][$status]??0)+1;
+        if(!in_array($status,['running','waiting','paused'],true))continue;
+        $rows[]=['id'=>(string)($row['id']??''),'status'=>$status,'lane'=>$lane,
+            'profile_key'=>(string)($row['profile_key']??''),'profile_name'=>(string)($row['profile_name']??''),
+            'current'=>(int)($row['current']??0),'total'=>(int)($row['total']??0),
+            'created_at'=>(int)($row['created_at']??0),'updated_at'=>(int)($row['updated_at']??0),
+            'worker_owner'=>!empty($row['_worker_owner']),'worker_live'=>!empty($row['_worker_live'])];
+    }
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'counts'=>$counts,'lane_counts'=>$laneCounts,
+        'active_rows'=>$rows,'active_send'=>$queue['active_send'],'profile_lanes'=>$queue['profile_lanes']],
+        JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
+}
 echo json_encode($queue,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
@@ -101597,6 +101658,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.623', t:'🚦 بازیابی صف دو لین و حذف پیشرفت کاذب', items:[
+    'کران در نخستین ورود، progress مانده از ردیف تمام‌شده، ناموفق یا لغوشده را با قفل همان لین از حالت running خارج می‌کند؛ checkpoint و شمارنده‌ها برای گزارش حفظ می‌شوند.',
+    'توزیع دوره‌ای به تنظیم سلکتور وابسته نیست: در تساوی ابتدا لین ۲ و سپس لین ۱ پر می‌شود تا هیچ worker بیکار نماند و هر پروفایل فقط یک مالک داشته باشد.',
+    'خروجی summary سبک برای ممیزی دقیق ردیف‌های فعال، مالک worker و شمارش وضعیت هر لین اضافه شد.'
+  ]},
   {v:'10.622', t:'🎨 نگاشت تنوع‌های واقعی API باسلام', items:[
     'آرایهٔ variants پاسخ Core v4 همراه با variation ID، قیمت تومانی، موجودی و ترکیب ویژگی‌های تو‌در‌تو استخراج می‌شود.',
     'نام و مقدار property/value هر تنوع بدون تبدیل اشتباه آرایه به متن، در ساختار استاندارد پروفایل نگه‌داری می‌شود.'
