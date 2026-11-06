@@ -250,6 +250,7 @@ class Scraper_Auto_Shop_Plugin {
 		// Admin menu
 		add_action( 'admin_menu', array( __CLASS__, 'register_admin_menus' ) );
 		add_action( 'rest_api_init', array( __CLASS__, 'register_diagnostic_routes' ) );
+		add_action( 'rest_api_init', array( __CLASS__, 'register_wc_cleanup_routes' ) );
 		add_action( 'init', array( __CLASS__, 'github_update_schedule' ) );
 		add_action( self::GITHUB_UPDATE_HOOK, array( __CLASS__, 'github_update_run' ) );
 		add_action( 'admin_post_amphp_github_update', array( __CLASS__, 'github_update_admin_save' ) );
@@ -687,45 +688,95 @@ class Scraper_Auto_Shop_Plugin {
 		return $counts;
 	}
 
+
+	/** Authentication is performed by WordPress REST (cookie nonce or Application Password). */
+	public static function register_wc_cleanup_routes() {
+		$permission = array( __CLASS__, 'wc_cleanup_rest_permission' );
+		register_rest_route( 'amphp/v1', '/wc-cleanup/products', array(
+			'methods' => 'GET', 'permission_callback' => $permission,
+			'callback' => array( __CLASS__, 'rest_wc_cleanup_list' ),
+			'args' => array( 'before' => array( 'type' => 'integer', 'minimum' => 0, 'default' => 0 ) ),
+		) );
+		register_rest_route( 'amphp/v1', '/wc-cleanup/start', array(
+			'methods' => 'POST', 'permission_callback' => $permission,
+			'callback' => array( __CLASS__, 'rest_wc_cleanup_start' ),
+			'args' => array( 'confirm' => array( 'type' => 'string', 'required' => true ) ),
+		) );
+		register_rest_route( 'amphp/v1', '/wc-cleanup/batch', array(
+			'methods' => 'POST', 'permission_callback' => $permission,
+			'callback' => array( __CLASS__, 'rest_wc_cleanup_batch' ),
+			'args' => array( 'job' => array( 'type' => 'string', 'required' => true ) ),
+		) );
+	}
+
+	public static function wc_cleanup_rest_permission() {
+		if ( ! is_user_logged_in() || ! current_user_can( 'manage_options' ) || ! current_user_can( 'delete_products' ) ) {
+			return new WP_Error( 'amphp_cleanup_forbidden', 'دسترسی کافی ندارید.', array( 'status' => rest_authorization_required_code() ) );
+		}
+		if ( ! class_exists( 'WooCommerce' ) ) { return new WP_Error( 'amphp_cleanup_woo_missing', 'ووکامرس فعال نیست.', array( 'status' => 400 ) ); }
+		return true;
+	}
+
+	public static function rest_wc_cleanup_list( $request ) { return self::wc_cleanup_list( $request->get_param( 'before' ) ); }
+	public static function rest_wc_cleanup_start( $request ) { return self::wc_cleanup_start( $request->get_param( 'confirm' ) ); }
+	public static function rest_wc_cleanup_batch( $request ) { return self::wc_cleanup_batch( $request->get_param( 'job' ) ); }
+
+	private static function wc_cleanup_ajax_result( $result ) {
+		if ( is_wp_error( $result ) ) {
+			$data = $result->get_error_data();
+			wp_send_json_error( array( 'message' => $result->get_error_message(), 'processed' => (int) ( $data['processed'] ?? 0 ) ), (int) ( $data['status'] ?? 500 ) );
+		}
+		wp_send_json_success( $result );
+	}
+
 	public static function ajax_wc_cleanup_list() {
 		self::wc_cleanup_authorize();
+		self::wc_cleanup_ajax_result( self::wc_cleanup_list( $_POST['before'] ?? 0 ) );
+	}
+	public static function ajax_wc_cleanup_start() {
+		self::wc_cleanup_authorize();
+		self::wc_cleanup_ajax_result( self::wc_cleanup_start( wp_unslash( $_POST['confirm'] ?? '' ) ) );
+	}
+	public static function ajax_wc_cleanup_batch() {
+		self::wc_cleanup_authorize();
+		self::wc_cleanup_ajax_result( self::wc_cleanup_batch( wp_unslash( $_POST['job'] ?? '' ) ) );
+	}
+
+	private static function wc_cleanup_list( $before ) {
 		global $wpdb;
-		$before = max( 0, (int) ( $_POST['before'] ?? 0 ) );
+		$before = max( 0, (int) $before );
 		$filter = $before ? $wpdb->prepare( ' AND ID < %d', $before ) : '';
 		$rows = $wpdb->get_results( "SELECT ID, post_title, post_status FROM {$wpdb->posts} WHERE post_type='product' AND post_status <> 'trash'{$filter} ORDER BY ID DESC LIMIT 51", ARRAY_A );
 		$counts = self::wc_cleanup_counts();
-		if ( ! is_array( $rows ) || null === $counts ) { wp_send_json_error( array( 'message' => 'خطا در خواندن محصولات.' ), 500 ); }
+		if ( ! is_array( $rows ) || null === $counts ) { return new WP_Error( 'amphp_cleanup_read_failed', 'خطا در خواندن محصولات.', array( 'status' => 500 ) ); }
 		$has_more = count( $rows ) > 50; $rows = array_slice( $rows, 0, 50 ); $products = array();
 		foreach ( $rows as $row ) { $products[] = array( 'id' => (int) $row['ID'], 'title' => (string) $row['post_title'], 'status' => (string) $row['post_status'] ); }
-		wp_send_json_success( array_merge( $counts, array( 'products' => $products, 'next_cursor' => $has_more ? (int) end( $rows )['ID'] : 0 ) ) );
+		return array_merge( $counts, array( 'products' => $products, 'next_cursor' => $has_more ? (int) end( $rows )['ID'] : 0 ) );
 	}
 
-	public static function ajax_wc_cleanup_start() {
-		self::wc_cleanup_authorize();
-		if ( ! defined( 'EMPTY_TRASH_DAYS' ) || (int) EMPTY_TRASH_DAYS <= 0 ) { wp_send_json_error( array( 'message' => 'زباله‌دان وردپرس غیرفعال است؛ برای جلوگیری از حذف دائمی عملیات متوقف شد.' ), 400 ); }
-		if ( (string) wp_unslash( $_POST['confirm'] ?? '' ) !== 'حذف همه' ) { wp_send_json_error( array( 'message' => 'عبارت تأیید معتبر نیست.' ), 400 ); }
+	private static function wc_cleanup_start( $confirm ) {
+		if ( ! defined( 'EMPTY_TRASH_DAYS' ) || (int) EMPTY_TRASH_DAYS <= 0 ) { return new WP_Error( 'amphp_cleanup_trash_disabled', 'زباله‌دان وردپرس غیرفعال است؛ برای جلوگیری از حذف دائمی عملیات متوقف شد.', array( 'status' => 400 ) ); }
+		if ( ! is_string( $confirm ) || $confirm !== 'حذف همه' ) { return new WP_Error( 'amphp_cleanup_confirmation', 'عبارت تأیید معتبر نیست.', array( 'status' => 400 ) ); }
 		global $wpdb;
 		$max = $wpdb->get_var( "SELECT MAX(ID) FROM {$wpdb->posts} WHERE post_type IN ('product','product_variation') AND post_status <> 'trash'" );
-		if ( ! empty( $wpdb->last_error ) ) { wp_send_json_error( array( 'message' => 'خطا در خواندن محصولات.' ), 500 ); }
+		if ( ! empty( $wpdb->last_error ) ) { return new WP_Error( 'amphp_cleanup_read_failed', 'خطا در خواندن محصولات.', array( 'status' => 500 ) ); }
 		$max = (int) $max;
 		$counts = self::wc_cleanup_counts( $max );
-		if ( null === $counts ) { wp_send_json_error( array( 'message' => 'خطا در شمارش محصولات.' ), 500 ); }
+		if ( null === $counts ) { return new WP_Error( 'amphp_cleanup_count_failed', 'خطا در شمارش محصولات.', array( 'status' => 500 ) ); }
 		$token = wp_generate_password( 32, false, false );
-		set_transient( 'amphp_wc_cleanup_' . $token, array( 'user' => get_current_user_id(), 'max' => $max ), 2 * HOUR_IN_SECONDS );
-		wp_send_json_success( array_merge( $counts, array( 'job' => $token ) ) );
+		if ( ! set_transient( 'amphp_wc_cleanup_' . $token, array( 'user' => get_current_user_id(), 'max' => $max ), 2 * HOUR_IN_SECONDS ) ) { return new WP_Error( 'amphp_cleanup_job_failed', 'ثبت عملیات ناموفق بود.', array( 'status' => 500 ) ); }
+		return array_merge( $counts, array( 'job' => $token ) );
 	}
 
-	public static function ajax_wc_cleanup_batch() {
-		self::wc_cleanup_authorize();
-		if ( ! defined( 'EMPTY_TRASH_DAYS' ) || (int) EMPTY_TRASH_DAYS <= 0 ) { wp_send_json_error( array( 'message' => 'زباله‌دان غیرفعال است؛ عملیات متوقف شد.' ), 400 ); }
-		$token = (string) ( $_POST['job'] ?? '' );
-		if ( ! preg_match( '/^[a-zA-Z0-9]{32}$/D', $token ) ) { wp_send_json_error( array( 'message' => 'شناسه عملیات نامعتبر است.' ), 400 ); }
+	private static function wc_cleanup_batch( $token ) {
+		if ( ! defined( 'EMPTY_TRASH_DAYS' ) || (int) EMPTY_TRASH_DAYS <= 0 ) { return new WP_Error( 'amphp_cleanup_trash_disabled', 'زباله‌دان غیرفعال است؛ عملیات متوقف شد.', array( 'status' => 400 ) ); }
+		if ( ! is_string( $token ) || ! preg_match( '/^[a-zA-Z0-9]{32}$/D', $token ) ) { return new WP_Error( 'amphp_cleanup_bad_job', 'شناسه عملیات نامعتبر است.', array( 'status' => 400 ) ); }
 		$job = get_transient( 'amphp_wc_cleanup_' . $token );
-		if ( ! is_array( $job ) || (int) ( $job['user'] ?? 0 ) !== get_current_user_id() ) { wp_send_json_error( array( 'message' => 'عملیات منقضی شده یا متعلق به شما نیست؛ دوباره شروع کنید.' ), 403 ); }
+		if ( ! is_array( $job ) || (int) ( $job['user'] ?? 0 ) !== get_current_user_id() ) { return new WP_Error( 'amphp_cleanup_expired', 'عملیات منقضی شده یا متعلق به شما نیست؛ دوباره شروع کنید.', array( 'status' => 403 ) ); }
 		$lock = 'amphp_wc_cleanup_batch_lock';
 		$previous = (int) get_option( $lock, 0 );
 		if ( $previous && $previous < time() - 300 ) { delete_option( $lock ); }
-		if ( ! add_option( $lock, time(), '', false ) ) { wp_send_json_error( array( 'message' => 'عملیات دیگری در حال اجراست؛ کمی بعد دوباره تلاش کنید.' ), 409 ); }
+		if ( ! add_option( $lock, time(), '', false ) ) { return new WP_Error( 'amphp_cleanup_busy', 'عملیات دیگری در حال اجراست؛ کمی بعد دوباره تلاش کنید.', array( 'status' => 409 ) ); }
 		$processed = 0; $error = ''; $done = false;
 		try {
 			global $wpdb;
@@ -743,9 +794,9 @@ class Scraper_Auto_Shop_Plugin {
 			}
 		} catch ( \Throwable $e ) { $error = 'خطا هنگام انتقال دسته؛ لاگ سرور را بررسی کنید.'; }
 		finally { delete_option( $lock ); }
-		if ( $error !== '' ) { wp_send_json_error( array( 'message' => $error, 'processed' => $processed ), 500 ); }
+		if ( $error !== '' ) { return new WP_Error( 'amphp_cleanup_batch_failed', $error, array( 'status' => 500, 'processed' => $processed ) ); }
 		if ( $done ) { delete_transient( 'amphp_wc_cleanup_' . $token ); }
-		wp_send_json_success( array( 'processed' => $processed, 'done' => $done ) );
+		return array( 'processed' => $processed, 'done' => $done );
 	}
 
 
