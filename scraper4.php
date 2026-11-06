@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.623';
+const APP_VERSION = '10.624';
 
 
 if (!function_exists('str_starts_with')) {
@@ -49080,6 +49080,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"if(!empty(\$_GET['summary']))")!==false
         &&strpos($selfSrc,"{v:'10." . "623'")!==false
         &&version_compare(APP_VERSION,'10.623','>='));
+    $add('10.624','خلاصهٔ صف گزارش‌های حجیم هر محصول را حمل نمی‌کند',
+        strpos($selfSrc,"\$compactLanes=['enabled'")!==false
+        &&strpos($selfSrc,"'profile_lanes'=>\$compactLanes")!==false
+        &&strpos($selfSrc,"{v:'10." . "624'")!==false
+        &&version_compare(APP_VERSION,'10.624','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -80649,8 +80654,15 @@ if(!empty($_GET['summary'])){
             'created_at'=>(int)($row['created_at']??0),'updated_at'=>(int)($row['updated_at']??0),
             'worker_owner'=>!empty($row['_worker_owner']),'worker_live'=>!empty($row['_worker_live'])];
     }
+    $compactLanes=['enabled'=>!empty($queue['profile_lanes']['enabled']),'workers'=>$workerLiveByLane,'progress'=>[]];
+    foreach($progressByLane as $lane=>$laneProgress){
+        $compactLanes['progress'][$lane]=[];
+        foreach(['queue_id','running','done','paused','stale','orphaned_terminal','terminal_queue_status','current','total','phase','phase_label','last_progress_ts','reconciled_at'] as $key){
+            if(array_key_exists($key,$laneProgress))$compactLanes['progress'][$lane][$key]=$laneProgress[$key];
+        }
+    }
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'counts'=>$counts,'lane_counts'=>$laneCounts,
-        'active_rows'=>$rows,'active_send'=>$queue['active_send'],'profile_lanes'=>$queue['profile_lanes']],
+        'active_rows'=>$rows,'active_send'=>$queue['active_send'],'profile_lanes'=>$compactLanes],
         JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 echo json_encode($queue,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
@@ -101658,6 +101670,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.624', t:'🩺 خلاصهٔ سبک وضعیت لین‌ها', items:[
+    'ممیزی summary فقط مالک‌های فعال و فیلدهای ضروری progress را برمی‌گرداند و دیگر گزارش‌های چندمگابایتی محصول را حمل نمی‌کند.'
+  ]},
   {v:'10.623', t:'🚦 بازیابی صف دو لین و حذف پیشرفت کاذب', items:[
     'کران در نخستین ورود، progress مانده از ردیف تمام‌شده، ناموفق یا لغوشده را با قفل همان لین از حالت running خارج می‌کند؛ checkpoint و شمارنده‌ها برای گزارش حفظ می‌شوند.',
     'توزیع دوره‌ای به تنظیم سلکتور وابسته نیست: در تساوی ابتدا لین ۲ و سپس لین ۱ پر می‌شود تا هیچ worker بیکار نماند و هر پروفایل فقط یک مالک داشته باشد.',
