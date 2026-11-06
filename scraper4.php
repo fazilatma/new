@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.625';
+const APP_VERSION = '10.626';
 
 
 if (!function_exists('str_starts_with')) {
@@ -49113,6 +49113,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"jina_error_before_apix")!==false
         &&strpos($selfSrc,"{v:'10." . "625'")!==false
         &&version_compare(APP_VERSION,'10.625','>='));
+    $add('10.626','صف محلی دسته‌بندی پشت شکست فهرست دوردست متوقف نمی‌شود',
+        strpos($selfSrc,"\$remoteFetchIncomplete=!empty(\$partial['partial'])")!==false
+        &&strpos($selfSrc,"\$hasMoreSlices=true")!==false
+        &&strpos($selfSrc,"{v:'10." . "626'")!==false
+        &&version_compare(APP_VERSION,'10.626','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -86875,7 +86880,8 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         } else {
             $fetchMeta = ['complete' => true, 'partial' => false, 'stopped' => false, 'page' => $nextScanPage];
         }
-        if (!empty($pendingAiItems) && !$hasMoreSlices) {
+        if (!empty($pendingAiItems) && (!$hasMoreSlices || empty($products))) {
+            $remoteFetchIncomplete=!empty($partial['partial'])||(!empty($fetchMeta)&&empty($fetchMeta['complete']));
             $addedPending = 0;
             foreach ($pendingAiItems as $pq) {
                 if (!is_array($pq)) continue;
@@ -86900,7 +86906,12 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 $addedPending++;
             }
             if ($addedPending > 0) {
-                catfixProgress(['log_add' => ['🤖 ' . aiFaNum($addedPending) . ' محصول کنارگذاشته‌شده از ارسال (پس از رد دسته‌های دستی) برای تصحیح دسته و ایجاد با هوش مصنوعی اضافه شد']]);
+                /* The local deferred queue is already a complete durable input.
+                   A temporary failure while listing remote rejected products
+                   must not prevent repairing these active-send failures. */
+                if($remoteFetchIncomplete){$partial=[];$fetchMeta=['complete'=>true,'partial'=>false,'stopped'=>false,'page'=>$nextScanPage];$hasMoreSlices=true;}
+                catfixProgress(['log_add' => ['🤖 ' . aiFaNum($addedPending) . ' محصول کنارگذاشته‌شده از ارسال (پس از رد دسته‌های دستی) برای تصحیح دسته و ایجاد با هوش مصنوعی اضافه شد'
+                    .($remoteFetchIncomplete?' · واکشی ردشده‌های دوردست معوق ماند و صف محلی اکنون پردازش می‌شود':'')]]);
             }
         }
         if ($maxLimit > 0 && count($products) > $maxLimit) {
@@ -101747,6 +101758,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.626', t:'🧠 ترمیم دسته‌های خطادار بدون وابستگی به فهرست دوردست', items:[
+    'محصولات محلیِ کنارگذاشته‌شده با خطای دسته‌بندی حتی هنگام شکست موقت دریافت فهرست محصولات ردشدهٔ باسلام فوراً با checkpoint خودشان پردازش می‌شوند.'
+  ]},
   {v:'10.625', t:'♾️ تداوم کار همهٔ صف‌ها و استفادهٔ همزمان از دو لین', items:[
     'اگر لین ۲ خالی و لین ۱ دارای چند پروفایل دوره‌ای باشد، یک ردیف waiting بدون کپی‌سازی و پس از بازسازی کامل جزئیات با کلید دقیق محصول به لین ۲ منتقل می‌شود.',
     'تحویل کران ردیف ارسال را با رسیدن cursor محصولات به total حذف نمی‌کند؛ فازهای ترمیم دسته، تصویر، تنوع و خطا تا status=done ادامه می‌یابند.',
