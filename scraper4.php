@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.626';
+const APP_VERSION = '10.627';
 
 
 if (!function_exists('str_starts_with')) {
@@ -21091,10 +21091,35 @@ function s4RecycleOutdatedExtractSlotProcesses(?string $expectedVer = null): arr
     }
     return $recycled;
 }
+/** A killed PHP request must not leave the updater visibly "checking" forever.
+ * Only reconcile after both updater flocks are proven free; an actual download
+ * is therefore never overwritten. The next ordinary tick may retry after its
+ * normal interval/backoff. */
+function s4CodeUpdateReconcileStaleState(int $staleSec=210):array{
+    if(!is_file(S4_CODE_UPDATE_STATE_FILE))return ['reconciled'=>false,'reason'=>'no_state'];
+    $state=@json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);
+    if(!is_array($state)||empty($state['checking']))return ['reconciled'=>false,'reason'=>'not_checking'];
+    $started=(int)($state['checked_at']??0);$age=$started>0?time()-$started:PHP_INT_MAX;
+    if($age<max(180,$staleSec))return ['reconciled'=>false,'reason'=>'within_download_window','age'=>$age];
+    $locks=[];
+    foreach([__DIR__.'/.scraper4-auto-update.lock',__DIR__.'/.scraper4-code-update.lock']as$file){
+        $fp=@fopen($file,'c');if(!$fp){foreach($locks as$h){@flock($h,LOCK_UN);@fclose($h);}return ['reconciled'=>false,'reason'=>'lock_open_failed'];}
+        if(!@flock($fp,LOCK_EX|LOCK_NB)){@fclose($fp);foreach($locks as$h){@flock($h,LOCK_UN);@fclose($h);}return ['reconciled'=>false,'reason'=>'update_still_running','age'=>$age];}
+        $locks[]=$fp;
+    }
+    try{
+        $disk=s4DiskCodeMeta();unset($state['checking']);$state['finished_at']=time();$state['ok']=false;$state['updated']=false;
+        $state['to_version']=$disk['version'];$state['sha']=$disk['sha'];$state['error']='stale_update_request_recovered';
+        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode($state,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+        return ['reconciled'=>true,'age'=>$age,'disk_version'=>$disk['version']];
+    }finally{foreach(array_reverse($locks)as$h){@flock($h,LOCK_UN);@fclose($h);}}
+}
+
 /** بدون deploy.php: هر پردازه حداکثر هر دو دقیقه branch ثابت را بررسی می‌کند.
  * flock قبل از شبکه گرفته می‌شود تا ده request همزمان سهمیه GitHub را نسوزانند. */
 function s4AutoCodeUpdateTick(bool $force=false):array{
     $now=time();$disk=s4DiskCodeMeta();$diskVer=$disk['version'];$diskSha=$disk['sha'];
+    $stateRecovery=s4CodeUpdateReconcileStaleState();
     $state=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$state=$j;}
     if(!empty($state['to_version'])&&(string)$state['to_version']!==$diskVer&&empty($state['checking'])){
         /* فایل روی دیسک بیرون از auto-updater (مثلاً توسط deploy.php روی برنچ دستی) عوض شده است؛
@@ -21143,10 +21168,10 @@ if(isset($_GET['code_update_sync_state'])){
 }
 if(isset($_GET['code_update_status'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');$cfg=vc_load();$wp=s4CodeUpdateAdminAuth();
-    $disk=s4DiskCodeMeta();
+    $disk=s4DiskCodeMeta();$autoRecovery=s4CodeUpdateReconcileStaleState();
     $auto=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$aj=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($aj))$auto=$aj;}
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'disk_version'=>$disk['version'],'disk_sha'=>$disk['sha'],'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
-        'auto_update'=>true,'auto_interval'=>S4_CODE_UPDATE_INTERVAL,'auto_endpoint'=>'?code_auto_update=1','auto_state'=>$auto,
+        'auto_update'=>true,'auto_interval'=>S4_CODE_UPDATE_INTERVAL,'auto_endpoint'=>'?code_auto_update=1','auto_state'=>$auto,'auto_state_recovery'=>$autoRecovery,
         'deploy_php_required'=>false,'source'=>S4_CODE_UPDATE_REPO.'@'.implode(',',vc_normalize_branches((array)($cfg['branches']??[]))).':'.S4_CODE_UPDATE_PATH,
         'branches'=>vc_normalize_branches((array)($cfg['branches']??[])),'pinned_branch'=>(string)($cfg['pinned_branch']??''),'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
         'nonce'=>!empty($wp['admin'])&&function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
@@ -34321,6 +34346,19 @@ function bslRecoverMissingQueueRowFromProgress(array $cn): array {
 
 function cronWatchdogs(array $cn): array {
     $results = ['watchdog' => []];
+    /* Reconcile the generic server worker before subsystem watchdogs. A dead
+       daemon can otherwise leave a durable job marked running forever and its
+       dedup key blocks every later Continue/cron request. Active flocks and
+       live PIDs are never touched. On exec-disabled hosts the recovered matrix
+       rows remain available to the web/cron segmented worker. */
+    if(function_exists('s4WorkerIsActive')&&!s4WorkerIsActive()){
+        $results['worker_lock_recovery']=s4WorkerRecoverStaleLockPath(180);
+        if(!s4WorkerIsActive()){
+            $results['worker_orphans_requeued']=(int)s4WorkerRecoverOrphanJobs((int)@getmypid());
+            $results['worker_restart']=s4SpawnPersistentWorker();
+        }
+    }
+    $results['update_state_recovery']=s4CodeUpdateReconcileStaleState();
     $orphanSend=bslRecoverMissingQueueRowFromProgress($cn);
     if(!empty($orphanSend['recovered']))$results['bsl_orphan_row_recovered']=$orphanSend;
     /* Reconcile Send-tab shop selection before any recovery. This also cleans
@@ -49118,6 +49156,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$hasMoreSlices=true")!==false
         &&strpos($selfSrc,"{v:'10." . "626'")!==false
         &&version_compare(APP_VERSION,'10.626','>='));
+    $add('10.627','ادامهٔ مستقیم و sweep سراسری ownerهای مرده',
+        strpos($selfSrc,'function s4CodeUpdateReconcileStaleState(int $staleSec=210):array')!==false
+        &&strpos($selfSrc,"'worker_orphans_requeued'")!==false
+        &&strpos($selfSrc,"if(!autoResume&&!confirm(msg))")===false
+        &&strpos($selfSrc,"stale.map((t,i)=>")===false
+        &&strpos($selfSrc,"{v:'10." . "627'")!==false
+        &&version_compare(APP_VERSION,'10.627','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -100021,7 +100066,7 @@ let syncPipeRows=[];const syncPipeExpanded=new Set();
 function syncPipelineToggle(key){if(syncPipeExpanded.has(key))syncPipeExpanded.delete(key);else syncPipeExpanded.add(key);syncPipelineRender();}
 function syncPipelineControl(key,action){
   const label=action==='stop'?'توقف این همگام‌سازی':'ادامهٔ این همگام‌سازی';
-  if(!confirm(label+'؟'))return;const fd=new FormData();fd.append('profile_key',key);fd.append('control',action);
+  if(action==='stop'&&!confirm(label+'؟'))return;const fd=new FormData();fd.append('profile_key',key);fd.append('control',action);
   fetch('?sync_pipeline_control=1',{method:'POST',body:fd,cache:'no-store'}).then(r=>r.json()).then(d=>{if(!d.ok){showToast(d.error||'عملیات ناموفق بود',1);return;}showToast(action==='stop'?'⏹ متوقف شد':'▶ ادامه در صف اجرا قرار گرفت');syncPipelineRender();}).catch(()=>showToast('خطا در کنترل همگام‌سازی',1));
 }
 function syncPipelineClearDone(){
@@ -100658,10 +100703,6 @@ function clearExtractQueueDone(){
 
 function resumeExtractQueue(profileKey, qid, resumePage, autoResume){
     resumePage = resumePage||0;
-    const msg = resumePage>0
-      ? ('ادامهٔ استخراج از صفحه '+resumePage+'؟\n(یک صفحه قبل از جایی که گیر کرده — از اول شروع نمی‌شود)')
-      : 'ادامهٔ استخراج این پروفایل از آخرین نقطه؟';
-    if(!autoResume&&!confirm(msg))return;
     showToast((autoResume?'♻️ ادامهٔ خودکار از ':'▶️ در حال ادامه از ')+(resumePage?('صفحه '+resumePage):'نقطهٔ ذخیره')+'…');
     const fd=new FormData();
     fd.append('action','extract_resume');
@@ -101758,6 +101799,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.627', t:'🛡 ادامهٔ مستقیم و بازیابی سراسری عملیات سرور', items:[
+    'دکمه‌های ادامه/ازسرگیری بدون پرسش بله یا خیر مستقیماً همان checkpoint را اجرا می‌کنند.',
+    'کران، worker مرده و jobهای ownerless را با اثبات آزادبودن قفل دوباره صف می‌کند و روی هاست بدون exec آن‌ها را برای worker وب نگه می‌دارد.',
+    'وضعیت checking رهاشدهٔ به‌روزرسان پس از پایان پنجرهٔ دانلود و اثبات آزادبودن هر دو قفل خودکار بسته می‌شود.'
+  ]},
   {v:'10.626', t:'🧠 ترمیم دسته‌های خطادار بدون وابستگی به فهرست دوردست', items:[
     'محصولات محلیِ کنارگذاشته‌شده با خطای دسته‌بندی حتی هنگام شکست موقت دریافت فهرست محصولات ردشدهٔ باسلام فوراً با checkpoint خودشان پردازش می‌شوند.'
   ]},
@@ -115791,8 +115837,6 @@ function tmResumeAll(){
   if(tmBusy)return;
   const stale=((tmData&&tmData.tasks)||[]).filter(t=>t.state==='stale'&&t.resumable&&t.bulk_resumable!==false);
   if(!stale.length){showToast('کارِ رهاشده‌ای برای ادامه نیست');return;}
-  if(!confirm(toFa(stale.length)+' کارِ گیرکرده به ترتیبِ اولویت دوباره شروع شوند؟\n'
-     +stale.map((t,i)=>'  '+toFa(i+1)+'. '+t.title).join('\n')))return;
   tmBusy=true;
   showToast('⏳ در حال راه‌اندازی '+toFa(stale.length)+' کار...');
   fetch('?tasks_resume_all=1&only=stale').then(r=>r.json()).then(d=>{
@@ -115808,14 +115852,6 @@ function tmResumeAll(){
 /* v10.23 (۳۶ج): ادامه/اجرای دوبارهٔ یک کار از داخلِ مدیر وظیفه */
 function tmResume(key){
   if(tmBusy)return;
-  const t=((tmData&&tmData.tasks)||[]).find(x=>x.key===key);
-  const isStale=!!(t&&t.state==='stale');
-  const q=isStale
-    ? (t&&t.profile_task
-      ? 'ادامهٔ اجرای پروفایل «'+((t&&t.profile_name)||((t&&t.title)||key))+'» از checkpoint خودش انجام شود؟\nفقط همین pipeline/صف ادامه می‌یابد.'
-      : 'کارِ گیرکردهٔ «'+((t&&t.title)||key)+'» دوباره شروع شود؟\nقفل و ردِ اجرای قبلی پاک می‌شود.')
-    : 'کارِ «'+((t&&t.title)||key)+'» با تنظیماتِ اجرای قبلی دوباره اجرا شود؟';
-  if(!confirm(q))return;
   tmBusy=true;
   fetch('?tasks_resume=1&key='+encodeURIComponent(key)).then(r=>r.json()).then(d=>{
     tmBusy=false;
@@ -123434,7 +123470,6 @@ function p2ApplyLearned(){
       showToast('برای هیچ‌کدام دستهٔ آموخته‌ای نیست — چند مورد را دستی اصلاح کنید',1);
       return;
     }
-    if(!confirm('بر اساس انتخاب‌های قبلی شما، '+m.length+' محصول قابل اصلاح است.\n\nادامه؟'))return;
     if(btn){btn.disabled=true;}
     let i=0;
     (function next(){
