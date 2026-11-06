@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.624';
+const APP_VERSION = '10.625';
 
 
 if (!function_exists('str_starts_with')) {
@@ -17714,6 +17714,13 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
             $apiFallback['jina_reader_trace'] = $trace;
             $apiFallback['jina_reader_modes'] = $jinaModes;
             return $apiFallback;
+        }
+        /* Do not hide the actionable APiX failure behind Jina's permanent 451.
+           The scheduler can back off/retry 429 and transient 5xx, but 451 made
+           a healthy SnappShop profile look permanently unreachable. */
+        if((int)($apiFallback['code']??0)>0){
+            $apiFallback['jina_reader_trace']=$trace;$apiFallback['jina_reader_modes']=$jinaModes;
+            $apiFallback['jina_error_before_apix']=(string)($last['error']??'');return $apiFallback;
         }
     }
     if ($firstText !== null) {
@@ -41173,6 +41180,19 @@ if(isset($_POST['tasks_cpu_guard'])){
     echo json_encode(['ok'=>$saved,'cpu_guard'=>s4CpuGuardSettings($cnCpu)],JSON_UNESCAPED_UNICODE);exit;
 }
 
+if(isset($_GET['continuity_enable'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $cnContinuity=loadConnections();
+    $cnContinuity['auto_resume_all_cron']=true;$cnContinuity['stall_watchdog']=true;$cnContinuity['auto_resume']=true;
+    $cnContinuity['internal_cron_enabled']=true;$cnContinuity['internal_cron_sec']=max(30,min(60,(int)($cnContinuity['internal_cron_sec']??30)));
+    $catCfg=is_array($cnContinuity['catfix_auto']??null)?$cnContinuity['catfix_auto']:[];
+    $catCfg['enabled']=true;$catCfg['interval_h']=1;$catCfg['all_vendors']=true;$catCfg['use_learn']=true;
+    $cnContinuity['catfix_auto']=$catCfg;$savedContinuity=saveConnections($cnContinuity);
+    echo json_encode(['ok'=>$savedContinuity,'version'=>APP_VERSION,'auto_resume_all_cron'=>true,
+        'stall_watchdog'=>true,'auto_resume'=>true,'internal_cron_sec'=>$cnContinuity['internal_cron_sec'],
+        'catfix_auto'=>$catCfg],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+
 if (isset($_POST['tasks_auto_resume_toggle']) || isset($_GET['tasks_auto_resume_toggle'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $cnT = loadConnections();
@@ -49085,6 +49105,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'profile_lanes'=>\$compactLanes")!==false
         &&strpos($selfSrc,"{v:'10." . "624'")!==false
         &&version_compare(APP_VERSION,'10.624','>='));
+    $add('10.625','دو لین و فازهای پس از محصول بدون بیکاری ادامه می‌یابند',
+        strpos($selfSrc,'function bslRebalanceWaitingProfileToDetail')!==false
+        &&strpos($selfSrc,"'lane_rebalanced_from']='fast'")!==false
+        &&strpos($selfSrc,"isset(\$_GET['continuity_enable'])")!==false
+        &&strpos($selfSrc,"status=done is the sole durable completion signal")!==false
+        &&strpos($selfSrc,"jina_error_before_apix")!==false
+        &&strpos($selfSrc,"{v:'10." . "625'")!==false
+        &&version_compare(APP_VERSION,'10.625','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -66219,7 +66247,10 @@ function queueCronHandoffPrepare(): ?array {
             $q=json_decode((string)@file_get_contents($qFile),true);$entry=null;
             foreach((array)($q['entries']??[])as $e)if(is_array($e)&&(string)($e['id']??'')===$qid){$entry=$e;break;}
             $status=(string)($entry['status']??'');$total=(int)($entry['total']??0);$current=(int)($entry['current']??0);
-            if(!$entry||$status==='done'||($total>0&&$current>=$total)){unset($all[$which]);continue;}
+            /* current==total closes only the product loop. Category, image,
+               variant and failed-item repair phases may still own this row;
+               status=done is the sole durable completion signal. */
+            if(!$entry||in_array($status,['done','failed','cancelled'],true)){unset($all[$which]);continue;}
             if(queueHasExplicitUserStop($which,$qid)){unset($all[$which]);continue;}
             $probe=queueBackendLock($which);if(!$probe)continue;queueBackendUnlock($probe);
             $get=is_array($h['get']??null)?$h['get']:[];$post=is_array($h['post']??null)?$h['post']:[];
@@ -79951,6 +79982,51 @@ function bslPeriodicBalancedLane(array $queue,array $profile,string $profileKey)
     $fast=count($active['fast']);$detail=count($active['detail']);$lane=$detail<=$fast?'detail':'fast';
     return ['lane'=>$lane,'existing'=>null,'eligible_detail'=>$configuredDetail,'detail_summary'=>$summary,'loads'=>['fast'=>$fast,'detail'=>$detail]];
 }
+/** Keep both send workers useful when older releases accumulated every
+ * periodic row in Lane 1. A waiting periodic row is moved—not copied—to Lane 2
+ * only after its stripped payload is losslessly rehydrated from the current
+ * profile snapshot by exact product key. Lane 1 always retains another profile. */
+function bslRebalanceWaitingProfileToDetail(array $queue): array {
+    $active=['fast'=>[],'detail'=>[]];
+    foreach((array)($queue['entries']??[]) as $row){
+        if(!is_array($row)||!in_array((string)($row['status']??''),['running','waiting','paused'],true))continue;
+        $lane=bslRowLane($row);if(isset($active[$lane]))$active[$lane][]=$row;
+    }
+    if($active['detail'])return ['changed'=>false,'reason'=>'detail_not_idle'];
+    $fastProfiles=[];foreach($active['fast'] as $row){$pk=trim((string)($row['profile_key']??''));if($pk!=='')$fastProfiles[$pk]=true;}
+    if(count($fastProfiles)<2)return ['changed'=>false,'reason'=>'lane1_needs_work'];
+    $pick=null;
+    foreach($active['fast'] as $row){
+        if((string)($row['status']??'')!=='waiting'||empty($row['auto_sync'])||queueHasExplicitUserStop('bsl',(string)($row['id']??'')))continue;
+        if((int)($row['current']??0)>0)continue;$pick=$row;break;
+    }
+    if(!$pick)return ['changed'=>false,'reason'=>'no_safe_periodic_waiter'];
+    $pk=trim((string)($pick['profile_key']??''));$qid=(string)($pick['id']??'');$file=(string)($pick['products_file']??'');
+    if($pk===''||$qid===''||$file===''||!is_file($file))return ['changed'=>false,'reason'=>'missing_payload'];
+    $queued=json_decode((string)@file_get_contents($file),true);$profile=bslLoadSingleProfileSnapshot($pk);
+    if(!is_array($queued)||!$queued||!is_array($profile))return ['changed'=>false,'reason'=>'profile_or_payload_unavailable'];
+    $full=profileOrderedProducts($profile,null,true);$byKey=[];
+    foreach($full as $product){$key=trim((string)($product['key']??''));if($key!==''&&!isset($byKey[$key]))$byKey[$key]=$product;}
+    $rehydrated=[];foreach($queued as $product){$key=trim((string)($product['key']??''));if($key===''||!isset($byKey[$key]))return ['changed'=>false,'reason'=>'key_mismatch','queue_id'=>$qid];$rehydrated[]=$byKey[$key];}
+    if(count($rehydrated)!==count($queued))return ['changed'=>false,'reason'=>'count_mismatch','queue_id'=>$qid];
+    $detailLock=@fopen(bslLaneLockFile('detail'),'c');$detailFree=is_resource($detailLock)&&@flock($detailLock,LOCK_EX|LOCK_NB);
+    if(!$detailFree){if(is_resource($detailLock))@fclose($detailLock);return ['changed'=>false,'reason'=>'detail_lock_held'];}
+    $mutex=@fopen(BSL_QUEUE_MUTEX_FILE,'c');if(!$mutex||!@flock($mutex,LOCK_EX)){if($mutex)@fclose($mutex);@flock($detailLock,LOCK_UN);@fclose($detailLock);return ['changed'=>false,'reason'=>'queue_lock'];}
+    $changed=false;$reason='row_changed';
+    try{
+        $disk=json_decode((string)@file_get_contents(BSL_QUEUE_FILE),true);if(!is_array($disk['entries']??null)){$reason='queue_unavailable';return ['changed'=>false,'reason'=>$reason];}
+        foreach($disk['entries'] as $row)if(is_array($row)&&bslRowLane($row)==='detail'&&in_array((string)($row['status']??''),['running','waiting','paused'],true)){$reason='detail_claimed';return ['changed'=>false,'reason'=>$reason];}
+        $idx=null;foreach($disk['entries'] as $i=>$row)if(is_array($row)&&(string)($row['id']??'')===$qid){$idx=$i;break;}
+        if($idx===null||(string)($disk['entries'][$idx]['status']??'')!=='waiting'||bslRowLane($disk['entries'][$idx])!=='fast')return ['changed'=>false,'reason'=>'row_changed'];
+        if(!sendQueueAtomicWrite($file,$rehydrated))return ['changed'=>false,'reason'=>'payload_write'];
+        $disk['entries'][$idx]['lane']='detail';$disk['entries'][$idx]['with_details']=true;
+        $disk['entries'][$idx]['detail_summary']=extractProfileDetailSummary($profile);
+        $disk['entries'][$idx]['lane_rebalanced_at']=time();$disk['entries'][$idx]['lane_rebalanced_from']='fast';
+        if(!sendQueueAtomicWrite(BSL_QUEUE_FILE,$disk)){sendQueueAtomicWrite($file,$queued);return ['changed'=>false,'reason'=>'queue_write'];}
+        $changed=true;$reason='moved';
+    }finally{@flock($mutex,LOCK_UN);@fclose($mutex);@flock($detailLock,LOCK_UN);@fclose($detailLock);}
+    return ['changed'=>$changed,'reason'=>$reason,'queue_id'=>$qid,'profile_key'=>$pk,'products'=>count($rehydrated)];
+}
 /** With a free lane flock, no sender can legitimately own a running row.
  * Recover every orphan (and non-user pause) to waiting in one sweep so the
  * lane worker can drain the complete backlog in queue order. */
@@ -80014,7 +80090,8 @@ function bslCronPumpProfileLanes(): array {
     $gate=@fopen(__DIR__.'/.bsl-lane-dispatch.lock','c');
     if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['enabled'=>true,'busy'=>true,'stale_progress'=>$staleProgress];}
     $queue=bslReadQueue();$recovered=bslRecoverOrphanedLaneRows($queue);
-    $now=time();$out=['enabled'=>true,'at'=>$now,'recovered'=>$recovered,'stale_progress'=>$staleProgress,'lanes'=>[]];
+    $rebalanced=bslRebalanceWaitingProfileToDetail($queue);if(!empty($rebalanced['changed']))$queue=bslReadQueue();
+    $now=time();$out=['enabled'=>true,'at'=>$now,'recovered'=>$recovered,'rebalanced'=>$rebalanced,'stale_progress'=>$staleProgress,'lanes'=>[]];
     foreach(['fast','detail'] as $lane){
         $row=null;foreach((array)($queue['entries']??[]) as $candidate){
             if(!is_array($candidate)||bslRowLane($candidate)!==$lane||!in_array((string)($candidate['status']??''),['running','waiting'],true))continue;
@@ -101670,6 +101747,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.625', t:'♾️ تداوم کار همهٔ صف‌ها و استفادهٔ همزمان از دو لین', items:[
+    'اگر لین ۲ خالی و لین ۱ دارای چند پروفایل دوره‌ای باشد، یک ردیف waiting بدون کپی‌سازی و پس از بازسازی کامل جزئیات با کلید دقیق محصول به لین ۲ منتقل می‌شود.',
+    'تحویل کران ردیف ارسال را با رسیدن cursor محصولات به total حذف نمی‌کند؛ فازهای ترمیم دسته، تصویر، تنوع و خطا تا status=done ادامه می‌یابند.',
+    'حالت تداوم، ادامهٔ همهٔ کارها، watchdog، cron داخلی و تصحیح ساعتی دسته‌های معوق را یکجا فعال می‌کند.',
+    'خطای واقعی APiX اسنپ‌شاپ دیگر پشت HTTP 451 دائمی Jina پنهان نمی‌شود و 429/5xx با سیاست retry صحیح ادامه می‌یابد.'
+  ]},
   {v:'10.624', t:'🩺 خلاصهٔ سبک وضعیت لین‌ها', items:[
     'ممیزی summary فقط مالک‌های فعال و فیلدهای ضروری progress را برمی‌گرداند و دیگر گزارش‌های چندمگابایتی محصول را حمل نمی‌کند.'
   ]},
