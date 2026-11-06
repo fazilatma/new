@@ -1,0 +1,18 @@
+import { Window } from 'happy-dom';
+import fs from 'node:fs';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
+const dir = path.dirname(fileURLToPath(import.meta.url)), root=path.resolve(dir,'..');
+const stable='sp_12345678901234567890123456789012';
+const w=new Window({url:'https://example.test/?product='+stable,width:900,height:800});
+w.document.write('<!doctype html><html><body><div id="amphp-storefront-root"></div></body></html>');
+w.matchMedia=()=>({matches:false,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}});w.requestAnimationFrame=fn=>setTimeout(fn,0);w.scrollTo=()=>{};
+w.eval(fs.readFileSync(path.join(dir,'boot-sample.js'),'utf8'));
+const sample=w.AMPHP_STOREFRONT.products[0];w.AMPHP_STOREFRONT.products=[{...sample,id:'legacy-hash',stable_id:stable,title:'محصول تست لینک ترب'}];w.AMPHP_STOREFRONT.settings.enable_ai_product_images=false;
+w.fetch=async()=>({ok:false,json:async()=>({})});
+w.eval(fs.readFileSync(path.join(root,'asset/js/storefront/storefront.js'),'utf8'));
+await new Promise(r=>setTimeout(r,600));
+assert.ok(w.document.body.textContent.includes('محصول تست لینک ترب'),'Stable feed URL opens the profile product');
+assert.ok(w.document.querySelector('.sf-pdp') || w.document.querySelector('[class*="product-page"]') || w.document.querySelector('[class*="pdp"]'),'Product detail is opened, not just catalog card');
+console.log('Torob stable product link smoke test passed');w.happyDOM.abort();

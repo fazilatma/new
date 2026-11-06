@@ -2614,7 +2614,7 @@ function StoreApp({ boot }) {
       const u = new URL(window.location.href);
       const pid = u.searchParams.get('product');
       if (!pid || !products.length) return;
-      const found = products.find((x) => String(x.id) === String(pid));
+      const found = products.find((x) => String(x.id) === String(pid) || (x.stable_id && String(x.stable_id) === String(pid)));
       if (found) setProductPage(found);
     } catch {}
   }, [products]);
@@ -2625,7 +2625,7 @@ function StoreApp({ boot }) {
         const u = new URL(window.location.href);
         const pid = u.searchParams.get('product');
         if (!pid) { setProductPage(null); return; }
-        const found = products.find((x) => String(x.id) === String(pid));
+        const found = products.find((x) => String(x.id) === String(pid) || (x.stable_id && String(x.stable_id) === String(pid)));
         if (found) setProductPage(found);
       } catch {}
     };
