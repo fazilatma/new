@@ -285,6 +285,9 @@ class Scraper_Auto_Shop_Plugin {
 
 		// AJAX actions for syncing to WooCommerce
 		add_action( 'wp_ajax_scraper_sync_to_woo', array( __CLASS__, 'ajax_sync_to_woo' ) );
+		add_action( 'wp_ajax_amphp_wc_cleanup_list', array( __CLASS__, 'ajax_wc_cleanup_list' ) );
+		add_action( 'wp_ajax_amphp_wc_cleanup_start', array( __CLASS__, 'ajax_wc_cleanup_start' ) );
+		add_action( 'wp_ajax_amphp_wc_cleanup_batch', array( __CLASS__, 'ajax_wc_cleanup_batch' ) );
 		add_action( 'wp_ajax_scraper_direct_sync_progress', array( __CLASS__, 'ajax_direct_sync_progress' ) );
 		add_action( 'wp_ajax_scraper_test_woo_direct', array( __CLASS__, 'ajax_test_woo_direct' ) );
 		add_action( 'wp_ajax_scraper_enable_woo_direct', array( __CLASS__, 'ajax_enable_woo_direct' ) );
@@ -627,6 +630,8 @@ class Scraper_Auto_Shop_Plugin {
 			array( __CLASS__, 'render_admin_settings_page' )
 		);
 
+		add_submenu_page( 'scraper-auto-shop', 'مدیریت سبک محصولات ووکامرس', 'مدیریت سبک محصولات ووکامرس', 'manage_options', 'amphp-wc-cleanup', array( __CLASS__, 'render_wc_cleanup_page' ) );
+
 		add_submenu_page(
 			'scraper-auto-shop',
 			'پنل کامل اسکرپر (scraper4)',
@@ -636,6 +641,113 @@ class Scraper_Auto_Shop_Plugin {
 			array( __CLASS__, 'render_scraper4_embed_page' )
 		);
 	}
+
+	/** Lightweight, independent admin screen; it never loads the scraper catalog. */
+	public static function render_wc_cleanup_page() {
+		if ( ! current_user_can( 'manage_options' ) ) { return; }
+		$nonce = wp_create_nonce( 'amphp_wc_cleanup' );
+		?>
+		<div class="wrap" dir="rtl" style="text-align:right;max-width:1100px">
+			<h1>مدیریت سبک محصولات ووکامرس</h1>
+			<p>فهرست بدون تصویر و در صفحه‌های ۵۰تایی نمایش داده می‌شود. این ابزار فقط محصولات ووکامرس و تنوع‌های آن‌ها را به زباله‌دان منتقل می‌کند؛ پروفایل‌ها، سفارش‌ها و فایل‌های رسانه را حذف نمی‌کند.</p>
+			<div class="notice notice-warning inline"><p><strong>قبل از اجرا نسخه پشتیبان کامل بگیرید.</strong> همهٔ وضعیت‌ها، از جمله پیش‌نویس و محصولات همگام‌شده، شامل می‌شوند. خرید و فید ترب ممکن است تحت تأثیر قرار گیرند. زباله‌دان وردپرس معمولاً پس از مدت تنظیم‌شده خودکار خالی می‌شود؛ اگر زباله‌دان غیرفعال باشد ابزار اجرا نمی‌شود. همگام‌سازی یا خرید ممکن است بعداً محصولات جدید بسازد.</p></div>
+			<p><button type="button" class="button" id="amphp-wc-list">نمایش سبک محصولات</button> <button type="button" class="button button-primary" id="amphp-wc-trash" style="background:#b91c1c;border-color:#991b1b">انتقال همه محصولات ووکامرس به زباله‌دان</button> <button type="button" class="button" id="amphp-wc-stop" disabled>توقف پس از دسته جاری</button></p>
+			<p id="amphp-wc-status" role="status" aria-live="polite"></p>
+			<table class="widefat striped" id="amphp-wc-table" hidden><thead><tr><th>شناسه</th><th>عنوان</th><th>وضعیت</th></tr></thead><tbody></tbody></table>
+			<p><button type="button" class="button" id="amphp-wc-more" hidden>صفحه بعد</button></p>
+		</div>
+		<script>
+		(function(){
+		 const url=<?php echo wp_json_encode( admin_url( 'admin-ajax.php' ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT ); ?>, nonce=<?php echo wp_json_encode( $nonce ); ?>;
+		 const list=document.getElementById('amphp-wc-list'), trash=document.getElementById('amphp-wc-trash'), stop=document.getElementById('amphp-wc-stop'), more=document.getElementById('amphp-wc-more'), table=document.getElementById('amphp-wc-table'), status=document.getElementById('amphp-wc-status');
+		 let cursor=0, paused=false, running=false;
+		 async function call(action,params={}) {const body=new URLSearchParams({action,nonce,...params});const response=await fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});let data;try{data=await response.json()}catch(e){throw new Error('پاسخ سرور نامعتبر است (HTTP '+response.status+').')}if(!response.ok || !data.success) throw new Error((data.data&&data.data.message)||'درخواست ناموفق بود (HTTP '+response.status+').');return data.data;}
+		 async function show(next){list.disabled=true;more.disabled=true;try{const data=await call('amphp_wc_cleanup_list',{before:next?String(cursor):'0'});cursor=data.next_cursor;table.hidden=false;let body=table.querySelector('tbody');body.replaceChildren();for(const p of data.products){const tr=document.createElement('tr');for(const value of [p.id,p.title,p.status]){const td=document.createElement('td');td.textContent=value;tr.appendChild(td)}body.appendChild(tr)}more.hidden=!cursor;status.textContent='محصولات خارج از زباله‌دان: '+data.products_count+'؛ تنوع‌ها: '+data.variations_count+'. فهرست، فقط محصولات اصلی را نشان می‌دهد.';}catch(e){status.textContent=e.message;}finally{list.disabled=running;more.disabled=running;}}
+		 list.addEventListener('click',()=>show(false));more.addEventListener('click',()=>show(true));
+		 stop.addEventListener('click',()=>{paused=true;stop.disabled=true;status.textContent='در حال توقف پس از دسته جاری…';});
+		 trash.addEventListener('click',async()=>{if(running)return;if(!confirm('همه محصولات ووکامرس، از جمله پیش‌نویس‌ها و تنوع‌ها، به زباله‌دان منتقل می‌شوند. از نسخه پشتیبان و اثر آن بر خرید مطمئن هستید؟'))return;const phrase=prompt('برای تأیید عبارت «حذف همه» را بنویسید:');if(phrase!=='حذف همه')return;running=true;paused=false;trash.disabled=list.disabled=more.disabled=true;stop.disabled=false;try{let job=await call('amphp_wc_cleanup_start',{confirm:phrase});let done=0;status.textContent='شروع شد. محدوده محصول اصلی: '+job.products_count+'؛ تنوع: '+job.variations_count+'.';while(!paused){let r=await call('amphp_wc_cleanup_batch',{job:job.job});done+=r.processed;status.textContent='پردازش مستقیم: '+done+' مورد. تنوع‌های فرزند ممکن است همراه محصول اصلی منتقل شوند.';if(r.done){status.textContent='پایان: تمام موارد واجد شرایط در محدوده شروع پردازش شدند. محصولات جدید پس از شروع شامل نبودند. کش سایت و فهرست ترب را بازخوانی کنید.';break;}await new Promise(resolve=>setTimeout(resolve,100));}if(paused)status.textContent='متوقف شد؛ موارد منتقل‌شده باقی می‌مانند. برای ادامه دوباره نمایش و اجرا را انتخاب کنید.';}catch(e){status.textContent='متوقف شد: '+e.message+' موارد منتقل‌شده باقی می‌مانند؛ پس از رفع مشکل می‌توانید دوباره اجرا کنید.';}finally{running=false;trash.disabled=list.disabled=false;more.disabled=false;stop.disabled=true;}});
+		})();
+		</script>
+		<?php
+	}
+
+	private static function wc_cleanup_authorize() {
+		if ( ! current_user_can( 'manage_options' ) || ! current_user_can( 'delete_products' ) ) { wp_send_json_error( array( 'message' => 'دسترسی کافی ندارید.' ), 403 ); }
+		check_ajax_referer( 'amphp_wc_cleanup', 'nonce' );
+		if ( ! class_exists( 'WooCommerce' ) ) { wp_send_json_error( array( 'message' => 'ووکامرس فعال نیست.' ), 400 ); }
+	}
+
+	private static function wc_cleanup_counts( $max_id = 0 ) {
+		global $wpdb;
+		$where = $max_id > 0 ? $wpdb->prepare( ' AND ID <= %d', $max_id ) : '';
+		$rows = $wpdb->get_results( "SELECT post_type, COUNT(*) AS n FROM {$wpdb->posts} WHERE post_type IN ('product','product_variation') AND post_status <> 'trash'{$where} GROUP BY post_type", ARRAY_A );
+		if ( ! is_array( $rows ) ) { return null; }
+		$counts = array( 'products_count' => 0, 'variations_count' => 0 );
+		foreach ( $rows as $row ) { if ( $row['post_type'] === 'product' ) { $counts['products_count'] = (int) $row['n']; } elseif ( $row['post_type'] === 'product_variation' ) { $counts['variations_count'] = (int) $row['n']; } }
+		return $counts;
+	}
+
+	public static function ajax_wc_cleanup_list() {
+		self::wc_cleanup_authorize();
+		global $wpdb;
+		$before = max( 0, (int) ( $_POST['before'] ?? 0 ) );
+		$filter = $before ? $wpdb->prepare( ' AND ID < %d', $before ) : '';
+		$rows = $wpdb->get_results( "SELECT ID, post_title, post_status FROM {$wpdb->posts} WHERE post_type='product' AND post_status <> 'trash'{$filter} ORDER BY ID DESC LIMIT 51", ARRAY_A );
+		$counts = self::wc_cleanup_counts();
+		if ( ! is_array( $rows ) || null === $counts ) { wp_send_json_error( array( 'message' => 'خطا در خواندن محصولات.' ), 500 ); }
+		$has_more = count( $rows ) > 50; $rows = array_slice( $rows, 0, 50 ); $products = array();
+		foreach ( $rows as $row ) { $products[] = array( 'id' => (int) $row['ID'], 'title' => (string) $row['post_title'], 'status' => (string) $row['post_status'] ); }
+		wp_send_json_success( array_merge( $counts, array( 'products' => $products, 'next_cursor' => $has_more ? (int) end( $rows )['ID'] : 0 ) ) );
+	}
+
+	public static function ajax_wc_cleanup_start() {
+		self::wc_cleanup_authorize();
+		if ( ! defined( 'EMPTY_TRASH_DAYS' ) || (int) EMPTY_TRASH_DAYS <= 0 ) { wp_send_json_error( array( 'message' => 'زباله‌دان وردپرس غیرفعال است؛ برای جلوگیری از حذف دائمی عملیات متوقف شد.' ), 400 ); }
+		if ( (string) wp_unslash( $_POST['confirm'] ?? '' ) !== 'حذف همه' ) { wp_send_json_error( array( 'message' => 'عبارت تأیید معتبر نیست.' ), 400 ); }
+		global $wpdb;
+		$max = $wpdb->get_var( "SELECT MAX(ID) FROM {$wpdb->posts} WHERE post_type IN ('product','product_variation') AND post_status <> 'trash'" );
+		if ( ! empty( $wpdb->last_error ) ) { wp_send_json_error( array( 'message' => 'خطا در خواندن محصولات.' ), 500 ); }
+		$max = (int) $max;
+		$counts = self::wc_cleanup_counts( $max );
+		if ( null === $counts ) { wp_send_json_error( array( 'message' => 'خطا در شمارش محصولات.' ), 500 ); }
+		$token = wp_generate_password( 32, false, false );
+		set_transient( 'amphp_wc_cleanup_' . $token, array( 'user' => get_current_user_id(), 'max' => $max ), 2 * HOUR_IN_SECONDS );
+		wp_send_json_success( array_merge( $counts, array( 'job' => $token ) ) );
+	}
+
+	public static function ajax_wc_cleanup_batch() {
+		self::wc_cleanup_authorize();
+		if ( ! defined( 'EMPTY_TRASH_DAYS' ) || (int) EMPTY_TRASH_DAYS <= 0 ) { wp_send_json_error( array( 'message' => 'زباله‌دان غیرفعال است؛ عملیات متوقف شد.' ), 400 ); }
+		$token = (string) ( $_POST['job'] ?? '' );
+		if ( ! preg_match( '/^[a-zA-Z0-9]{32}$/D', $token ) ) { wp_send_json_error( array( 'message' => 'شناسه عملیات نامعتبر است.' ), 400 ); }
+		$job = get_transient( 'amphp_wc_cleanup_' . $token );
+		if ( ! is_array( $job ) || (int) ( $job['user'] ?? 0 ) !== get_current_user_id() ) { wp_send_json_error( array( 'message' => 'عملیات منقضی شده یا متعلق به شما نیست؛ دوباره شروع کنید.' ), 403 ); }
+		$lock = 'amphp_wc_cleanup_batch_lock';
+		$previous = (int) get_option( $lock, 0 );
+		if ( $previous && $previous < time() - 300 ) { delete_option( $lock ); }
+		if ( ! add_option( $lock, time(), '', false ) ) { wp_send_json_error( array( 'message' => 'عملیات دیگری در حال اجراست؛ کمی بعد دوباره تلاش کنید.' ), 409 ); }
+		$processed = 0; $error = ''; $done = false;
+		try {
+			global $wpdb;
+			$ids = $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM {$wpdb->posts} WHERE post_type IN ('product','product_variation') AND post_status <> 'trash' AND ID <= %d ORDER BY ID DESC LIMIT 20", (int) $job['max'] ) );
+			if ( ! is_array( $ids ) || ! empty( $wpdb->last_error ) ) { $error = 'خواندن دسته محصولات ناموفق بود.'; }
+			elseif ( ! $ids ) { $done = true; }
+			else {
+				foreach ( $ids as $id ) {
+					$id = (int) $id; $post = get_post( $id );
+					if ( ! $post || $post->post_status === 'trash' ) { continue; }
+					if ( ! in_array( $post->post_type, array( 'product', 'product_variation' ), true ) || ! current_user_can( 'delete_post', $id ) ) { $error = 'دسترسی حذف برای محصول #' . $id . ' وجود ندارد.'; break; }
+					if ( ! wp_trash_post( $id ) || get_post_status( $id ) !== 'trash' ) { $error = 'انتقال محصول #' . $id . ' به زباله‌دان ناموفق بود.'; break; }
+					$processed++;
+				}
+			}
+		} catch ( \Throwable $e ) { $error = 'خطا هنگام انتقال دسته؛ لاگ سرور را بررسی کنید.'; }
+		finally { delete_option( $lock ); }
+		if ( $error !== '' ) { wp_send_json_error( array( 'message' => $error, 'processed' => $processed ), 500 ); }
+		if ( $done ) { delete_transient( 'amphp_wc_cleanup_' . $token ); }
+		wp_send_json_success( array( 'processed' => $processed, 'done' => $done ) );
+	}
+
 
 	/**
 	 * Convert Persian / Arabic numerals to English ASCII digits.
