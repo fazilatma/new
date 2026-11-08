@@ -1,0 +1,78 @@
+const csrf = document.querySelector('meta[name="csrf"]').content;
+const message = text => { document.querySelector('#message').textContent = text; };
+async function api(url, method = 'GET', data) {
+  const response = await fetch(url, {method, headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf}, body: data === undefined ? undefined : JSON.stringify(data)});
+  if (response.status === 401) { location.href = '/login'; throw Error('ورود دوباره لازم است.'); }
+  const result = await response.json();
+  if (!response.ok) throw Error(result.error || `HTTP ${response.status}`);
+  return result;
+}
+function handle(form, callback) {
+  form.addEventListener('submit', async event => { event.preventDefault(); try { await callback(Object.fromEntries(new FormData(form))); } catch(error) { message(error.message); } });
+}
+const profileForm = document.querySelector('#profile-form');
+handle(profileForm, async data => {
+  const selectors = Object.fromEntries(['container','title','price','link','image','sku'].map(k => [k, data[k]]).filter(([,v]) => v));
+  await api('/api/profiles', 'POST', {key:data.key, name:data.name, url:data.url, selectors, pagination:{type:data.pagType, val:data.pagVal}});
+  location.reload();
+});
+document.querySelector('#preview').onclick = async () => {
+  try {
+    const data = Object.fromEntries(new FormData(profileForm));
+    const result = await api('/api/pagination/preview?' + new URLSearchParams({url:data.url,type:data.pagType,val:data.pagVal,pages:3}));
+    document.querySelector('#preview-result').textContent = result.urls.join('\n');
+  } catch(error) { message(error.message); }
+};
+document.querySelectorAll('.edit').forEach(button => button.onclick = async () => {
+  try {
+    const {profiles} = await api('/api/profiles');
+    const profile = profiles.find(p => p.id === Number(button.dataset.id));
+    for(const key of ['key','name','url']) profileForm.elements[key].value = profile[key];
+    profileForm.elements.pagType.value = profile.pagination.type || 'query_page';
+    profileForm.elements.pagVal.value = profile.pagination.val || '';
+    for(const key of ['container','title','price','link','image','sku']) profileForm.elements[key].value = profile.selectors[key] || '';
+    profileForm.scrollIntoView({behavior:'smooth'});
+  } catch(error) { message(error.message); }
+});
+document.querySelectorAll('.delete').forEach(button => button.onclick = async () => {
+  if(!confirm('پروفایل و همه محصولات آن حذف شود؟')) return;
+  try { await api(`/api/profiles/${button.dataset.id}`, 'DELETE'); location.reload(); } catch(error) { message(error.message); }
+});
+handle(document.querySelector('#job-form'), async data => {
+  if(data.kind !== 'extract' && !confirm('ارسال به فروشگاه انجام شود؟ قبل از تلاش مجدد، محصولات مقصد را بررسی کنید.')) return;
+  const result = await api('/api/jobs','POST', data);
+  message(`کار ${result.id} به صف اضافه شد. worker را از کنسول یا Tasks اجرا کنید.`);
+  await poll();
+});
+document.querySelectorAll('.connection-form').forEach(form => {
+  handle(form, async data => { await api(`/api/connections/${form.dataset.name}`,'POST',data); message('اتصال ذخیره شد.'); });
+  api(`/api/connections/${form.dataset.name}`).then(result => {
+    for(const [key,value] of Object.entries(result.fields)) if(form.elements[key]) form.elements[key].value = value;
+  }).catch(error => message(error.message));
+});
+function cell(row, text) { const td = document.createElement('td'); td.textContent = text; row.append(td); return td; }
+const labels = {waiting:'در انتظار',running:'در حال اجرا',paused:'مکث',failed:'خطا',done:'تمام‌شده',cancelled:'لغو شده'};
+async function poll() {
+  const result = await api('/api/jobs');
+  for(const key of ['profiles','products','queue_alive']) document.querySelector(`#stat-${key}`).textContent = result.stats[key];
+  const tbody = document.querySelector('#jobs'); tbody.replaceChildren();
+  for(const job of result.jobs) {
+    const row = document.createElement('tr');
+    cell(row, job.id); cell(row, job.kind); cell(row, labels[job.status] || job.status);
+    cell(row, `${job.counters.current || 0} / ${job.counters.total || 0}`); cell(row,job.error);
+    const controls = cell(row,'');
+    if(!['done','cancelled'].includes(job.status)) for(const [action,title] of [['pause','مکث'],['resume','ادامه'],['cancel','لغو']]) {
+      if(action === 'resume' && !['paused','failed'].includes(job.status)) continue;
+      if(action === 'pause' && !['waiting','running'].includes(job.status)) continue;
+      const button = document.createElement('button'); button.className = 'secondary'; button.textContent = title;
+      button.onclick = async () => { try {
+        if(job.status === 'failed' && action === 'resume' && !confirm('قبل از ارسال مجدد، محصول را در مقصد بررسی کرده‌اید؟')) return;
+        await api(`/api/jobs/${job.id}/${action}`,'POST',{}); await poll();
+      } catch(error) { message(error.message); } };
+      controls.append(button);
+    }
+    tbody.append(row);
+  }
+}
+async function refresh() { try { await poll(); } catch(error) { message(error.message); } finally { setTimeout(refresh,5000); } }
+refresh();

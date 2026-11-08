@@ -1,5 +1,8 @@
 # 🚀 WebConsole Pro & Cloudflare Workers Edge Suite
 
+> **Scraper PythonAnywhere port:** see [`pythonanywhere/README.fa.md`](pythonanywhere/README.fa.md). Use `pythonanywhere/install.sh` for that app, not the root installer.
+
+
 > **All-in-One Multi-Runtime Management Console, Universal Forward Proxy, & VPS/Termux/Cloudflare Automation Platform**  
 > *Version: 1.9.2 | Multi-Platform: Ubuntu / Debian / CentOS / Rocky / AlmaLinux / Alpine / Arch / Android Termux / GitHub Codespaces / Cloudflare Workers*
 

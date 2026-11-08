@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/fazilatma/new",
+  "source_branch": "arena/01a0ebf7-new",
+  "source_commit": "5aa1012d767a1b9f9a9ca43064c7fc3dc35976d3",
+  "verified_on": "2026-11-08",
+  "port_branch": "arena/f3d5d2a0-new",
+  "reference": "Laravel services and legacy JSON import contract",
+  "scope": "PythonAnywhere-compatible core port; not complete legacy scraper4.php feature parity"
+}
