@@ -1,0 +1,2 @@
+# Preserve upstream client bytes, including its existing whitespace/line endings.
+pythonanywhere/scraper4/upstream/php-ui.html -text -whitespace

@@ -108,6 +108,14 @@ def create_app(settings=None):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' https:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        if request.endpoint == 'php_ui.host':
+            response.headers['Content-Security-Policy'] += "; frame-src " + "https://" + request.host + "/php-ui/frame http://" + request.host + "/php-ui/frame"
+        elif request.endpoint == 'php_ui.frame':
+            # Opaque sandbox: original inline code has NO cookie/CSRF/network authority.
+            response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+            response.headers['Content-Security-Policy'] = "default-src 'none'; script-src 'unsafe-inline' " + " ".join(scheme + request.host + path for scheme in ('https://','http://') for path in ('/static/php-ui-frame.js','/static/php-ui-attach.js')) + "; style-src 'unsafe-inline'; font-src " + " ".join(scheme + request.host + '/static/fonts/' for scheme in ('https://','http://')) + "; img-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; sandbox allow-scripts allow-modals"
+        if request.endpoint == 'static' and request.path.startswith('/static/fonts/'):
+            response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Cache-Control'] = 'no-store'
         if request.endpoint in ('cron.run', 'deploy.run'):
             response.headers['X-Robots-Tag'] = 'noindex, nofollow'
@@ -371,6 +379,8 @@ def create_app(settings=None):
     register_profile_settings(app, db, settings)
     from .start import register_start
     register_start(app, db, settings)
+    from .php_ui import register_php_ui
+    register_php_ui(app, db, settings)
     from .worker import register_worker
     register_worker(app, db, settings)
     return app

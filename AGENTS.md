@@ -6,7 +6,7 @@ Work only on `arena/f3d5d2a0-new`. The production site is
 After changing `pythonanywhere/`:
 1. Run the Python tests, `node --test pythonanywhere/tests/auto_refresh.test.cjs`,
    `npm ci --prefix tools/ui-tests` then
-   `NODE_PATH=tools/ui-tests/node_modules node --test pythonanywhere/tests/settings_transfer_ui.test.cjs pythonanywhere/tests/product_browser_ui.test.cjs pythonanywhere/tests/selector_preview_ui.test.cjs pythonanywhere/tests/extraction_control_ui.test.cjs pythonanywhere/tests/worker_runtime_ui.test.cjs pythonanywhere/tests/extraction_tools_ui.test.cjs pythonanywhere/tests/start_ui.test.cjs pythonanywhere/tests/profile_menu_ui.test.cjs`,
+   `NODE_PATH=tools/ui-tests/node_modules node --test pythonanywhere/tests/settings_transfer_ui.test.cjs pythonanywhere/tests/product_browser_ui.test.cjs pythonanywhere/tests/selector_preview_ui.test.cjs pythonanywhere/tests/extraction_control_ui.test.cjs pythonanywhere/tests/worker_runtime_ui.test.cjs pythonanywhere/tests/extraction_tools_ui.test.cjs pythonanywhere/tests/start_ui.test.cjs pythonanywhere/tests/profile_menu_ui.test.cjs pythonanywhere/tests/php_original_ui.test.cjs`,
    JS/shell syntax checks and `git diff --check`.
 2. Commit the code and push `origin arena/f3d5d2a0-new`.
 3. Run `python3 tools/deploy_after_push.py`. It signs the current app source tree
@@ -47,3 +47,15 @@ what works and what remains. Do not claim full parity. Follow the deployment
 workflow above after pushing. If a slice is blocked, explain the concrete blocker
 rather than claiming it is done. Keep each slice compatible with safe resumable
 minute-cron boundaries and preserve credentials, products and remote IDs.
+
+## Original PHP client integrity
+The entire pinned line-start HTML document lives at
+`pythonanywhere/scraper4/upstream/php-ui.html`; DO NOT reformat or edit it.
+Use `tools/vendor_php_ui.py` with a verified full source commit; changed PHP
+output slots require explicit renderer review. Runtime adaptations belong in
+`services/php_ui.py` and `static/php-ui-{frame,attach,host}.js`. The sandbox must
+never gain `allow-same-origin`, cookies, CSRF, broad own-origin subresource access
+or direct networking. The parent broker checks exact frame source/null origin,
+whitelists operations and confirms every write. Never map legacy GET heartbeats
+to production cron or auto-retry remote sends. Keep the working default dashboard
+until native-client capability gaps are closed and browser-verified.
