@@ -1,17 +1,18 @@
 {
   "source": {
     "branch": "arena/01a0ebf7-new",
-    "commit": "5aa1012d767a1b9f9a9ca43064c7fc3dc35976d3",
-    "version": "10.640",
+    "commit": "9756c320ff377e46ac9f80676575b757f6383a1d",
+    "version": "10.641",
     "path": "scraper4.php",
-    "sha256": "79824ce702c945d9bdffcfa0ad2e1eb7dd8f483d32b4f8d4a04ec79af3e1655c",
+    "sha256": "9cacc29b92a302df1e5063c49c38549067c6480eea01be7fa0e78fd2ebce670d",
     "verified_on": "2026-11-08",
-    "bytes_utf8": 8718674,
-    "lines": 124481
+    "bytes_utf8": 8721662,
+    "lines": 124514
   },
   "inventory": {
     "line_start_function_declarations_in_mixed_source": 2711,
-    "unique_literal_php_request_keys": 670
+    "unique_literal_php_request_keys": 670,
+    "reference_commit": "5aa1012d767a1b9f9a9ca43064c7fc3dc35976d3"
   },
   "migration": "in_progress",
   "full_php_parity": false,
@@ -48,10 +49,14 @@
     {
       "feature": "Ed25519-approved code-only HTTP deployment with fixed source-tree checks and frozen running-build health identity",
       "reference": "PythonAnywhere-specific deployment; not PHP feature parity"
+    },
+    {
+      "feature": "Opt-in detail CSS selectors, resumable per-product enrichment, sanitized short/long HTML, basic specs table/dl/list rows, gallery/sku/brand and enriched simple Woo/Basalam descriptions",
+      "reference": "PHP 10.641 extractNormalizeDetailSelectors, extractHasDetailSelectors, detailCleanHtml, s4ExtractSpecsRowsFromDom and extractMergeDetail (partial, stricter HTML allowlist)"
     }
   ],
   "pending": [
-    "Detail-page enrichment and complete variant mapping",
+    "Complete variants, detail price/stock/weight/category handling, automatic detail discovery and advanced specification layouts",
     "Basalam public catalogue adapters and complete send payloads",
     "Site-specific engines (Digikala, Snappshop, Emalls-specific adapters)",
     "Visual selector picker and full PHP UI parity",
@@ -60,7 +65,8 @@
   "notes": [
     "This ledger is not a claim of full parity.",
     "DOM fixtures are based on the PHP algorithm; PHP CLI was not available for differential execution.",
-    "HTTP cron performs one queue step only; code updates remain CLI/Task operations.",
-    "Lexical inventory includes embedded JavaScript declarations; it is not a count of implemented PHP routes."
+    "HTTP queue cron performs one page or detail-product step only. Signed code-only deployment is separate; dependency/schema updates remain CLI operations.",
+    "Lexical inventory includes embedded JavaScript declarations; it is not a count of implemented PHP routes.",
+    "Latest PHP 10.641 source checked at 9756c32; lexical inventory remains explicitly tied to the previous reference commit. Detail fixtures are algorithm-based, not PHP CLI differential execution."
   ]
 }

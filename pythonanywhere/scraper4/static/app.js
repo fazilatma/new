@@ -13,7 +13,8 @@ function handle(form, callback) {
 const profileForm = document.querySelector('#profile-form');
 handle(profileForm, async data => {
   const selectors = Object.fromEntries(['container','title','price','link','image','sku'].map(k => [k, data[k]]).filter(([,v]) => v));
-  await api('/api/profiles', 'POST', {key:data.key, name:data.name, url:data.url, selectors, pagination:{type:data.pagType, val:data.pagVal}});
+  const detailSelectors = Object.fromEntries(['shortDesc','longDesc','specs','images','sku','brand'].map(key => [key, data['detail_'+key] || '']).filter(([,value]) => value.trim()));
+  await api('/api/profiles', 'POST', {detailSelectors, key:data.key, name:data.name, url:data.url, selectors, pagination:{type:data.pagType, val:data.pagVal}});
   location.reload();
 });
 document.querySelector('#preview').onclick = async () => {
@@ -31,6 +32,10 @@ document.querySelectorAll('.edit').forEach(button => button.onclick = async () =
     profileForm.elements.pagType.value = profile.pagination.type || 'query_page';
     profileForm.elements.pagVal.value = profile.pagination.val || '';
     for(const key of ['container','title','price','link','image','sku']) profileForm.elements[key].value = profile.selectors[key] || '';
+    for(const key of ['shortDesc','longDesc','specs','images','sku','brand']) {
+      const saved = profile.settings?.detailSelectors?.[key];
+      profileForm.elements['detail_'+key].value = typeof saved === 'string' ? saved : (saved?.enabled === false ? '' : saved?.selector || '');
+    }
     activateTab('selectors');
     profileForm.scrollIntoView({behavior:'smooth'});
   } catch(error) { message(error.message); }
@@ -60,7 +65,7 @@ async function poll() {
   for(const job of result.jobs) {
     const row = document.createElement('tr');
     cell(row, job.id); cell(row, job.kind); cell(row, labels[job.status] || job.status);
-    cell(row, `${job.counters.current || 0} / ${job.counters.total || 0}`); cell(row,job.error);
+    cell(row, `${job.counters.current || 0} / ${job.counters.total || 0}` + (job.counters.phase === 'detail' ? ` · جزئیات ${job.counters.detail_current || 0}/${job.counters.detail_total || 0}` : job.counters.detail_enriched ? ` · ${job.counters.detail_enriched} جزئیات` : '')); cell(row,job.error);
     const controls = cell(row,'');
     if(!['done','cancelled'].includes(job.status)) for(const [action,title] of [['pause','مکث'],['resume','ادامه'],['cancel','لغو']]) {
       if(action === 'resume' && !['paused','failed'].includes(job.status)) continue;
@@ -235,6 +240,12 @@ function paintProducts() {
     const meta = document.createElement('div'); meta.className = 'product-meta';
     meta.textContent = `${product.sku || 'بدون کد'} · ووکامرس: ${product.woo_id ? 'مرتبط' : 'ارسال نشده'} · باسلام: ${product.basalam_id ? 'مرتبط' : 'ارسال نشده'}`;
     body.append(title, price, meta);
+    if(product.extra?._detail_preview || product.extra?.brand || product.extra?.images_count) {
+      const details = document.createElement('details'), summary = document.createElement('summary'), info = document.createElement('p');
+      summary.textContent = 'اطلاعات تکمیلی';
+      info.textContent = [product.extra.brand ? `برند: ${product.extra.brand}` : '', product.extra.images_count ? `${product.extra.images_count} تصویر` : '', product.extra._detail_preview || ''].filter(Boolean).join(' · ');
+      details.append(summary, info); body.append(details);
+    }
     const link = safeProductUrl(product.link);
     if(link) body.append(sourceLink(link));
     card.append(image,body); grid.append(card);
@@ -249,7 +260,7 @@ function paintProducts() {
 async function loadProducts() {
   const ticket = ++productsRequest;
   const profile = document.querySelector('#results-profile').value;
-  const params = new URLSearchParams({limit:productLimit, offset:productOffset});
+  const params = new URLSearchParams({limit:productLimit, offset:productOffset, summary:'1'});
   if(profile) params.set('profile_id', profile);
   document.querySelector('#products-status').textContent = 'در حال دریافت محصولات…';
   try {
@@ -295,4 +306,11 @@ agentDeployEnabled.onchange = async () => {
     await api('/api/deploy/config', 'POST', {enabled});
     message(enabled ? 'استقرار نسخه‌های دارای امضای معتبر فعال شد.' : 'استقرار عامل غیرفعال شد.');
   } catch(error) { agentDeployEnabled.checked = !enabled; message(error.message); }
+};
+
+
+document.querySelector('#detail-woo-defaults').onclick = () => {
+  const defaults = {shortDesc:'.woocommerce-product-details__short-description',longDesc:'#tab-description',specs:'.woocommerce-product-attributes',images:'.woocommerce-product-gallery img',sku:'.product_meta .sku',brand:'.product_meta .brand'};
+  for(const [key,value] of Object.entries(defaults)) profileForm.elements['detail_'+key].value = value;
+  message('سلکتورهای رایج ووکامرس وارد شدند؛ آن‌ها را با سایت مبدأ تطبیق دهید و سپس پروفایل را ذخیره کنید.');
 };

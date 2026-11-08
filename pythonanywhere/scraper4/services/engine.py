@@ -7,11 +7,13 @@ that product remotely before resuming. No automatic retries of failed writes.
 import fcntl
 import time
 import math
+import json
 from dataclasses import replace
 
 from ..db import utc_now
 from .scraping.pagination import build, NEXT_SELECTOR
 from .scraping.parser import parse_products, load_dom, query_inside
+from .scraping.detail import normalize_selectors, parse_detail, merge_detail, sanitize_fragment, text_html, web_url
 from .scraping.fetch import validate_url
 from .scraping.smart_fetch import SmartFetcher
 from .support.persian import price_num
@@ -22,6 +24,10 @@ from .basalam.client import BasalamClient
 
 def _extract_step(db, settings, entry, profile, network_timeout=None):
     payload, counts = entry['payload'], entry['counters']
+    if '_detail_selectors' not in payload:
+        payload['_detail_selectors'] = normalize_selectors(profile['settings'].get('detailSelectors', {}))
+    if payload.get('_phase') == 'detail':
+        return _detail_step(db, settings, entry, profile, network_timeout)
     page = int(payload.get('_page', 1))
     pages = max(1, min(100, int(payload.get('pages', settings.max_pages))))
     pagination = profile['pagination']
@@ -37,7 +43,15 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
         raise ValueError(result.get('error') or 'Fetch failed')
     html, effective = result.get('html', ''), result.get('url') or url
     products = parse_products(html, effective, profile['selectors'])
+    eligible = [key for key, row in products.items() if row.get('link')]
+    if payload['_detail_selectors'] and len(eligible) > 1000:
+        raise ValueError('Detail extraction supports at most 1000 linked products per listing page; narrow the selectors')
     for key, product in products.items():
+        with db.connect() as conn:
+            previous = conn.execute('SELECT sku,image FROM products WHERE profile_id=? AND key=?', (profile['id'], key)).fetchone()
+        if previous:
+            product['sku'] = product.get('sku') or previous['sku']
+            product['image'] = product.get('image') or previous['image']
         product['price_num'] = price_num(product.get('price', ''))
         db.upsert_product(profile['id'], key, product)
     counts.update(current=page, total=pages, found=counts.get('found', 0) + len(products))
@@ -56,6 +70,55 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
             payload['_next_url'] = next_url
     count = db.sync_profile_count(profile['id'])
     db.touch_profile(profile['id'], count)
+    counts['phase'] = 'listing'
+    if payload['_detail_selectors'] and eligible:
+        payload.update(_phase='detail', _detail_keys=eligible, _detail_index=0, _listing_done=done)
+        counts.update(phase='detail', detail_current=0, detail_total=len(eligible))
+        return False
+    return done
+
+
+def _detail_step(db, settings, entry, profile, network_timeout=None):
+    payload, counts = entry['payload'], entry['counters']
+    index, keys = int(payload.get('_detail_index', 0)), payload.get('_detail_keys', [])
+    if index >= len(keys):
+        raise ValueError('Invalid detail checkpoint')
+    with db.connect() as conn:
+        row = conn.execute('SELECT * FROM products WHERE profile_id=? AND key=?',
+                           (profile['id'], keys[index])).fetchone()
+    if row and row['link']:
+        url = validate_url(row['link'])
+        net = settings.net.as_dict() if network_timeout else settings.net
+        if network_timeout:
+            net['_deadline_seconds'] = 12
+        result = SmartFetcher.get(url, timeout=network_timeout or settings.fetch_timeout, net=net,
+                                  mode=payload.get('render', 'static'), settings=settings)
+        if not result.get('ok'):
+            raise ValueError(result.get('error') or 'Detail fetch failed')
+        effective = validate_url(result.get('url') or url)
+        fresh = parse_detail(result.get('html', ''), effective, payload['_detail_selectors'])
+        # Merge against the latest row, preserving unrelated extra data and all
+        # pricing/remote IDs. Never regenerate a product key from enriched data.
+        with db.connect() as conn:
+            live = conn.execute('SELECT extra,sku,image FROM products WHERE id=?', (row['id'],)).fetchone()
+            if live:
+                extra = merge_detail(json.loads(live['extra'] or '{}'), fresh)
+                extra.update(_detail_status='ok' if fresh else 'empty', _detail_checked_at=utc_now(), _detail_source_url=effective)
+                conn.execute('UPDATE products SET extra=?,sku=?,image=?,updated_at=? WHERE id=?',
+                    (json.dumps(extra,ensure_ascii=False,separators=(',',':')), fresh.get('sku') or live['sku'],
+                     live['image'] or next(iter(extra.get('images') or []), ''), utc_now(), row['id']))
+        field = 'detail_enriched' if fresh else 'detail_empty'
+        counts[field] = counts.get(field, 0) + 1
+    else:
+        counts['detail_skipped'] = counts.get('detail_skipped', 0) + 1
+    payload['_detail_index'] = index + 1
+    counts['detail_current'] = index + 1
+    if index + 1 < len(keys):
+        return False
+    done = bool(payload.get('_listing_done'))
+    for key in ('_phase','_detail_keys','_detail_index','_listing_done'):
+        payload.pop(key, None)
+    counts['phase'] = 'complete' if done else 'listing'
     return done
 
 
@@ -71,6 +134,14 @@ def _send_step(db, settings, entry, profile, network_timeout=None):
     if not row:
         return True
     product = dict(row)
+    extra = json.loads(product.get('extra') or '{}')
+    if not isinstance(extra, dict):
+        extra = {}
+    description = sanitize_fragment(extra.get('longDesc', ''), product.get('link') or profile['url'])
+    short = sanitize_fragment(extra.get('shortDesc', ''), product.get('link') or profile['url'])
+    specs = sanitize_fragment(extra.get('specs', ''), product.get('link') or profile['url'])
+    if specs and specs not in description:
+        description += '<h4>مشخصات فنی</h4>' + specs
     if product.get(remote_column) and not payload.get('force'):
         counts['skipped'] = counts.get('skipped', 0) + 1
     else:
@@ -86,8 +157,20 @@ def _send_step(db, settings, entry, profile, network_timeout=None):
                     'regular_price': str(product['price_num'])}
             if product.get('sku'):
                 body['sku'] = product['sku']
-            if product.get('image'):
-                body['images'] = [{'src': product['image']}]
+            if description:
+                body['description'] = description
+            if short:
+                body['short_description'] = short
+            gallery = []
+            for value in [product.get('image', ''), *(extra.get('images') if isinstance(extra.get('images'), list) else [])]:
+                url = web_url(value, product.get('link') or profile['url']) if isinstance(value, str) else ''
+                if url and url not in gallery and len(gallery) < 30:
+                    gallery.append(url)
+            if gallery:
+                body['images'] = [{'src': url} for url in gallery]
+            attributes = [r for r in (extra.get('specs_rows') if isinstance(extra.get('specs_rows'), list) else []) if isinstance(r, dict) and r.get('k') and r.get('v')][:100]
+            if attributes:
+                body['attributes'] = [{'name':str(r['k']), 'visible':True, 'variation':False, 'options':[str(r['v'])]} for r in attributes]
             if payload.get('category_id'):
                 body['categories'] = [{'id': int(payload['category_id'])}]
             result = client.update_product(product['woo_id'], body) if product.get('woo_id') else client.create_product(body)
@@ -98,7 +181,7 @@ def _send_step(db, settings, entry, profile, network_timeout=None):
             client = BasalamClient.from_connection(cfg, api_base=settings.basalam_api_base)
             if network_timeout:
                 client.timeout, client.connect_timeout, client.max_attempts = network_timeout, 3, 1
-            body = {'name': product['title'], 'price': product['price_num'], 'description': product['title']}
+            body = {'name': product['title'], 'price': product['price_num'], 'description': text_html(description or short)[:10000] or product['title']}
             category = payload.get('category_id') or cfg.get('category_id')
             if category:
                 body['category_id'] = int(category)

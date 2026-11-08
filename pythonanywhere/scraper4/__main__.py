@@ -26,9 +26,15 @@ def import_legacy(db, directory):
         for key, row in profiles.items():
             if not isinstance(row, dict) or not row.get('url'):
                 continue
+            profile_settings = row.get('settings') or row.get('detail') or {}
+            if isinstance(row.get('detailSelectors'), dict):
+                from .services.scraping.detail import FIELDS, normalize_selectors
+                profile_settings = dict(profile_settings)
+                profile_settings['detailSelectors'] = normalize_selectors({k:v for k,v in row['detailSelectors'].items() if k in FIELDS})
+                profile_settings['legacy_detailSelectors'] = row['detailSelectors']
             profile = db.upsert_profile(key or profile_key(row['url']), row['url'], row.get('name', ''),
                        row.get('selectors') or {}, {'type': row.get('pagType', 'query_page'), 'val': row.get('pagVal', '')},
-                       row.get('settings') or row.get('detail') or {})
+                       profile_settings)
             counts['profiles'] += 1
             products = row.get('products') or {}
             entries = products.items() if isinstance(products, dict) else enumerate(products)

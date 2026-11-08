@@ -155,7 +155,7 @@ def create_app(settings=None):
 
     @app.get('/api/ping')
     def ping():
-        return jsonify(ok=True, version=VERSION, source_commit='5aa1012d767a1b9f9a9ca43064c7fc3dc35976d3')
+        return jsonify(ok=True, version=VERSION, source_commit='9756c320ff377e46ac9f80676575b757f6383a1d')
 
     @app.get('/api/pagination/preview')
     def preview():
@@ -183,9 +183,15 @@ def create_app(settings=None):
             raise ValueError('Next-link CSS selector is required')
         if pagination['type'] == 'full_pattern':
             validate_url(str(pagination.get('val', '')).replace('{page}', '2'))
-        return jsonify(ok=True, profile=db.upsert_profile(str(data.get('key') or profile_key(url)), url,
+        key = str(data.get('key') or profile_key(url))
+        previous = db.get_profile(key)
+        profile_settings = dict((previous or {}).get('settings') or {})
+        if 'detailSelectors' in data:
+            from .services.scraping.detail import normalize_selectors
+            profile_settings['detailSelectors'] = normalize_selectors(data['detailSelectors'])
+        return jsonify(ok=True, profile=db.upsert_profile(key, url,
                        name=str(data.get('name') or ''), selectors=selectors, pagination=pagination,
-                       enabled=bool(data.get('enabled', True))))
+                       settings=profile_settings, enabled=bool(data.get('enabled', (previous or {}).get('enabled', True)))))
 
     @app.delete('/api/profiles/<int:profile_id>')
     def delete_profile(profile_id):
@@ -197,8 +203,13 @@ def create_app(settings=None):
     @app.get('/api/products')
     def products():
         pid = request.args.get('profile_id', type=int)
-        return jsonify(ok=True, total=db.count_products(pid), products=db.list_products(pid,
-                       limit=max(1, min(500, int(request.args.get('limit', 100)))), offset=max(0, int(request.args.get('offset', 0)))))
+        rows = db.list_products(pid, limit=max(1, min(500, int(request.args.get('limit', 100)))),
+                                offset=max(0, int(request.args.get('offset', 0))))
+        if request.args.get('summary') == '1':
+            for row in rows:
+                extra = row.get('extra') or {}
+                row['extra'] = {key:extra[key] for key in ('brand','images_count','_detail_preview','_detail_status') if isinstance(extra, dict) and key in extra}
+        return jsonify(ok=True, total=db.count_products(pid), products=rows)
 
     @app.get('/api/export/<int:profile_id>')
     def export(profile_id):

@@ -33,3 +33,14 @@ queue cron and full-admin API credentials must never authorize deployment.
 If the signer is lost, stop and explain that a newly pinned public authority
 must be installed through the CLI; never silently substitute a new key or
 weaken TLS/signature checks. Private artifacts live only in `.deployment/`.
+
+
+## Ongoing PHP parity work (standing user request)
+For EVERY subsequent user prompt, complete the next bounded, tested PHP parity
+slice alongside the explicit request, unless the user changes this instruction.
+Verify the latest source on `arena/01a0ebf7-new`, implement real behavior (not just
+menu placeholders), add regressions, update the parity ledger and report both
+what works and what remains. Do not claim full parity. Follow the deployment
+workflow above after pushing. If a slice is blocked, explain the concrete blocker
+rather than claiming it is done. Keep each slice compatible with safe resumable
+minute-cron boundaries and preserve credentials, products and remote IDs.
