@@ -17,7 +17,21 @@ SITES = {'www.pythonanywhere.com', 'eu.pythonanywhere.com'}
 
 
 class PlatformError(ValueError):
-    pass
+    def __init__(self, message, *, status=None, operation=None, category=None):
+        super().__init__(message)
+        self.status = status
+        self.operation = operation
+        self.category = category
+
+
+def operation_name(method, path):
+    if path.startswith('files/path'):
+        return 'wsgi_upload'
+    if path.startswith('schedule/'):
+        return {'GET': 'task_read', 'POST': 'task_create', 'PATCH': 'task_update'}.get(method.upper(), 'task')
+    if path.endswith('/reload/'):
+        return 'webapp_reload'
+    return {'GET': 'webapp_read', 'POST': 'webapp_create', 'PATCH': 'webapp_configure'}.get(method.upper(), 'webapp')
 
 
 class PythonAnywhere:
@@ -33,17 +47,36 @@ class PythonAnywhere:
         self.base = f'https://{self.site}/api/v0/user/{quote(self.username)}/'
 
     def call(self, method, path, *, allow_404=False, **kwargs):
+        operation = operation_name(method, path)
         try:
             response = requests.request(method, self.base + path,
                 headers={'Authorization': 'Token ' + self.config['token'], 'User-Agent': 'scraper4-pa/1.1'},
                 timeout=(10, 60), allow_redirects=False, **kwargs)
         except requests.RequestException:
-            raise PlatformError('PythonAnywhere API network error; check account connectivity') from None
+            raise PlatformError(f'PythonAnywhere API network error during {operation}; check account connectivity', operation=operation, category='network') from None
         if allow_404 and response.status_code == 404:
             return None
         if not 200 <= response.status_code < 300:
-            # Never echo the response, URLs, headers or credentials into public status.
-            raise PlatformError(f'PythonAnywhere API HTTP {response.status_code}; check token, account quota and API permissions')
+            # Classify only known error phrases. Never echo arbitrary response data,
+            # URLs, headers, credentials, or the raw exception into public status.
+            detail = ''
+            try:
+                body = response.json()
+                if isinstance(body, dict):
+                    detail = ' '.join(str(body.get(k, '')) for k in ('detail', 'error', 'message')).lower()
+            except ValueError:
+                pass
+            auth_error = response.status_code == 401 or any(phrase in detail for phrase in
+                ('invalid token', 'invalid authentication', 'authentication credentials were not provided'))
+            category = 'authentication' if auth_error else 'forbidden' if response.status_code == 403 else 'api'
+            if auth_error:
+                hint = 'Authentication rejected: verify API token, username and US/EU API site; use configure --reset-api to replace credentials'
+            elif response.status_code == 403:
+                hint = 'Access denied; this does not by itself prove an invalid token. Run diagnose-platform to distinguish account/API/task permissions'
+            else:
+                hint = 'Check account quota, API permissions and configuration'
+            raise PlatformError(f'PythonAnywhere API HTTP {response.status_code} during {operation}; {hint}',
+                                status=response.status_code, operation=operation, category=category)
         try:
             result = response.json()
         except ValueError:
@@ -114,8 +147,12 @@ class PythonAnywhere:
         try:
             task = self.call(method, path, json=payload)
         except PlatformError as exc:
-            # Some accounts only allow daily schedules. Do not hide auth/server errors.
-            if 'HTTP 400' not in str(exc):
+            # An authenticated task-list read already succeeded. A rejected hourly
+            # write may be a plan restriction; try daily, not unrelated credentials.
+            status = exc.status
+            if status is None and 'HTTP 400' in str(exc):
+                status = 400  # compatibility with callers raising legacy errors
+            if status not in (400, 403) or exc.category == 'authentication':
                 raise
             payload.update(interval='daily', hour=3)
             task = self.call(method, path, json=payload)
@@ -126,29 +163,63 @@ class PythonAnywhere:
         return result
 
 
-def prompt_configuration(db):
+def prompt_configuration(db, *, reset_api=False, site=None, username=None, domain=None):
     """Read secrets only from the local tty or platform environment, never chat."""
     cfg = db.get_config('pythonanywhere')
     cfg.setdefault('site', os.environ.get('PYTHONANYWHERE_SITE', 'www.pythonanywhere.com'))
     cfg.setdefault('username', os.environ.get('PYTHONANYWHERE_USERNAME', getpass.getuser()))
     suffix = 'eu.pythonanywhere.com' if cfg['site'] == 'eu.pythonanywhere.com' else 'pythonanywhere.com'
     cfg.setdefault('domain', cfg['username'].lower() + '.' + suffix)
-    cfg['token'] = os.environ.get('API_TOKEN') or cfg.get('token') or ''
+    for key, value in (('site', site), ('username', username), ('domain', domain)):
+        if value is not None:
+            cfg[key] = value
+    # An explicit replacement must not be silently undone by a stale API_TOKEN
+    # environment variable in the next console/configure invocation.
+    cfg['token'] = '' if reset_api else (cfg.get('token') or os.environ.get('API_TOKEN') or '')
     if not cfg['token']:
         try:
             with open('/dev/tty', 'r+') as tty:
                 tty.write('PythonAnywhere Account → API Token: create a token once.\n')
+                previous_account = (cfg['site'], cfg['username'])
                 tty.write(f'API site [{cfg["site"]}]: '); tty.flush()
                 cfg['site'] = tty.readline().strip() or cfg['site']
                 tty.write(f'Username [{cfg["username"]}]: '); tty.flush()
                 cfg['username'] = tty.readline().strip() or cfg['username']
                 suffix = 'eu.pythonanywhere.com' if cfg['site'] == 'eu.pythonanywhere.com' else 'pythonanywhere.com'
-                cfg['domain'] = cfg['username'].lower() + '.' + suffix
+                if domain is None and previous_account != (cfg['site'], cfg['username']):
+                    cfg['domain'] = cfg['username'].lower() + '.' + suffix
                 tty.write(f'Web domain [{cfg["domain"]}]: '); tty.flush()
                 cfg['domain'] = tty.readline().strip() or cfg['domain']
                 cfg['token'] = getpass.getpass('API token (hidden): ', stream=tty)
         except OSError:
             raise PlatformError('No local terminal/API_TOKEN available. Run python -m scraper4 configure on PythonAnywhere.') from None
-    PythonAnywhere(cfg)  # validate before persisting
+    cfg['token'] = cfg['token'].strip()
+    api = PythonAnywhere(cfg)
+    if reset_api:
+        # Read-only authentication check before overwriting a stored credential.
+        api.call('GET', 'webapps/')
     db.put_config('pythonanywhere', cfg)
     return cfg
+
+
+def diagnose(db):
+    """Only GET requests. Returns no token, headers, paths or raw API bodies."""
+    cfg = db.get_config('pythonanywhere')
+    if not cfg:
+        return {'ok': False, 'error': 'API not configured; run configure first', 'checks': []}
+    api = PythonAnywhere(cfg)
+    checks = []
+    for name, path in (('webapps_read', 'webapps/'), ('webapp_read', api.web_path), ('tasks_read', 'schedule/')):
+        try:
+            api.call('GET', path)
+            checks.append({'name': name, 'ok': True, 'http_status': 200})
+        except PlatformError as exc:
+            checks.append({'name': name, 'ok': False, 'http_status': exc.status,
+                           'category': exc.category, 'error': str(exc)})
+    works = any(check['ok'] for check in checks)
+    return {'ok': all(check['ok'] for check in checks), 'site': api.site,
+            'username': api.username, 'domain': api.domain, 'read_only': True,
+            'authentication_confirmed_on_some_routes': works,
+            'hint': ('Token worked on at least one route; inspect the failing operation/plan permissions'
+                     if works else 'Check token, username, API site and account API access; 403 alone is not conclusive'),
+            'checks': checks}

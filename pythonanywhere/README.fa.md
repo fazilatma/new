@@ -408,3 +408,43 @@ curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/f3d5d2a0-new/py
 انتخاب نسخهٔ متفاوت با virtualenv موجود نیز با خطای واضح متوقف می‌شود تا تنظیم وب‌اپ خراب نشود.
 تست اجرایی این اصلاح در محیط توسعه با Python 3.11 انجام شده؛ برای ۳.۱۰، سازگاری syntax و حل وابستگی‌ها
 نیز بررسی شده‌اند، اما اجرای واقعی حساب شما همچنان به مفسرها و محدودیت‌های همان حساب بستگی دارد.
+
+### رفع خطای PythonAnywhere API HTTP 403 — نسخهٔ ۱.۱.۲
+
+HTTP 403 به‌تنهایی ثابت نمی‌کند توکن اشتباه است؛ ممکن است دسترسی یک عملیات، محدودهٔ API،
+نام کاربری/ناحیهٔ اشتباه یا محدودیت حساب/Tasks باشد. پیام جدید مرحلهٔ خطا را بدون افشای
+توکن/پاسخ خام مشخص می‌کند: `webapp_read`, `webapp_configure`, `wsgi_upload`,
+`webapp_reload`, `task_read`, `task_create`, `task_update`.
+
+برای دریافت اصلاح بدون تلاش دوبارهٔ تنظیم خودکار:
+
+```bash
+set -o pipefail
+curl -fsSL 'https://raw.githubusercontent.com/fazilatma/new/arena/f3d5d2a0-new/pythonanywhere/bootstrap.sh?v=1.1.2' | S4_AUTO_CONFIGURE=0 bash
+cd "$HOME/scraper4-python/pythonanywhere"
+"$HOME/.virtualenvs/scraper4/bin/python" -m scraper4 diagnose-platform
+```
+
+این فرمان فقط سه درخواست GET برای خواندن وب‌اپ‌ها، وب‌اپ هدف و Taskها می‌زند و تغییری در حساب
+نمی‌دهد. توکن یا هدرهای درخواست چاپ نمی‌شوند. اگر خواندن Web موفق و Tasks ناموفق باشد،
+مسئله را صرفاً به توکن نسبت ندهید. اگر خواندن Task موفق باشد ولی ساخت Task ساعتی با
+HTTP 400 یا 403 (به‌جز خطای صریح احراز هویت) رد شود، هلپر زمان‌بندی روزانه را نیز امتحان می‌کند.
+این fallback تضمینی برای رفع quota/مجوزهای حساب نیست.
+
+برای واردکردن توکن جایگزین، **فقط در ترمینال خودتان**:
+
+```bash
+"$HOME/.virtualenvs/scraper4/bin/python" -m scraper4 configure \
+  --replace-existing --reset-api \
+  --api-site www.pythonanywhere.com \
+  --api-username fazilatma \
+  --api-domain fazilatma.pythonanywhere.com
+```
+
+گزینه‌های account بالا برای دامنهٔ اعلام‌شده در این جلسه‌اند؛ برای حساب دیگر تغییر دهید.
+توکن را از **Account → API Token همان حساب و همان ناحیه** بگیرید. `--reset-api` توکن ذخیره‌شده
+و متغیر قدیمی `API_TOKEN` را نادیده می‌گیرد و توکن جدید را پنهان می‌پرسد. پیش از جایگزینی
+اطلاعات ذخیره‌شده، یک تست GET انجام می‌شود؛ اگر رد شود تنظیم قبلی باقی می‌ماند.
+در اجرای معمول، توکن ذخیره‌شده بر متغیر محیطی اولویت دارد تا محیط قدیمی اصلاح را برنگرداند.
+هیچ‌گاه توکن، فایل `.env` یا خروجی دارای Authorization را در چت ارسال نکنید؛ خروجی امن
+`diagnose-platform` یا پیام جدید شامل نام مرحله برای عیب‌یابی کافی است.

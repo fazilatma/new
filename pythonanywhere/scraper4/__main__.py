@@ -66,6 +66,11 @@ def main():
     commands.add_parser('selftest')
     configure = commands.add_parser('configure')
     configure.add_argument('--replace-existing', action='store_true')
+    configure.add_argument('--reset-api', action='store_true', help='Read a replacement API token from the local terminal')
+    configure.add_argument('--api-site', choices=['www.pythonanywhere.com', 'eu.pythonanywhere.com'])
+    configure.add_argument('--api-username')
+    configure.add_argument('--api-domain')
+    commands.add_parser('diagnose-platform')
     maintenance = commands.add_parser('maintain')
     maintenance.add_argument('--budget', type=int, default=240)
     update = commands.add_parser('update')
@@ -88,9 +93,13 @@ def main():
     elif args.command == 'configure':
         from .services.platform import PythonAnywhere, prompt_configuration
         from .services.updates import update_config
-        cfg = prompt_configuration(db)
+        cfg = prompt_configuration(db, reset_api=args.reset_api, site=args.api_site,
+                                   username=args.api_username, domain=args.api_domain)
         result = PythonAnywhere(cfg).provision(db, settings, replace_existing=args.replace_existing)
         db.checkpoint_write('updates:config', update_config(db))
+    elif args.command == 'diagnose-platform':
+        from .services.platform import diagnose
+        result = diagnose(db)
     elif args.command in ('maintain', 'update'):
         from .services import updates
         lock_path = settings.db_path.with_suffix('.worker.lock')
@@ -135,4 +144,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except ValueError as exc:
+        print(json.dumps({'ok': False, 'error': str(exc)}, ensure_ascii=False, indent=2))
+        raise SystemExit(1)

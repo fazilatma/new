@@ -211,3 +211,136 @@ def test_reload_failure_keeps_maintenance_until_recovery(db,settings,monkeypatch
     assert result['recovered']['ok']
     assert not (settings.base_dir/'.maintenance.json').exists()
     assert updates.update_config(db)['enabled'] is False
+
+
+def test_403_includes_stage_without_disclosing_response(monkeypatch):
+    response=Mock(status_code=403)
+    response.json.return_value={'detail':'Access forbidden: '+CONFIG['token']}
+    monkeypatch.setattr('scraper4.services.platform.requests.request',lambda *a,**k:response)
+    with pytest.raises(PlatformError) as exc:
+        PythonAnywhere(CONFIG).call('POST','files/path/var/www/site_wsgi.py',files={})
+    assert exc.value.status==403
+    assert exc.value.operation=='wsgi_upload'
+    assert 'during wsgi_upload' in str(exc.value)
+    assert CONFIG['token'] not in str(exc.value)
+
+
+def test_invalid_token_is_classified_without_echoing_secret(monkeypatch):
+    response=Mock(status_code=403)
+    response.json.return_value={'detail':'Invalid token: '+CONFIG['token']}
+    monkeypatch.setattr('scraper4.services.platform.requests.request',lambda *a,**k:response)
+    with pytest.raises(PlatformError) as exc:
+        PythonAnywhere(CONFIG).call('GET','webapps/')
+    assert exc.value.category=='authentication'
+    assert CONFIG['token'] not in str(exc.value)
+
+
+def test_hourly_403_falls_back_after_successful_task_read(db,settings,monkeypatch):
+    api=PythonAnywhere(CONFIG)
+    intervals=[]
+    def call(method,path,**kwargs):
+        if method=='GET':
+            return [] if path=='schedule/' else None
+        if path=='schedule/':
+            intervals.append(kwargs['json']['interval'])
+            if kwargs['json']['interval']=='hourly':
+                raise PlatformError('Forbidden hourly task',status=403,category='forbidden')
+            return {'id':9,'enabled':True,'interval':'daily'}
+        return {}
+    monkeypatch.setattr(api,'call',call)
+    assert api.provision(db,settings)['interval']=='daily'
+    assert intervals==['hourly','daily']
+
+
+def test_authenticated_task_error_does_not_retry_invalid_token(db,settings,monkeypatch):
+    api=PythonAnywhere(CONFIG)
+    writes=[]
+    def call(method,path,**kwargs):
+        if method=='GET':
+            return [] if path=='schedule/' else None
+        if path=='schedule/':
+            writes.append(True)
+            raise PlatformError('Invalid token',status=403,category='authentication')
+        return {}
+    monkeypatch.setattr(api,'call',call)
+    with pytest.raises(PlatformError):
+        api.provision(db,settings)
+    assert len(writes)==1
+
+
+def test_platform_diagnostics_read_only_and_safe(db,monkeypatch):
+    from scraper4.services.platform import diagnose
+    db.put_config('pythonanywhere',CONFIG)
+    calls=[]
+    def call(self,method,path,**kwargs):
+        calls.append((method,path))
+        if path=='schedule/':
+            raise PlatformError('HTTP 403 during task_read',status=403,operation='task_read',category='forbidden')
+        return []
+    monkeypatch.setattr(PythonAnywhere,'call',call)
+    result=diagnose(db)
+    assert result['read_only']
+    assert result['authentication_confirmed_on_some_routes']
+    assert not result['ok']
+    assert all(m=='GET' for m,_ in calls)
+    assert CONFIG['token'] not in json.dumps(result)
+
+
+def test_saved_token_not_overridden_by_stale_environment(db,monkeypatch):
+    from scraper4.services.platform import prompt_configuration
+    db.put_config('pythonanywhere',CONFIG)
+    monkeypatch.setenv('API_TOKEN','stale-env-token')
+    cfg=prompt_configuration(db)
+    assert cfg['token']==CONFIG['token']
+
+
+class FakeTerminal:
+    def __enter__(self):
+        return self
+    def __exit__(self,*args):
+        pass
+    def write(self,value):
+        pass
+    def flush(self):
+        pass
+    def readline(self):
+        return '\n'
+
+
+def test_reset_api_ignores_stale_env_and_validates_before_save(db,monkeypatch):
+    from scraper4.services.platform import prompt_configuration
+    db.put_config('pythonanywhere',CONFIG)
+    monkeypatch.setenv('API_TOKEN','stale-env-token')
+    monkeypatch.setattr('builtins.open',lambda *a,**k:FakeTerminal())
+    monkeypatch.setattr('scraper4.services.platform.getpass.getpass',lambda *a,**k:'  replacement-token  ')
+    reads=[]
+    def call(self,method,path,**kwargs):
+        reads.append((method,path,self.config['token']))
+        return []
+    monkeypatch.setattr(PythonAnywhere,'call',call)
+    cfg=prompt_configuration(db,reset_api=True)
+    assert cfg['token']=='replacement-token'
+    assert reads==[('GET','webapps/','replacement-token')]
+    assert db.get_config('pythonanywhere')['token']=='replacement-token'
+
+
+def test_reset_rejected_token_preserves_previous_config(db,monkeypatch):
+    from scraper4.services.platform import prompt_configuration
+    db.put_config('pythonanywhere',CONFIG)
+    monkeypatch.setattr('builtins.open',lambda *a,**k:FakeTerminal())
+    monkeypatch.setattr('scraper4.services.platform.getpass.getpass',lambda *a,**k:'invalid-new-token')
+    def call(*args,**kwargs):
+        raise PlatformError('HTTP 403',status=403,category='authentication')
+    monkeypatch.setattr(PythonAnywhere,'call',call)
+    with pytest.raises(PlatformError):
+        prompt_configuration(db,reset_api=True)
+    assert db.get_config('pythonanywhere')['token']==CONFIG['token']
+
+
+def test_reset_api_preserves_explicit_custom_domain(db,monkeypatch):
+    from scraper4.services.platform import prompt_configuration
+    db.put_config('pythonanywhere',{**CONFIG,'domain':'shop.example.com'})
+    monkeypatch.setattr('builtins.open',lambda *a,**k:FakeTerminal())
+    monkeypatch.setattr('scraper4.services.platform.getpass.getpass',lambda *a,**k:'new-token')
+    monkeypatch.setattr(PythonAnywhere,'call',lambda *a,**k:[])
+    assert prompt_configuration(db,reset_api=True)['domain']=='shop.example.com'
