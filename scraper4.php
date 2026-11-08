@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.632';
+const APP_VERSION = '10.633';
 
 
 if (!function_exists('str_starts_with')) {
@@ -41442,6 +41442,13 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
                 $pT = !empty($r['profile_task'])
                     ? ['phase'=>$r['phase']??'','current'=>$r['current']??0,'total'=>$r['total']??0,'sent'=>$r['current']??0]
                     : ($fT !== '' ? localTaskStateRead($fT, []) : []);
+                /* v10.633: cron must never undo an explicit Stop after an
+                   arbitrary 45-second grace period. Only a direct user Continue
+                   may override the durable stopped marker. */
+                if (empty($r['profile_task']) && is_array($defT) && tasksResumeExplicitlyStopped($rKey,$defT,$pT)) {
+                    $skipped[] = ['key' => $rKey, 'why' => 'توقف صریح کاربر؛ فقط دکمهٔ ادامه آن را دوباره اجرا می‌کند'];
+                    continue;
+                }
                 if ($rKey === 'matrix_fix' && $periodicBuildOnly && (string)($pT['source'] ?? '') === 'recon_auto') {
                     $skipped[] = ['key' => $rKey, 'why' => 'تیک فقط ساخت جدول دوره‌ای روشن است'];
                     continue;
@@ -49224,6 +49231,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"heartbeat alone is not daemon proof")!==false
         &&strpos($selfSrc,"{v:'10." . "632'")!==false
         &&version_compare(APP_VERSION,'10.632','>='));
+    $add('10.633','کران توقف صریح کاربر را پس از ۴۵ ثانیه لغو نمی‌کند',
+        strpos($selfSrc,"tasksResumeExplicitlyStopped(\$rKey,\$defT,\$pT)")!==false
+        &&strpos($selfSrc,"Only a direct user Continue")!==false
+        &&strpos($selfSrc,"{v:'10." . "633'")!==false
+        &&version_compare(APP_VERSION,'10.633','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101909,6 +101921,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.633', t:'⏹ توقف صریح پایدار در کران', items:[
+    'کران دیگر پس از پایان مهلت کوتاه ۴۵ ثانیه‌ای، عملیات صریحاً متوقف‌شده را خودکار ادامه نمی‌دهد.',
+    'ساخت ماتریس متوقف‌شده منابع نوویکس را دوباره اشغال نمی‌کند؛ فقط کلیک مستقیم ادامه می‌تواند آن را فعال کند.',
+    'استخراج و همگام‌سازی پروفایل‌ها تا پایان از ظرفیت محدود هاست استفاده می‌کنند.'
+  ]},
   {v:'10.632', t:'🧟 حذف worker خیالی در هاست نوویکس', items:[
     'heartbeat فایل worker بدون PID زنده یا flock معتبر دیگر نشانهٔ worker دائمی نیست.',
     'درخواست وب ماتریس یا استخراج نمی‌تواند running قدیمی را تازه کند و همگام‌سازی‌ها را به صف worker غیرموجود بفرستد.',
