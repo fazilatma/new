@@ -54,3 +54,45 @@ test('opaque original client boots and restores/selects profiles with real timer
  assert.ok(warnings.every(w=>w.startsWith('⚠️ Version mismatch! HTML shows:')),JSON.stringify(warnings));
  t.diagnostic(JSON.stringify({javascript_errors:errors.length,http_errors:httpErrors.length,upstream_stale_version_warnings:warnings.length,endpoint_actions:[...new Set(actions)],blocked_background_actions:Object.keys(diagnostics),broker_requests:messages.length}));
 });
+
+test('original interface fills desktop/mobile viewports; title, all tabs, secure menu and help remain reachable', {timeout:90000},async t=>{
+ const {page,origin}=await setup(t),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const before=await(await page.request.get(origin+'/__test__/snapshot')).json();
+ await page.goto(origin+'/php-ui');const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await page.frameLocator('#php-original-ui').locator('html[data-s4-ready="1"]').waitFor();
+ for(const size of [{width:1920,height:1080},{width:1280,height:800},{width:900,height:700},{width:899,height:700},{width:390,height:844},{width:320,height:568},{width:844,height:390}]){
+  await page.setViewportSize(size);await child.evaluate(()=>{scrollTo(0,0);switchMainTab('start');});
+  const box=await page.locator('#php-original-ui').boundingBox(),metrics=await child.evaluate(()=>{const box=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom};};return {title:box('body>.container>h1'),toolbar:box('#hdrTools'),content:box('body>.container'),tabs:box('#mainTabs'),width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth};});
+  t.diagnostic(JSON.stringify({viewport:size,frame:box,child:metrics}));
+  assert.ok(Math.abs(box.x)<1&&Math.abs(box.y)<1,JSON.stringify({size,box}));
+  assert.ok(Math.abs(box.width-size.width)<1&&Math.abs(box.height-size.height)<1,JSON.stringify({size,box}));
+  assert.ok(metrics.title.y>=metrics.toolbar.bottom+3,'fixed toolbar must not cover title on desktop or mobile');
+  assert.ok(metrics.width-metrics.content.width<=40,'no desktop-only 1400px content cap');
+  assert.ok(metrics.scrollWidth<=metrics.width+1,'no clipped horizontal document');
+  for(const tab of ['start','settings','selectors','results','send']){
+   const button=page.frameLocator('#php-original-ui').locator(`#mainTabs [data-tab="${tab}"]`);await button.click();assert.equal(await page.frameLocator('#php-original-ui').locator('#pane-'+tab).evaluate(el=>getComputedStyle(el).display!=='none'),true);
+  }
+  // Real original hamburger -> same-page parent help, not a persistent host bar.
+  await child.evaluate(()=>scrollTo(0,0));await page.frameLocator('#php-original-ui').locator('#hdrTools #hamburgerBtn').click();
+  await page.frameLocator('#php-original-ui').locator('[data-python-panel="help"]').click();await page.locator('#php-ui-about[open]').waitFor();
+  assert.equal(await page.locator('#php-ui-about').isVisible(),true);await page.locator('#php-ui-about-close').click();
+  assert.ok((await page.locator('#php-ui-recovery').boundingBox()).y<0,'no permanent host overlay after successful boot')
+  await child.evaluate(()=>toggleSettingsPanel());
+ }
+ // Keyboard-only recovery stays accessible without covering healthy content.
+ await page.locator('#php-ui-recovery').focus();assert.ok((await page.locator('#php-ui-recovery').boundingBox()).y>=0);
+ await page.keyboard.press('Enter');await page.locator('#php-ui-about[open]').waitFor();await page.keyboard.press('Escape');
+ assert.equal(await page.locator('#php-ui-about').evaluate(el=>el.open),false);
+ // Restoring a compact viewport cannot change data or start jobs.
+ const after=await(await page.request.get(origin+'/__test__/snapshot')).json();assert.deepEqual(after,before);assert.deepEqual(errors,[]);
+});
+
+
+test('failed original frame retains visible recovery; help can close with Escape and open usable secure settings', {timeout:30000},async t=>{
+ const {page,origin}=await setup(t);await page.route('**/php-ui/frame',route=>route.abort());
+ await page.goto(origin+'/php-ui');await page.locator('#php-ui-recovery').click();await page.locator('#php-ui-about[open]').waitFor();
+ await page.keyboard.press('Escape');assert.equal(await page.locator('#php-ui-about').evaluate(el=>el.open),false);
+ await page.locator('#php-ui-recovery').click();await page.locator('#hamburgerBtn').click();
+ assert.equal(await page.locator('#php-ui-about').evaluate(el=>el.open),false);
+ await page.locator('#settings-menu-close').click();
+ assert.equal(await page.locator('#settings-menu').evaluate(el=>el.open),false);
+});

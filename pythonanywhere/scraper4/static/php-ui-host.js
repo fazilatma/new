@@ -38,6 +38,7 @@ window.addEventListener('message',async event=>{
    try{data=await response.json();if(!data||typeof data!=='object'||typeof data.ok!=='boolean')throw Error('invalid envelope');}
    catch{code=response.status>=400?response.status:502;data={ok:false,error:response.status===401?'نشست پایان یافته است؛ دوباره وارد شوید.':`پاسخ endpoint معتبر نیست (HTTP ${response.status})؛ وضعیت سرور را بررسی و دوباره تلاش کنید.`};}
 
+   if(op==='app_ready'&&response.ok&&data.ok)document.body.classList.remove('php-ui-loading');
    if(data.key&&data.revision)revisions.set(data.key,data.revision);
    if(op==='load_profile'&&response.ok&&data.profile&&ticket===selectionTicket){window.S4NativeSelection=data.profile;window.S4NativeTools?.select(data.profile);}
    status.textContent=data.ok?(write?'عملیات پایتون انجام شد؛ اطلاعات واقعی ذخیره/صف شد.':'رابط اصلی PHP · اتصال‌های فعال از پایتون پاسخ می‌گیرند.'):(data.error||'خطای اتصال');

@@ -181,6 +181,6 @@ def write(db,settings,data):
 def contracts():
     return {'ok':True,'read_actions':sorted(php_ui.READS|READS),'write_actions':sorted(php_ui.WRITES|WRITES),
             'ui_actions':['python_open_panel'],'full_php_parity':False,'heartbeat_can_run_cron':False,
-            'trusted_panels':['woocommerce','basalam','backup','general','version','render','guardian','profile-stats','profile','selectors','results','audit'],
+            'trusted_panels':['woocommerce','basalam','backup','general','version','render','guardian','profile-stats','profile','selectors','results','audit','help'],
             'boot_policy':{'legacy_background_jobs':False,'automatic_selector_probes':False,'service_worker':False},
             'secret_operations':'trusted_parent_only','unknown_action_http_status':501}

@@ -186,3 +186,17 @@ test('parent reports HTML/invalid JSON/expired-session endpoint failures without
  }
  assert.deepEqual(e.errors,[]);
 });
+
+test('full-screen help stays a UI-only allowlisted panel; recovery, status, capabilities and secure settings remain accessible',async t=>{
+ const e=await trustedHost(t),{d}=e,about=d.querySelector('#php-ui-about');
+ assert.ok(d.body.classList.contains('php-ui-loading'));
+ const calls=e.calls.length;assert.equal((await e.send({action:'python_open_panel',panel:'help'})).status,200);
+ assert.equal(e.calls.length,calls);assert.ok(about.open);assert.equal(d.activeElement.id,'php-ui-about-close');
+ d.querySelector('#php-ui-capabilities').click();assert.ok(d.querySelector('#php-ui-help').open);
+ d.querySelector('#hamburgerBtn').click();assert.equal(about.open,false);assert.ok(d.querySelector('#settings-menu').open);
+ d.querySelector('#settings-menu-close').click();
+ d.querySelector('#php-ui-recovery').focus();d.querySelector('#php-ui-recovery').click();assert.ok(about.open);
+ d.querySelector('#php-ui-about-close').click();assert.equal(about.open,false);assert.equal(d.activeElement.id,'php-ui-recovery');
+ assert.equal((await e.send({action:'app_ready'})).status,200);assert.ok(!d.body.classList.contains('php-ui-loading'));
+ assert.deepEqual(e.errors,[]);
+});

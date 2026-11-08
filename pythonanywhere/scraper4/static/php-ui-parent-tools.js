@@ -1,10 +1,12 @@
 /* Trusted controls are reused, not cloned into the untrusted original client. */
 (()=>{'use strict';
+const about=document.getElementById('php-ui-about');let aboutReturnFocus=null;
 const dialog=document.getElementById('php-tools'),frame=document.getElementById('php-original-ui');let selected=null,refreshTicket=0;
 const keys=new Set(['woocommerce','basalam','backup','general','version','render','guardian','profile-stats']);
 const labels={profile:'تنظیمات و پاک‌سازی پروفایل انتخاب‌شده',selectors:'آزمایش واقعی سلکتورها',results:'تمام نتایج و جزئیات ذخیره‌شده',audit:'تست موتورهای استخراج با endpointهای واقعی'};
 function changeSelection(p){if(!p)return;selected=p;window.dispatchEvent(new CustomEvent('s4:profile-selected',{detail:{id:p.id}}));}
 function open(key){
+ if(key==='help'){if(!about.open){aboutReturnFocus=document.activeElement;about.showModal();document.getElementById('php-ui-about-close').focus();}return true;}
  if(keys.has(key)){window.S4Menu.open(key);if(key==='guardian')jobs();return true;}
  if(!Object.hasOwn(labels,key))return false;
  for(const section of dialog.querySelectorAll('[data-python-tool]'))section.hidden=section.dataset.pythonTool!==key;
@@ -14,6 +16,11 @@ function open(key){
  if(key==='selectors'&&selected){const form=document.getElementById('profile-form');if(!form.dataset.dirty){form.elements.url.value=selected.url;for(const [k,v]of Object.entries(selected.selectors||{}))if(form.elements[k])form.elements[k].value=v;for(const [k,v]of Object.entries(selected.detailSelectors||{}))if(form.elements['detail_'+k])form.elements['detail_'+k].value=v.selector||v;}}
  return true;
 }
+// Native dialogs are top-layer: dismiss help before opening the reused drawer.
+document.getElementById('hamburgerBtn').addEventListener('click',()=>{if(about.open){aboutReturnFocus=null;about.close();}},{capture:true});
+document.getElementById('php-ui-recovery').onclick=()=>open('help');
+document.getElementById('php-ui-about-close').onclick=()=>about.close();
+about.addEventListener('close',()=>{aboutReturnFocus?.focus();aboutReturnFocus=null;});
 document.getElementById('php-tools-close').onclick=()=>dialog.close();
 window.S4NativeTools={open,select:changeSelection};
 if(window.S4NativeSelection)changeSelection(window.S4NativeSelection);

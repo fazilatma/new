@@ -1,6 +1,23 @@
-@font-face{font-family:Vazirmatn;src:url(fonts/Vazirmatn-Regular.woff2) format('woff2');font-display:swap}*{box-sizing:border-box}body{margin:0;background:#0f172a;color:#e2e8f0;font:12px Vazirmatn,Tahoma,sans-serif;display:flex;flex-direction:column;height:100dvh}header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:7px 12px;background:#111c31}header a{color:#67e8f9}header span{color:#fcd34d}button{font:inherit;color:#fff;background:#334155;border:1px solid #64748b;border-radius:6px;cursor:pointer}#php-ui-status{margin:0;padding:4px 12px;color:#cbd5e1;overflow-wrap:anywhere}#php-ui-help{padding:6px 12px;max-height:40vh;overflow:auto;line-height:1.8}#php-ui-help:not([open]){display:none}iframe{flex:1;min-height:0;width:100%;border:0;background:#0f172a}
-body>header{flex-shrink:0}.php-tools-dialog{width:min(1200px,96vw);max-height:90dvh;overflow:auto;background:#0f172a;color:#e2e8f0;border:1px solid #475569;border-radius:12px;padding:18px}.php-tools-dialog::backdrop{background:#000b}.php-tools-dialog .section-heading{display:flex;justify-content:space-between}.php-tools-dialog [hidden]{display:none!important}body>dialog{font-size:13px}#settings-menu .menu-intro{line-height:1.8}
-
-body{font-family:var(--app-font,Tahoma,system-ui,sans-serif)}
-
-#php-ui-boot-policy{margin:0;padding:4px 12px;color:#94a3b8;font-size:11px}
+/* Host styles must not inherit dashboard padding, especially its mobile
+   bottom-navigation reserve. Only the opaque original client scrolls. */
+html{width:100%;height:100%;overflow:hidden}
+body.php-ui-host{margin:0;padding:0;width:100%;height:100vh;height:100dvh;overflow:hidden;background:#0f172a;color:#e2e8f0;font:12px/1.9 var(--app-font,Vazirmatn,Tahoma,sans-serif)}
+#php-original-ui{position:fixed;inset:0;display:block;width:100%;height:100vh;height:100dvh;min-width:0;min-height:0;max-width:none;margin:0;padding:0;border:0;background:#0f172a}
+/* Recovery access is keyboard-visible, never a persistent overlay over the
+   original UI. Mouse/touch access is inside the original hamburger. */
+.php-ui-recovery{position:fixed;inset-block-start:-1000px;inset-inline-start:8px;z-index:20}
+.php-ui-host.php-ui-loading .php-ui-recovery,.php-ui-recovery:focus{inset-block-start:8px}
+.php-ui-about,.php-tools-dialog{width:min(1200px,96vw);max-width:96vw;max-height:90vh;max-height:90dvh;overflow:auto;background:#0f172a;color:#e2e8f0;border:1px solid #475569;border-radius:12px;padding:18px;overscroll-behavior:contain}
+.php-ui-about::backdrop,.php-tools-dialog::backdrop{background:#000b}
+.php-ui-about>header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0 0 12px;background:#0f172a}
+.php-ui-about>header strong{flex:1 1 240px}
+.php-ui-about a{color:#67e8f9}
+#php-ui-status{overflow-wrap:anywhere}
+#php-ui-boot-policy{color:#94a3b8;font-size:11px}
+#php-ui-help{line-height:1.8}
+#php-ui-help:not([open]){display:none}
+.php-tools-dialog .section-heading{display:flex;justify-content:space-between}
+.php-tools-dialog [hidden]{display:none!important}
+body>dialog{font-size:13px}
+#settings-menu .menu-intro{line-height:1.8}
+@media(max-width:480px){.php-ui-about,.php-tools-dialog{padding:12px}.php-ui-about>header{gap:8px}}
