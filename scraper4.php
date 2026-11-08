@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.644';
+const APP_VERSION = '10.645';
 
 
 if (!function_exists('str_starts_with')) {
@@ -20889,6 +20889,44 @@ const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
 
+/* v10.645: cron-job.org cannot execute 42web's AES JavaScript challenge.
+   This fixed-destination bridge performs only that cookie handshake; it is not
+   a general proxy and cannot be redirected to an arbitrary host/path. */
+function s4Cron42webHttp(string $url,string $cookie=''):array{
+    if(!function_exists('curl_init'))return['ok'=>false,'code'=>0,'error'=>'curl_unavailable','body'=>''];
+    $ch=curl_init($url);$headers=['Accept: application/json,text/plain,*/*','User-Agent: scraper4-cron-bridge/1.0'];
+    curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_CONNECTTIMEOUT=>12,CURLOPT_TIMEOUT=>90,
+        CURLOPT_ENCODING=>'',CURLOPT_HTTPHEADER=>$headers,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
+    if($cookie!=='')curl_setopt($ch,CURLOPT_COOKIE,'__test='.$cookie);
+    $body=curl_exec($ch);$err=(string)curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);
+    return['ok'=>$body!==false&&$code>=200&&$code<400,'code'=>$code,'error'=>$err,'body'=>$body===false?'':(string)$body];
+}
+function s4Cron42webBridge():array{
+    $lock=@fopen(__DIR__.'/.cron-42web-bridge.lock','c');if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){if($lock)@fclose($lock);return['ok'=>true,'skipped'=>'bridge_busy'];}
+    try{
+        $base='https://scraper4.42web.io/scraper4.php?cron_run=1';$first=s4Cron42webHttp($base);
+        if(!$first['ok'])return['ok'=>false,'stage'=>'challenge','http'=>$first['code'],'error'=>$first['error']?:'HTTP '.$first['code']];
+        $body=(string)$first['body'];$decoded=json_decode($body,true);
+        if(is_array($decoded))return['ok'=>true,'challenge'=>false,'target_http'=>$first['code'],'target'=>$decoded];
+        $pat='~var\\s+a=toNumbers\\("([0-9a-f]{32})"\\)\\s*,\\s*b=toNumbers\\("([0-9a-f]{32})"\\)\\s*,\\s*c=toNumbers\\("([0-9a-f]{32})"\\)~i';
+        if(!preg_match($pat,$body,$m))return['ok'=>false,'stage'=>'parse','http'=>$first['code'],'error'=>'42web_aes_challenge_not_recognized','preview'=>mb_substr(strip_tags($body),0,180)];
+        if(!function_exists('openssl_decrypt'))return['ok'=>false,'stage'=>'decrypt','error'=>'openssl_decrypt_unavailable'];
+        $plain=@openssl_decrypt(hex2bin($m[3]),'AES-128-CBC',hex2bin($m[1]),OPENSSL_RAW_DATA|OPENSSL_ZERO_PADDING,hex2bin($m[2]));
+        if(!is_string($plain)||$plain==='')return['ok'=>false,'stage'=>'decrypt','error'=>'aes_decrypt_failed'];
+        $cookie=bin2hex($plain);$next=$base.'&i=1';
+        if(preg_match('~location\\.href=["\\\']([^"\\\']+)~i',$body,$lm)){
+            $candidate=html_entity_decode((string)$lm[1],ENT_QUOTES|ENT_HTML5,'UTF-8');$u=parse_url($candidate);
+            if(($u['scheme']??'')==='https'&&strtolower((string)($u['host']??''))==='scraper4.42web.io'&&($u['path']??'')==='/scraper4.php')$next=$candidate;
+        }
+        $second=s4Cron42webHttp($next,$cookie);$target=json_decode((string)$second['body'],true);
+        return['ok'=>$second['ok']&&is_array($target),'challenge'=>true,'target_http'=>$second['code'],
+            'target'=>is_array($target)?$target:null,'error'=>is_array($target)?'':($second['error']?:'42web_non_json_after_challenge')];
+    }finally{@flock($lock,LOCK_UN);@fclose($lock);}
+}
+if(isset($_GET['cron_42web_bridge'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    echo json_encode(s4Cron42webBridge(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
+}
 
 /* =====================================================================
  * v10.635: PHP runtime diagnostics and safe account-level tuning.
@@ -41630,6 +41668,10 @@ function tasksResumeAllStateWrite(array $st): void {
  */
 function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual'): array {
     $isCronAuto = ($trigger !== 'manual');
+    /* v10.645: every cron behaves like an attentive human pressing Continue.
+       It still respects live owners and explicit Stop, but does not wait four
+       minutes before retrying an unchanged, genuinely stale task. */
+    $humanWatchdog=strpos($trigger,'human_watchdog')!==false;
     $cnRa = loadConnections();
     if ($isCronAuto && array_key_exists('auto_resume_all_cron', $cnRa) && empty($cnRa['auto_resume_all_cron'])) {
         return ['ok' => true, 'disabled' => true, 'trigger' => $trigger, 'resumed' => [], 'skipped' => [], 'count' => 0, 'sequential' => true];
@@ -41700,7 +41742,7 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
                 $prevMeta = is_array($perTask[$rKey] ?? null) ? $perTask[$rKey] : [];
                 $prevAt = (int)($prevMeta['at'] ?? 0);
                 $prevSig = (string)($prevMeta['sig'] ?? '');
-                if ($prevAt > 0 && ($now - $prevAt) < 240 && $prevSig !== '' && $prevSig === $curSig) {
+                if (!$humanWatchdog && $prevAt > 0 && ($now - $prevAt) < 240 && $prevSig !== '' && $prevSig === $curSig) {
                     $deferredRows[] = ['row' => $r, 'sig' => $curSig, 'age_since_try' => ($now - $prevAt)];
                     continue;
                 }
@@ -41766,7 +41808,8 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
 
 function s4CronAutoResumeAllTasks(string $trigger = 'cron'): array {
     try {
-        return tasksResumeAllExecute('stale', $trigger);
+        $humanTrigger=strpos($trigger,'human_watchdog')!==false?$trigger:'human_watchdog_'.$trigger;
+        return tasksResumeAllExecute('stale', $humanTrigger);
     } catch (Throwable $e) {
         return ['ok' => false, 'trigger' => $trigger, 'error' => mb_substr($e->getMessage(), 0, 200), 'count' => 0, 'sequential' => true];
     }
@@ -49557,6 +49600,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$qe['resume_page']=max(1,\$page);")!==false
         &&strpos($selfSrc,"{v:'10." . "644'")!==false
         &&version_compare(APP_VERSION,'10.644','>='));
+    $add('10.645','هر cron نقش کاربر Continue را دارد و bridge ثابت AES برای 42web موجود است',
+        strpos($selfSrc,"\$humanTrigger=strpos(\$trigger,'human_watchdog')")!==false
+        &&strpos($selfSrc,"!\$humanWatchdog && \$prevAt > 0")!==false
+        &&strpos($selfSrc,'function s4Cron42webBridge():array')!==false
+        &&strpos($selfSrc,"if(isset(\$_GET['cron_42web_bridge']))")!==false
+        &&strpos($selfSrc,"scraper4.42web.io/scraper4.php?cron_run=1")!==false
+        &&strpos($selfSrc,"{v:'10." . "645'")!==false
+        &&version_compare(APP_VERSION,'10.645','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102279,6 +102330,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.645', t:'👤 نگهبان انسانی cron و پل امن 42web', items:[
+    'هر cron دقیقاً مانند کاربر انسانی فهرست کارهای stale را به‌ترتیب اولویت می‌بیند و Continue را بدون cooldown چهار‌دقیقه‌ای اجرا می‌کند.',
+    'مالک زنده و توقف صریح کاربر همچنان محترم‌اند و روی هاست بدون CLI در هر تیک فقط یک کار بازیابی می‌شود.',
+    'endpoint ثابت cron_42web_bridge چالش JavaScript/AES هاست 42web را با OpenSSL حل و فقط cron_run همان دامنه را فراخوانی می‌کند؛ SSRF عمومی نیست.',
+    'برای exec همچنان گزارش provider-only دقیق باقی می‌ماند، چون disable_functions سطح SYSTEM از داخل PHP قابل تغییر نیست.'
+  ]},
   {v:'10.644', t:'➡️ حرکت قطعی صفحه پس از هر برش استخراج', items:[
     'در پایان بودجه، checkpoint روی صفحهٔ بعدیِ واکشی‌نشده ذخیره می‌شود نه آخرین صفحهٔ موفق.',
     'منبع کندی که در هر برش فقط یک صفحه پاسخ می‌دهد دیگر همان صفحه را برای همیشه تکرار نمی‌کند.',
