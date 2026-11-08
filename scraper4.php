@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.635';
+const APP_VERSION = '10.636';
 
 
 if (!function_exists('str_starts_with')) {
@@ -20907,11 +20907,11 @@ function s4PhpRuntimeReport(): array {
     foreach(['exec','shell_exec','proc_open','popen','system','passthru','set_time_limit','fastcgi_finish_request'] as $name)
         $functions[$name]=function_exists($name);
     $iniNames=['memory_limit','max_execution_time','max_input_time','default_socket_timeout','upload_max_filesize','post_max_size','max_file_uploads','max_input_vars','output_buffering','opcache.enable','opcache.memory_consumption','realpath_cache_size','user_ini.filename','user_ini.cache_ttl','disable_functions'];
-    $ini=[];$all=@ini_get_all(null,true);
+    $ini=[];$all=@ini_get_all(null,true);$iniUser=defined('PHP_INI_USER')?(int)constant('PHP_INI_USER'):1;$iniPerdir=defined('PHP_INI_PERDIR')?(int)constant('PHP_INI_PERDIR'):2;
     foreach($iniNames as $name){
         $meta=is_array($all[$name]??null)?$all[$name]:[];$access=(int)($meta['access']??0);
         $ini[$name]=['value'=>(string)ini_get($name),'global'=>(string)($meta['global_value']??''),'access'=>$access,
-            'runtime_changeable'=>(bool)($access&PHP_INI_USER),'directory_changeable'=>(bool)($access&PHP_INI_PERDIR)];
+            'runtime_changeable'=>(bool)($access&$iniUser),'directory_changeable'=>(bool)($access&$iniPerdir)];
     }
     $disabled=array_values(array_filter(array_map('trim',explode(',',(string)ini_get('disable_functions')))));
     $userIniName=trim((string)ini_get('user_ini.filename'));if($userIniName==='')$userIniName='.user.ini';
@@ -20928,7 +20928,7 @@ function s4PhpRuntimeReport(): array {
     if(!$functions['proc_open'])$provider[]='Remove proc_open from disable_functions for supervised child processes.';
     if($missingRequired)$provider[]='Enable required extensions: '.implode(', ',$missingRequired).'.';
     return ['ok'=>true,'app_version'=>APP_VERSION,'php'=>['version'=>PHP_VERSION,'version_id'=>PHP_VERSION_ID,'sapi'=>PHP_SAPI,
-        'os'=>PHP_OS_FAMILY,'architecture'=>PHP_INT_SIZE*8,'zts'=>(bool)PHP_ZTS,'binary'=>basename($rawBin)],
+        'os'=>defined('PHP_OS_FAMILY')?PHP_OS_FAMILY:PHP_OS,'architecture'=>PHP_INT_SIZE*8,'zts'=>defined('PHP_ZTS')?(bool)constant('PHP_ZTS'):false,'binary'=>basename($rawBin)],
         'extensions'=>['required'=>$required,'recommended'=>$recommended,'optional'=>$optional,'loaded'=>$ext,
             'missing_required'=>$missingRequired,'missing_recommended'=>$missingRecommended],
         'functions'=>$functions,'disable_functions'=>$disabled,'ini'=>$ini,
@@ -20970,12 +20970,14 @@ function s4PhpRuntimeApply(): array {
 }
 if(isset($_GET['php_runtime_status'])||(($_POST['action']??'')==='php_runtime_status')){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
-    echo json_encode(s4PhpRuntimeReport(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+    try{$out=s4PhpRuntimeReport();}catch(Throwable $e){$out=['ok'=>false,'error'=>$e->getMessage(),'line'=>$e->getLine(),'version'=>APP_VERSION];http_response_code(500);}
+    echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 if(isset($_POST['php_runtime_apply'])||(($_POST['action']??'')==='php_runtime_apply')){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
-    $out=s4PhpRuntimeApply();if(empty($out['ok']))http_response_code((int)($out['http']??400));
-    echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+    try{$out=s4PhpRuntimeApply();}catch(Throwable $e){$out=['ok'=>false,'http'=>500,'error'=>$e->getMessage(),'line'=>$e->getLine()];}
+    if(empty($out['ok']))http_response_code((int)($out['http']??400));
+    echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 
 function s4CodeUpdateHttp(string $url,string $token='',int $timeout=90):array{
@@ -49342,6 +49344,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function phpRuntimeApply()')!==false
         &&strpos($selfSrc,"{v:'10." . "635'")!==false
         &&version_compare(APP_VERSION,'10.635','>='));
+    $add('10.636','گزارش PHP روی تفاوت‌های هاست همیشه JSON خطای ساختاریافته می‌دهد',
+        strpos($selfSrc,"defined('PHP_INI_PERDIR')")!==false
+        &&strpos($selfSrc,"JSON_INVALID_UTF8_SUBSTITUTE);exit;")!==false
+        &&strpos($selfSrc,"['ok'=>false,'error'=>\$e->getMessage(),'line'=>\$e->getLine(),'version'=>APP_VERSION]")!==false
+        &&strpos($selfSrc,"{v:'10." . "636'")!==false
+        &&version_compare(APP_VERSION,'10.636','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102063,6 +102071,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.636', t:'🧯 سازگاری گزارش PHP با تفاوت‌های هاست', items:[
+    'ثابت‌های سطح دسترسی ini و مشخصات سیستم با fallback سازگار خوانده می‌شوند.',
+    'خطاهای محیطی endpoint به‌جای پاسخ خالی به JSON ساختاریافته با خط و نسخه تبدیل می‌شوند.',
+    'متن‌های نامعتبر UTF-8 در پیکربندی هاست دیگر کل پاسخ گزارش را خالی نمی‌کنند.'
+  ]},
   {v:'10.635', t:'🐘 پنل تشخیص و تنظیم امن PHP', items:[
     'بخش تازهٔ منوی همبرگری نسخه و SAPI، افزونه‌ها، توابع exec، PHP CLI، محدودیت‌های ini و قابلیت worker را یکجا آزمایش می‌کند.',
     'اندپوینت php_runtime_status گزارش ماشینی بدون توکن و دادهٔ حساس می‌دهد؛ php_runtime_apply با مجوز نصب‌کننده بخش مدیریت‌شدهٔ .user.ini را اتمیک می‌نویسد.',
