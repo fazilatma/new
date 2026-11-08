@@ -815,7 +815,7 @@ function CartDrawer({ open, onClose, items, currency, onQty, onRemove, onCheckou
   );
 }
 
-function MenuDrawer({ open, onClose, settings, categories, onCat, cartCount, onOpenCart, accountUrl, adminUrl }) {
+function MenuDrawer({ open, onClose, settings, categories, onCat, cartCount, onOpenCart, onOpenCalculator, accountUrl, adminUrl }) {
   if (!open) return null;
   return (
     <>
@@ -832,10 +832,11 @@ function MenuDrawer({ open, onClose, settings, categories, onCat, cartCount, onO
         </div>
         <div className="sf-drawer-body">
           <p style={{ fontWeight: 800, color: '#64748b', marginTop: 0 }}>{settings.shop_subtitle}</p>
-          <div style={{ display: 'grid', gap: 8 }}>
+          <div className="sf-menu-actions" style={{ display: 'grid', gap: 8 }}>
             <button type="button" className="sf-action-btn" style={{ justifyContent: 'flex-start' }} onClick={() => { onCat('all'); onClose(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>🏠 صفحه اصلی</button>
             <button type="button" className="sf-action-btn" style={{ justifyContent: 'flex-start' }} onClick={() => { onOpenCart(); onClose(); }}>🛒 سبد خرید ({toFa(cartCount)})</button>
             <a className="sf-action-btn" style={{ justifyContent: 'flex-start' }} href={accountUrl}>👤 حساب کاربری</a>
+            <button type="button" className="sf-action-btn" data-vendor-open="true" onClick={() => { onClose(); onOpenCalculator(); }}>🧮 محاسبه گر غرفه داران</button>
             {adminUrl ? <a className="sf-action-btn" style={{ justifyContent: 'flex-start' }} href={adminUrl}>⚙️ مدیریت</a> : null}
             {settings.contact_phone ? <a className="sf-action-btn" style={{ justifyContent: 'flex-start' }} href={`tel:${settings.contact_phone}`}>📞 {settings.contact_phone}</a> : null}
           </div>
@@ -852,6 +853,94 @@ function MenuDrawer({ open, onClose, settings, categories, onCat, cartCount, onO
         </div>
       </aside>
     </>
+  );
+}
+
+
+// Parse Persian/Arabic digits and grouping separators without accepting expressions or signs.
+function parseCalculatorNumber(value) {
+  const text = String(value).trim().replace(/[۰-۹]/g, c => String(c.charCodeAt(0) - 1776))
+    .replace(/[٠-٩]/g, c => String(c.charCodeAt(0) - 1632)).replace(/[٬،,\s]/g, '').replace(/٫/g, '.');
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(text)) return null;
+  const number = Number(text);
+  return Number.isFinite(number) && number <= 1e12 ? number : null;
+}
+
+function VendorCalculator({ currency, onClose }) {
+  const [sale, setSale] = useState('');
+  const [base, setBase] = useState('');
+  const [share, setShare] = useState('');
+  const [method, setMethod] = useState('cash');
+  const [fee, setFee] = useState('5');
+  const dialogRef = useRef(null);
+  const inputRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const before = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    inputRef.current?.focus();
+    const keydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); onCloseRef.current(); return; }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const nodes = [...dialogRef.current.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), [href]')];
+      if (!nodes.length) return;
+      const first = nodes[0], last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', keydown);
+    return () => { document.removeEventListener('keydown', keydown); document.body.style.overflow = before; };
+  }, []);
+
+  const values = [sale, base, share, fee].map(parseCalculatorNumber);
+  const [saleValue, baseValue, shareValue, feeValue] = values;
+  let error = '';
+  if (sale !== '' && (saleValue === null || saleValue <= 0)) error = 'قیمت فروش باید عددی بیشتر از صفر باشد.';
+  else if (base !== '' && baseValue === null) error = 'قیمت پایه باید عددی نامنفی باشد.';
+  else if (saleValue !== null && baseValue !== null && baseValue > saleValue) error = 'قیمت پایه نمی‌تواند از قیمت فروش بیشتر باشد.';
+  else if (share !== '' && (shareValue === null || shareValue > 100)) error = 'درصد سهم غرفه‌دار باید بین صفر تا ۱۰۰ باشد.';
+  else if (method === 'sample' && fee !== '' && (feeValue === null || feeValue >= 100)) error = 'درصد کارمزد باید از صفر تا کمتر از ۱۰۰ باشد.';
+  let ready = !error && saleValue !== null && saleValue > 0 && baseValue !== null && shareValue !== null && (method === 'cash' || feeValue !== null);
+  const profit = ready ? saleValue - baseValue : 0;
+  const vendorShare = ready ? Math.round((profit * shareValue / 100) * 100) / 100 : 0;
+  const cash = ready ? Math.round((saleValue - vendorShare) * 100) / 100 : 0;
+  // Round up the sample price to a whole currency unit, ensuring the payout covers the cash amount.
+  const sample = ready && method === 'sample' ? Math.ceil(cash / (1 - feeValue / 100)) : 0;
+  if (method === 'sample' && ready && !Number.isSafeInteger(sample)) { error = 'مبلغ نمونه بیش از محدوده قابل محاسبه است؛ درصد کارمزد را بررسی کنید.'; ready = false; }
+  const money = value => `${toFa(value.toLocaleString('en-US', { maximumFractionDigits: 2 }))} ${currency}`;
+  return (
+    <div className="sf-vendor-modal sf-modal" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <section className="sf-vendor-card sf-modal-card" role="dialog" aria-modal="true" aria-labelledby="sf-vendor-title" ref={dialogRef}>
+        <header className="sf-vendor-head">
+          <div><span className="sf-vendor-kicker">محاسبه‌گر فروش</span><h2 id="sf-vendor-title">محاسبه گر غرفه داران</h2><p>سهم سود و مبلغ قابل پرداخت را سریع محاسبه کنید.</p></div>
+          <button type="button" className="sf-close" aria-label="بستن محاسبه‌گر" onClick={onClose}>✕</button>
+        </header>
+        <div className="sf-vendor-content">
+          <div className="sf-vendor-grid">
+            <label>قیمت فروش غرفه‌دار <span>({currency})</span><input ref={inputRef} inputMode="decimal" value={sale} onChange={e => setSale(e.target.value)} placeholder="مثلاً ۱۲۰٬۰۰۰" /></label>
+            <label>قیمت پایه محصول <span>({currency})</span><input inputMode="decimal" value={base} onChange={e => setBase(e.target.value)} placeholder="مثلاً ۱۰۰٬۰۰۰" /></label>
+            <label>درصد سهم غرفه‌دار از سود <span>٪</span><input inputMode="decimal" value={share} onChange={e => setShare(e.target.value)} placeholder="مثلاً ۲۰" /></label>
+            <label>درصد کارمزد محصول نمونه <span>٪</span><input inputMode="decimal" value={fee} onChange={e => setFee(e.target.value)} aria-describedby="sf-vendor-fee-help" /></label>
+          </div>
+          <p className="sf-vendor-help" id="sf-vendor-fee-help">کارمزد باسلام فقط در خرید محصول نمونه لحاظ می‌شود؛ پرداخت نقدی کارمزد ندارد.</p>
+          <fieldset className="sf-vendor-method"><legend>نوع پرداخت غرفه‌دار</legend>
+            <label><input type="radio" name="vendor-payment-method" value="cash" checked={method === 'cash'} onChange={() => setMethod('cash')} /> پرداخت نقدی</label>
+            <label><input type="radio" name="vendor-payment-method" value="sample" checked={method === 'sample'} onChange={() => setMethod('sample')} /> خرید محصول نمونه</label>
+          </fieldset>
+          {error ? <p className="sf-vendor-error" role="alert">{error}</p> : null}
+          {ready ? <div className="sf-vendor-results" aria-live="polite">
+            <div><span>سود محصول</span><strong>{money(profit)}</strong></div>
+            <div><span>سهم غرفه‌دار از سود</span><strong>{money(vendorShare)}</strong></div>
+            <div><span>پرداخت نقدی بدون کارمزد</span><strong>{money(cash)}</strong></div>
+            {method === 'sample' ? <div><span>کارمزد تقریبی باسلام</span><strong>{money(sample * feeValue / 100)}</strong></div> : null}
+            <div className="sf-vendor-total"><span>مبلغ نهایی قابل پرداخت {method === 'sample' ? '(محصول نمونه)' : '(نقدی)'}</span><strong data-testid="vendor-final">{money(method === 'sample' ? sample : cash)}</strong></div>
+            {method === 'sample' ? <p>قیمت نمونه به واحد کامل رو به بالا گرد می‌شود تا دریافتی پس از کسر کارمزد کمتر از مبلغ نقدی نباشد.</p> : null}
+          </div> : <p className="sf-vendor-empty">برای مشاهده نتیجه، قیمت‌ها و درصد سهم را وارد کنید.</p>}
+          <p className="sf-vendor-note">سهم غرفه‌دار از اختلاف قیمت فروش و قیمت پایه محاسبه و از مبلغ فروش کسر می‌شود. این محاسبه تخمینی است و هزینه‌های دیگر را شامل نمی‌شود.</p>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2326,6 +2415,7 @@ function StoreApp({ boot }) {
   const [wish, setWish] = useState(() => loadLS(WISH_KEY, {}));
   const [cartOpen, setCartOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [calculatorOpen, setCalculatorOpen] = useState(false);
   const [megaOpen, setMegaOpen] = useState(false);
   const [quick, setQuick] = useState(null);
   const [productPage, setProductPage] = useState(null);
@@ -3292,9 +3382,11 @@ function StoreApp({ boot }) {
         onCat={setCat}
         cartCount={cartCount}
         onOpenCart={() => setCartOpen(true)}
+        onOpenCalculator={() => setCalculatorOpen(true)}
         accountUrl={boot.urls?.account || '#'}
         adminUrl={boot.urls?.admin || ''}
       />
+      {calculatorOpen ? <VendorCalculator currency={currency} onClose={() => { setCalculatorOpen(false); setMenuOpen(true); window.setTimeout(() => document.querySelector('[data-vendor-open]')?.focus(), 40); }} /> : null}
       {productPage ? (
         <ProductPage
           product={productPage}

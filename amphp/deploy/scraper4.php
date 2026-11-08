@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.622';
+const APP_VERSION = '10.641';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1266,8 +1266,11 @@ function s4WorkerRecoverStaleLockPath(int $staleSec = 180): array {
 function s4WorkerIsActive(int $staleSec = 45): bool {
     $st = s4WorkerStateLoad();
     $hb = (int)($st['heartbeat'] ?? 0);$running=!empty($st['running']);
-    if ($running && $hb > 0 && time() - $hb <= $staleSec) return true;
     $pid=(int)($st['pid']??0);$age=$hb>0?time()-$hb:PHP_INT_MAX;
+    /* v10.632: heartbeat alone is not daemon proof. Web matrix/extraction
+       fallbacks also update worker_state and can inherit running=true from an
+       old daemon. Require the canonical worker flock or a genuinely live PID,
+       otherwise exec-disabled hosts enqueue forever into a phantom worker. */
     /* A PID can remain visible as a zombie after the daemon has exited, and an
        exec child may inherit WORKER_LOCK_FILE's fd after the parent daemon dies.
        Never treat an inherited lock as active once the daemon PID is dead and
@@ -1278,10 +1281,13 @@ function s4WorkerIsActive(int $staleSec = 45): bool {
         if ($free) @flock($fp, LOCK_UN);
         @fclose($fp);
     }
-    if ($lockHeld && ($pid <= 0 || s4WorkerPidAlive($pid) || $age <= max(120, $staleSec * 3))) return true;
-    /* Without lock ownership, accept a living PID only for a short handoff
-       window; never let a zombie suppress cron watchdog recovery forever. */
-    return $running&&$age<=max(120,$staleSec*2)&&s4WorkerPidAlive($pid);
+    /* v10.634: a lock without the daemon PID is commonly an fd inherited by a
+       web/exec child. It is not a worker. Require running + fresh heartbeat +
+       a recorded PID + canonical flock; when POSIX probing is available the PID
+       must also be alive. The daemon takes the flock before writing its state. */
+    if(!$running||$pid<=1||$age>max(120,$staleSec*3)||!$lockHeld)return false;
+    if(function_exists('posix_kill')&&!s4WorkerPidAlive($pid))return false;
+    return true;
 }
 
 function s4WorkerEnqueue(string $type, array $payload, string $label = ''): array {
@@ -17715,6 +17721,13 @@ function fetch_html_jina_reader(string $url, int $timeout = 25, array $prev = []
             $apiFallback['jina_reader_modes'] = $jinaModes;
             return $apiFallback;
         }
+        /* Do not hide the actionable APiX failure behind Jina's permanent 451.
+           The scheduler can back off/retry 429 and transient 5xx, but 451 made
+           a healthy SnappShop profile look permanently unreachable. */
+        if((int)($apiFallback['code']??0)>0){
+            $apiFallback['jina_reader_trace']=$trace;$apiFallback['jina_reader_modes']=$jinaModes;
+            $apiFallback['jina_error_before_apix']=(string)($last['error']??'');return $apiFallback;
+        }
     }
     if ($firstText !== null) {
         $firstText['jina_reader_trace'] = $trace;
@@ -20876,6 +20889,132 @@ const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
 
+
+/* =====================================================================
+ * v10.635: PHP runtime diagnostics and safe account-level tuning.
+ * Reading never exposes tokens or environment values. Applying requires the
+ * same deploy token / WordPress administrator nonce as code installation.
+ * Missing extensions and system-level disable_functions are reported only:
+ * shared hosting cannot safely change either from application PHP.
+ * ===================================================================== */
+function s4PhpRuntimeReport(): array {
+    $required=['curl','json','openssl','mbstring','fileinfo','mysqli','pdo','pdo_mysql','dom','xmlreader','xmlwriter','zip','gd','intl','sodium','opcache'];
+    $recommended=['imagick','pdo_sqlite','sqlite3','posix','sockets','bcmath','gmp','phar','apcu','brotli'];
+    $optional=['redis','igbinary','memcached','inotify','sysvsem','sysvmsg','sysvshm'];
+    $ext=[];
+    foreach(array_merge($required,$recommended,$optional) as $name)$ext[$name]=$name==='opcache'
+        ? (extension_loaded('Zend OPcache')||function_exists('opcache_get_status')) : extension_loaded($name);
+    $functions=[];
+    foreach(['exec','shell_exec','proc_open','popen','system','passthru','set_time_limit','fastcgi_finish_request'] as $name)
+        $functions[$name]=function_exists($name);
+    $iniNames=['memory_limit','max_execution_time','max_input_time','default_socket_timeout','upload_max_filesize','post_max_size','max_file_uploads','max_input_vars','output_buffering','opcache.enable','opcache.memory_consumption','realpath_cache_size','user_ini.filename','user_ini.cache_ttl','disable_functions'];
+    $ini=[];$all=@ini_get_all(null,true);$iniUser=defined('PHP_INI_USER')?(int)constant('PHP_INI_USER'):1;$iniPerdir=defined('PHP_INI_PERDIR')?(int)constant('PHP_INI_PERDIR'):2;
+    foreach($iniNames as $name){
+        $meta=is_array($all[$name]??null)?$all[$name]:[];$access=(int)($meta['access']??0);
+        $ini[$name]=['value'=>(string)ini_get($name),'global'=>(string)($meta['global_value']??''),'access'=>$access,
+            'runtime_changeable'=>(bool)($access&$iniUser),'directory_changeable'=>(bool)($access&$iniPerdir)];
+    }
+    $disabled=array_values(array_filter(array_map('trim',explode(',',(string)ini_get('disable_functions')))));
+    $userIniName=trim((string)ini_get('user_ini.filename'));if($userIniName==='')$userIniName='.user.ini';
+    $userIniPath=__DIR__.'/'.$userIniName;$managedIni=[];
+    if(is_file($userIniPath)){
+        $raw=(string)@file_get_contents($userIniPath);
+        if(preg_match('~; BEGIN SCRAPER4 MANAGED PHP(.*?); END SCRAPER4 MANAGED PHP~s',$raw,$mm)){
+            foreach(preg_split('~\\R~',(string)$mm[1]) as $line){
+                if(preg_match('~^\\s*([a-zA-Z0-9_.]+)\\s*=\\s*([^;#]+)~',$line,$kv)&&in_array($kv[1],$iniNames,true))$managedIni[$kv[1]]=trim($kv[2]);
+            }
+        }
+    }
+    $cli=[];
+    $rawBin=defined('PHP_BINARY')?(string)PHP_BINARY:'';
+    foreach(array_unique(array_filter([$rawBin,defined('PHP_BINDIR')?rtrim((string)PHP_BINDIR,'/').'/php':'','/usr/local/bin/php','/usr/bin/php','/opt/cpanel/ea-php83/root/usr/bin/php'])) as $candidate){
+        $cli[]=['path'=>$candidate,'exists'=>is_file($candidate),'executable'=>is_executable($candidate)];
+    }
+    $missingRequired=array_values(array_filter($required,static fn($x)=>empty($ext[$x])));
+    $missingRecommended=array_values(array_filter($recommended,static fn($x)=>empty($ext[$x])));
+    $provider=[];
+    if(!$functions['exec'])$provider[]='Remove exec from disable_functions and permit PHP CLI/background processes.';
+    if(!$functions['proc_open'])$provider[]='Remove proc_open from disable_functions for supervised child processes.';
+    if($missingRequired)$provider[]='Enable required extensions: '.implode(', ',$missingRequired).'.';
+    return ['ok'=>true,'app_version'=>APP_VERSION,'php'=>['version'=>PHP_VERSION,'version_id'=>PHP_VERSION_ID,'sapi'=>PHP_SAPI,
+        'os'=>defined('PHP_OS_FAMILY')?PHP_OS_FAMILY:PHP_OS,'architecture'=>PHP_INT_SIZE*8,'zts'=>defined('PHP_ZTS')?(bool)constant('PHP_ZTS'):false,'binary'=>basename($rawBin)],
+        'extensions'=>['required'=>$required,'recommended'=>$recommended,'optional'=>$optional,'loaded'=>$ext,
+            'missing_required'=>$missingRequired,'missing_recommended'=>$missingRecommended],
+        'functions'=>$functions,'disable_functions'=>$disabled,'ini'=>$ini,
+        'user_ini'=>['name'=>$userIniName,'path'=>basename($userIniPath),'exists'=>is_file($userIniPath),
+            'directory_writable'=>is_writable(__DIR__),'file_writable'=>!is_file($userIniPath)||is_writable($userIniPath),
+            'managed_settings'=>$managedIni,'cache_ttl'=>(int)ini_get('user_ini.cache_ttl')],
+        'cli_candidates'=>$cli,'worker'=>['active'=>function_exists('s4WorkerIsActive')?s4WorkerIsActive():false,
+            'exec_available'=>$functions['exec'],'persistent_capable'=>$functions['exec']&&$functions['proc_open']],
+        'provider_actions'=>$provider,'recommended_php'=>'8.3'];
+}
+function s4PhpRuntimeApplyAuth(): array {
+    $cfg=function_exists('vc_load')?vc_load():[];$expected=trim((string)($cfg['deploy_token']??''));
+    $given=trim((string)($_SERVER['HTTP_X_S4_UPDATE_TOKEN']??($_POST['token']??'')));
+    $tokenOk=$expected!==''&&$given!==''&&hash_equals($expected,$given);
+    $wp=function_exists('s4CodeUpdateAdminAuth')?s4CodeUpdateAdminAuth():['ok'=>false];
+    return ['ok'=>$tokenOk||!empty($wp['ok']),'token'=>$tokenOk,'wordpress'=>!empty($wp['ok'])];
+}
+function s4PhpIniBytes(string $value): int {
+    $v=trim($value);if($v==='-1')return PHP_INT_MAX;if(!preg_match('~^([0-9]+(?:\\.[0-9]+)?)\\s*([KMGT]?)~i',$v,$m))return 0;
+    $n=(float)$m[1];$power=array_search(strtoupper((string)$m[2]),['','K','M','G','T'],true);if($power===false)$power=0;
+    return (int)min(PHP_INT_MAX,$n*(1024**$power));
+}
+function s4PhpRuntimeApply(bool $trustedMigration=false): array {
+    $auth=$trustedMigration?['ok'=>true,'migration'=>true]:s4PhpRuntimeApplyAuth();if(empty($auth['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized'];
+    /* Never lower stronger hosting values. Zero/-1 execution limits mean unlimited and are preserved. */
+    $targets=['memory_limit'=>'1024M','max_execution_time'=>'300','max_input_time'=>'300','default_socket_timeout'=>'90',
+        'upload_max_filesize'=>'64M','post_max_size'=>'72M','max_file_uploads'=>'50','max_input_vars'=>'5000'];
+    $sizeKeys=['memory_limit','upload_max_filesize','post_max_size'];$unlimitedKeys=['max_execution_time','max_input_time'];$desired=[];
+    foreach($targets as $key=>$target){$current=trim((string)ini_get($key));$improve=false;
+        if(in_array($key,$sizeKeys,true))$improve=s4PhpIniBytes($current)<s4PhpIniBytes($target);
+        elseif(in_array($key,$unlimitedKeys,true))$improve=(int)$current>0&&(int)$current<(int)$target;
+        else $improve=(int)$current<(int)$target;
+        if($improve)$desired[$key]=$target;
+    }
+    $name=trim((string)ini_get('user_ini.filename'));if($name==='')$name='.user.ini';$path=__DIR__.'/'.$name;
+    if(is_file($path)&&!is_writable($path))return ['ok'=>false,'http'=>500,'error'=>'user_ini_not_writable','path'=>basename($path)];
+    if(!is_file($path)&&!is_writable(__DIR__))return ['ok'=>false,'http'=>500,'error'=>'plugin_directory_not_writable','path'=>basename($path)];
+    $before=is_file($path)?(string)@file_get_contents($path):'';
+    $start='; BEGIN SCRAPER4 MANAGED PHP';$end='; END SCRAPER4 MANAGED PHP';
+    $lines=[$start,'; Safe account-level settings. Extensions and disable_functions require the hosting provider.'];
+    foreach($desired as $key=>$value)$lines[]=$key.' = '.$value;
+    $managed=implode("\n",$lines)."\n".$end;
+    $pattern='~(?:^|\\R)'.preg_quote($start,'~').'.*?'.preg_quote($end,'~').'(?=\\R|$)~s';
+    $clean=preg_replace($pattern,'',$before);if(!is_string($clean))$clean=$before;
+    $next=rtrim($clean).($clean!==''?"\n\n":'').$managed."\n";
+    $backup='';if($before!==''){$backup=$path.'.before-s4';@file_put_contents($backup,$before,LOCK_EX);}
+    $tmp=$path.'.tmp.'.(int)getmypid();$written=@file_put_contents($tmp,$next,LOCK_EX);
+    if($written===false||!@rename($tmp,$path)){@unlink($tmp);return ['ok'=>false,'http'=>500,'error'=>'user_ini_write_failed','path'=>basename($path)];}
+    $runtime=[];foreach($desired as $key=>$value){$old=(string)ini_get($key);$r=@ini_set($key,$value);$runtime[$key]=['before'=>$old,'requested'=>$value,'runtime_applied'=>$r!==false,'effective_now'=>(string)ini_get($key)];}
+    return ['ok'=>true,'path'=>basename($path),'backup'=>basename($backup),'existing_content_preserved'=>true,'settings'=>$runtime,
+        'changed_directives'=>array_keys($desired),'stronger_values_preserved'=>true,
+        'note'=>'Only lower finite limits were raised. PHP-FPM/LiteSpeed may cache .user.ini for user_ini.cache_ttl seconds; extensions, exec and PHP version remain provider-level.',
+        'report'=>s4PhpRuntimeReport()];
+}
+/* One-time post-update migration: code_update_status is the updater's trusted
+   verification step. It applies only monotonic account-level improvements and
+   records the result; public runtime reads remain side-effect free afterwards. */
+if(isset($_GET['code_update_status'])&&version_compare(APP_VERSION,'10.638','>=')&&PHP_SAPI!=='cli'){
+    $migrationFile=__DIR__.'/.scraper4-php-runtime-10638.json';
+    if(!is_file($migrationFile)){
+        try{$migration=s4PhpRuntimeApply(true);}catch(Throwable $e){$migration=['ok'=>false,'error'=>$e->getMessage(),'line'=>$e->getLine()];}
+        $migration['attempted_at']=time();$migration['app_version']=APP_VERSION;
+        @file_put_contents($migrationFile,json_encode($migration,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);
+    }
+}
+if(isset($_GET['php_runtime_status'])||(($_POST['action']??'')==='php_runtime_status')){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    try{$out=s4PhpRuntimeReport();}catch(Throwable $e){$out=['ok'=>false,'error'=>$e->getMessage(),'line'=>$e->getLine(),'version'=>APP_VERSION];http_response_code(500);}
+    echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
+}
+if(isset($_POST['php_runtime_apply'])||(($_POST['action']??'')==='php_runtime_apply')){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    try{$out=s4PhpRuntimeApply();}catch(Throwable $e){$out=['ok'=>false,'http'=>500,'error'=>$e->getMessage(),'line'=>$e->getLine()];}
+    if(empty($out['ok']))http_response_code((int)($out['http']??400));
+    echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
+}
+
 function s4CodeUpdateHttp(string $url,string $token='',int $timeout=90):array{
     if(!function_exists('curl_init'))return ['ok'=>false,'code'=>0,'error'=>'curl_unavailable','body'=>''];
     $h=['User-Agent: scraper4-code-updater','Accept: application/octet-stream','Cache-Control: no-cache'];
@@ -21084,10 +21223,35 @@ function s4RecycleOutdatedExtractSlotProcesses(?string $expectedVer = null): arr
     }
     return $recycled;
 }
+/** A killed PHP request must not leave the updater visibly "checking" forever.
+ * Only reconcile after both updater flocks are proven free; an actual download
+ * is therefore never overwritten. The next ordinary tick may retry after its
+ * normal interval/backoff. */
+function s4CodeUpdateReconcileStaleState(int $staleSec=210):array{
+    if(!is_file(S4_CODE_UPDATE_STATE_FILE))return ['reconciled'=>false,'reason'=>'no_state'];
+    $state=@json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);
+    if(!is_array($state)||empty($state['checking']))return ['reconciled'=>false,'reason'=>'not_checking'];
+    $started=(int)($state['checked_at']??0);$age=$started>0?time()-$started:PHP_INT_MAX;
+    if($age<max(180,$staleSec))return ['reconciled'=>false,'reason'=>'within_download_window','age'=>$age];
+    $locks=[];
+    foreach([__DIR__.'/.scraper4-auto-update.lock',__DIR__.'/.scraper4-code-update.lock']as$file){
+        $fp=@fopen($file,'c');if(!$fp){foreach($locks as$h){@flock($h,LOCK_UN);@fclose($h);}return ['reconciled'=>false,'reason'=>'lock_open_failed'];}
+        if(!@flock($fp,LOCK_EX|LOCK_NB)){@fclose($fp);foreach($locks as$h){@flock($h,LOCK_UN);@fclose($h);}return ['reconciled'=>false,'reason'=>'update_still_running','age'=>$age];}
+        $locks[]=$fp;
+    }
+    try{
+        $disk=s4DiskCodeMeta();unset($state['checking']);$state['finished_at']=time();$state['ok']=false;$state['updated']=false;
+        $state['to_version']=$disk['version'];$state['sha']=$disk['sha'];$state['error']='stale_update_request_recovered';
+        @file_put_contents(S4_CODE_UPDATE_STATE_FILE,json_encode($state,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),LOCK_EX);
+        return ['reconciled'=>true,'age'=>$age,'disk_version'=>$disk['version']];
+    }finally{foreach(array_reverse($locks)as$h){@flock($h,LOCK_UN);@fclose($h);}}
+}
+
 /** بدون deploy.php: هر پردازه حداکثر هر دو دقیقه branch ثابت را بررسی می‌کند.
  * flock قبل از شبکه گرفته می‌شود تا ده request همزمان سهمیه GitHub را نسوزانند. */
 function s4AutoCodeUpdateTick(bool $force=false):array{
     $now=time();$disk=s4DiskCodeMeta();$diskVer=$disk['version'];$diskSha=$disk['sha'];
+    $stateRecovery=s4CodeUpdateReconcileStaleState();
     $state=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$j=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($j))$state=$j;}
     if(!empty($state['to_version'])&&(string)$state['to_version']!==$diskVer&&empty($state['checking'])){
         /* فایل روی دیسک بیرون از auto-updater (مثلاً توسط deploy.php روی برنچ دستی) عوض شده است؛
@@ -21136,10 +21300,10 @@ if(isset($_GET['code_update_sync_state'])){
 }
 if(isset($_GET['code_update_status'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');$cfg=vc_load();$wp=s4CodeUpdateAdminAuth();
-    $disk=s4DiskCodeMeta();
+    $disk=s4DiskCodeMeta();$autoRecovery=s4CodeUpdateReconcileStaleState();
     $auto=[];if(is_file(S4_CODE_UPDATE_STATE_FILE)){$aj=json_decode((string)@file_get_contents(S4_CODE_UPDATE_STATE_FILE),true);if(is_array($aj))$auto=$aj;}
     echo json_encode(['ok'=>true,'version'=>APP_VERSION,'disk_version'=>$disk['version'],'disk_sha'=>$disk['sha'],'endpoint'=>basename(__FILE__).'?code_update=1','method'=>'POST',
-        'auto_update'=>true,'auto_interval'=>S4_CODE_UPDATE_INTERVAL,'auto_endpoint'=>'?code_auto_update=1','auto_state'=>$auto,
+        'auto_update'=>true,'auto_interval'=>S4_CODE_UPDATE_INTERVAL,'auto_endpoint'=>'?code_auto_update=1','auto_state'=>$auto,'auto_state_recovery'=>$autoRecovery,
         'deploy_php_required'=>false,'source'=>S4_CODE_UPDATE_REPO.'@'.implode(',',vc_normalize_branches((array)($cfg['branches']??[]))).':'.S4_CODE_UPDATE_PATH,
         'branches'=>vc_normalize_branches((array)($cfg['branches']??[])),'pinned_branch'=>(string)($cfg['pinned_branch']??''),'token_configured'=>trim((string)($cfg['deploy_token']??''))!=='','admin'=>!empty($wp['admin']),
         'nonce'=>!empty($wp['admin'])&&function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
@@ -27724,10 +27888,22 @@ if (isset($_POST['ai_content_auto'])) {
         'bsl_cats' => !isset($aca['bsl_cats']) || !empty($aca['bsl_cats']),
     ];
 }
-if (isset($_POST['baleh'])) { $bl = json_decode($_POST['baleh'], true) ?: []; $conn['baleh'] = ['enabled'=>!empty($bl['enabled']),'token'=>trim($bl['token']??''),'chat_id'=>trim($bl['chat_id']??'')]; }
-if (isset($_POST['rubika'])) { $rb = json_decode($_POST['rubika'], true) ?: []; $conn['rubika'] = ['enabled'=>!empty($rb['enabled']),'token'=>trim($rb['token']??''),'chat_id'=>trim($rb['chat_id']??'')]; }
+$notifMessengerInput=function(array $raw):array{
+    $ids=is_array($raw['chat_ids']??null)?$raw['chat_ids']:[];
+    $conversation=trim((string)($ids['conversations']??$ids['customer_chat']??$ids['vendor_chat']??$raw['conversation_chat_id']??''));
+    return ['enabled'=>!empty($raw['enabled']),'token'=>trim((string)($raw['token']??'')),
+        'chat_id'=>trim((string)($raw['chat_id']??'')),
+        'all_same'=>!array_key_exists('all_same',$raw)||!empty($raw['all_same']),
+        'chat_ids'=>[
+            'conversations'=>$conversation,
+            'orders'=>trim((string)($ids['orders']??$raw['orders_chat_id']??'')),
+            'visits'=>trim((string)($ids['visits']??$raw['visits_chat_id']??'')),
+        ]];
+};
+if (isset($_POST['baleh'])) { $bl = json_decode($_POST['baleh'], true) ?: []; $conn['baleh'] = $notifMessengerInput($bl); }
+if (isset($_POST['rubika'])) { $rb = json_decode($_POST['rubika'], true) ?: []; $conn['rubika'] = $notifMessengerInput($rb); }
 /* v10.78 (92): تلگرام — سومین پیام‌رسان، با همان ساختار بله/روبیکا */
-if (isset($_POST['telegram'])) { $tgm = json_decode($_POST['telegram'], true) ?: []; $conn['telegram'] = ['enabled'=>!empty($tgm['enabled']),'token'=>trim($tgm['token']??''),'chat_id'=>trim($tgm['chat_id']??'')]; }
+if (isset($_POST['telegram'])) { $tgm = json_decode($_POST['telegram'], true) ?: []; $conn['telegram'] = $notifMessengerInput($tgm); }
 if (isset($_POST['notif_events'])) { $ne = json_decode($_POST['notif_events'], true) ?: []; $conn['notif_events'] = ['order_new'=>!empty($ne['order_new']),'order_status'=>!empty($ne['order_status']),'chat_msg'=>!empty($ne['chat_msg']),'product_status'=>!empty($ne['product_status']),'product_new'=>!empty($ne['product_new']),'order_refund'=>!empty($ne['order_refund']),'src_price'=>!empty($ne['src_price']),'src_stock'=>!empty($ne['src_stock']),'run_fail'=>!empty($ne['run_fail']),'retire'=>!empty($ne['retire']),'cron_ping'=>!empty($ne['cron_ping']),/* v10.35 (۴۷د): گزارشِ همگام‌سازی — پیش‌فرض روشن، پس نبودِ کلید یعنی روشن */'sync_report'=>!isset($ne['sync_report'])||!empty($ne['sync_report'])]; }
 /* v10.392: a short, user-defined installation/host label is appended to every notification. */
 if (isset($_POST['notif_source_text'])) $conn['notif_source_text'] = mb_substr(trim((string)$_POST['notif_source_text']), 0, 160);
@@ -28733,6 +28909,58 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     echo json_encode(['ok'=>!empty($resumeResult['ok']),'started'=>true,'resuming'=>true,'browser_held'=>true,
         'profile_key'=>$pk,'phase'=>$phase,'start_page'=>(int)$meta['start_page'],'result'=>$resumeResult],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
+}
+
+/* v10.640: exec-disabled hosts need a real attached owner, not a queued daemon
+   job that can never be claimed. Select the least-recently serviced extraction
+   checkpoint and run one bounded segment. The queue/worker locks remain the
+   authority, and explicit user stops are never overridden. */
+function s4HasAttachedExtractionWork():bool{
+    if(s4WorkerIsActive())return false;$now=time();
+    foreach((array)(extractReadQueue()['entries']??[])as$row){
+        if(!is_array($row)||!in_array((string)($row['status']??''),['paused','waiting','running'],true))continue;
+        $qid=trim((string)($row['id']??''));$pk=trim((string)($row['profile_key']??''));if($qid===''||$pk==='')continue;
+        if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user'||extractStopRequestedForQueue($qid,false))continue;
+        if((string)($row['status']??'')==='running'&&extractLockHeldForQueue($qid))return true;
+        $recent=max((int)($row['resume_requested_at']??0),(int)($row['updated_at']??0),(int)($row['started_at']??0));
+        if((string)($row['status']??'')!=='running'||$recent<=0||$now-$recent>=40)return true;
+    }
+    return false;
+}
+function s4RunOneAttachedExtractionSegment(string $source='web_cron',int $budgetSec=20):array{
+    if(s4WorkerIsActive())return['ok'=>true,'skipped'=>'persistent_worker_active'];
+    $q=extractReadQueue();$candidates=[];$now=time();
+    foreach((array)($q['entries']??[])as$row){
+        if(!is_array($row))continue;$qid=trim((string)($row['id']??''));$pk=trim((string)($row['profile_key']??''));$st=(string)($row['status']??'');
+        if($qid===''||$pk===''||!in_array($st,['paused','waiting','running'],true))continue;
+        if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user'||extractStopRequestedForQueue($qid,false))continue;
+        if(extractLockHeldForQueue($qid))continue;
+        if($st==='running'){
+            $recent=max((int)($row['resume_requested_at']??0),(int)($row['updated_at']??0),(int)($row['started_at']??0));
+            if($recent>0&&$now-$recent<40)continue;
+            $paused=extractQueuePauseStaleRow($qid,0,true);if(!$paused)continue;$row=(array)($paused['row']??$row);
+        }
+        $candidates[]=$row;
+    }
+    if(!$candidates)return['ok'=>true,'skipped'=>'no_resumable_extraction'];
+    usort($candidates,static fn($a,$b)=>((int)($a['updated_at']??0)<=> (int)($b['updated_at']??0))?:strcmp((string)($a['id']??''),(string)($b['id']??'')));
+    $row=$candidates[0];$qid=(string)$row['id'];$pk=(string)$row['profile_key'];
+    $profiles=loadProfiles();if(!is_array($profiles[$pk]??null))return['ok'=>false,'error'=>'profile_not_found','queue_id'=>$qid];
+    $prep=extractResumePrepare($pk,loadConnections(),$qid,true);
+    if(empty($prep['ok']))return['ok'=>true,'skipped'=>'checkpoint_busy','reason'=>(string)($prep['reason']??''),'queue_id'=>$qid];
+    $phase=(string)($prep['phase']??$row['resume_phase']??$row['phase']??'list');if(!in_array($phase,['list','detail'],true))$phase='list';
+    $pr=loadProfiles()[$pk]??$profiles[$pk];$runPhase=$phase==='list'&&!empty($pr['_extract_want_detail'])?'all':$phase;
+    $detailMode=normalizeDetailExtractMode($pr['detailExtractMode']??'two_stage');
+    $GLOBALS['_extractCronSliceSec']=max(15,min(25,$budgetSec));
+    header('Cache-Control: no-store');header('X-Accel-Buffering: no');@ini_set('zlib.output_compression','0');
+    try{$res=runBackendExtract($pk,$source,false,$runPhase,false,(string)($prep['queue_id']??$qid),-1,$detailMode);}
+    catch(Throwable $e){$res=['ok'=>false,'error'=>$e->getMessage(),'resume_needed'=>true];}
+    return['ok'=>!empty($res['ok']),'ran'=>true,'source'=>$source,'queue_id'=>$qid,'profile_key'=>$pk,'phase'=>$phase,
+        'resume_needed'=>!empty($res['resume_needed'])||!empty($res['ran_out']),'result'=>$res];
+}
+if(isset($_GET['internal_extract_feedback'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Access-Control-Allow-Origin: *');
+    echo json_encode(s4RunOneAttachedExtractionSegment('browser_attached',20),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 
 if (isset($_GET['extract_recover_stuck']) || isset($_POST['extract_recover_stuck'])) {
@@ -34314,6 +34542,19 @@ function bslRecoverMissingQueueRowFromProgress(array $cn): array {
 
 function cronWatchdogs(array $cn): array {
     $results = ['watchdog' => []];
+    /* Reconcile the generic server worker before subsystem watchdogs. A dead
+       daemon can otherwise leave a durable job marked running forever and its
+       dedup key blocks every later Continue/cron request. Active flocks and
+       live PIDs are never touched. On exec-disabled hosts the recovered matrix
+       rows remain available to the web/cron segmented worker. */
+    if(function_exists('s4WorkerIsActive')&&!s4WorkerIsActive()){
+        $results['worker_lock_recovery']=s4WorkerRecoverStaleLockPath(180);
+        if(!s4WorkerIsActive()){
+            $results['worker_orphans_requeued']=(int)s4WorkerRecoverOrphanJobs((int)@getmypid());
+            $results['worker_restart']=s4SpawnPersistentWorker();
+        }
+    }
+    $results['update_state_recovery']=s4CodeUpdateReconcileStaleState();
     $orphanSend=bslRecoverMissingQueueRowFromProgress($cn);
     if(!empty($orphanSend['recovered']))$results['bsl_orphan_row_recovered']=$orphanSend;
     /* Reconcile Send-tab shop selection before any recovery. This also cleans
@@ -36633,7 +36874,14 @@ if((string)getenv('S4_INTERNAL_CRON')!=='1'){
 $GLOBALS['_syncSendReconciliation']=syncPipelineReconcileMissingSendQueues(true);
 $GLOBALS['_cellEqualizeReconciliation']=syncCellEqualizeReconcile();
 /* v10.472: با هر بار رسیدن کران (داخلی یا خارجی)، دکمهٔ «ادامه همه» در مدیریت وظایف خودکار زده می‌شود */
-$GLOBALS['_cronTasksResumeAll']=s4CronAutoResumeAllTasks($_cronVisualKind.'_cron');
+/* v10.641: On no-CLI hosting, do not spend the single dispatch slot queuing
+   manual_sync/matrix work for a daemon that cannot exist while extraction
+   checkpoints are waiting. The attached runner below owns this pulse. */
+if(!s4WorkerIsActive()&&function_exists('s4HasAttachedExtractionWork')&&s4HasAttachedExtractionWork()){
+    $GLOBALS['_cronTasksResumeAll']=['ok'=>true,'skipped'=>'attached_extraction_priority','count'=>0,'trigger'=>$_cronVisualKind.'_cron'];
+}else{
+    $GLOBALS['_cronTasksResumeAll']=s4CronAutoResumeAllTasks($_cronVisualKind.'_cron');
+}
 /* v10.476: اجرای خودکار روزانهٔ تست مدل‌های هوش مصنوعی و انتخاب مستر + پشتیبان‌ها بر اساس آمار تست */
 if(function_exists('s4CronMaybeRunDailyAiTest')){
     $GLOBALS['_cronDailyAiTest']=s4CronMaybeRunDailyAiTest($_cronVisualKind.'_cron');
@@ -36783,6 +37031,20 @@ register_shutdown_function(function () use ($cronLockFp) {
         @fclose($cronLockFp);
     }
 });
+/* v10.640: On a host without a persistent daemon, extraction checkpoints are
+   the first-class cron workload. Run exactly one attached bounded segment and
+   return; the next pulse fairly picks the oldest remaining row. Heavy matrix
+   work cannot consume this pulse or force a five-minute stale wait. */
+if(!s4WorkerIsActive()&&function_exists('s4RunOneAttachedExtractionSegment')
+    &&function_exists('s4HasAttachedExtractionWork')&&s4HasAttachedExtractionWork()){
+    /* Extraction has its own authoritative flock. Do not hold the global cron
+       flock across slow source HTTP: one slow page previously made every later
+       cron report "previous cron still owns the lock". */
+    if(is_resource($cronLockFp))@flock($cronLockFp,LOCK_UN);
+    $_cronExtract=s4RunOneAttachedExtractionSegment('external_cron_attached',20);
+    cronEmit(['ok'=>!empty($_cronExtract['ok']),'profile_extraction'=>$_cronExtract,
+        'priority'=>'profile_before_matrix','cron_lock_released'=>true,'version'=>APP_VERSION]);exit;
+}
 
 /* =====================================================================
    v10.21 (۳۴ج): «نبضِ کران» — علتِ قطع‌شدنِ اعلانِ دوره‌ای
@@ -41173,6 +41435,19 @@ if(isset($_POST['tasks_cpu_guard'])){
     echo json_encode(['ok'=>$saved,'cpu_guard'=>s4CpuGuardSettings($cnCpu)],JSON_UNESCAPED_UNICODE);exit;
 }
 
+if(isset($_GET['continuity_enable'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $cnContinuity=loadConnections();
+    $cnContinuity['auto_resume_all_cron']=true;$cnContinuity['stall_watchdog']=true;$cnContinuity['auto_resume']=true;
+    $cnContinuity['internal_cron_enabled']=true;$cnContinuity['internal_cron_sec']=max(30,min(60,(int)($cnContinuity['internal_cron_sec']??30)));
+    $catCfg=is_array($cnContinuity['catfix_auto']??null)?$cnContinuity['catfix_auto']:[];
+    $catCfg['enabled']=true;$catCfg['interval_h']=1;$catCfg['all_vendors']=true;$catCfg['use_learn']=true;
+    $cnContinuity['catfix_auto']=$catCfg;$savedContinuity=saveConnections($cnContinuity);
+    echo json_encode(['ok'=>$savedContinuity,'version'=>APP_VERSION,'auto_resume_all_cron'=>true,
+        'stall_watchdog'=>true,'auto_resume'=>true,'internal_cron_sec'=>$cnContinuity['internal_cron_sec'],
+        'catfix_auto'=>$catCfg],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+
 if (isset($_POST['tasks_auto_resume_toggle']) || isset($_GET['tasks_auto_resume_toggle'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $cnT = loadConnections();
@@ -41337,7 +41612,14 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
         $periodicBuildOnly = !empty($reconCfgRa['build_only']);
         $reg = tasksRegistry();
         $rows = tasksRowsOrdered($now);
-        foreach (array_merge(tasksProfilePipelineRows($now),tasksProfileExtractionRows($now)) as $_pipelineTask) { $_pipelineTask['rank'] = count($rows) + 1; $rows[] = $_pipelineTask; }
+        /* v10.631: on exec-disabled hosting only one web fallback may start per
+           cron pass. Put profile pipelines/extractions before heavyweight
+           matrix continuation, otherwise a resumable matrix monopolizes every
+           pass and profile jobs remain pending with attempts=0 indefinitely. */
+        $_profileRowsRa=array_merge(tasksProfilePipelineRows($now),tasksProfileExtractionRows($now));
+        foreach($_profileRowsRa as $_priRa=>&$_pipelineTask){$_pipelineTask['rank']=$_priRa+1;}unset($_pipelineTask);
+        foreach($rows as $_baseRa=>&$_baseTaskRa){$_baseTaskRa['rank']=count($_profileRowsRa)+$_baseRa+1;}unset($_baseTaskRa);
+        $rows=array_merge($_profileRowsRa,$rows);unset($_profileRowsRa);
         $done = []; $skipped = []; $dispatchedCount = 0;
         $maxDispatchPerPass = (function_exists('s4CanSpawnCliTask') && s4CanSpawnCliTask()) ? ($isCronAuto ? 6 : 8) : 1;
         $maxDispatchPerPass=min($maxDispatchPerPass,s4CpuGuardMaxParallel($cnRa));
@@ -41362,6 +41644,13 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
                 $pT = !empty($r['profile_task'])
                     ? ['phase'=>$r['phase']??'','current'=>$r['current']??0,'total'=>$r['total']??0,'sent'=>$r['current']??0]
                     : ($fT !== '' ? localTaskStateRead($fT, []) : []);
+                /* v10.633: cron must never undo an explicit Stop after an
+                   arbitrary 45-second grace period. Only a direct user Continue
+                   may override the durable stopped marker. */
+                if (empty($r['profile_task']) && is_array($defT) && tasksResumeExplicitlyStopped($rKey,$defT,$pT)) {
+                    $skipped[] = ['key' => $rKey, 'why' => 'توقف صریح کاربر؛ فقط دکمهٔ ادامه آن را دوباره اجرا می‌کند'];
+                    continue;
+                }
                 if ($rKey === 'matrix_fix' && $periodicBuildOnly && (string)($pT['source'] ?? '') === 'recon_auto') {
                     $skipped[] = ['key' => $rKey, 'why' => 'تیک فقط ساخت جدول دوره‌ای روشن است'];
                     continue;
@@ -45951,6 +46240,12 @@ if(isset($_GET['internal_matrix_feedback'])){
     $cn=loadConnections();$enabled=!array_key_exists('internal_cron_enabled',$cn)||!empty($cn['internal_cron_enabled']);
     if(!$enabled){echo json_encode(['ok'=>true,'skipped'=>'internal_cron_disabled']);exit;}
     if(s4WorkerIsActive()){echo json_encode(['ok'=>true,'skipped'=>'persistent_worker_active','revived_fix'=>s4WorkerReviveFailedMatrixFix()]);exit;}
+    /* Profile extraction owns the scarce attached web request before matrix. */
+    foreach((array)(extractReadQueue()['entries']??[])as$_mxEx){
+        if(!is_array($_mxEx)||!in_array((string)($_mxEx['status']??''),['paused','waiting','running'],true))continue;
+        $_mxQid=trim((string)($_mxEx['id']??''));if($_mxQid===''||!empty($_mxEx['stopped_by_user'])||(string)($_mxEx['paused_by']??'')==='user')continue;
+        if(!extractStopRequestedForQueue($_mxQid,false)){echo json_encode(['ok'=>true,'skipped'=>'profile_extraction_priority','queue_id'=>$_mxQid]);exit;}
+    }
     $job=s4WorkerClaimMatrixWebJob();if(!$job){echo json_encode(['ok'=>true,'skipped'=>'no_pending_matrix_job']);exit;}
     $jid=(string)($job['id']??'');$type=(string)($job['type']??'');$payload=is_array($job['payload']??null)?$job['payload']:[];$payload['resume']=true;
     try{
@@ -49071,6 +49366,137 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$row['variants']??\$row['variations']")!==false
         &&strpos($selfSrc,"{v:'10." . "622'")!==false
         &&version_compare(APP_VERSION,'10.622','>='));
+    $__laneFirst623=bslPeriodicBalancedLane(['entries'=>[]],[],'profile-a');
+    $__laneNext623=bslPeriodicBalancedLane(['entries'=>[['id'=>'q-detail','status'=>'waiting','lane'=>'detail','profile_key'=>'profile-b']]],[],'profile-a');
+    $add('10.623','لین ۲ ابتدا پر می‌شود و progress پایانی کاذب پاک‌سازی‌پذیر است',
+        (string)($__laneFirst623['lane']??'')==='detail'&&(string)($__laneNext623['lane']??'')==='fast'
+        &&strpos($selfSrc,'function bslReconcileTerminalLaneProgress')!==false
+        &&strpos($selfSrc,"['done','failed','cancelled']")!==false
+        &&strpos($selfSrc,"if(!empty(\$_GET['summary']))")!==false
+        &&strpos($selfSrc,"{v:'10." . "623'")!==false
+        &&version_compare(APP_VERSION,'10.623','>='));
+    $add('10.624','خلاصهٔ صف گزارش‌های حجیم هر محصول را حمل نمی‌کند',
+        strpos($selfSrc,"\$compactLanes=['enabled'")!==false
+        &&strpos($selfSrc,"'profile_lanes'=>\$compactLanes")!==false
+        &&strpos($selfSrc,"{v:'10." . "624'")!==false
+        &&version_compare(APP_VERSION,'10.624','>='));
+    $add('10.625','دو لین و فازهای پس از محصول بدون بیکاری ادامه می‌یابند',
+        strpos($selfSrc,'function bslRebalanceWaitingProfileToDetail')!==false
+        &&strpos($selfSrc,"'lane_rebalanced_from']='fast'")!==false
+        &&strpos($selfSrc,"isset(\$_GET['continuity_enable'])")!==false
+        &&strpos($selfSrc,"status=done is the sole durable completion signal")!==false
+        &&strpos($selfSrc,"jina_error_before_apix")!==false
+        &&strpos($selfSrc,"{v:'10." . "625'")!==false
+        &&version_compare(APP_VERSION,'10.625','>='));
+    $add('10.626','صف محلی دسته‌بندی پشت شکست فهرست دوردست متوقف نمی‌شود',
+        strpos($selfSrc,"\$remoteFetchIncomplete=!empty(\$partial['partial'])")!==false
+        &&strpos($selfSrc,"\$hasMoreSlices=true")!==false
+        &&strpos($selfSrc,"{v:'10." . "626'")!==false
+        &&version_compare(APP_VERSION,'10.626','>='));
+    $add('10.627','ادامهٔ مستقیم و sweep سراسری ownerهای مرده',
+        strpos($selfSrc,'function s4CodeUpdateReconcileStaleState(int $staleSec=210):array')!==false
+        &&strpos($selfSrc,"'worker_orphans_requeued'")!==false
+        &&strpos($selfSrc,"if(!autoResume&&!confirm(msg))")===false
+        &&strpos($selfSrc,"stale.map((t,i)=>")===false
+        &&strpos($selfSrc,"{v:'10." . "627'")!==false
+        &&version_compare(APP_VERSION,'10.627','>='));
+    $__notifCfg628=['chat_id'=>'legacy','all_same'=>false,'chat_ids'=>['customer_chat'=>'customers','vendor_chat'=>'vendors','orders'=>'orders','visits'=>'visits']];
+    $add('10.628','مقصدهای نوع اعلان با fallback سازگار حفظ می‌شوند',
+        notifMessengerChatId($__notifCfg628,'chat_customer')==='customers'
+        &&notifMessengerChatId($__notifCfg628,'chat_vendor')==='customers'
+        &&notifMessengerChatId($__notifCfg628,'order')==='orders'
+        &&notifMessengerChatId($__notifCfg628,'site_visit')==='visits'
+        &&notifMessengerChatId(['chat_id'=>'legacy','chat_ids'=>[]],'order')==='legacy'
+        &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
+        &&strpos($selfSrc,"{v:'10." . "628'")!==false
+        &&version_compare(APP_VERSION,'10.628','>='));
+    $__notifCfg629=['chat_id'=>'common','all_same'=>false,'chat_ids'=>['conversations'=>'talk','orders'=>'orders','visits'=>'visits']];
+    $add('10.629','مشتری و ادمین یک مقصد گفتگو دارند و تیک همه یکسان قفل مقصدهای جدا را کنترل می‌کند',
+        notifMessengerChatId($__notifCfg629,'chat_customer')==='talk'
+        &&notifMessengerChatId($__notifCfg629,'chat_vendor')==='talk'
+        &&notifMessengerChatId(array_merge($__notifCfg629,['all_same'=>true]),'order')==='common'
+        &&strpos($selfSrc,"function messengerSameToggle(prefix)")!==false
+        &&substr_count($selfSrc,'AllSame" checked onchange="messengerSameToggle')===3
+        &&strpos($selfSrc,"{v:'10." . "629'")!==false
+        &&version_compare(APP_VERSION,'10.629','>='));
+    $__togglePos630=strpos($selfSrc,'function messengerSameToggle(prefix)');
+    $__applyPos630=strpos($selfSrc,'function applyCn()');
+    $add('10.630','تیک همه یکسان handler سراسری دارد و پیام‌رسان‌ها ابتدا بسته‌اند',
+        $__togglePos630!==false&&$__applyPos630!==false&&$__togglePos630<$__applyPos630
+        &&strpos($selfSrc,'<details id="balehMessengerPanel" class="alert alert-info"')!==false
+        &&strpos($selfSrc,'<details id="rubikaMessengerPanel" class="alert alert-info"')!==false
+        &&strpos($selfSrc,'<details id="telegramMessengerPanel" class="alert alert-info"')!==false
+        &&strpos($selfSrc,'MessengerPanel" '.'open')===false
+        &&strpos($selfSrc,"{v:'10." . "630'")!==false
+        &&version_compare(APP_VERSION,'10.630','>='));
+    $add('10.631','هاست بدون exec استخراج و همگام‌سازی پروفایل را پیش از ماتریس ادامه می‌دهد',
+        strpos($selfSrc,"\$rows=array_merge(\$_profileRowsRa,\$rows)")!==false
+        &&strpos($selfSrc,"matrix continuation, otherwise a resumable matrix monopolizes every")!==false
+        &&strpos($selfSrc,"{v:'10." . "631'")!==false
+        &&version_compare(APP_VERSION,'10.631','>='));
+    $add('10.632','heartbeat وب بدون PID یا flock به‌اشتباه worker دائمی شناخته نمی‌شود',
+        strpos($selfSrc,"if (\$running && \$hb > 0 && time() - \$hb <= \$staleSec) return true;")===false
+        &&strpos($selfSrc,"heartbeat alone is not daemon proof")!==false
+        &&strpos($selfSrc,"{v:'10." . "632'")!==false
+        &&version_compare(APP_VERSION,'10.632','>='));
+    $add('10.633','کران توقف صریح کاربر را پس از ۴۵ ثانیه لغو نمی‌کند',
+        strpos($selfSrc,"tasksResumeExplicitlyStopped(\$rKey,\$defT,\$pT)")!==false
+        &&strpos($selfSrc,"Only a direct user Continue")!==false
+        &&strpos($selfSrc,"{v:'10." . "633'")!==false
+        &&version_compare(APP_VERSION,'10.633','>='));
+    $add('10.634','flock موروثی بدون PID معتبر worker دائمی محسوب نمی‌شود',
+        strpos($selfSrc,"if(!\$running||\$pid<=1||\$age>max(120,\$staleSec*3)||!\$lockHeld)return false;")!==false
+        &&strpos($selfSrc,"a lock without the daemon PID")!==false
+        &&strpos($selfSrc,"{v:'10." . "634'")!==false
+        &&version_compare(APP_VERSION,'10.634','>='));
+    $add('10.635','پنل و endpoint امن تشخیص و تنظیم PHP وجود دارد',
+        strpos($selfSrc,'function s4PhpRuntimeReport(): array')!==false
+        &&strpos($selfSrc,"isset(\$_GET['php_runtime_status'])")!==false
+        &&strpos($selfSrc,"isset(\$_POST['php_runtime_apply'])")!==false
+        &&strpos($selfSrc,'BEGIN SCRAPER4 MANAGED PHP')!==false
+        &&strpos($selfSrc,'id="phpRuntimeSmenu"')!==false
+        &&strpos($selfSrc,'function phpRuntimeApply()')!==false
+        &&strpos($selfSrc,"{v:'10." . "635'")!==false
+        &&version_compare(APP_VERSION,'10.635','>='));
+    $add('10.636','گزارش PHP روی تفاوت‌های هاست همیشه JSON خطای ساختاریافته می‌دهد',
+        strpos($selfSrc,"defined('PHP_INI_PERDIR')")!==false
+        &&strpos($selfSrc,"JSON_INVALID_UTF8_SUBSTITUTE);exit;")!==false
+        &&strpos($selfSrc,"['ok'=>false,'error'=>\$e->getMessage(),'line'=>\$e->getLine(),'version'=>APP_VERSION]")!==false
+        &&strpos($selfSrc,"{v:'10." . "636'")!==false
+        &&version_compare(APP_VERSION,'10.636','>='));
+    $add('10.637','اعمال تنظیمات PHP هرگز مقادیر قوی‌تر هاست را کاهش نمی‌دهد',
+        strpos($selfSrc,'function s4PhpIniBytes(string $value): int')!==false
+        &&strpos($selfSrc,"'stronger_values_preserved'=>true")!==false
+        &&strpos($selfSrc,"extension_loaded('Zend OPcache')")!==false
+        &&strpos($selfSrc,"{v:'10." . "637'")!==false
+        &&version_compare(APP_VERSION,'10.637','>='));
+    $add('10.638','مهاجرت یک‌بارهٔ پس از نصب تنظیمات امن PHP را بدون افشای token اعمال می‌کند',
+        strpos($selfSrc,'function s4PhpRuntimeApply(bool $trustedMigration=false): array')!==false
+        &&strpos($selfSrc,".scraper4-php-runtime-10638.json")!==false
+        &&strpos($selfSrc,'$migration=s4PhpRuntimeApply(true)')!==false
+        &&strpos($selfSrc,"{v:'10." . "638'")!==false
+        &&version_compare(APP_VERSION,'10.638','>='));
+    $add('10.639','گزارش PHP تنظیمات مدیریت‌شدهٔ روی دیسک و زمان cache را نشان می‌دهد',
+        strpos($selfSrc,"'managed_settings'=>\$managedIni")!==false
+        &&strpos($selfSrc,"'cache_ttl'=>(int)ini_get('user_ini.cache_ttl')")!==false
+        &&strpos($selfSrc,'u.managed_settings||{}')!==false
+        &&strpos($selfSrc,"{v:'10." . "639'")!==false
+        &&version_compare(APP_VERSION,'10.639','>='));
+    $add('10.640','هاست بدون exec هر checkpoint استخراج را پیش از ماتریس با request متصل و محدود ادامه می‌دهد',
+        strpos($selfSrc,'function s4RunOneAttachedExtractionSegment(string $source=')!==false
+        &&strpos($selfSrc,"if(isset(\$_GET['internal_extract_feedback']))")!==false
+        &&strpos($selfSrc,"'priority'=>'profile_before_matrix'")!==false
+        &&strpos($selfSrc,"const cronReference=location.origin+location.pathname;")!==false
+        &&strpos($selfSrc,"'skipped'=>'profile_extraction_priority'")!==false
+        &&strpos($selfSrc,"{v:'10." . "640'")!==false
+        &&version_compare(APP_VERSION,'10.640','>='));
+    $add('10.641','استخراج متصل قفل سراسری cron را نگه نمی‌دارد و dispatch بی‌worker را مصرف نمی‌کند',
+        strpos($selfSrc,'function s4HasAttachedExtractionWork():bool')!==false
+        &&strpos($selfSrc,"'skipped'=>'attached_extraction_priority'")!==false
+        &&strpos($selfSrc,"if(is_resource(\$cronLockFp))@flock(\$cronLockFp,LOCK_UN);")!==false
+        &&strpos($selfSrc,"'cron_lock_released'=>true")!==false
+        &&strpos($selfSrc,"{v:'10." . "641'")!==false
+        &&version_compare(APP_VERSION,'10.641','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -63408,9 +63834,32 @@ function bslAnyChatRouteOn(array $cn): bool {
 function notifMessengerConfigured(array $cn, string $channel): bool {
     if (!in_array($channel, ['baleh', 'rubika', 'telegram'], true)) return false;
     $cfg = $cn[$channel] ?? null;
-    return is_array($cfg)
-        && trim((string)($cfg['token'] ?? '')) !== ''
-        && trim((string)($cfg['chat_id'] ?? '')) !== '';
+    if (!is_array($cfg) || trim((string)($cfg['token'] ?? '')) === '') return false;
+    if (trim((string)($cfg['chat_id'] ?? '')) !== '') return true;
+    $ids = is_array($cfg['chat_ids'] ?? null) ? $cfg['chat_ids'] : [];
+    foreach (['conversations', 'customer_chat', 'vendor_chat', 'orders', 'visits'] as $key) {
+        if (trim((string)($ids[$key] ?? '')) !== '') return true;
+    }
+    return false;
+}
+/** Resolve a notification class. Customer/admin always share one conversation destination. */
+function notifMessengerChatId(array $cfg, ?string $feed): string {
+    $ids = is_array($cfg['chat_ids'] ?? null) ? $cfg['chat_ids'] : [];
+    $general = trim((string)($cfg['chat_id'] ?? ''));
+    $allSame = !array_key_exists('all_same', $cfg) || !empty($cfg['all_same']);
+    if ($allSame && $general !== '') return $general;
+    $map = [
+        'chat_customer' => 'conversations', 'customer_chat' => 'conversations',
+        'chat_vendor' => 'conversations', 'vendor_chat' => 'conversations', 'admin_chat' => 'conversations',
+        'order' => 'orders', 'orders' => 'orders',
+        'visit' => 'visits', 'visits' => 'visits', 'site_visit' => 'visits',
+    ];
+    $key = $map[(string)$feed] ?? '';
+    /* v10.629 migration: both old conversation keys collapse into one shared value. */
+    $specific = $key === 'conversations'
+        ? trim((string)($ids['conversations'] ?? $ids['customer_chat'] ?? $ids['vendor_chat'] ?? ''))
+        : ($key !== '' ? trim((string)($ids[$key] ?? '')) : '');
+    return $specific !== '' ? $specific : $general;
 }
 function notifMessengerReady(array $cn, string $channel): bool {
     $cfg = $cn[$channel] ?? null;
@@ -63829,7 +64278,7 @@ function notifRecordAutoSent(string $coreMsg, ?string $feed): void {
     }
 }
 
-function notifSend(array $cn, string $msg, ?string $feed = null, array $media = []): array {
+function notifSend(array $cn, string $msg, ?string $feed = null, array $media = [], ?string $route = null): array {
     $_coreMsgForDedup = $msg;
     if (notifShouldSuppressAutoDuplicate($cn, $_coreMsgForDedup, $feed)) {
         return ['suppressed_duplicate' => 'sent_before'];
@@ -63837,12 +64286,13 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
     /* Add exactly the saved textbox text; no website URL, instance ID, or version. */
     $msg=notifAppendSourceText($msg,$cn);
     $out = [];
-    $bt = $cn['baleh']['token'] ?? '';  $bc = $cn['baleh']['chat_id'] ?? '';
-    $rt = $cn['rubika']['token'] ?? ''; $rc = $cn['rubika']['chat_id'] ?? '';
-    $tt = $cn['telegram']['token'] ?? ''; $tc = $cn['telegram']['chat_id'] ?? '';   // v10.78 (92): تلگرام
-    $sendBaleh = notifMessengerReady($cn, 'baleh');
-    $sendRubika = notifMessengerReady($cn, 'rubika');
-    $sendTelegram = notifMessengerReady($cn, 'telegram');
+    $destinationClass = $route ?? $feed;
+    $bt = $cn['baleh']['token'] ?? '';  $bc = notifMessengerChatId((array)($cn['baleh'] ?? []), $destinationClass);
+    $rt = $cn['rubika']['token'] ?? ''; $rc = notifMessengerChatId((array)($cn['rubika'] ?? []), $destinationClass);
+    $tt = $cn['telegram']['token'] ?? ''; $tc = notifMessengerChatId((array)($cn['telegram'] ?? []), $destinationClass);   // v10.628: مقصد مستقل هر نوع اعلان
+    $sendBaleh = notifMessengerReady($cn, 'baleh') && $bc !== '';
+    $sendRubika = notifMessengerReady($cn, 'rubika') && $rc !== '';
+    $sendTelegram = notifMessengerReady($cn, 'telegram') && $tc !== '';
     /* v10.109: لینک‌های داخل متن — پیش‌نمایش وب برای تلگرام/بله */
     $wantPreview = $media !== [] || (bool)preg_match('~https?://\S+~u', $msg);
     if ($sendBaleh)  { $rb = bslSendToBaleh($bt, $bc, $msg, $wantPreview); $out['baleh'] = $rb['ok'] ? 'sent' : 'fail'; if (!$rb['ok'] && $rb['error'] !== '') $out['baleh_err'] = $rb['error']; if ($rb['ok'] && ($rb['message_id'] ?? '') !== '') { $out['baleh_msg_id'] = $rb['message_id']; msgrSaveMsg('bale', $rb['message_id'], 0, 0); } }   // v10.79 (93)
@@ -65572,7 +66022,7 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                 /* Commit this chat signature before slow messenger/media calls to prevent replay after timeout. */
                 notifSaveState($st);
                 $_media109 = bslChatCollectMedia($f['nc'], $body);
-                $sentTo = notifSend($cn, $msg, null, $_media109);
+                $sentTo = notifSend($cn, $msg, null, $_media109, !empty($f['is_admin']) ? 'chat_vendor' : 'chat_customer');
                 /* v10.85 (99): message_id با context چت برای webhook */
                 $_ncCh85 = (int)($f['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($f['nc']['shop'] ?? 1); $_ncWh85 = (string)($f['nc']['who'] ?? '');
                 foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
@@ -66205,7 +66655,10 @@ function queueCronHandoffPrepare(): ?array {
             $q=json_decode((string)@file_get_contents($qFile),true);$entry=null;
             foreach((array)($q['entries']??[])as $e)if(is_array($e)&&(string)($e['id']??'')===$qid){$entry=$e;break;}
             $status=(string)($entry['status']??'');$total=(int)($entry['total']??0);$current=(int)($entry['current']??0);
-            if(!$entry||$status==='done'||($total>0&&$current>=$total)){unset($all[$which]);continue;}
+            /* current==total closes only the product loop. Category, image,
+               variant and failed-item repair phases may still own this row;
+               status=done is the sole durable completion signal. */
+            if(!$entry||in_array($status,['done','failed','cancelled'],true)){unset($all[$which]);continue;}
             if(queueHasExplicitUserStop($which,$qid)){unset($all[$which]);continue;}
             $probe=queueBackendLock($which);if(!$probe)continue;queueBackendUnlock($probe);
             $get=is_array($h['get']??null)?$h['get']:[];$post=is_array($h['post']??null)?$h['post']:[];
@@ -79890,6 +80343,34 @@ function bslLaneIsLive(string $lane,int $fresh=180): bool {
     $p=readProgress(bslLaneProgressFile($lane));if(empty($p['running']))return false;
     $beat=max((int)($p['last_progress_ts']??0),(int)($p['started_at']??0));return $beat>0&&time()-$beat<$fresh;
 }
+/** A terminal queue row can never own a running lane progress file. Clear only
+ * that false running flag while holding the physical lane flock; all counters
+ * and checkpoint data remain available for history/diagnostics. */
+function bslReconcileTerminalLaneProgress(string $lane,?array $queue=null): array {
+    $lane=bslNormalizeProfileLane($lane);if($lane==='legacy')return ['changed'=>false,'reason'=>'legacy'];
+    if($queue===null)$queue=bslReadQueue();$file=bslLaneProgressFile($lane);$progress=readProgress($file);
+    $qid=trim((string)($progress['queue_id']??$progress['checkpoint']['queue_id']??''));
+    if($qid===''||empty($progress['running']))return ['changed'=>false,'queue_id'=>$qid,'reason'=>'not_running'];
+    $row=null;foreach((array)($queue['entries']??[]) as $candidate){
+        if(is_array($candidate)&&(string)($candidate['id']??'')===$qid){$row=$candidate;break;}
+    }
+    $status=(string)($row['status']??'missing');
+    if(!in_array($status,['done','failed','cancelled'],true))return ['changed'=>false,'queue_id'=>$qid,'status'=>$status,'reason'=>'non_terminal'];
+    $lock=@fopen(bslLaneLockFile($lane),'c');$free=is_resource($lock)&&@flock($lock,LOCK_EX|LOCK_NB);
+    if(!$free){if(is_resource($lock))@fclose($lock);return ['changed'=>false,'queue_id'=>$qid,'status'=>$status,'reason'=>'worker_lock_held'];}
+    /* Re-read after taking the lock so a just-finished worker cannot be
+       overwritten with an older snapshot. */
+    $latest=readProgress($file);$latestQid=trim((string)($latest['queue_id']??$latest['checkpoint']['queue_id']??''));
+    $changed=false;
+    if($latestQid===$qid&&!empty($latest['running'])){
+        $latest['running']=false;$latest['stale']=true;$latest['orphaned_terminal']=true;
+        $latest['terminal_queue_status']=$status;$latest['reconciled_at']=time();
+        if($status==='done')$latest['done']=true;
+        writeProgress($file,$latest);$changed=true;
+    }
+    @flock($lock,LOCK_UN);@fclose($lock);
+    return ['changed'=>$changed,'queue_id'=>$qid,'status'=>$status,'reason'=>$changed?'terminal_progress_cleared':'progress_changed'];
+}
 /** Assign one periodic-sync profile to exactly one physical lane. Lane 2 wins
  * an equal-load tie; once it owns a profile the next profile fills Lane 1. */
 function bslPeriodicBalancedLane(array $queue,array $profile,string $profileKey): array {
@@ -79901,10 +80382,58 @@ function bslPeriodicBalancedLane(array $queue,array $profile,string $profileKey)
         if($profileKey!==''&&$rk!==''&&($rk===$profileKey||profileKey($rk)===profileKey($profileKey)))$existing=$row;
     }
     if($existing)return ['lane'=>bslRowLane($existing),'existing'=>$existing,'eligible_detail'=>!empty($existing['with_details'])];
-    $summary=extractProfileDetailSummary($profile);$eligible=!empty($summary['enabled'])&&extractProfileHasAnyDetailData($summary);
-    if(!$eligible)return ['lane'=>'fast','existing'=>null,'eligible_detail'=>false,'detail_summary'=>$summary,'loads'=>['fast'=>count($active['fast']),'detail'=>count($active['detail'])]];
+    $summary=extractProfileDetailSummary($profile);$configuredDetail=!empty($summary['enabled'])&&extractProfileHasAnyDetailData($summary);
+    /* Periodic distribution is a lane-capacity decision, not a selector
+       eligibility decision. The first profile must fill Lane 2 and the next
+       one Lane 1 even when this profile has no optional detail selectors. Lane
+       1 still strips its payload; Lane 2 preserves every extracted field. */
     $fast=count($active['fast']);$detail=count($active['detail']);$lane=$detail<=$fast?'detail':'fast';
-    return ['lane'=>$lane,'existing'=>null,'eligible_detail'=>true,'detail_summary'=>$summary,'loads'=>['fast'=>$fast,'detail'=>$detail]];
+    return ['lane'=>$lane,'existing'=>null,'eligible_detail'=>$configuredDetail,'detail_summary'=>$summary,'loads'=>['fast'=>$fast,'detail'=>$detail]];
+}
+/** Keep both send workers useful when older releases accumulated every
+ * periodic row in Lane 1. A waiting periodic row is moved—not copied—to Lane 2
+ * only after its stripped payload is losslessly rehydrated from the current
+ * profile snapshot by exact product key. Lane 1 always retains another profile. */
+function bslRebalanceWaitingProfileToDetail(array $queue): array {
+    $active=['fast'=>[],'detail'=>[]];
+    foreach((array)($queue['entries']??[]) as $row){
+        if(!is_array($row)||!in_array((string)($row['status']??''),['running','waiting','paused'],true))continue;
+        $lane=bslRowLane($row);if(isset($active[$lane]))$active[$lane][]=$row;
+    }
+    if($active['detail'])return ['changed'=>false,'reason'=>'detail_not_idle'];
+    $fastProfiles=[];foreach($active['fast'] as $row){$pk=trim((string)($row['profile_key']??''));if($pk!=='')$fastProfiles[$pk]=true;}
+    if(count($fastProfiles)<2)return ['changed'=>false,'reason'=>'lane1_needs_work'];
+    $pick=null;
+    foreach($active['fast'] as $row){
+        if((string)($row['status']??'')!=='waiting'||empty($row['auto_sync'])||queueHasExplicitUserStop('bsl',(string)($row['id']??'')))continue;
+        if((int)($row['current']??0)>0)continue;$pick=$row;break;
+    }
+    if(!$pick)return ['changed'=>false,'reason'=>'no_safe_periodic_waiter'];
+    $pk=trim((string)($pick['profile_key']??''));$qid=(string)($pick['id']??'');$file=(string)($pick['products_file']??'');
+    if($pk===''||$qid===''||$file===''||!is_file($file))return ['changed'=>false,'reason'=>'missing_payload'];
+    $queued=json_decode((string)@file_get_contents($file),true);$profile=bslLoadSingleProfileSnapshot($pk);
+    if(!is_array($queued)||!$queued||!is_array($profile))return ['changed'=>false,'reason'=>'profile_or_payload_unavailable'];
+    $full=profileOrderedProducts($profile,null,true);$byKey=[];
+    foreach($full as $product){$key=trim((string)($product['key']??''));if($key!==''&&!isset($byKey[$key]))$byKey[$key]=$product;}
+    $rehydrated=[];foreach($queued as $product){$key=trim((string)($product['key']??''));if($key===''||!isset($byKey[$key]))return ['changed'=>false,'reason'=>'key_mismatch','queue_id'=>$qid];$rehydrated[]=$byKey[$key];}
+    if(count($rehydrated)!==count($queued))return ['changed'=>false,'reason'=>'count_mismatch','queue_id'=>$qid];
+    $detailLock=@fopen(bslLaneLockFile('detail'),'c');$detailFree=is_resource($detailLock)&&@flock($detailLock,LOCK_EX|LOCK_NB);
+    if(!$detailFree){if(is_resource($detailLock))@fclose($detailLock);return ['changed'=>false,'reason'=>'detail_lock_held'];}
+    $mutex=@fopen(BSL_QUEUE_MUTEX_FILE,'c');if(!$mutex||!@flock($mutex,LOCK_EX)){if($mutex)@fclose($mutex);@flock($detailLock,LOCK_UN);@fclose($detailLock);return ['changed'=>false,'reason'=>'queue_lock'];}
+    $changed=false;$reason='row_changed';
+    try{
+        $disk=json_decode((string)@file_get_contents(BSL_QUEUE_FILE),true);if(!is_array($disk['entries']??null)){$reason='queue_unavailable';return ['changed'=>false,'reason'=>$reason];}
+        foreach($disk['entries'] as $row)if(is_array($row)&&bslRowLane($row)==='detail'&&in_array((string)($row['status']??''),['running','waiting','paused'],true)){$reason='detail_claimed';return ['changed'=>false,'reason'=>$reason];}
+        $idx=null;foreach($disk['entries'] as $i=>$row)if(is_array($row)&&(string)($row['id']??'')===$qid){$idx=$i;break;}
+        if($idx===null||(string)($disk['entries'][$idx]['status']??'')!=='waiting'||bslRowLane($disk['entries'][$idx])!=='fast')return ['changed'=>false,'reason'=>'row_changed'];
+        if(!sendQueueAtomicWrite($file,$rehydrated))return ['changed'=>false,'reason'=>'payload_write'];
+        $disk['entries'][$idx]['lane']='detail';$disk['entries'][$idx]['with_details']=true;
+        $disk['entries'][$idx]['detail_summary']=extractProfileDetailSummary($profile);
+        $disk['entries'][$idx]['lane_rebalanced_at']=time();$disk['entries'][$idx]['lane_rebalanced_from']='fast';
+        if(!sendQueueAtomicWrite(BSL_QUEUE_FILE,$disk)){sendQueueAtomicWrite($file,$queued);return ['changed'=>false,'reason'=>'queue_write'];}
+        $changed=true;$reason='moved';
+    }finally{@flock($mutex,LOCK_UN);@fclose($mutex);@flock($detailLock,LOCK_UN);@fclose($detailLock);}
+    return ['changed'=>$changed,'reason'=>$reason,'queue_id'=>$qid,'profile_key'=>$pk,'products'=>count($rehydrated)];
 }
 /** With a free lane flock, no sender can legitimately own a running row.
  * Recover every orphan (and non-user pause) to waiting in one sweep so the
@@ -79961,11 +80490,16 @@ function bslRecoverOrphanedLaneRows(array &$queue): array {
 /** Every cron arrival pumps both physical send lanes before the generic cron
  * mutex. This path is deliberately independent of watchdog/auto-resume flags. */
 function bslCronPumpProfileLanes(): array {
-    if(!bslParallelProfileLanesEnabled())return ['enabled'=>false];
+    /* Reconcile false activity before checking whether split mode currently has
+       work. This also repairs a stale Lane 2 display when only Lane 1 remains. */
+    $queue=bslReadQueue();$staleProgress=[];
+    foreach(['fast','detail'] as $__lane)$staleProgress[$__lane]=bslReconcileTerminalLaneProgress($__lane,$queue);
+    if(!bslParallelProfileLanesEnabled())return ['enabled'=>false,'stale_progress'=>$staleProgress];
     $gate=@fopen(__DIR__.'/.bsl-lane-dispatch.lock','c');
-    if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['enabled'=>true,'busy'=>true];}
+    if(!$gate||!@flock($gate,LOCK_EX|LOCK_NB)){if($gate)@fclose($gate);return ['enabled'=>true,'busy'=>true,'stale_progress'=>$staleProgress];}
     $queue=bslReadQueue();$recovered=bslRecoverOrphanedLaneRows($queue);
-    $now=time();$out=['enabled'=>true,'at'=>$now,'recovered'=>$recovered,'lanes'=>[]];
+    $rebalanced=bslRebalanceWaitingProfileToDetail($queue);if(!empty($rebalanced['changed']))$queue=bslReadQueue();
+    $now=time();$out=['enabled'=>true,'at'=>$now,'recovered'=>$recovered,'rebalanced'=>$rebalanced,'stale_progress'=>$staleProgress,'lanes'=>[]];
     foreach(['fast','detail'] as $lane){
         $row=null;foreach((array)($queue['entries']??[]) as $candidate){
             if(!is_array($candidate)||bslRowLane($candidate)!==$lane||!in_array((string)($candidate['status']??''),['running','waiting'],true))continue;
@@ -80543,6 +81077,7 @@ header('Content-Type: application/json; charset=UTF-8');
    رندرِ رابط، یک بار بچکش تا کاربر دیگر وظیفهٔ تمام‌شدهٔ «فعال» نبیند. */
 try { if(!bslParallelProfileLanesEnabled())queueStallCheck('bsl', BSL_SEND_STALL_SEC); } catch (Throwable $eB) {}
 $queue=bslReadQueue();
+foreach(['fast','detail'] as $__reconcileLane)bslReconcileTerminalLaneProgress($__reconcileLane,$queue);
 $progressByLane=['legacy'=>readProgress(BSL_PROGRESS_FILE),'fast'=>readProgress(BSL_FAST_PROGRESS_FILE),'detail'=>readProgress(BSL_DETAIL_PROGRESS_FILE)];
 $workerLiveByLane=[];foreach(['legacy','fast','detail'] as $__ln){$__fp=@fopen(bslLaneLockFile($__ln),'c');$__live=true;if($__fp){$__live=!@flock($__fp,LOCK_EX|LOCK_NB);if(!$__live)@flock($__fp,LOCK_UN);@fclose($__fp);}$workerLiveByLane[$__ln]=$__live;}
 $progress=$progressByLane['legacy'];foreach(['fast','detail'] as $__ln)if(!empty($progressByLane[$__ln]['running'])){$progress=$progressByLane[$__ln];break;}
@@ -80592,6 +81127,29 @@ foreach($queue['entries'] as &$e){
     }
 }unset($e);
 $queue['profile_lanes']=['enabled'=>bslParallelProfileLanesEnabled(),'priority'=>'lane_1_no_detail','workers'=>$workerLiveByLane,'progress'=>$progressByLane];
+if(!empty($_GET['summary'])){
+    $rows=[];$counts=[];$laneCounts=[];
+    foreach((array)($queue['entries']??[]) as $row){
+        if(!is_array($row))continue;$status=(string)($row['status']??'unknown');$lane=bslRowLane($row);
+        $counts[$status]=($counts[$status]??0)+1;$laneCounts[$lane][$status]=($laneCounts[$lane][$status]??0)+1;
+        if(!in_array($status,['running','waiting','paused'],true))continue;
+        $rows[]=['id'=>(string)($row['id']??''),'status'=>$status,'lane'=>$lane,
+            'profile_key'=>(string)($row['profile_key']??''),'profile_name'=>(string)($row['profile_name']??''),
+            'current'=>(int)($row['current']??0),'total'=>(int)($row['total']??0),
+            'created_at'=>(int)($row['created_at']??0),'updated_at'=>(int)($row['updated_at']??0),
+            'worker_owner'=>!empty($row['_worker_owner']),'worker_live'=>!empty($row['_worker_live'])];
+    }
+    $compactLanes=['enabled'=>!empty($queue['profile_lanes']['enabled']),'workers'=>$workerLiveByLane,'progress'=>[]];
+    foreach($progressByLane as $lane=>$laneProgress){
+        $compactLanes['progress'][$lane]=[];
+        foreach(['queue_id','running','done','paused','stale','orphaned_terminal','terminal_queue_status','current','total','phase','phase_label','last_progress_ts','reconciled_at'] as $key){
+            if(array_key_exists($key,$laneProgress))$compactLanes['progress'][$lane][$key]=$laneProgress[$key];
+        }
+    }
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'counts'=>$counts,'lane_counts'=>$laneCounts,
+        'active_rows'=>$rows,'active_send'=>$queue['active_send'],'profile_lanes'=>$compactLanes],
+        JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
+}
 echo json_encode($queue,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE);
 exit;
 }
@@ -86725,7 +87283,8 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
         } else {
             $fetchMeta = ['complete' => true, 'partial' => false, 'stopped' => false, 'page' => $nextScanPage];
         }
-        if (!empty($pendingAiItems) && !$hasMoreSlices) {
+        if (!empty($pendingAiItems) && (!$hasMoreSlices || empty($products))) {
+            $remoteFetchIncomplete=!empty($partial['partial'])||(!empty($fetchMeta)&&empty($fetchMeta['complete']));
             $addedPending = 0;
             foreach ($pendingAiItems as $pq) {
                 if (!is_array($pq)) continue;
@@ -86750,7 +87309,12 @@ function catfixRun(array $cn, string $mode, array $opts = [], ?array $cp = null)
                 $addedPending++;
             }
             if ($addedPending > 0) {
-                catfixProgress(['log_add' => ['🤖 ' . aiFaNum($addedPending) . ' محصول کنارگذاشته‌شده از ارسال (پس از رد دسته‌های دستی) برای تصحیح دسته و ایجاد با هوش مصنوعی اضافه شد']]);
+                /* The local deferred queue is already a complete durable input.
+                   A temporary failure while listing remote rejected products
+                   must not prevent repairing these active-send failures. */
+                if($remoteFetchIncomplete){$partial=[];$fetchMeta=['complete'=>true,'partial'=>false,'stopped'=>false,'page'=>$nextScanPage];$hasMoreSlices=true;}
+                catfixProgress(['log_add' => ['🤖 ' . aiFaNum($addedPending) . ' محصول کنارگذاشته‌شده از ارسال (پس از رد دسته‌های دستی) برای تصحیح دسته و ایجاد با هوش مصنوعی اضافه شد'
+                    .($remoteFetchIncomplete?' · واکشی ردشده‌های دوردست معوق ماند و صف محلی اکنون پردازش می‌شود':'')]]);
             }
         }
         if ($maxLimit > 0 && count($products) > $maxLimit) {
@@ -90585,6 +91149,19 @@ html[data-skin="gloss"] .progress-bar{
 <div class="settings-panel-head"><h2>☰ تنظیمات عمومی</h2><span id="connSaveInd" style="font-size:13px;min-width:16px;text-align:center;transition:color .3s" title=""></span><div class="settings-panel-actions"><button class="panel-fullwidth-btn" id="fullBtn" onclick="toggleFullSettings()" title="تمام عرض کردن منو و محتویات آن"><span aria-hidden="true">⛶</span><span>تمام‌عرض</span></button><button class="btn btn-gray" onclick="toggleSettingsPanel()" style="font-size:14px;padding:4px 10px" title="بستن منو">✕</button></div></div>
 <div class="settings-panel-body" style="padding:0">
 
+<!-- v10.635: PHP runtime diagnostics and safe account-level tuning -->
+<div class="smenu" id="phpRuntimeSmenu">
+<div class="smenu-hdr" style="background:linear-gradient(90deg,#065f46,#0f172a)" onclick="toggleSmenu(this);phpRuntimeLoad(false)"><h3>🐘 تنظیمات و سلامت PHP</h3><span class="cst off" id="phpRuntimeBadge">بررسی نشده</span><span class="arrow">▼</span></div>
+<div class="smenu-body">
+<div style="font-size:10.5px;color:#94a3b8;line-height:1.9;margin-bottom:8px">نسخه، افزونه‌ها، محدودیت‌ها، PHP CLI و امکان اجرای worker را بررسی می‌کند. «اعمال تنظیمات امن» فقط بخش مدیریت‌شدهٔ <code>.user.ini</code> را می‌نویسد؛ فعال‌کردن افزونه‌ها و exec فقط در اختیار هاست است.</div>
+<div class="cact" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+<button type="button" class="btn btn-cyan" onclick="phpRuntimeLoad(true)">🔍 آزمایش دوباره</button>
+<button type="button" class="btn btn-green" id="phpRuntimeApplyBtn" onclick="phpRuntimeApply()">🛠 اعمال تنظیمات امن</button>
+</div>
+<div id="phpRuntimeResult" style="font-size:10.5px;line-height:1.8;color:#cbd5e1"><span style="color:#64748b">برای مشاهدهٔ گزارش، این بخش را باز کنید.</span></div>
+</div>
+</div>
+
 <!-- v10.470: زیرمنوی جامع «مدیریت سفارشات» (باسلام چندغرفه + ووکامرس) -->
 <div class="smenu" id="omSmenuRoot">
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#1d4ed8,#0f172a)" onclick="toggleSmenu(this);omEnsureLoaded()"><h3>📦 مدیریت سفارشات</h3><span class="cst off" id="omHdrBadge">باسلام + ووکامرس</span><span class="arrow">▼</span></div>
@@ -91756,17 +92333,42 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <button type="button" class="ntab" onclick="setNotifTab('query',this)">🔍 استعلام</button>
 </div>
 <div id="ntab-messenger" class="ntabpane">
+<details id="balehMessengerPanel" class="alert alert-info" style="margin:0 0 8px;padding:8px 10px">
+<summary style="cursor:pointer;font-weight:800;color:#93c5fd">🔵 بله</summary>
+<div style="padding-top:8px">
 <div class="crow"><label>بله فعال:</label><input type="checkbox" id="balehEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token بله:</label><input type="password" id="balehToken" dir="ltr" placeholder="Bot Token" style="flex:1"></div>
-<div class="crow"><label>Chat ID:</label><input type="text" id="balehChatId" dir="ltr" placeholder="شناسه چت" style="flex:1"></div>
+<div class="crow"><label>Chat ID مشترک:</label><input type="text" id="balehChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها" style="flex:1"></div>
+<div class="crow"><label>همه یکسان:</label><input type="checkbox" id="balehAllSame" checked onchange="messengerSameToggle('baleh')" style="width:16px;height:16px"><span style="font-size:10px;color:#94a3b8">همهٔ اعلان‌ها به Chat ID مشترک بروند</span></div>
+<div class="crow"><label>گفتگوها:</label><input type="text" id="balehConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>سفارش‌ها:</label><input type="text" id="balehOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
+<div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="balehVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
+</div></details>
+<details id="rubikaMessengerPanel" class="alert alert-info" style="margin:0 0 8px;padding:8px 10px">
+<summary style="cursor:pointer;font-weight:800;color:#fdba74">🟠 روبیکا</summary>
+<div style="padding-top:8px">
 <div class="crow"><label>روبیکا فعال:</label><input type="checkbox" id="rubikaEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token روبیکا:</label><input type="password" id="rubikaToken" dir="ltr" placeholder="Bot Token" style="flex:1"></div>
-<div class="crow"><label>Chat ID:</label><input type="text" id="rubikaChatId" dir="ltr" placeholder="شناسه چت" style="flex:1"></div>
+<div class="crow"><label>Chat ID مشترک:</label><input type="text" id="rubikaChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها" style="flex:1"></div>
+<div class="crow"><label>همه یکسان:</label><input type="checkbox" id="rubikaAllSame" checked onchange="messengerSameToggle('rubika')" style="width:16px;height:16px"><span style="font-size:10px;color:#94a3b8">همهٔ اعلان‌ها به Chat ID مشترک بروند</span></div>
+<div class="crow"><label>گفتگوها:</label><input type="text" id="rubikaConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>سفارش‌ها:</label><input type="text" id="rubikaOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
+<div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="rubikaVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
+</div></details>
 <!-- v10.78 (92): تلگرام — سومین پیام‌رسان -->
-<div class="crow" style="margin-top:8px;padding-top:8px;border-top:1px solid #334155"><b style="font-size:11px">✈️ تلگرام</b></div>
+<details id="telegramMessengerPanel" class="alert alert-info" style="margin:0 0 8px;padding:8px 10px">
+<summary style="cursor:pointer;font-weight:800;color:#c4b5fd">✈️ تلگرام</summary>
+<div style="padding-top:8px">
 <div class="crow"><label>تلگرام فعال:</label><input type="checkbox" id="telegramEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token تلگرام:</label><input type="password" id="telegramToken" dir="ltr" placeholder="Bot Token (از BotFather)" style="flex:1"></div>
-<div class="crow"><label>Chat ID:</label><input type="text" id="telegramChatId" dir="ltr" placeholder="شناسهٔ کاربر یا گروه (با -100)" style="flex:1"></div>
+<div class="crow"><label>Chat ID مشترک:</label><input type="text" id="telegramChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها (با -100 برای گروه)" style="flex:1"></div>
+<div class="crow"><label>همه یکسان:</label><input type="checkbox" id="telegramAllSame" checked onchange="messengerSameToggle('telegram')" style="width:16px;height:16px"><span style="font-size:10px;color:#94a3b8">همهٔ اعلان‌ها به Chat ID مشترک بروند</span></div>
+<div class="crow"><label>گفتگوها:</label><input type="text" id="telegramConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>سفارش‌ها:</label><input type="text" id="telegramOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
+<div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="telegramVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
+</div></details>
+<div style="font-size:10px;color:#94a3b8;line-height:1.8;margin:6px 0">با برداشتن تیک «همه یکسان»، مقصد مشترک گفتگوهای مشتری و ادمین، سفارش‌ها و بازدیدها جداگانه قابل ویرایش می‌شود. فیلد خالی از Chat ID مشترک استفاده می‌کند.</div>
+<div class="crow" style="margin-top:8px"><label>مقصد تست:</label><select id="notifTestRoute" style="flex:1"><option value="">مشترک</option><option value="Conversation">گفتگوهای مشتری و ادمین</option><option value="Orders">سفارش‌ها</option><option value="Visits">بازدیدهای سایت</option></select></div>
 <div class="cact" style="margin-top:10px">
 <button class="btn btn-purple" onclick="testNotif('baleh')">🔔 تست بله</button>
 <button class="btn btn-orange" onclick="testNotif('rubika')">🔔 تست روبیکا</button><button class="btn btn-gray" onclick="testNotif('telegram')">✈️ تست تلگرام</button>
@@ -95067,6 +95669,30 @@ function toggleFullSettings(){
     if(p && p.classList.contains('open')) toggleSettingsPanel();
   });
 })();
+/* v10.635: hamburger PHP runtime report. */
+window._phpRuntimeLoaded=false;
+function phpRuntimePill(ok,label){return '<span style="display:inline-block;margin:2px;padding:2px 7px;border-radius:999px;border:1px solid '+(ok?'#047857;color:#6ee7b7;background:#064e3b55':'#b91c1c;color:#fca5a5;background:#7f1d1d55')+'">'+(ok?'✓ ':'✗ ')+esc(label)+'</span>';}
+function phpRuntimeRender(d){
+  const box=$('phpRuntimeResult'),badge=$('phpRuntimeBadge');if(!box||!d)return;
+  if(!d.ok){box.innerHTML='<div class="alert alert-error">'+esc(d.error||'خطای گزارش PHP')+'</div>';return;}
+  const p=d.php||{},ex=d.extensions||{},loaded=ex.loaded||{},fn=d.functions||{},ini=d.ini||{},u=d.user_ini||{},worker=d.worker||{};
+  const extLine=(ex.required||[]).map(x=>phpRuntimePill(!!loaded[x],x)).join('');
+  const recLine=(ex.recommended||[]).map(x=>phpRuntimePill(!!loaded[x],x)).join('');
+  const funLine=['exec','shell_exec','proc_open','popen','posix_kill'].filter(x=>x in fn||x==='posix_kill').map(x=>phpRuntimePill(x==='posix_kill'?!!loaded.posix:!!fn[x],x)).join('');
+  const iniRow=k=>{const v=ini[k]||{};return '<tr><td>'+esc(k)+'</td><td dir="ltr">'+esc(v.value||'—')+'</td><td>'+(v.directory_changeable?'قابل تنظیم':(v.runtime_changeable?'فقط runtime':'سطح هاست'))+'</td></tr>';};
+  let html='<div style="background:#0b1324;border:1px solid #334155;border-radius:9px;padding:9px;margin-bottom:7px"><b style="color:#67e8f9">PHP '+esc(p.version||'')+'</b> · '+esc(p.sapi||'')+' · '+esc(p.os||'')+' '+esc(String(p.architecture||''))+'bit<br>worker دائمی: '+(worker.active?'🟢 فعال':(worker.persistent_capable?'🟡 قابل اجرا ولی غیرفعال':'🔴 غیرقابل اجرا در تنظیم فعلی'))+'</div>';
+  html+='<div style="margin:6px 0"><b>افزونه‌های ضروری</b><br>'+extLine+'</div><div style="margin:6px 0"><b>افزونه‌های پیشنهادی</b><br>'+recLine+'</div><div style="margin:6px 0"><b>توابع پردازشی</b><br>'+funLine+'</div>';
+  html+='<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><tr><th>تنظیم</th><th>مقدار</th><th>دسترسی</th></tr>'+['memory_limit','max_execution_time','max_input_time','default_socket_timeout','upload_max_filesize','post_max_size','max_input_vars','opcache.enable'].map(iniRow).join('')+'</table></div>';
+  html+='<div style="margin-top:7px;color:'+(u.file_writable?'#86efac':'#fca5a5')+'">.user.ini: '+(u.file_writable?'قابل نوشتن':'غیرقابل نوشتن')+'</div>';
+  const managed=u.managed_settings||{},managedKeys=Object.keys(managed);if(managedKeys.length)html+='<div style="margin-top:5px;color:#fde68a">تنظیمات نوشته‌شده'+(u.cache_ttl?' (کش تا '+esc(String(u.cache_ttl))+' ثانیه)':'')+': '+managedKeys.map(k=>esc(k)+'='+esc(managed[k])).join(' · ')+'</div>';
+  if((d.provider_actions||[]).length)html+='<div class="alert alert-warn" style="margin-top:7px"><b>نیازمند اقدام هاست:</b><br>'+d.provider_actions.map(x=>'• '+esc(x)).join('<br>')+'</div>';
+  box.innerHTML=html;if(badge){const good=(ex.missing_required||[]).length===0&&!!fn.exec;badge.textContent=good?'آماده':'نیازمند تنظیم';badge.className='cst '+(good?'on':'off');}
+}
+function phpRuntimeLoad(force){if(window._phpRuntimeLoaded&&!force)return;const box=$('phpRuntimeResult');if(box)box.innerHTML='<span style="color:#facc15">⏳ در حال بررسی PHP…</span>';fetch('?php_runtime_status=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{window._phpRuntimeLoaded=true;phpRuntimeRender(d);}).catch(e=>{if(box)box.innerHTML='<div class="alert alert-error">خطا در خواندن تنظیمات PHP</div>';});}
+function phpRuntimeApply(){
+  const box=$('phpRuntimeResult'),btn=$('phpRuntimeApplyBtn');if(btn)btn.disabled=true;if(box)box.insertAdjacentHTML('afterbegin','<div style="color:#facc15">⏳ دریافت مجوز و اعمال بخش امن .user.ini…</div>');
+  fetch('?vc_deploy_info=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(a=>{const fd=new FormData();fd.append('action','php_runtime_apply');fd.append('php_runtime_apply','1');if(a.token)fd.append('token',a.token);if(a.nonce)fd.append('_wpnonce',a.nonce);return fetch('',{method:'POST',body:fd}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d;});}).then(d=>{showToast('✓ تنظیمات امن PHP نوشته شد');window._phpRuntimeLoaded=false;phpRuntimeRender(d.report);}).catch(e=>{showToast('اعمال تنظیمات PHP: '+e.message,1);phpRuntimeLoad(true);}).finally(()=>{if(btn)btn.disabled=false;});
+}
 /* v9.94 (۸ب): بعد از پایانِ ترنزیشنِ باز شدن، کلاس smenu-done می‌گیرد تا سقفِ
    max-height برداشته و overflow باز شود؛ موقعِ بستن اول برمی‌گردد به حالتِ
    سقف‌دار وگرنه انیمیشنِ بسته‌شدن اصلاً دیده نمی‌شود. */
@@ -99860,7 +100486,7 @@ let syncPipeRows=[];const syncPipeExpanded=new Set();
 function syncPipelineToggle(key){if(syncPipeExpanded.has(key))syncPipeExpanded.delete(key);else syncPipeExpanded.add(key);syncPipelineRender();}
 function syncPipelineControl(key,action){
   const label=action==='stop'?'توقف این همگام‌سازی':'ادامهٔ این همگام‌سازی';
-  if(!confirm(label+'؟'))return;const fd=new FormData();fd.append('profile_key',key);fd.append('control',action);
+  if(action==='stop'&&!confirm(label+'؟'))return;const fd=new FormData();fd.append('profile_key',key);fd.append('control',action);
   fetch('?sync_pipeline_control=1',{method:'POST',body:fd,cache:'no-store'}).then(r=>r.json()).then(d=>{if(!d.ok){showToast(d.error||'عملیات ناموفق بود',1);return;}showToast(action==='stop'?'⏹ متوقف شد':'▶ ادامه در صف اجرا قرار گرفت');syncPipelineRender();}).catch(()=>showToast('خطا در کنترل همگام‌سازی',1));
 }
 function syncPipelineClearDone(){
@@ -100497,10 +101123,6 @@ function clearExtractQueueDone(){
 
 function resumeExtractQueue(profileKey, qid, resumePage, autoResume){
     resumePage = resumePage||0;
-    const msg = resumePage>0
-      ? ('ادامهٔ استخراج از صفحه '+resumePage+'؟\n(یک صفحه قبل از جایی که گیر کرده — از اول شروع نمی‌شود)')
-      : 'ادامهٔ استخراج این پروفایل از آخرین نقطه؟';
-    if(!autoResume&&!confirm(msg))return;
     showToast((autoResume?'♻️ ادامهٔ خودکار از ':'▶️ در حال ادامه از ')+(resumePage?('صفحه '+resumePage):'نقطهٔ ذخیره')+'…');
     const fd=new FormData();
     fd.append('action','extract_resume');
@@ -101597,6 +102219,99 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.641', t:'🔓 حذف انسداد cron هنگام استخراج متصل', items:[
+    'پیش از درخواست کند مبدأ، قفل سراسری cron آزاد می‌شود؛ قفل اختصاصی استخراج همچنان از اجرای تکراری جلوگیری می‌کند.',
+    'تا وقتی checkpoint استخراج وجود دارد، Resume All سهم یگانهٔ هاست بدون CLI را صرف manual_sync یا ماتریسِ بدون worker نمی‌کند.',
+    'cronهای هم‌زمان هنگام مشغول‌بودن استخراج با پاسخ سبک خارج می‌شوند و ماتریس را جلوتر از استخراج راه نمی‌اندازند.'
+  ]},
+  {v:'10.640', t:'🚑 ادامهٔ فوری استخراج Noviex بدون worker دائمی', items:[
+    'نبض مرورگر به‌جای آدرس ثابت 42web همیشه همان نصب بازشده، از جمله Noviex، را زنده نگه می‌دارد.',
+    'روی هاست بدون exec هر cron یک checkpoint استخراج را با اتصال باز و برش حداکثر ۲۰ ثانیه‌ای اجرا می‌کند؛ دیگر منتظر stale پنج‌دقیقه‌ای نمی‌ماند.',
+    'checkpointهای استخراج به‌صورت منصفانه و قدیمی‌ترین‌اول پیش از ماتریس اجرا می‌شوند و توقف صریح کاربر دست‌نخورده می‌ماند.',
+    'ماتریس تا وقتی استخراج قابل‌ادامه وجود دارد request محدود وب را تصاحب نمی‌کند.'
+  ]},
+  {v:'10.639', t:'🧾 نمایش وضعیت واقعی .user.ini و کش PHP', items:[
+    'گزارش فقط کلیدهای مجاز داخل بخش مدیریت‌شدهٔ برنامه را از دیسک می‌خواند و نمایش می‌دهد.',
+    'زمان user_ini.cache_ttl مشخص می‌کند تغییر نوشته شده چه مدت ممکن است هنوز در PHP-FPM یا LiteSpeed دیده نشود.',
+    'هیچ بخش نامرتبط یا محرمانه‌ای از .user.ini در endpoint یا رابط نمایش داده نمی‌شود.'
+  ]},
+  {v:'10.638', t:'⚙️ اعمال یک‌بارهٔ تنظیمات مجاز PHP پس از نصب', items:[
+    'مرحلهٔ تأیید updater یک مهاجرت داخلی یک‌باره اجرا می‌کند تا تنظیمات امن و قابل‌نوشتن بدون نمایش token اعمال شوند.',
+    'نتیجهٔ مهاجرت در فایل وضعیت محلی ثبت می‌شود و در درخواست‌های بعدی تکرار نمی‌شود.',
+    'این مهاجرت نیز فقط محدودیت‌های پایین‌تر را افزایش می‌دهد و به نسخه، افزونه‌ها یا disable_functions دست نمی‌زند.'
+  ]},
+  {v:'10.637', t:'🛡 جلوگیری از کاهش تنظیمات قوی‌تر PHP', items:[
+    'اعمال امن فقط محدودیت‌های واقعاً پایین‌تر را افزایش می‌دهد و حافظه، زمان یا آپلود قوی‌تر هاست را کاهش نمی‌دهد.',
+    'مقادیر صفر و منفی محدودیت زمان به‌عنوان حالت نامحدود حفظ می‌شوند.',
+    'OPcache با نام واقعی Zend OPcache نیز تشخیص داده می‌شود تا گزارش کمبود اشتباه نباشد.'
+  ]},
+  {v:'10.636', t:'🧯 سازگاری گزارش PHP با تفاوت‌های هاست', items:[
+    'ثابت‌های سطح دسترسی ini و مشخصات سیستم با fallback سازگار خوانده می‌شوند.',
+    'خطاهای محیطی endpoint به‌جای پاسخ خالی به JSON ساختاریافته با خط و نسخه تبدیل می‌شوند.',
+    'متن‌های نامعتبر UTF-8 در پیکربندی هاست دیگر کل پاسخ گزارش را خالی نمی‌کنند.'
+  ]},
+  {v:'10.635', t:'🐘 پنل تشخیص و تنظیم امن PHP', items:[
+    'بخش تازهٔ منوی همبرگری نسخه و SAPI، افزونه‌ها، توابع exec، PHP CLI، محدودیت‌های ini و قابلیت worker را یکجا آزمایش می‌کند.',
+    'اندپوینت php_runtime_status گزارش ماشینی بدون توکن و دادهٔ حساس می‌دهد؛ php_runtime_apply با مجوز نصب‌کننده بخش مدیریت‌شدهٔ .user.ini را اتمیک می‌نویسد.',
+    'تنظیمات سطح هاست مانند نسخهٔ PHP، افزونه‌های مفقود و disable_functions فقط گزارش می‌شوند و هرگز با دورزدن امنیت تغییر نمی‌کنند.'
+  ]},
+  {v:'10.634', t:'🔐 تشخیص قطعی worker واقعی', items:[
+    'flock موروثیِ پردازهٔ وب یا child بدون PID معتبر دیگر worker دائمی محسوب نمی‌شود.',
+    'worker واقعی باید هم state فعال و تازه، هم PID ثبت‌شده و هم flock اصلی را هم‌زمان داشته باشد.',
+    'نوویکس دیگر همگام‌سازی را به صف daemon غیرموجود تحویل نمی‌دهد و مسیر مستقیم وب اجرا می‌شود.'
+  ]},
+  {v:'10.633', t:'⏹ توقف صریح پایدار در کران', items:[
+    'کران دیگر پس از پایان مهلت کوتاه ۴۵ ثانیه‌ای، عملیات صریحاً متوقف‌شده را خودکار ادامه نمی‌دهد.',
+    'ساخت ماتریس متوقف‌شده منابع نوویکس را دوباره اشغال نمی‌کند؛ فقط کلیک مستقیم ادامه می‌تواند آن را فعال کند.',
+    'استخراج و همگام‌سازی پروفایل‌ها تا پایان از ظرفیت محدود هاست استفاده می‌کنند.'
+  ]},
+  {v:'10.632', t:'🧟 حذف worker خیالی در هاست نوویکس', items:[
+    'heartbeat فایل worker بدون PID زنده یا flock معتبر دیگر نشانهٔ worker دائمی نیست.',
+    'درخواست وب ماتریس یا استخراج نمی‌تواند running قدیمی را تازه کند و همگام‌سازی‌ها را به صف worker غیرموجود بفرستد.',
+    'روی هاست بدون exec، همگام‌سازی از مسیر مستقیم وب و checkpoint اجرا می‌شود و صف pending بدون attempts باقی نمی‌ماند.'
+  ]},
+  {v:'10.631', t:'🚦 جلوگیری از گرسنگی استخراج روی هاست بدون exec', items:[
+    'در هاست‌هایی مثل نوویکس که worker دائمی به‌علت exec_disabled اجرا نمی‌شود، ادامهٔ پروفایل‌ها و استخراج‌ها پیش از ماتریس انجام می‌شود.',
+    'ماتریس دیگر تنها سهم اجرای هر کران را اشغال نمی‌کند و همگام‌سازی‌های pending با attempts=0 پشت آن نمی‌مانند.',
+    'ترتیب جدید checkpointها را حفظ می‌کند و هر کران فقط ظرفیت امن همان هاست را مصرف می‌کند.'
+  ]},
+  {v:'10.630', t:'🧩 رفع خطای تیک و پنل‌های بستهٔ پیام‌رسان', items:[
+    'تابع تیک «همه یکسان» به محدودهٔ سراسری منتقل شد تا برداشتن تیک دیگر خطای JavaScript ندهد.',
+    'بله، روبیکا و تلگرام هرکدام در یک پنل کشویی مستقل قرار گرفتند و در شروع بسته‌اند.',
+    'باز و بسته‌کردن پنل‌ها مقدارهای ذخیره‌شده و وضعیت قابل‌ویرایش فیلدها را حفظ می‌کند.'
+  ]},
+  {v:'10.629', t:'💬 مقصد مشترک گفتگو و تیک «همه یکسان»', items:[
+    'گفتگوهای مشتری و ادمین/غرفه‌دار در هر پیام‌رسان همیشه از یک Chat ID مشترک گفتگو استفاده می‌کنند.',
+    'برای بله، روبیکا و تلگرام تیک «همه یکسان» افزوده شد؛ در حالت روشن همهٔ اعلان‌ها به Chat ID مشترک می‌روند.',
+    'با برداشتن تیک، فیلدهای گفتگو، سفارش و بازدید قابل ویرایش و تست مستقل می‌شوند.'
+  ]},
+  {v:'10.628', t:'🔀 مقصد مستقل اعلان‌ها در هر پیام‌رسان', items:[
+    'برای بله، روبیکا و تلگرام چهار Chat ID مستقل برای گفتگوی مشتری، گفتگوی غرفه‌دار/ادمین، سفارش و بازدید سایت افزوده شد.',
+    'اعلان گفتگوی مشتری و غرفه‌دار اکنون با نوع صریح به مقصد درست می‌رود و سفارش‌ها نیز به مقصد سفارش همان پیام‌رسان هدایت می‌شوند.',
+    'Chat ID عمومی قبلی به‌عنوان مقصد جایگزین حفظ شده و تست اتصال می‌تواند هر مقصد اختصاصی را جداگانه آزمایش کند.'
+  ]},
+  {v:'10.627', t:'🛡 ادامهٔ مستقیم و بازیابی سراسری عملیات سرور', items:[
+    'دکمه‌های ادامه/ازسرگیری بدون پرسش بله یا خیر مستقیماً همان checkpoint را اجرا می‌کنند.',
+    'کران، worker مرده و jobهای ownerless را با اثبات آزادبودن قفل دوباره صف می‌کند و روی هاست بدون exec آن‌ها را برای worker وب نگه می‌دارد.',
+    'وضعیت checking رهاشدهٔ به‌روزرسان پس از پایان پنجرهٔ دانلود و اثبات آزادبودن هر دو قفل خودکار بسته می‌شود.'
+  ]},
+  {v:'10.626', t:'🧠 ترمیم دسته‌های خطادار بدون وابستگی به فهرست دوردست', items:[
+    'محصولات محلیِ کنارگذاشته‌شده با خطای دسته‌بندی حتی هنگام شکست موقت دریافت فهرست محصولات ردشدهٔ باسلام فوراً با checkpoint خودشان پردازش می‌شوند.'
+  ]},
+  {v:'10.625', t:'♾️ تداوم کار همهٔ صف‌ها و استفادهٔ همزمان از دو لین', items:[
+    'اگر لین ۲ خالی و لین ۱ دارای چند پروفایل دوره‌ای باشد، یک ردیف waiting بدون کپی‌سازی و پس از بازسازی کامل جزئیات با کلید دقیق محصول به لین ۲ منتقل می‌شود.',
+    'تحویل کران ردیف ارسال را با رسیدن cursor محصولات به total حذف نمی‌کند؛ فازهای ترمیم دسته، تصویر، تنوع و خطا تا status=done ادامه می‌یابند.',
+    'حالت تداوم، ادامهٔ همهٔ کارها، watchdog، cron داخلی و تصحیح ساعتی دسته‌های معوق را یکجا فعال می‌کند.',
+    'خطای واقعی APiX اسنپ‌شاپ دیگر پشت HTTP 451 دائمی Jina پنهان نمی‌شود و 429/5xx با سیاست retry صحیح ادامه می‌یابد.'
+  ]},
+  {v:'10.624', t:'🩺 خلاصهٔ سبک وضعیت لین‌ها', items:[
+    'ممیزی summary فقط مالک‌های فعال و فیلدهای ضروری progress را برمی‌گرداند و دیگر گزارش‌های چندمگابایتی محصول را حمل نمی‌کند.'
+  ]},
+  {v:'10.623', t:'🚦 بازیابی صف دو لین و حذف پیشرفت کاذب', items:[
+    'کران در نخستین ورود، progress مانده از ردیف تمام‌شده، ناموفق یا لغوشده را با قفل همان لین از حالت running خارج می‌کند؛ checkpoint و شمارنده‌ها برای گزارش حفظ می‌شوند.',
+    'توزیع دوره‌ای به تنظیم سلکتور وابسته نیست: در تساوی ابتدا لین ۲ و سپس لین ۱ پر می‌شود تا هیچ worker بیکار نماند و هر پروفایل فقط یک مالک داشته باشد.',
+    'خروجی summary سبک برای ممیزی دقیق ردیف‌های فعال، مالک worker و شمارش وضعیت هر لین اضافه شد.'
+  ]},
   {v:'10.622', t:'🎨 نگاشت تنوع‌های واقعی API باسلام', items:[
     'آرایهٔ variants پاسخ Core v4 همراه با variation ID، قیمت تومانی، موجودی و ترکیب ویژگی‌های تو‌در‌تو استخراج می‌شود.',
     'نام و مقدار property/value هر تنوع بدون تبدیل اشتباه آرایه به متن، در ساختار استاندارد پروفایل نگه‌داری می‌شود.'
@@ -112559,6 +113274,8 @@ function s4EnsureVersionPanel(){
 // ========== Connection JS ==========
 let wSend=false,bSend=false,cn={woocommerce:{},basalam:{}},extractPollTimer=null,extractModalTimer=null;
 function loadConn(){fetch('',{method:'POST',body:new URLSearchParams('action=load_connections')}).then(r=>r.json()).then(d=>{if(d.ok){cn=d.connections;applyCn();}}).catch(()=>{});}
+/* Global because the checkboxes call it directly from their onchange attribute. */
+function messengerSameToggle(prefix){const same=!!$(prefix+'AllSame')?.checked;['Conversation','Orders','Visits'].forEach(s=>{const el=$(prefix+s+'ChatId');if(el){el.disabled=same;el.style.opacity=same?'.55':'1';}});}
 function applyCn(){window._connHydrated=true;const w=cn.woocommerce||{},b=cn.basalam||{};
 try{if(typeof reconAutoApplyCfg==='function') reconAutoApplyCfg(cn.recon_auto||{});}catch(e){}
 try{if(typeof catfixAutoApplyCfg==='function') catfixAutoApplyCfg(cn.catfix_auto||{});}catch(e){}
@@ -112577,9 +113294,10 @@ applyAiNet(cn.ai_net||{});
 /* Provider catalogs and a hidden test modal are loaded when their settings
    panel is opened; they are not prerequisites for the Start page. */
 // v8.17: Restore Baleh/Rubika settings
-const bl=cn.baleh||{};if($('balehEnabled'))$('balehEnabled').checked=!!bl.enabled;if($('balehToken')&&bl.token)$('balehToken').value=bl.token;if($('balehChatId')&&bl.chat_id)$('balehChatId').value=bl.chat_id;if($('balehS')&&bl.token){$('balehS').textContent='فعال';$('balehS').className='cst on';}
-const rb=cn.rubika||{};if($('rubikaEnabled'))$('rubikaEnabled').checked=!!rb.enabled;if($('rubikaToken')&&rb.token)$('rubikaToken').value=rb.token;if($('rubikaChatId')&&rb.chat_id)$('rubikaChatId').value=rb.chat_id;
-const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!!tgm.enabled;if($('telegramToken')&&tgm.token)$('telegramToken').value=tgm.token;if($('telegramChatId')&&tgm.chat_id)$('telegramChatId').value=tgm.chat_id;
+const applyMessenger=(prefix,cfg)=>{cfg=cfg||{};const ids=cfg.chat_ids||{};if($(prefix+'Enabled'))$(prefix+'Enabled').checked=!!cfg.enabled;if($(prefix+'Token')&&cfg.token)$(prefix+'Token').value=cfg.token;if($(prefix+'ChatId'))$(prefix+'ChatId').value=cfg.chat_id||'';if($(prefix+'AllSame'))$(prefix+'AllSame').checked=cfg.all_same===undefined?true:!!cfg.all_same;const conversation=ids.conversations||ids.customer_chat||ids.vendor_chat||'';if($(prefix+'ConversationChatId'))$(prefix+'ConversationChatId').value=conversation;if($(prefix+'OrdersChatId'))$(prefix+'OrdersChatId').value=ids.orders||'';if($(prefix+'VisitsChatId'))$(prefix+'VisitsChatId').value=ids.visits||'';messengerSameToggle(prefix);};
+const bl=cn.baleh||{};applyMessenger('baleh',bl);if($('balehS')&&bl.token){$('balehS').textContent='فعال';$('balehS').className='cst on';}
+const rb=cn.rubika||{};applyMessenger('rubika',rb);
+const tgm=cn.telegram||{};applyMessenger('telegram',tgm);
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
 if($('notifSourceText'))$('notifSourceText').value=String(cn.notif_source_text||'');if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
 updN();syncMatrixRenderDestinations(b);
@@ -113377,10 +114095,11 @@ fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendo
 
 // v8.06: Save AI settings
 fd.append('ai_net',JSON.stringify(getAiNet()));
-// v8.17: Save Baleh/Rubika
-fd.append('baleh',JSON.stringify({enabled:$('balehEnabled')?.checked?1:0,token:$('balehToken')?.value||'',chat_id:$('balehChatId')?.value||''}));
-fd.append('rubika',JSON.stringify({enabled:$('rubikaEnabled')?.checked?1:0,token:$('rubikaToken')?.value||'',chat_id:$('rubikaChatId')?.value||''}));
-fd.append('telegram',JSON.stringify({enabled:$('telegramEnabled')?.checked?1:0,token:$('telegramToken')?.value||'',chat_id:$('telegramChatId')?.value||''}));
+// v10.629: Save common mode plus shared conversations, orders, and visits for every messenger.
+const messengerPayload=prefix=>({enabled:$(prefix+'Enabled')?.checked?1:0,token:$(prefix+'Token')?.value||'',chat_id:$(prefix+'ChatId')?.value||'',all_same:$(prefix+'AllSame')?.checked?1:0,chat_ids:{conversations:$(prefix+'ConversationChatId')?.value||'',orders:$(prefix+'OrdersChatId')?.value||'',visits:$(prefix+'VisitsChatId')?.value||''}});
+fd.append('baleh',JSON.stringify(messengerPayload('baleh')));
+fd.append('rubika',JSON.stringify(messengerPayload('rubika')));
+fd.append('telegram',JSON.stringify(messengerPayload('telegram')));
 fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_source_text',$('notifSourceText')?.value||'');fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('internal_cron_enabled',$('internalCronEnabled')?.checked?1:0);fd.append('internal_cron_sec',$('internalCronSec')?.value||60);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
 fd.append('ai_content_auto',JSON.stringify({
   enabled:!!($('aiContentAutoEnabled')&&$('aiContentAutoEnabled').checked),
@@ -113693,12 +114412,16 @@ document.addEventListener('DOMContentLoaded',function(){
 function testNotif(type){
     const r=$('notifTR');
     r.innerHTML='';
-    let token,chatId,label;
-    if(type==='baleh'){token=$('balehToken')?.value?.trim()||'';chatId=$('balehChatId')?.value?.trim()||'';label='بله';}
-    else if(type==='rubika'){token=$('rubikaToken')?.value?.trim()||'';chatId=$('rubikaChatId')?.value?.trim()||'';label='روبیکا';}
-    else if(type==='telegram'){token=$('telegramToken')?.value?.trim()||'';chatId=$('telegramChatId')?.value?.trim()||'';label='تلگرام';}
+    const route=String($('notifTestRoute')?.value||'');
+    let token,chatId,label,prefix;
+    if(type==='baleh'){prefix='baleh';label='بله';}
+    else if(type==='rubika'){prefix='rubika';label='روبیکا';}
+    else if(type==='telegram'){prefix='telegram';label='تلگرام';}
     else{showToast('نوع نامعتبر',1);return;}
-    if(!token||!chatId){showToast('Token و Chat ID را وارد کنید',1);return;}
+    token=$(prefix+'Token')?.value?.trim()||'';
+    const allSame=!!$(prefix+'AllSame')?.checked;
+    chatId=(!allSame&&route?$(prefix+route+'ChatId')?.value?.trim():'')||$(prefix+'ChatId')?.value?.trim()||'';
+    if(!token||!chatId){showToast('Token و Chat ID مقصد انتخاب‌شده را وارد کنید',1);return;}
     r.innerHTML='<div style="color:#facc15;font-size:11px;padding:4px">⏳ تست '+label+'...</div>';
     const fd=new FormData();fd.append('action','test_notif');fd.append('notif_type',type);fd.append('token',token);fd.append('chat_id',chatId);
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
@@ -115613,8 +116336,6 @@ function tmResumeAll(){
   if(tmBusy)return;
   const stale=((tmData&&tmData.tasks)||[]).filter(t=>t.state==='stale'&&t.resumable&&t.bulk_resumable!==false);
   if(!stale.length){showToast('کارِ رهاشده‌ای برای ادامه نیست');return;}
-  if(!confirm(toFa(stale.length)+' کارِ گیرکرده به ترتیبِ اولویت دوباره شروع شوند؟\n'
-     +stale.map((t,i)=>'  '+toFa(i+1)+'. '+t.title).join('\n')))return;
   tmBusy=true;
   showToast('⏳ در حال راه‌اندازی '+toFa(stale.length)+' کار...');
   fetch('?tasks_resume_all=1&only=stale').then(r=>r.json()).then(d=>{
@@ -115630,14 +116351,6 @@ function tmResumeAll(){
 /* v10.23 (۳۶ج): ادامه/اجرای دوبارهٔ یک کار از داخلِ مدیر وظیفه */
 function tmResume(key){
   if(tmBusy)return;
-  const t=((tmData&&tmData.tasks)||[]).find(x=>x.key===key);
-  const isStale=!!(t&&t.state==='stale');
-  const q=isStale
-    ? (t&&t.profile_task
-      ? 'ادامهٔ اجرای پروفایل «'+((t&&t.profile_name)||((t&&t.title)||key))+'» از checkpoint خودش انجام شود؟\nفقط همین pipeline/صف ادامه می‌یابد.'
-      : 'کارِ گیرکردهٔ «'+((t&&t.title)||key)+'» دوباره شروع شود؟\nقفل و ردِ اجرای قبلی پاک می‌شود.')
-    : 'کارِ «'+((t&&t.title)||key)+'» با تنظیماتِ اجرای قبلی دوباره اجرا شود؟';
-  if(!confirm(q))return;
   tmBusy=true;
   fetch('?tasks_resume=1&key='+encodeURIComponent(key)).then(r=>r.json()).then(d=>{
     tmBusy=false;
@@ -123256,7 +123969,6 @@ function p2ApplyLearned(){
       showToast('برای هیچ‌کدام دستهٔ آموخته‌ای نیست — چند مورد را دستی اصلاح کنید',1);
       return;
     }
-    if(!confirm('بر اساس انتخاب‌های قبلی شما، '+m.length+' محصول قابل اصلاح است.\n\nادامه؟'))return;
     if(btn){btn.disabled=true;}
     let i=0;
     (function next(){
@@ -123768,7 +124480,9 @@ async function s4RuntimeHealthCheck(force=false){
    فاصلهٔ ذخیره‌شده، lock و enabled را enforce می‌کند؛ چند tab امن هستند. */
 (function opsFeedbackPulse(){
   if(window._s4OpsPulse)return;window._s4OpsPulse=true;
-  const cronReference='https://scraper4.42web.io/scraper4.php';
+  /* Always drive the installation currently open. A fixed 42web URL made
+     Noviex tabs keep another host alive while their own checkpoints waited. */
+  const cronReference=location.origin+location.pathname;
   const localBeat=()=>fetch('?ops_feedback=1&repair=1',{cache:'no-store',credentials:'same-origin',keepalive:true}).catch(()=>{});
   const cronBeat=()=>{
     const u=cronReference+'?internal_cron_feedback=1&_pulse='+Date.now();
@@ -123779,13 +124493,18 @@ async function s4RuntimeHealthCheck(force=false){
     const u=cronReference+'?cron_run=1&internal_browser_keep=1&_pulse='+Date.now();
     fetch(u,{method:'GET',mode:'no-cors',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4BrowserCronBusy=false;});
   };
+  const extractBeat=()=>{
+    if(window._s4ExtractFeedbackBusy)return;window._s4ExtractFeedbackBusy=true;
+    const u=cronReference+'?internal_extract_feedback=1&_pulse='+Date.now();
+    fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4ExtractFeedbackBusy=false;});
+  };
   const matrixBeat=()=>{
     if(window._s4MatrixFeedbackBusy)return;window._s4MatrixFeedbackBusy=true;
     const u=cronReference+'?internal_matrix_feedback=1&_pulse='+Date.now();
-    fetch(u,{method:'GET',mode:'no-cors',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4MatrixFeedbackBusy=false;});
+    fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4MatrixFeedbackBusy=false;});
   };
-  const wake=()=>{localBeat();cronBeat();cronRunBeat();matrixBeat();};
-  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(matrixBeat,20000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
+  const wake=()=>{localBeat();cronBeat();extractBeat();cronRunBeat();setTimeout(matrixBeat,2500);};
+  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(extractBeat,25000);setInterval(matrixBeat,30000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
   window.addEventListener('pageshow',wake);window.addEventListener('online',wake);
   window.addEventListener('focus',wake);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});

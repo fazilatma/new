@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const php = process.env.PHP_BINARY || 'php';
 const html = execFileSync(php, [path.join(__dirname,'render-refresh-script.php')], {encoding:'utf8'});
+assert.ok(html.includes('.sf-vendor-modal'), 'Open vendor calculator blocks refresh');
 const js = html.replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '');
 const initial = html.match(/var initial="([a-f0-9]{24})"/)[1];
 async function run({version, busySelector=false, paid=false, interacting=false, hidden=false, currentRefresh=''}) {
