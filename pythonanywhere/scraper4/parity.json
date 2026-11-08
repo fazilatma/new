@@ -85,16 +85,33 @@
     {
       "feature": "CLI-only persistent worker supervisor with enable/poll settings, single-daemon guard, independent heartbeat, shared queue locking, bounded fresh-interpreter tick/maintenance children, graceful boundary stop/code-change exit, and internal PythonAnywhere scheduled-worker activation with hourly/daily fallback and Always-on commands",
       "reference": "PHP 10.641 s4WorkerLoopFromCli (2790), internal_cron_enabled/internal_cron_sec; no web threads or detached processes, no full parallel pools/auto-resume/report parity"
+    },
+    {
+      "feature": "All nine PHP extractionEngineAllowed routes execute through the queue: selectors, auto JSON-LD-first, heuristic, JSON-LD, bounded Jina markdown reader, Digikala public API route/marketability/pager mapping, Basalam public vendor/product API and cursor checkpoints, explicit remote Playwright/Selenium driver validation; selected engine honored in new and previously imported PHP profiles, browser/API detail-stage routing, real list SKU, robust JSON-LD image/offers parsing",
+      "reference": "PHP 10.641 extractionEngineAllowed/normalizeExtractionEngine/fetch_html_for_engine/parse_list_by_engine 26775–27067; public API helpers 19089+ and 26682+; remote renderer required, not locally spawned browsers or every PHP fallback/detail adapter"
+    },
+    {
+      "feature": "Authenticated no-send first-page audit for every saved profile or all nine engines, sequential browser benchmark, quality counts/timing, separate empty/failed results, stop-at-request-boundary and persisted credential-free reports; PHP-like benchmark counters/table, saved engine badges and actual engine editor",
+      "reference": "PHP engineBenchmarkStart/renderEngineBenchmark 97096+; fixture queue integration is verified, live private profile results are NOT claimed without an authenticated panel run"
+    },
+    {
+      "feature": "PHP bslAllShops default-wins dedup, encrypted additional vendors and blank-token preservation, explicit pinned per-job vendor, independent per-shop remote IDs and price adjustments, legacy owner pinned before config restore/change, atomic per-product target map plus indexed checkpoint for correct multi-shop product metrics; no automatic failed-send retry",
+      "reference": "PHP 10.641 bslAllShops 32907+, vendors/send_shop fields; full image-upload, complete variants and send fanout/parallel reports remain pending"
+    },
+    {
+      "feature": "Explicit import-keys consent shortcut and per-section presence/transfer report (including vendor tokens), accurate saved-key status and no plaintext credential echo; encrypted export/restore includes Basalam vendors and renderer connection",
+      "reference": "PHP connections.json canonical woocommerce/basalam/vendors and render fields. Prior non-imported keys are not available to recover from server alone: reimport original file with explicit credential consent."
     }
   ],
   "pending": [
     "Complete variants, detail price/stock/weight, destination category/tag resolution, automatic detail discovery and advanced specification layouts",
-    "Basalam public catalogue adapters and complete send payloads",
-    "Site-specific engines (Digikala, Snappshop, Emalls-specific adapters)",
     "Visual selector picker and full PHP UI parity",
     "AI/category/content automation, notifications, chat and complete legacy action parity",
     "Whole PHP data/queue/remote-map and unsupported-feature bundle restoration; Python .env/install identity and API keys intentionally remain outside portable web settings",
-    "Full PHP product overview: stock/unknown-stock, gallery-aware image, variations/readiness/content metrics, destination discrepancy matrix and durable inventory history charts"
+    "Full PHP product overview: stock/unknown-stock, gallery-aware image, variations/readiness/content metrics, destination discrepancy matrix and durable inventory history charts",
+    "Complete Basalam variation-detail fanout, media uploads/required create payload fields and full multi-shop parallel/fanout workflow",
+    "Full SnappShop guest API and anti-block/Emalls/Jina fallback chains, complete Digikala details/variants, raw W3C WebDriver fallback; browser engine routes currently require a compatible trusted remote /render service",
+    "Live first-page audit and complete pagination/detail verification for private production profiles requires authenticated browser execution; synthetic fixture tests are not proof of current remote-site reachability"
   ],
   "notes": [
     "This ledger is not a claim of full parity.",
@@ -108,6 +125,7 @@
     "PHP 10.641/9756c32 rechecked unchanged for 1.9.0. Overview aggregates only primary saved-product columns, with an explicit non-live-destination label. Search normalizes Persian/Arabic letters, digits and ZWNJ; SQL values are bound and filters/sorts allowlisted. Read-only routes preserve credentials, products, remote IDs and jobs; no schema/dependency changes. Browser regressions include real Flask temporary-database overview/search/detail integration; no production data used.",
     "PHP 10.641/9756c32 rechecked unchanged for 1.10.0; local source SHA-256 verified. Selector preview uses one direct static-page fetch with existing 8-second HTTP deadline, 12-MiB download cap and 2-MiB UTF-8 parse cap, at most 8 samples and one preview per WSGI process. No schema/dependency/authority changes or saved-data writes. Whole-document match counts are distinct from card extraction; fallback/automatic behavior and the existing list-SKU limitation are explicit. UI tests include real Flask+fixture parsing and verify no persisted profiles/products/jobs.",
     "PHP 10.641/9756c32 rechecked unchanged for 1.11.0. Live unauthenticated endpoint probes confirmed health 1.10.0, protected queue/status and disabled public GET cron; query-bearing cron probe is guaranteed rejected before tick. No production queue advanced. Settings file cap raised to 10 MiB, plain/native/PHP decoded cap 6 MiB, scoped authenticated browser transfer request envelope 60 MiB+64KiB; global 2 MiB cap for other routes unchanged. Larger PHP import and encrypted roundtrips, extraction-only API/manual browser flow and send exclusion tested with temporary DBs. No schema/dependency/authority changes; public cron remains explicit opt-in.",
-    "PHP 10.641/9756c32 rechecked unchanged for 1.12.0. Official PythonAnywhere AlwaysOnTasks/ScheduledTasks/AsyncInWebApps docs checked: paid Always-on recommended; hourly/daily schedule depends on plan, newer free accounts may lack Tasks. New browser-only authenticated host scheduling uses saved token, fixed installed virtualenv command and owns only this installation; never starts local processes inside WSGI. Worker config defaults disabled, native activation enables it only on API success. Runtime enabled/Task configured/observed live heartbeat are distinct. Existing public cron configuration and credentials/products/remote IDs are preserved. Worker host-specific config/state excluded from portable settings; no dependency/schema/authority change."
+    "PHP 10.641/9756c32 rechecked unchanged for 1.12.0. Official PythonAnywhere AlwaysOnTasks/ScheduledTasks/AsyncInWebApps docs checked: paid Always-on recommended; hourly/daily schedule depends on plan, newer free accounts may lack Tasks. New browser-only authenticated host scheduling uses saved token, fixed installed virtualenv command and owns only this installation; never starts local processes inside WSGI. Worker config defaults disabled, native activation enables it only on API success. Runtime enabled/Task configured/observed live heartbeat are distinct. Existing public cron configuration and credentials/products/remote IDs are preserved. Worker host-specific config/state excluded from portable settings; no dependency/schema/authority change.",
+    "PHP 10.641/9756c32 rechecked unchanged for 1.13.0. Imported top-level extractionEngine previously stayed only in legacy metadata and was ignored by the queue; execution now reads both promoted and already-imported values. Credential opt-in remains secure/default false with an explicit consent button and transfer report; no missing original secrets can be reconstructed. Native settings now have eight sections including remote renderer; .env/authority, products/remote IDs and queues remain outside settings restore. Host-local legacy-owner metadata pins prior Basalam IDs across credential imports. New IDs are scoped in product.extra and atomically indexed in existing task_checkpoints for metrics without JSON1, HTML scans or schema changes. Network adapters use existing bounded TLS/URL guards; no bypass of PythonAnywhere outbound restrictions, local browser spawn, dependency/schema/authority changes. Agent did not execute production queues, credentials imports, outbound sends or private live-profile probes."
   ]
 }

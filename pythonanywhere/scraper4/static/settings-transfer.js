@@ -121,6 +121,11 @@
     });
   }
   inspectButton.onclick = () => inspectFile(true);
+  doc.querySelector('#credentials-import-confirm').onclick=()=>{
+    if(!confirm('کلیدها و توکن‌های بخش‌های انتخاب‌شده از فایل جایگزین/ادغام شوند؟ از فایل اصلیِ مورد اعتماد استفاده کنید.'))return;
+    importing.elements.credentials.checked=true;
+    importing.elements.credentials.dispatchEvent(new Event('change',{bubbles:true}));
+  };
   function makePreview() {
     queued = null; clearTimeout(autoTimer);
     return run(importing, async () => {
@@ -130,6 +135,8 @@
     const value = await api('/api/settings/preview', data);
     if(epoch !== generation) throw Error('فرم تغییر کرد؛ پیش‌نمایش تازه بگیرید.');
     preview = value;
+    const presence=value.credential_presence||{};
+    doc.querySelector('#credentials-import-warning').textContent=Object.entries(presence).map(([name,info])=>`${labels[name]}: ${info.keys_present} کلید اصلی و ${info.vendor_tokens} توکن غرفه در فایل · ${data.credentials?'با تأیید اعمال منتقل می‌شوند':'وارد نمی‌شوند؛ دکمهٔ انتقال کلیدها را بزنید'}`).join('\n')||'این انتخاب شامل کلید اتصال نیست.';
     result.textContent = [...value.changes.map(change => change.section === 'profiles' ?
       `${labels.profiles}: ${change.added} جدید، ${change.updated} ویرایش، ${change.disabled} غیرفعال` :
       `${labels[change.section]}: ${change.changed ? 'تغییر می‌کند' : 'بدون تغییر'}`),
@@ -152,7 +159,7 @@
       const applied = await api('/api/settings/import', {...data,token:approved.token});
       doc.querySelector('#transfer-previous').disabled = !applied.undo_available;
       if(epoch === generation) {importing.reset(); window.S4Refresh?.clean(importing, revision);}
-      message('تنظیمات پیش‌نمایش تأییدشده اعمال شد. محصولات و صف تغییر نکردند. نسخهٔ قبل از بازیابی از همین فرم قابل بازگرداندن است؛ برای دیدن فرم‌های تازه به پنل برگردید.');
+      message((applied.credentials_imported ? 'انتقال کلیدهای بخش‌های انتخاب‌شده تأیید شده بود. ' : 'کلیدهای فایل وارد نشدند؛ برای انتقال، دکمهٔ انتقال کلیدها را بزنید و فایل را دوباره اعمال کنید. ')+'تنظیمات پیش‌نمایش تأییدشده اعمال شد. محصولات و صف تغییر نکردند. نسخهٔ قبل از بازیابی از همین فرم قابل بازگرداندن است؛ برای دیدن فرم‌های تازه به پنل برگردید.');
     });
   });
   exporting.addEventListener('submit', event => {

@@ -71,3 +71,6 @@ body.menu-open{overflow:hidden}
 .selector-sample{padding:12px;margin-top:9px;background:#0e1a2d;border:1px solid #304766;border-radius:9px;overflow-wrap:anywhere}.selector-sample p{font-size:11px;margin:5px 0;color:#94a3b8}.selector-sample strong{color:#e2e8f0}#selector-test-result h3{font-size:13px;color:#93c5fd;margin-top:20px}
 
 #extraction-status{white-space:pre-line;line-height:2;color:#bae6fd}#extraction-action-status{white-space:pre-line;color:#fde68a}#extraction-jobs td{white-space:normal;overflow-wrap:anywhere;max-width:360px}#extraction-jobs td:last-child{color:#fcd34d}#extraction-jobs p{font-size:10px;margin:4px 0}
+
+/* PHP-style engine benchmark and isolated shop cards. */
+.audit-counters{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}.audit-counters span,.shop-card{background:#152339;border:1px solid #30445e;border-radius:12px;padding:14px}.audit-counters b{display:inline-block;min-width:25px;font-size:1.35rem}.audit-passed{color:#68d9a4}.audit-empty{color:#f8cc76}.audit-failed{color:#ff9797}#audit-progress{width:100%;height:10px;accent-color:#58a6ff}.shops-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.shop-card button{margin:4px}#audit-results td{max-width:360px;overflow-wrap:anywhere}#extraction-audit .eyebrow{color:#91bfff}

@@ -48,8 +48,9 @@ def create_app(settings=None):
 
     @app.context_processor
     def build_context():
+        from .services.scraping.engines import ENGINES, profile_engine
         return {'app_version': VERSION, 'app_commit': str(loaded_release.get('commit') or 'local')[:12],
-                'app_build': str(loaded_release.get('commit') or ''), 'settings_menu': SETTINGS_MENU}
+                'app_build': str(loaded_release.get('commit') or ''), 'settings_menu': SETTINGS_MENU, 'engine_choices': ENGINES, 'profile_engine': profile_engine}
 
 
     @app.before_request
@@ -174,7 +175,8 @@ def create_app(settings=None):
     @app.route('/api/profiles', methods=['GET', 'POST'])
     def profiles():
         if request.method == 'GET':
-            return jsonify(ok=True, profiles=db.list_profiles())
+            from .services.scraping.engines import profile_engine
+            return jsonify(ok=True, profiles=[{**p,'extraction_engine':profile_engine(p)} for p in db.list_profiles()])
         data = request.get_json()
         if not isinstance(data, dict):
             raise ValueError('Expected a JSON object')
@@ -192,6 +194,10 @@ def create_app(settings=None):
         key = str(data.get('key') or profile_key(url))
         previous = db.get_profile(key)
         profile_settings = dict((previous or {}).get('settings') or {})
+        if 'extractionEngine' in data:
+            from .services.scraping.engines import ENGINES
+            if not isinstance(data['extractionEngine'],str) or data['extractionEngine'] not in ENGINES: raise ValueError('Unknown extraction engine')
+            profile_settings['extractionEngine'] = data['extractionEngine']
         if 'detailSelectors' in data:
             from .services.scraping.detail import normalize_selectors
             profile_settings['detailSelectors'] = normalize_selectors(data['detailSelectors'])
@@ -272,6 +278,11 @@ def create_app(settings=None):
             raise ValueError('Unknown render mode')
         if payload.get('status', 'draft') not in ('draft', 'publish', 'pending'):
             raise ValueError('Invalid product status')
+        if kind == 'bsl_send':
+            from .services.basalam.shops import resolve
+            cfg = db.get_config('basalam')
+            shop = resolve(cfg,data.get('vendor_id'))
+            payload['vendor_id'] = shop['vendor_id']  # pin destination, never drift with primary config
         return jsonify(ok=True, id=db.enqueue(kind, profile['id'], payload)), 202
 
     @app.get('/api/jobs/<int:entry_id>')
@@ -299,20 +310,32 @@ def create_app(settings=None):
     @app.route('/api/connections/<name>', methods=['GET', 'POST'])
     def connections(name):
         allowed = {'woocommerce': {'store_url', 'consumer_key', 'consumer_secret'},
-                   'basalam': {'token', 'vendor_id', 'category_id'}}
+                   'basalam': {'token', 'vendor_id', 'category_id'}, 'render': {'url','token'}}
         if name not in allowed:
             abort(404)
         if request.method == 'GET':
             cfg = db.get_config(name)
-            return jsonify(ok=True, configured=bool(cfg), fields={k: ('••••' if k in ('token', 'consumer_key', 'consumer_secret') and v else v)
+            return jsonify(ok=True, configured=bool(cfg), credential_status={k:bool(cfg.get(k)) for k in allowed[name] if k in ('token','consumer_key','consumer_secret')}, fields={k: ('••••' if k in ('token', 'consumer_key', 'consumer_secret') and v else v)
                            for k, v in cfg.items() if k in allowed[name]})
+        if name == 'render' and (not session.get('authenticated') or request.environ.get('s4.bearer')): abort(403)
         data = request.get_json() or {}
+        if not isinstance(data,dict): raise ValueError('Expected connection object')
         cfg = db.get_config(name)
+        for key,value in data.items():
+            if key not in allowed[name]: continue
+            if key in ('vendor_id','category_id') and type(value) is int: value=str(value);data[key]=value
+            if not isinstance(value,str) or len(value)>4096 or '\r' in value or '\n' in value: raise ValueError('Invalid connection field')
         for key in allowed[name]:
             if key in data and data[key] != '••••':
                 cfg[key] = str(data[key])
         if cfg.get('store_url'):
             validate_url(cfg['store_url'])
+        if name == 'render' and cfg.get('url'):
+            validate_url(cfg['url'])
+        if name == 'basalam':
+            from .services.basalam.shops import normalize_config, pin_legacy_owner
+            cfg = normalize_config(cfg)
+            with db.connect() as conn: pin_legacy_owner(conn,db.get_config(name))
         db.put_config(name, cfg)
         return jsonify(ok=True)
 
@@ -324,6 +347,8 @@ def create_app(settings=None):
     register_cron(app, db, settings)
     from .settings_transfer import register_settings_transfer
     register_settings_transfer(app, db, settings)
+    from .extraction_tools import register_extraction_tools
+    register_extraction_tools(app, db, settings)
     from .worker import register_worker
     register_worker(app, db, settings)
     return app

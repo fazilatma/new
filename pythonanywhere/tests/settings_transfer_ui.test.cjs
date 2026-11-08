@@ -262,3 +262,23 @@ test('host HTML 413 produces an actionable file-limit error instead of unreadabl
   const e=setup(t);await e.flush();const old=e.w.fetch;e.w.fetch=(url,options)=>url.endsWith('/inspect')?Promise.resolve({ok:false,status:413,json:async()=>{throw Error('HTML');}}):old(url,options);
   e.file(2400000,'{"app":"scraper","files":{}}');await e.flush();assert(e.d.querySelector('#settings-import-state').textContent.includes('۱۰ MiB'));assert.equal(e.d.querySelector('#settings-apply').disabled,true);
 });
+
+test('explicit import-keys button obtains consent, refreshes preview, and reports nested vendor tokens',async t=>{
+  const e=setup(t);await e.flush();const old=e.reply;e.reply=async(url,options)=>{
+    const value=await old(url,options);
+    if(url.endsWith('/preview'))return {...value,credential_presence:{basalam:{keys_present:1,vendor_tokens:2}}};
+    return value;
+  };
+  await e.inspect();assert.equal(e.importing.elements.credentials.checked,false);
+  assert(e.d.querySelector('#credentials-import-warning').textContent.includes('وارد نمی‌شوند'));
+  e.w.confirm=()=>false;e.d.querySelector('#credentials-import-confirm').click();assert.equal(e.importing.elements.credentials.checked,false);
+  e.w.confirm=()=>true;e.d.querySelector('#credentials-import-confirm').click();await e.flush();
+  assert.equal(e.importing.elements.credentials.checked,true);assert(e.calls.filter(c=>c.url.endsWith('/preview')).at(-1).data.credentials);
+  assert(e.d.querySelector('#credentials-import-warning').textContent.includes('2 توکن غرفه'));assert(e.d.querySelector('#credentials-import-warning').textContent.includes('منتقل می‌شوند'));
+  assert(!e.calls.some(c=>c.url.endsWith('/import')));
+});
+
+test('successful settings-only import states plainly that keys were NOT imported',async t=>{
+  const e=setup(t);await e.flush();await e.inspect();await e.preview();e.submit(e.importing);await e.flush();
+  assert(e.d.querySelector('#transfer-message').textContent.includes('کلیدهای فایل وارد نشدند'));
+});

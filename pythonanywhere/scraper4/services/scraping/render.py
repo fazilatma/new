@@ -13,6 +13,7 @@ import math
 from typing import Any
 
 import requests
+from .fetch import validate_url
 
 from ...config import RenderSettings, Settings, get_settings
 
@@ -33,6 +34,12 @@ class RenderedFetcher:
         if base in ("", "http://", "https://"):
             return _fail(url, "renderer url not configured")
 
+        try:
+            validate_url(base, resolve=True)
+            validate_url(url, resolve=True)
+        except (ValueError, OSError):
+            return _fail(url, "renderer/target URL is not public or reachable")
+
         timeout_ms = int(opts.get("timeout_ms") or render.timeout_ms or 60000)
         payload: dict[str, Any] = {
             "url": url,
@@ -45,6 +52,8 @@ class RenderedFetcher:
         if opts.get("blockResources"):
             payload["blockResources"] = True
 
+        if opts.get("driver") in ("playwright", "selenium"):
+            payload["driver"] = opts["driver"]
         headers = {"Accept": "application/json"}
         if render.token:
             headers["Authorization"] = f"Bearer {render.token}"
@@ -54,8 +63,10 @@ class RenderedFetcher:
                 base + "/render",
                 json=payload,
                 headers=headers,
-                timeout=(5, int(math.ceil(timeout_ms / 1000)) + 10),
+                timeout=(min(5,2 if opts.get('_deadline_seconds') else 5),
+                         min(int(math.ceil(timeout_ms/1000))+10,6) if opts.get('_deadline_seconds') else int(math.ceil(timeout_ms/1000))+10),
                 verify=True,
+                allow_redirects=False,
             )
         except requests.RequestException as exc:
             return _fail(url, str(exc))
@@ -65,7 +76,7 @@ class RenderedFetcher:
         except ValueError:
             body = None
 
-        if response.status_code >= 400 or not isinstance(body, dict) or not body.get("ok"):
+        if not 200 <= response.status_code < 300 or not isinstance(body, dict) or not body.get("ok"):
             error = (str(body.get("error")) if isinstance(body, dict) and body.get("error")
                      else f"HTTP {response.status_code}")
             return {"ok": False, "code": response.status_code, "error": error,

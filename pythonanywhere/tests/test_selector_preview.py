@@ -30,7 +30,7 @@ def test_list_test_uses_actual_parser_relative_links_and_document_counts(client,
     result = response.json
     assert result['persisted'] is False and result['render'] == 'static_direct'
     assert result['total'] == 2 and result['sample_limit'] == 8
-    assert result['products'][0] == {'title':'کتاب اول','price':'۱۲۵٬۰۰۰ تومان','sku':'','link':'https://example.com/shop/../p/1','image':'https://example.com/a.jpg'}
+    assert result['products'][0] == {'title':'کتاب اول','price':'۱۲۵٬۰۰۰ تومان','sku':'A','link':'https://example.com/shop/../p/1','image':'https://example.com/a.jpg'}
     fields = {row['field']:row for row in result['fields']}
     assert fields['title']['count'] == 2
     assert fields['link']['value'] == 'https://example.com/shop/../p/1'
@@ -155,6 +155,9 @@ def test_dashboard_has_explicit_non_submit_buttons_and_safe_unnamed_sample_input
 @pytest.mark.parametrize('raw', ['{"@type":"Product","name":"Bad","offers":42}', '['*1200+'0'+']'*1200])
 def test_malformed_upstream_product_structure_is_not_a_server_crash(client,auth_headers,upstream,raw):
     upstream.return_value['html'] = '<script type="application/ld+json">'+raw+'</script>'
-    assert post(client,auth_headers,selectors={}).status_code == 422
+    response=post(client,auth_headers,selectors={})
+    # Scalar offers no longer crash parsing; a title-only Product is usable.
+    assert response.status_code == (200 if raw.startswith('{') else 422)
+    if response.status_code==200: assert response.json['products'][0]['price']==''
     upstream.return_value['html'] = SOURCE
     assert post(client,auth_headers).status_code == 200

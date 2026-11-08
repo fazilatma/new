@@ -11,6 +11,9 @@ from ..db import utc_now
 from .scraping.detail import sanitize_fragment, text_html, web_url
 from .support.persian import fa_digits_to_en
 
+# Indexed checkpoint range avoids scanning descriptions/JSON blobs for shop IDs.
+BSL_LINKED = "(coalesce(p.basalam_id,0)>0 OR EXISTS(SELECT 1 FROM task_checkpoints z WHERE z.task>=('basalam:remote:'||p.id||':') AND z.task<('basalam:remote:'||p.id||';')))"
+
 METRICS = {
     'all': ('کل محصولات', '1'),
     'priced': ('دارای قیمت', 'p.price_num > 0'),
@@ -19,9 +22,9 @@ METRICS = {
     'linked': ('دارای لینک مبدأ', "trim(p.link) <> ''"),
     'sku': ('دارای SKU', "trim(p.sku) <> ''"),
     'woo_linked': ('مرتبط با ووکامرس', 'coalesce(p.woo_id,0) > 0'),
-    'bsl_linked': ('مرتبط با باسلام', 'coalesce(p.basalam_id,0) > 0'),
+    'bsl_linked': ('مرتبط با باسلام', BSL_LINKED),
     'woo_missing': ('بدون شناسهٔ ووکامرس', 'coalesce(p.woo_id,0) <= 0'),
-    'bsl_missing': ('بدون شناسهٔ باسلام', 'coalesce(p.basalam_id,0) <= 0'),
+    'bsl_missing': ('بدون شناسهٔ باسلام', 'NOT '+BSL_LINKED),
 }
 SORTS = {'oldest': 'p.id ASC', 'newest': 'p.id DESC',
          'price_asc': 'p.price_num ASC,p.id ASC', 'price_desc': 'p.price_num DESC,p.id ASC',
@@ -90,7 +93,7 @@ def list_products(db, args):
             offset = ((total - 1) // limit) * limit
         elif not total:
             offset = 0
-        rows = conn.execute(f'''SELECT p.*,coalesce(nullif(r.name,''),r.key) AS profile_name,r.key AS profile_key
+        rows = conn.execute(f'''SELECT p.*,coalesce(nullif(r.name,''),r.key) AS profile_name,r.key AS profile_key,{BSL_LINKED} AS basalam_linked
             FROM products p JOIN profiles r ON r.id=p.profile_id
             WHERE {where} AND ({METRICS[metric][1]}) ORDER BY {SORTS[order]} LIMIT ? OFFSET ?''',
             (*values, limit, offset)).fetchall()
@@ -138,7 +141,8 @@ def detail(db, product_id):
     specs = [{'k': str(row['k'])[:120], 'v': str(row['v'])[:2000]} for row in specs[:100]
              if isinstance(row, dict) and isinstance(row.get('k'), str) and isinstance(row.get('v'), str)]
     view = {key: str(fields.get(key) or '')[:1000] for key in ('brand', 'category', 'tags', '_detail_status', '_detail_checked_at')}
-    view.update(images=images, specs=specs)
+    targets=fields.get('basalam_targets') or {}
+    view.update(images=images, specs=specs, basalam_targets={str(k):v for k,v in targets.items() if str(k).isdigit() and type(v) is int and v>0} if isinstance(targets,dict) else {})
     for key in ('shortDesc', 'longDesc', 'specs'):
         view[key + '_text'] = text_html(sanitize_fragment(fields.get(key, ''), base))[:30000]
     data['link'] = web_url(data['link'], data['profile_url'])

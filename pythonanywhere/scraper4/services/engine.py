@@ -34,18 +34,18 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
     kind, val = pagination.get('type', 'query_page'), pagination.get('val', '')
     url = payload.get('_next_url') or (profile['url'] if page == 1 else build(profile['url'], profile['url'], page, kind, val))
     validate_url(url)
-    net = settings.net.as_dict() if network_timeout else settings.net
-    if network_timeout:
-        net['_deadline_seconds'] = 12
-    result = SmartFetcher.get(url, timeout=network_timeout or settings.fetch_timeout, net=net,
-                              mode=payload.get('render', 'static'), settings=settings)
+    from .scraping.engines import extract, profile_engine, for_installation
+    try:
+        result = extract(url, profile['selectors'], profile_engine(profile), for_installation(settings, db),
+                         timeout=network_timeout or settings.fetch_timeout, render_mode=payload.get('render', 'static'))
+    except ValueError as exc:
+        counts.update(last_http_status=getattr(exc,'upstream_status',0),engine=profile_engine(profile))
+        raise
     counts.update(last_http_status=result.get('code', 0), last_html_chars=len(result.get('html') or ''),
                   js_shell=bool(result.get('js_shell_detected') or looks_like_js_shell(result.get('html') or '')),
-                  render_failed=bool(result.get('render_error')))
-    if not result.get('ok'):
-        raise ValueError(result.get('error') or 'Fetch failed')
+                  render_failed=bool(result.get('render_error')), engine=result['engine'], used_engine=result['used_engine'])
     html, effective = result.get('html', ''), result.get('url') or url
-    products = parse_products(html, effective, profile['selectors'])
+    products = result['products']
     counts['last_page_products'] = len(products)
     counts['warning'] = ('هیچ محصولی در این صفحه تشخیص داده نشد؛ سلکتور کارت، آدرس فهرست و نیاز سایت به JavaScript را بررسی کنید.' if not products
                          else 'رندر JavaScript ناموفق بود؛ نتیجه از HTML ایستا استخراج شد.' if counts['render_failed'] else '')
@@ -54,16 +54,26 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
         raise ValueError('Detail extraction supports at most 1000 linked products per listing page; narrow the selectors')
     for key, product in products.items():
         with db.connect() as conn:
-            previous = conn.execute('SELECT sku,image FROM products WHERE profile_id=? AND key=?', (profile['id'], key)).fetchone()
+            previous = conn.execute('SELECT sku,image,extra FROM products WHERE profile_id=? AND key=?', (profile['id'], key)).fetchone()
         if previous:
             product['sku'] = product.get('sku') or previous['sku']
             product['image'] = product.get('image') or previous['image']
+        saved_extra = json.loads(previous['extra'] or '{}') if previous else {}
+        if not isinstance(saved_extra,dict): saved_extra={}
+        rich = {k:product[k] for k in ('images','brand','category','tags','in_stock','stock','stock_status','longDesc','shortDesc','source_id','variations') if k in product and product[k] is not None and product[k] != '' and product[k] != [] and product[k] != {}}
+        if rich: product['extra'] = {**saved_extra, **rich}
         product['price_num'] = price_num(product.get('price', ''))
         db.upsert_product(profile['id'], key, product)
     counts.update(current=page, total=pages, found=counts.get('found', 0) + len(products))
     payload['_page'] = page + 1
-    done = page >= pages or not products
-    if kind == NEXT_SELECTOR and not done:
+    done = page >= pages or not products or result.get('last_page', False)
+    if result.get('next_url'):
+        next_url = validate_url(result['next_url'])
+        visited = payload.setdefault('_visited', [])
+        if next_url in visited or next_url == url: done = True
+        visited.append(url)
+        payload['_next_url'] = next_url
+    elif kind == NEXT_SELECTOR and not done:
         nodes = query_inside(load_dom(html), val)
         href = nodes[0].get('href') if nodes else ''
         next_url = absolute(href, effective) if href else ''
@@ -94,15 +104,27 @@ def _detail_step(db, settings, entry, profile, network_timeout=None):
                            (profile['id'], keys[index])).fetchone()
     if row and row['link']:
         url = validate_url(row['link'])
-        net = settings.net.as_dict() if network_timeout else settings.net
-        if network_timeout:
-            net['_deadline_seconds'] = 12
-        result = SmartFetcher.get(url, timeout=network_timeout or settings.fetch_timeout, net=net,
-                                  mode=payload.get('render', 'static'), settings=settings)
-        if not result.get('ok'):
-            raise ValueError(result.get('error') or 'Detail fetch failed')
-        effective = validate_url(result.get('url') or url)
-        fresh = parse_detail(result.get('html', ''), effective, payload['_detail_selectors'])
+        from .scraping.engines import extract, profile_engine, for_installation
+        engine = profile_engine(profile)
+        if engine == 'selectors':
+            # Preserve the established static detail contract for legacy profiles.
+            net = settings.net.as_dict() if network_timeout else settings.net
+            if network_timeout: net['_deadline_seconds'] = 12
+            result = SmartFetcher.get(url, timeout=network_timeout or settings.fetch_timeout, net=net,
+                                      mode=payload.get('render', 'static'), settings=settings)
+            if not result.get('ok'): raise ValueError('Detail fetch failed; check source/network before retry')
+            effective = validate_url(result.get('url') or url)
+            fresh = parse_detail(result.get('html', ''), effective, payload['_detail_selectors'])
+        else:
+            result = extract(url, {}, engine, for_installation(settings,db), timeout=network_timeout or settings.fetch_timeout)
+            effective = validate_url(result.get('url') or url)
+            if engine in ('basalam_api','digikala_api'):
+                record = next(iter(result['products'].values()), {})
+                fresh = {k:record[k] for k in payload['_detail_selectors'] if record.get(k)}
+                for k in ('shortDesc','longDesc','specs'):
+                    if k in fresh: fresh[k] = sanitize_fragment(fresh[k],effective)
+            else:
+                fresh = parse_detail(result.get('html',''),effective,payload['_detail_selectors'])
         # Merge against the latest row, preserving unrelated extra data and all
         # pricing/remote IDs. Never regenerate a product key from enriched data.
         with db.connect() as conn:
@@ -148,7 +170,16 @@ def _send_step(db, settings, entry, profile, network_timeout=None):
     specs = sanitize_fragment(extra.get('specs', ''), product.get('link') or profile['url'])
     if specs and specs not in description:
         description += '<h4>مشخصات فنی</h4>' + specs
-    if product.get(remote_column) and not payload.get('force'):
+    remote_id = product.get(remote_column)
+    shop = None
+    if target == 'basalam':
+        from .basalam.shops import resolve, owner, remote_id as shop_remote_id
+        bsl_cfg = db.get_config('basalam')
+        legacy_owner = owner(db,bsl_cfg)
+        shop = resolve(bsl_cfg, payload.get('vendor_id') or legacy_owner)
+        payload.setdefault('vendor_id',shop['vendor_id'])
+        remote_id = shop_remote_id(product,extra,shop['vendor_id'],legacy_owner)
+    if remote_id and not payload.get('force'):
         counts['skipped'] = counts.get('skipped', 0) + 1
     else:
         if target == 'woo':
@@ -181,25 +212,29 @@ def _send_step(db, settings, entry, profile, network_timeout=None):
                 body['categories'] = [{'id': int(payload['category_id'])}]
             result = client.update_product(product['woo_id'], body) if product.get('woo_id') else client.create_product(body)
         else:
-            cfg = db.get_config('basalam')
-            if not cfg.get('token') or not cfg.get('vendor_id'):
-                raise ValueError('Basalam token/vendor_id are required')
+            cfg = {**bsl_cfg, **shop}
+            from .basalam.shops import adjusted_price
+            amount = adjusted_price(product['price_num'],bsl_cfg,shop)
             client = BasalamClient.from_connection(cfg, api_base=settings.basalam_api_base)
             if network_timeout:
                 client.timeout, client.connect_timeout, client.max_attempts = network_timeout, 3, 1
-            body = {'name': product['title'], 'price': product['price_num'], 'description': text_html(description or short)[:10000] or product['title']}
+            body = {'name': product['title'], 'primary_price': amount*10, 'description': text_html(description or short)[:10000] or product['title']}
             category = payload.get('category_id') or cfg.get('category_id')
             if category:
                 body['category_id'] = int(category)
-            result = (client.update_product(product['basalam_id'], body, cfg['vendor_id'])
-                      if product.get('basalam_id') else client.create_product(cfg['vendor_id'], body))
+            result = (client.update_product(remote_id, body, cfg['vendor_id'])
+                      if remote_id else client.create_product(cfg['vendor_id'], body))
         remote = result.get('body')
         if not result.get('ok') or not isinstance(remote, dict) or not remote.get('id'):
             # Stop here: operator can inspect the error before attempting again.
             counts['failed'] = counts.get('failed', 0) + 1
             raise ValueError(f"{target}: HTTP {result.get('code', 0)}; verify product {product['id']} remotely before retry")
-        db.mark_product_target(product['id'], target, int(remote['id']))
-        field = 'updated' if product.get(remote_column) else 'sent'
+        if target == 'basalam':
+            from .basalam.shops import mark_remote
+            mark_remote(db,product['id'],shop['vendor_id'],int(remote['id']),legacy_owner)
+        else:
+            db.mark_product_target(product['id'], target, int(remote['id']))
+        field = 'updated' if remote_id else 'sent'
         counts[field] = counts.get(field, 0) + 1
     payload['_after_id'] = product['id']
     counts['current'] = counts.get('current', 0) + 1

@@ -89,7 +89,7 @@ def render(source, base, mode, selectors):
                              'link': checked_url(row.get('link', ''), base), 'image': checked_url(row.get('image', ''), base)})
     warnings = []
     if mode == 'list' and 'sku' in selectors:
-        warnings.append('SKU فهرست فقط آزمایش متنی است؛ موتور فعلی SKU را از مرحلهٔ جزئیات می‌گیرد، نه سلکتور فهرست.')
+        warnings.append('SKU از سلکتور فهرست خوانده می‌شود؛ مرحلهٔ جزئیات فقط مقدار تازهٔ غیرخالی را تکمیل می‌کند.')
     return {'ok': True, 'mode': mode, 'url': base, 'fields': diagnostics, 'products': products,
             'total': total, 'sample_limit': 8, 'automatic': mode == 'list' and not selectors.get('container'),
             'persisted': False, 'render': 'static_direct',

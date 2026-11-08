@@ -36,16 +36,17 @@ UNDO = 'settings_restore_undo'
 SECTIONS = {
     'profiles': 'پروفایل‌ها و سلکتورها (بدون محصولات)',
     'woocommerce': 'اتصال ووکامرس',
-    'basalam': 'اتصال باسلام',
+    'basalam': 'اتصال باسلام و غرفه‌ها',
+    'render': 'سرویس رندر Playwright/Selenium',
     'pythonanywhere': 'میزبانی و توکن PythonAnywhere (انتخاب صریح)',
     'cron': 'کران خارجی و GET عمومی',
     'updates': 'دریافت خودکار نسخه‌ها',
     'deployment': 'پذیرش استقرار امضاشده',
 }
-CONNECTIONS = {'woocommerce', 'basalam', 'pythonanywhere'}
+CONNECTIONS = {'woocommerce', 'basalam', 'pythonanywhere', 'render'}
 CHECKPOINTS = {'cron': 'cron:config', 'updates': 'updates:config', 'deployment': 'deploy:config'}
 DEFAULTS = {'cron': {'public_get': False}, 'updates': {'enabled': True, 'interval_seconds': 3600}, 'deployment': {'enabled': True}}
-PUBLIC = {'woocommerce': {'store_url'}, 'basalam': {'vendor_id', 'category_id'}, 'pythonanywhere': {'site', 'username', 'domain'}}
+PUBLIC = {'woocommerce': {'store_url'}, 'basalam': {'vendor_id', 'category_id'}, 'pythonanywhere': {'site', 'username', 'domain'}, 'render': {'url'}}
 EXCLUDED = ['products', 'remote_ids', 'queue_entries', 'progress/logs', '.env/runtime installation settings',
             'panel password/session/encryption key', 'admin/cron API keys', 'deployment authority and signing keys']
 
@@ -240,6 +241,9 @@ def from_php(file):
                     unmapped = {k: v for k, v in row.items() if k not in {'key', 'url', 'name', 'selectors', 'pagType', 'pagVal', 'settings', 'detail', 'enabled', 'detailSelectors', 'products', 'productsOrder'}}
                     if unmapped:
                         config['legacy_profile_settings'] = unmapped
+                    if 'extractionEngine' in row:
+                        from .scraping.engines import normalize
+                        config['extractionEngine'] = normalize(row['extractionEngine'])
                     if 'detailSelectors' in row:
                         config['detailSelectors'] = php_detail_selectors(row['detailSelectors'])
                         config['legacy_detailSelectors'] = row['detailSelectors']
@@ -256,12 +260,21 @@ def from_php(file):
         else:
             for name, value in data.items():
                 name = {'woo': 'woocommerce', 'bsl': 'basalam'}.get(name, name)
-                if name in ('woocommerce', 'basalam'):
+                if name in ('woocommerce', 'basalam', 'render'):
                     if isinstance(value, dict):
                         value = copy.deepcopy(value)
                         for field in ('vendor_id', 'category_id'):
                             if field in value:
                                 value[field] = str(value[field] or '')
+                    if name == 'basalam' and isinstance(value,dict):
+                        try:
+                            from .basalam.shops import normalize_config
+                            value=normalize_config(value)
+                        except ValueError:
+                            warnings.append('ساختار غرفه‌های باسلام معتبر نیست؛ این بخش وارد نشد.')
+                            continue
+                    if name == 'render' and isinstance(value,dict):
+                        value={k:v for k,v in value.items() if k in ('url','token')}
                     add(name, value)
                 else:
                     ignored.append('connections:' + str(name)[:80])
@@ -324,7 +337,11 @@ def validate(bundle):
                 validate_url(value['store_url'])
             if section == 'pythonanywhere' and value:
                 PythonAnywhere({**value, 'token': value.get('token') or 'local-validation-only'})
+            if section == 'render' and value.get('url'):
+                validate_url(value['url'])
             if section == 'basalam':
+                from .basalam.shops import validate_config
+                validate_config(value)
                 for key in ('vendor_id', 'category_id'):
                     if value.get(key) and not re.fullmatch(r'[0-9]+', value[key]):
                         raise ValueError('شناسهٔ غرفه/دسته باید عددی باشد.')
@@ -395,13 +412,16 @@ def plan(current, incoming, selected, mode, credentials):
             changes.append({'section': section, 'added': added, 'updated': updated, 'disabled': disabled})
         else:
             if section in CONNECTIONS:
-                identities = {'woocommerce': ('store_url',), 'basalam': ('vendor_id',), 'pythonanywhere': ('site', 'username', 'domain')}[section]
-                secrets = {'woocommerce': ('consumer_key', 'consumer_secret'), 'basalam': ('token',), 'pythonanywhere': ('token',)}[section]
+                identities = {'woocommerce': ('store_url',), 'basalam': ('vendor_id',), 'pythonanywhere': ('site', 'username', 'domain'), 'render': ('url',)}[section]
+                secrets = {'woocommerce': ('consumer_key', 'consumer_secret'), 'basalam': ('token',), 'pythonanywhere': ('token',), 'render': ('token',)}[section]
                 changed_identity = before and any(key in patch and patch[key] != before.get(key) for key in identities)
                 if changed_identity and any(before.get(key) for key in secrets) and (not credentials or not all(patch.get(key) for key in secrets)):
                     raise ValueError('برای تغییر هویت اتصال، کلیدهای کامل همان هویت و تأیید انتقال کلیدها لازم است.')
                 if any(patch.get(key) == '••••' for key in secrets):
                     raise ValueError('کلید ماسک‌شده قابل بازیابی نیست؛ از فایل پشتیبان اصلی استفاده کنید.')
+            if section == 'basalam':
+                from .basalam.shops import merge_vendors
+                patch = merge_vendors(before,patch,credentials,mode)
             if section in CONNECTIONS and not credentials:
                 patch = {key: value for key, value in patch.items() if key in PUBLIC[section]}
                 fresh = deep_merge(before, patch)
@@ -448,7 +468,8 @@ def preview(db, data, binding):
             ['محصولات، شناسه‌های مقصد، صف و تنظیمات نصب/امنیت دست‌نخورده می‌مانند.',
              'در جایگزینی، پروفایل‌های خارج فایل فقط غیرفعال می‌شوند؛ حذف نمی‌شوند.',
              'رمزها و کلیدها منتقل می‌شوند.' if credentials else 'کلیدها و توکن‌های اتصال فعلی حفظ می‌شوند؛ کلیدهای فایل وارد نمی‌شوند.'],
-            'public_cron': target['sections']['cron']['public_get']}
+            'credential_presence': credential_presence({s:incoming['sections'][s] for s in selected}),
+            'credentials_imported': credentials, 'public_cron': target['sections']['cron']['public_get']}
 
 
 def write_target(conn, db, target, selected):
@@ -464,6 +485,10 @@ def write_target(conn, db, target, selected):
                     (row['key'], row['name'], row['url'], canonical(row['selectors']).decode(), canonical(row['pagination']).decode(),
                      canonical(row['settings']).decode(), int(row['enabled']), now, now))
         elif section in CONNECTIONS:
+            if section == 'basalam':
+                from .basalam.shops import pin_legacy_owner
+                old = conn.execute('SELECT config FROM connections WHERE name=?',('basalam',)).fetchone()
+                if old: pin_legacy_owner(conn,unseal(old['config'],db.secret_key))
             conn.execute('''INSERT INTO connections (name,config,created_at,updated_at) VALUES (?,?,?,?)
                 ON CONFLICT(name) DO UPDATE SET config=excluded.config,updated_at=excluded.updated_at''',
                 (section, seal(value, db.secret_key), now, now))
@@ -502,10 +527,22 @@ def apply(db, settings, data, binding):
                 raise Conflict('ابتدا کارهای در انتظار، در حال اجرا یا مکث‌شده را تمام یا لغو کنید؛ صف حذف نمی‌شود.')
             if digest(current) == digest(target):
                 undo = conn.execute('SELECT 1 FROM connections WHERE name=?', (UNDO,)).fetchone()
-                return {'ok': True, 'changed': False, 'changes': changes, 'undo_available': bool(undo), 'products_changed': False, 'queue_changed': False}
+                return {'ok': True, 'changed': False, 'changes': changes, 'undo_available': bool(undo), 'products_changed': False, 'queue_changed': False, 'credentials_imported':data.get('credentials') is True}
             now = utc_now()
             conn.execute('''INSERT INTO connections (name,config,created_at,updated_at) VALUES (?,?,?,?)
                 ON CONFLICT(name) DO UPDATE SET config=excluded.config,updated_at=excluded.updated_at''',
                 (UNDO, seal(current, db.secret_key), now, now))
             write_target(conn, db, target, selected)
-    return {'ok': True, 'changed': True, 'changes': changes, 'undo_available': True, 'products_changed': False, 'queue_changed': False}
+    return {'ok': True, 'changed': True, 'changes': changes, 'undo_available': True, 'products_changed': False, 'queue_changed': False, 'credentials_imported':data.get('credentials') is True}
+
+
+def credential_presence(sections):
+    """Counts/booleans only; never expose credentials or hashes in reports."""
+    out={}
+    for name,value in sections.items():
+        if name not in CONNECTIONS: continue
+        fields=('consumer_key','consumer_secret') if name=='woocommerce' else ('token',)
+        count=sum(bool(value.get(k)) for k in fields)
+        vendors=sum(bool(v.get('token')) for v in value.get('vendors',[])) if name=='basalam' else 0
+        out[name]={'keys_present':count,'vendor_tokens':vendors}
+    return out

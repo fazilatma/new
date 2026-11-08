@@ -29,7 +29,7 @@
 <label>روش اعمال<select name="mode"><option value="merge">ادغام با تنظیمات فعلی</option><option value="replace">جایگزینی بخش‌های انتخاب‌شده</option></select></label>
 <p>در ادغام، فیلدهای موجودِ خارج از فایل حفظ می‌شوند. در جایگزینی، تنظیمات همان بخش جایگزین می‌شود؛ پروفایل‌های خارج از فایل فقط غیرفعال می‌شوند و محصولاتشان باقی می‌ماند.</p>
 <label><input type="checkbox" name="credentials"> انتقال کلیدها و توکن‌های اتصال از فایل را تأیید می‌کنم (پیش‌فرض: حفظ کلیدهای فعلی)</label>
-<p>قبل از اعمال، همهٔ کارهای در انتظار/در حال اجرا/مکث‌شده باید تمام یا لغو شوند؛ هیچ کاری حذف نمی‌شود. بازیابی خودکار ارسال، استخراج، Reload یا ساخت Task را اجرا نمی‌کند.</p>
+<p id="credentials-import-warning" class="notice" role="status">بدون تیک بالا، کلیدهای ووکامرس و توکن‌های همهٔ غرفه‌ها از فایل وارد نمی‌شوند، حتی اگر بقیهٔ تنظیمات وارد شوند.</p><button type="button" id="credentials-import-confirm" class="secondary">کلیدهای ووکامرس و توکن‌های غرفه‌ها را هم از فایل منتقل کن</button><p>قبل از اعمال، همهٔ کارهای در انتظار/در حال اجرا/مکث‌شده باید تمام یا لغو شوند؛ هیچ کاری حذف نمی‌شود. بازیابی خودکار ارسال، استخراج، Reload یا ساخت Task را اجرا نمی‌کند.</p>
 <button type="button" id="settings-preview" class="secondary" disabled>۲. پیش‌نمایش تغییرات</button>
 <pre id="settings-preview-result" role="status" aria-live="polite"></pre>
 <p id="settings-apply-hint" role="status" aria-live="polite"></p>

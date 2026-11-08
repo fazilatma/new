@@ -177,16 +177,17 @@ def _image_from_node(node, base_url: str) -> str:
     return ""
 
 
-def _walk_json_ld(data, out: list) -> None:
+def _walk_json_ld(data, out: list, depth=0) -> None:
+    if depth > 40: return
     if isinstance(data, dict):
         if "product" in str(data.get("@type") or "").lower():
             out.append(data)
         for value in data.values():
             if isinstance(value, (dict, list)):
-                _walk_json_ld(value, out)
+                _walk_json_ld(value, out, depth+1)
     elif isinstance(data, list):
         for item in data:
-            _walk_json_ld(item, out)
+            _walk_json_ld(item, out, depth+1)
 
 
 def json_ld_fallback(root, base_url: str, products: dict) -> dict:
@@ -203,16 +204,21 @@ def json_ld_fallback(root, base_url: str, products: dict) -> dict:
             image = item.get("image")
             if isinstance(image, list):
                 image = image[0] if image else ""
+            if isinstance(image, dict):
+                image = image.get("url") or image.get("contentUrl") or ""
             offers = item.get("offers") or {}
             if isinstance(offers, list):
                 offers = offers[0] if offers else {}
+            if not isinstance(offers, dict): offers = {}
+            amount = offers.get("price") or offers.get("lowPrice") or offers.get("highPrice") or ""
             row = {
                 "title": str(item.get("name") or ""),
-                "price": str((offers or {}).get("price") or "") + " تومان",
-                "link": absolute(str(item.get("url") or ""), base_url),
+                "price": str(amount) + " تومان" if amount != "" else "",
+                "link": absolute(str(item.get("url") or offers.get("url") or ""), base_url),
                 "image": absolute(str(image or ""), base_url),
                 "sku": str(item.get("sku") or ""),
             }
+            if not row["title"] and not row["link"]: continue
             key = product_key(row)
             products.setdefault(key, row)
     return products
@@ -345,6 +351,10 @@ def with_selectors(html: str, base_url: str, selectors: dict) -> dict:
             imgs = [n for n in _safe_xpath(container, ".//img") if _is_element(n)]
             if imgs:
                 row["image"] = _image_from_node(imgs[0], base_url)
+
+        if selectors.get("sku"):
+            nodes = query_inside(container, selectors["sku"]) or []
+            if nodes: row["sku"] = normalize_text(nodes[0].text_content())
 
         if row["title"] == "" and row["link"] == "":
             continue

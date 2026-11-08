@@ -126,6 +126,7 @@
     for(const [label, value] of facts) {const group = node('div'); group.append(node('dt', label), node('dd', value ?? '—')); summary.append(group);}
     body.append(summary);
     const source = safeUrl(product.link);
+    if(fields.basalam_targets && Object.keys(fields.basalam_targets).length) addTextSection('شناسه‌های مقصد به تفکیک غرفهٔ باسلام',Object.entries(fields.basalam_targets).map(([vendor,id])=>`غرفه ${vendor}: ${id}`).join(' · '));
     if(source) {const link = node('a', 'بازکردن صفحهٔ مبدأ ↗', 'detail-source'); link.href = source; link.target = '_blank'; link.rel = 'noopener noreferrer'; body.append(link);}
     const gallery = node('section', undefined, 'detail-gallery'); gallery.setAttribute('aria-label', 'تصاویر ذخیره‌شدهٔ محصول');
     for(const [index, value] of (product.gallery || []).entries()) {

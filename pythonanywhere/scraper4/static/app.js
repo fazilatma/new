@@ -26,7 +26,7 @@ const profileForm = document.querySelector('#profile-form');
 handle(profileForm, async data => {
   const selectors = Object.fromEntries(['container','title','price','link','image','sku'].map(k => [k, data[k]]).filter(([,v]) => v));
   const detailSelectors = Object.fromEntries(['shortDesc','longDesc','specs','images','sku','brand','category','tags'].map(key => [key, data['detail_'+key] || '']).filter(([,value]) => value.trim()));
-  await api('/api/profiles', 'POST', {detailSelectors, key:data.key, name:data.name, url:data.url, selectors, pagination:{type:data.pagType, val:data.pagVal}});
+  await api('/api/profiles', 'POST', {detailSelectors, extractionEngine:data.extractionEngine, key:data.key, name:data.name, url:data.url, selectors, pagination:{type:data.pagType, val:data.pagVal}});
   location.reload();
 });
 document.querySelector('#preview').onclick = async () => {
@@ -41,6 +41,7 @@ document.querySelectorAll('.edit').forEach(button => button.onclick = async () =
     const {profiles} = await api('/api/profiles');
     const profile = profiles.find(p => p.id === Number(button.dataset.id));
     for(const key of ['key','name','url']) profileForm.elements[key].value = profile[key];
+    profileForm.elements.extractionEngine.value = profile.extraction_engine || profile.settings?.extractionEngine || 'selectors';
     profileForm.elements.pagType.value = profile.pagination.type || 'query_page';
     profileForm.elements.pagVal.value = profile.pagination.val || '';
     for(const key of ['container','title','price','link','image','sku']) profileForm.elements[key].value = profile.selectors[key] || '';
@@ -65,9 +66,11 @@ handle(document.querySelector('#job-form'), async data => {
   await poll();
 });
 document.querySelectorAll('.connection-form').forEach(form => {
-  handle(form, async data => { await api(`/api/connections/${form.dataset.name}`,'POST',data); message('اتصال ذخیره شد.'); });
+  handle(form, async data => { await api(`/api/connections/${form.dataset.name}`,'POST',data); const status=document.querySelector(`[data-connection-status="${form.dataset.name}"]`);if(status)status.textContent='اتصال ذخیره شد؛ مقدار کلیدها فقط به صورت مخفی نمایش داده می‌شود.'; message('اتصال ذخیره شد.'); window.dispatchEvent(new Event('s4:connections-saved')); });
   api(`/api/connections/${form.dataset.name}`).then(result => {
     if(window.S4Refresh?.isDirty(form)) return;
+    const state=document.querySelector(`[data-connection-status="${form.dataset.name}"]`);
+    if(state) state.textContent=Object.entries(result.credential_status||{}).map(([key,value])=>`${key}: ${value?'ذخیره‌شده (مخفی)':'موجود نیست؛ درون‌ریزی با اجازهٔ انتقال کلید یا ثبت دستی لازم است'}`).join(' · ');
     for(const [key,value] of Object.entries(result.fields)) if(form.elements[key]) form.elements[key].value = value;
   }).catch(error => message(error.message));
 });
@@ -273,7 +276,7 @@ function paintProducts() {
     if(link) actions.append(sourceLink(link)); body.append(actions);
     card.append(image,body); grid.append(card);
     const row = document.createElement('tr');
-    for(const value of [product.title,product.price,product.sku,product.woo_id || '—',product.basalam_id || '—']) cell(row, value || '—');
+    for(const value of [product.title,product.price,product.sku,product.woo_id || '—',product.basalam_id || (product.basalam_linked ? 'غرفه‌های دیگر · جزئیات' : '—')]) cell(row, value || '—');
     const last = cell(row, ''); last.append(detailButton()); if(link) last.append(sourceLink(link));
     rows.append(row);
   }
