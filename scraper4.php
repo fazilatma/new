@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.629';
+const APP_VERSION = '10.630';
 
 
 if (!function_exists('str_starts_with')) {
@@ -49194,6 +49194,16 @@ if (isset($_GET['selftest'])) {
         &&substr_count($selfSrc,'AllSame" checked onchange="messengerSameToggle')===3
         &&strpos($selfSrc,"{v:'10." . "629'")!==false
         &&version_compare(APP_VERSION,'10.629','>='));
+    $__togglePos630=strpos($selfSrc,'function messengerSameToggle(prefix)');
+    $__applyPos630=strpos($selfSrc,'function applyCn()');
+    $add('10.630','تیک همه یکسان handler سراسری دارد و پیام‌رسان‌ها ابتدا بسته‌اند',
+        $__togglePos630!==false&&$__applyPos630!==false&&$__togglePos630<$__applyPos630
+        &&strpos($selfSrc,'<details id="balehMessengerPanel" class="alert alert-info"')!==false
+        &&strpos($selfSrc,'<details id="rubikaMessengerPanel" class="alert alert-info"')!==false
+        &&strpos($selfSrc,'<details id="telegramMessengerPanel" class="alert alert-info"')!==false
+        &&strpos($selfSrc,'MessengerPanel" '.'open')===false
+        &&strpos($selfSrc,"{v:'10." . "630'")!==false
+        &&version_compare(APP_VERSION,'10.630','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -92017,6 +92027,9 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <button type="button" class="ntab" onclick="setNotifTab('query',this)">🔍 استعلام</button>
 </div>
 <div id="ntab-messenger" class="ntabpane">
+<details id="balehMessengerPanel" class="alert alert-info" style="margin:0 0 8px;padding:8px 10px">
+<summary style="cursor:pointer;font-weight:800;color:#93c5fd">🔵 بله</summary>
+<div style="padding-top:8px">
 <div class="crow"><label>بله فعال:</label><input type="checkbox" id="balehEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token بله:</label><input type="password" id="balehToken" dir="ltr" placeholder="Bot Token" style="flex:1"></div>
 <div class="crow"><label>Chat ID مشترک:</label><input type="text" id="balehChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها" style="flex:1"></div>
@@ -92024,7 +92037,10 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div class="crow"><label>گفتگوها:</label><input type="text" id="balehConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
 <div class="crow"><label>سفارش‌ها:</label><input type="text" id="balehOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
 <div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="balehVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
-<div class="crow" style="margin-top:8px;padding-top:8px;border-top:1px solid #334155"><b style="font-size:11px">🟠 روبیکا</b></div>
+</div></details>
+<details id="rubikaMessengerPanel" class="alert alert-info" style="margin:0 0 8px;padding:8px 10px">
+<summary style="cursor:pointer;font-weight:800;color:#fdba74">🟠 روبیکا</summary>
+<div style="padding-top:8px">
 <div class="crow"><label>روبیکا فعال:</label><input type="checkbox" id="rubikaEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token روبیکا:</label><input type="password" id="rubikaToken" dir="ltr" placeholder="Bot Token" style="flex:1"></div>
 <div class="crow"><label>Chat ID مشترک:</label><input type="text" id="rubikaChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها" style="flex:1"></div>
@@ -92032,8 +92048,11 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div class="crow"><label>گفتگوها:</label><input type="text" id="rubikaConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
 <div class="crow"><label>سفارش‌ها:</label><input type="text" id="rubikaOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
 <div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="rubikaVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
+</div></details>
 <!-- v10.78 (92): تلگرام — سومین پیام‌رسان -->
-<div class="crow" style="margin-top:8px;padding-top:8px;border-top:1px solid #334155"><b style="font-size:11px">✈️ تلگرام</b></div>
+<details id="telegramMessengerPanel" class="alert alert-info" style="margin:0 0 8px;padding:8px 10px">
+<summary style="cursor:pointer;font-weight:800;color:#c4b5fd">✈️ تلگرام</summary>
+<div style="padding-top:8px">
 <div class="crow"><label>تلگرام فعال:</label><input type="checkbox" id="telegramEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token تلگرام:</label><input type="password" id="telegramToken" dir="ltr" placeholder="Bot Token (از BotFather)" style="flex:1"></div>
 <div class="crow"><label>Chat ID مشترک:</label><input type="text" id="telegramChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها (با -100 برای گروه)" style="flex:1"></div>
@@ -92041,6 +92060,7 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div class="crow"><label>گفتگوها:</label><input type="text" id="telegramConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
 <div class="crow"><label>سفارش‌ها:</label><input type="text" id="telegramOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
 <div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="telegramVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
+</div></details>
 <div style="font-size:10px;color:#94a3b8;line-height:1.8;margin:6px 0">با برداشتن تیک «همه یکسان»، مقصد مشترک گفتگوهای مشتری و ادمین، سفارش‌ها و بازدیدها جداگانه قابل ویرایش می‌شود. فیلد خالی از Chat ID مشترک استفاده می‌کند.</div>
 <div class="crow" style="margin-top:8px"><label>مقصد تست:</label><select id="notifTestRoute" style="flex:1"><option value="">مشترک</option><option value="Conversation">گفتگوهای مشتری و ادمین</option><option value="Orders">سفارش‌ها</option><option value="Visits">بازدیدهای سایت</option></select></div>
 <div class="cact" style="margin-top:10px">
@@ -101869,6 +101889,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.630', t:'🧩 رفع خطای تیک و پنل‌های بستهٔ پیام‌رسان', items:[
+    'تابع تیک «همه یکسان» به محدودهٔ سراسری منتقل شد تا برداشتن تیک دیگر خطای JavaScript ندهد.',
+    'بله، روبیکا و تلگرام هرکدام در یک پنل کشویی مستقل قرار گرفتند و در شروع بسته‌اند.',
+    'باز و بسته‌کردن پنل‌ها مقدارهای ذخیره‌شده و وضعیت قابل‌ویرایش فیلدها را حفظ می‌کند.'
+  ]},
   {v:'10.629', t:'💬 مقصد مشترک گفتگو و تیک «همه یکسان»', items:[
     'گفتگوهای مشتری و ادمین/غرفه‌دار در هر پیام‌رسان همیشه از یک Chat ID مشترک گفتگو استفاده می‌کنند.',
     'برای بله، روبیکا و تلگرام تیک «همه یکسان» افزوده شد؛ در حالت روشن همهٔ اعلان‌ها به Chat ID مشترک می‌روند.',
@@ -112863,6 +112888,8 @@ function s4EnsureVersionPanel(){
 // ========== Connection JS ==========
 let wSend=false,bSend=false,cn={woocommerce:{},basalam:{}},extractPollTimer=null,extractModalTimer=null;
 function loadConn(){fetch('',{method:'POST',body:new URLSearchParams('action=load_connections')}).then(r=>r.json()).then(d=>{if(d.ok){cn=d.connections;applyCn();}}).catch(()=>{});}
+/* Global because the checkboxes call it directly from their onchange attribute. */
+function messengerSameToggle(prefix){const same=!!$(prefix+'AllSame')?.checked;['Conversation','Orders','Visits'].forEach(s=>{const el=$(prefix+s+'ChatId');if(el){el.disabled=same;el.style.opacity=same?'.55':'1';}});}
 function applyCn(){window._connHydrated=true;const w=cn.woocommerce||{},b=cn.basalam||{};
 try{if(typeof reconAutoApplyCfg==='function') reconAutoApplyCfg(cn.recon_auto||{});}catch(e){}
 try{if(typeof catfixAutoApplyCfg==='function') catfixAutoApplyCfg(cn.catfix_auto||{});}catch(e){}
@@ -112881,7 +112908,6 @@ applyAiNet(cn.ai_net||{});
 /* Provider catalogs and a hidden test modal are loaded when their settings
    panel is opened; they are not prerequisites for the Start page. */
 // v8.17: Restore Baleh/Rubika settings
-function messengerSameToggle(prefix){const same=!!$(prefix+'AllSame')?.checked;['Conversation','Orders','Visits'].forEach(s=>{const el=$(prefix+s+'ChatId');if(el){el.disabled=same;el.style.opacity=same?'.55':'1';}});}
 const applyMessenger=(prefix,cfg)=>{cfg=cfg||{};const ids=cfg.chat_ids||{};if($(prefix+'Enabled'))$(prefix+'Enabled').checked=!!cfg.enabled;if($(prefix+'Token')&&cfg.token)$(prefix+'Token').value=cfg.token;if($(prefix+'ChatId'))$(prefix+'ChatId').value=cfg.chat_id||'';if($(prefix+'AllSame'))$(prefix+'AllSame').checked=cfg.all_same===undefined?true:!!cfg.all_same;const conversation=ids.conversations||ids.customer_chat||ids.vendor_chat||'';if($(prefix+'ConversationChatId'))$(prefix+'ConversationChatId').value=conversation;if($(prefix+'OrdersChatId'))$(prefix+'OrdersChatId').value=ids.orders||'';if($(prefix+'VisitsChatId'))$(prefix+'VisitsChatId').value=ids.visits||'';messengerSameToggle(prefix);};
 const bl=cn.baleh||{};applyMessenger('baleh',bl);if($('balehS')&&bl.token){$('balehS').textContent='فعال';$('balehS').className='cst on';}
 const rb=cn.rubika||{};applyMessenger('rubika',rb);
