@@ -62,3 +62,11 @@ test('failed save retains drafts; delete requires consent and never deletes dest
   const e=setup(t,'basalam-shops.js');await e.flush();const old=e.reply;e.reply=(url,options,...args)=>options.method==='POST'?{httpError:400,error:'توکن لازم است'}:old(url,options,...args);const f=e.d.querySelector('#basalam-shop-form');f.elements.vendor_id.value='30';f.elements.token.value='draft';e.submit('#basalam-shop-form');await e.flush();assert.equal(f.elements.token.value,'draft');
   e.w.confirm=()=>false;e.d.querySelectorAll('.shop-card')[1].querySelectorAll('button')[1].click();await e.flush();assert.equal(e.calls.filter(c=>c.options.method==='DELETE').length,0);assert.equal(e.hooks.begin,e.hooks.end);
 });
+
+test('five-page comprehensive audit follows signed continuation sequentially and stops at its real end',async t=>{
+  const e=setup(t,'extraction-audit.js'),form=e.d.querySelector('#extraction-audit-form');form.elements.profile_id.value='1';form.elements.pages.value='5';
+  let page=0;const old=e.reply;e.reply=async(url,options,data)=>url.endsWith('/probe')?{ok:true,report:{profile_id:1,name:'اول',engine:'basalam_api',page:++page,status:'passed',count:3,next:page<5?'signed-'+(page+1):null}}:old(url,options,data);
+  e.submit('#extraction-audit-form');await e.flush();const probes=e.calls.filter(c=>c.url.endsWith('/probe'));
+  assert.equal(probes.length,5);assert.equal(probes[0].data.continuation,undefined);assert.equal(probes[1].data.continuation,'signed-2');assert.equal(probes[4].data.continuation,'signed-5');assert.equal(e.d.querySelectorAll('#audit-results tr').length,5);assert.equal(e.d.querySelector('#audit-done').textContent,'1');
+  assert.ok(e.calls.every(c=>!c.url.includes('/jobs')));assert.equal(e.hooks.begin,e.hooks.end);
+});

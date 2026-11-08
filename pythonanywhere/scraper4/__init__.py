@@ -176,7 +176,8 @@ def create_app(settings=None):
     def profiles():
         if request.method == 'GET':
             from .services.scraping.engines import profile_engine
-            return jsonify(ok=True, profiles=[{**p,'extraction_engine':profile_engine(p)} for p in db.list_profiles()])
+            from .services.start_page import options
+            return jsonify(ok=True, profiles=[{**p,'extraction_engine':profile_engine(p),'start_options':options(p)} for p in db.list_profiles()])
         data = request.get_json()
         if not isinstance(data, dict):
             raise ValueError('Expected a JSON object')
@@ -349,6 +350,8 @@ def create_app(settings=None):
     register_settings_transfer(app, db, settings)
     from .extraction_tools import register_extraction_tools
     register_extraction_tools(app, db, settings)
+    from .start import register_start
+    register_start(app, db, settings)
     from .worker import register_worker
     register_worker(app, db, settings)
     return app

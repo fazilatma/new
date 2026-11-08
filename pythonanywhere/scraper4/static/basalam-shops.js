@@ -9,6 +9,7 @@
       list.append(card);if(select&&shop.token_configured){const option=document.createElement('option');option.value=shop.vendor_id;option.textContent=shop.shop_name+' #'+shop.vendor_id;select.append(option);}
     }
     if(select&&[...select.options].some(o=>o.value===previous))select.value=previous;
+    window.dispatchEvent(new Event('s4:basalam-vendors-changed'));
     if(!vendors.length)message.textContent='هنوز غرفه‌ای ثبت نشده است؛ اتصال اصلی یا غرفهٔ اضافی را ثبت کنید.';
   }
   async function run(callback){if(busy)return;busy=true;window.S4Refresh?.beginMutation();try{await callback();}catch(error){message.textContent=error.message;}finally{busy=false;window.S4Refresh?.endMutation();}}

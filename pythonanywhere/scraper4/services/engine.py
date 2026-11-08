@@ -24,12 +24,21 @@ from .basalam.client import BasalamClient
 
 def _extract_step(db, settings, entry, profile, network_timeout=None):
     payload, counts = entry['payload'], entry['counters']
+    from .start_page import options
+    opts=options(profile)
+    if opts['source']=='github':
+        from .github_products import load_file,import_products
+        products=load_file(opts['github'])
+        count=import_products(db,profile,products)
+        counts.update(found=count,current=1,total=1,phase='complete',source='github',warning='')
+        return True
     if '_detail_selectors' not in payload:
-        payload['_detail_selectors'] = normalize_selectors(profile['settings'].get('detailSelectors', {}))
+        payload['_detail_selectors'] = normalize_selectors(profile['settings'].get('detailSelectors', {})) if payload.get('with_detail',True) else {}
     if payload.get('_phase') == 'detail':
         return _detail_step(db, settings, entry, profile, network_timeout)
     page = int(payload.get('_page', 1))
-    pages = max(1, min(100, int(payload.get('pages', settings.max_pages))))
+    requested = int(payload.get('pages',settings.max_pages))
+    pages = 1000 if requested == 0 else max(1,min(1000,requested))
     pagination = profile['pagination']
     kind, val = pagination.get('type', 'query_page'), pagination.get('val', '')
     url = payload.get('_next_url') or (profile['url'] if page == 1 else build(profile['url'], profile['url'], page, kind, val))
@@ -49,6 +58,17 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
     counts['last_page_products'] = len(products)
     counts['warning'] = ('هیچ محصولی در این صفحه تشخیص داده نشد؛ سلکتور کارت، آدرس فهرست و نیاز سایت به JavaScript را بررسی کنید.' if not products
                          else 'رندر JavaScript ناموفق بود؛ نتیجه از HTML ایستا استخراج شد.' if counts['render_failed'] else '')
+    if requested == 0 and products:
+        import hashlib
+        signature=hashlib.sha256(json.dumps(sorted(products)).encode()).hexdigest()
+        seen=payload.setdefault('_page_signatures',[])
+        if signature in seen:
+            counts['warning']='صفحهٔ تکراری شناسایی شد؛ استخراج خودکار در انتهای واقعی/حلقه متوقف شد.'
+            if payload.get('detail_mode')=='two_stage' and payload['_detail_selectors']:
+                payload.update(_phase='detail',_detail_page=1,_detail_pages=page-1,_detail_keys=[],_detail_index=0,_listing_done=True)
+                return _next_detail_page(db,entry)
+            return True
+        seen.append(signature)
     eligible = [key for key, row in products.items() if row.get('link')]
     if payload['_detail_selectors'] and len(eligible) > 1000:
         raise ValueError('Detail extraction supports at most 1000 linked products per listing page; narrow the selectors')
@@ -87,6 +107,12 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
     count = db.sync_profile_count(profile['id'])
     db.touch_profile(profile['id'], count)
     counts['phase'] = 'listing'
+    if payload.get('detail_mode') == 'two_stage' and payload['_detail_selectors']:
+        db.checkpoint_write(f'start:seen:{entry["id"]}:{page}',{'keys':eligible},entry['id'])
+        if not done:return False
+        payload.update(_phase='detail',_detail_page=1,_detail_pages=page,_detail_keys=[],_detail_index=0,_listing_done=True)
+        counts.update(phase='detail',detail_current=0,detail_total=0)
+        return _next_detail_page(db,entry)
     if payload['_detail_selectors'] and eligible:
         payload.update(_phase='detail', _detail_keys=eligible, _detail_index=0, _listing_done=done)
         counts.update(phase='detail', detail_current=0, detail_total=len(eligible))
@@ -94,15 +120,30 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
     return done
 
 
+def _next_detail_page(db,entry):
+    payload,counts=entry['payload'],entry['counters']
+    if payload['_detail_page']>payload['_detail_pages']:
+        counts['phase']='complete'
+        return True
+    keys=db.checkpoint_read(f'start:seen:{entry["id"]}:{payload["_detail_page"]}').get('keys',[])
+    payload.update(_detail_keys=keys,_detail_index=0)
+    counts.update(phase='detail',detail_current=0,detail_total=len(keys),detail_page=payload['_detail_page'])
+    if not keys:payload['_detail_page']+=1
+    return False
+
+
 def _detail_step(db, settings, entry, profile, network_timeout=None):
     payload, counts = entry['payload'], entry['counters']
     index, keys = int(payload.get('_detail_index', 0)), payload.get('_detail_keys', [])
+    if not keys and payload.get('detail_mode')=='two_stage':return _next_detail_page(db,entry)
     if index >= len(keys):
         raise ValueError('Invalid detail checkpoint')
     with db.connect() as conn:
         row = conn.execute('SELECT * FROM products WHERE profile_id=? AND key=?',
                            (profile['id'], keys[index])).fetchone()
-    if row and row['link']:
+    seen=f'start:seen:{entry["id"]}:detail:{keys[index]}'
+    already=payload.get('detail_mode')=='two_stage' and db.checkpoint_read(seen).get('done')
+    if row and row['link'] and not already:
         url = validate_url(row['link'])
         from .scraping.engines import extract, profile_engine, for_installation
         engine = profile_engine(profile)
@@ -137,12 +178,16 @@ def _detail_step(db, settings, entry, profile, network_timeout=None):
                      live['image'] or next(iter(extra.get('images') or []), ''), utc_now(), row['id']))
         field = 'detail_enriched' if fresh else 'detail_empty'
         counts[field] = counts.get(field, 0) + 1
+        if payload.get('detail_mode')=='two_stage':db.checkpoint_write(seen,{'done':True},entry['id'])
     else:
         counts['detail_skipped'] = counts.get('detail_skipped', 0) + 1
     payload['_detail_index'] = index + 1
     counts['detail_current'] = index + 1
     if index + 1 < len(keys):
         return False
+    if payload.get('detail_mode')=='two_stage':
+        payload['_detail_page']+=1
+        return _next_detail_page(db,entry)
     done = bool(payload.get('_listing_done'))
     for key in ('_phase','_detail_keys','_detail_index','_listing_done'):
         payload.pop(key, None)
@@ -253,7 +298,8 @@ def run_entry(db, settings, entry, deadline, *, max_steps=None, network_timeout=
             if live['status'] != 'running':
                 return
             if entry['kind'] == 'extract':
-                done = _extract_step(db, settings, entry, profile, network_timeout)
+                done = entry['payload'].get('_extraction_complete',False) or _extract_step(db, settings, entry, profile, network_timeout)
+                if done: entry['payload']['_extraction_complete']=True
             elif entry['kind'] in ('woo_send', 'bsl_send'):
                 done = _send_step(db, settings, entry, profile, network_timeout)
             else:
@@ -264,7 +310,10 @@ def run_entry(db, settings, entry, deadline, *, max_steps=None, network_timeout=
             if db.get_entry(entry['id'])['status'] != 'running':
                 return
             if done:
-                db.finish_entry(entry['id'])
+                if entry['kind']=='extract':
+                    from ..start import finish_extraction
+                    finish_extraction(db,entry)
+                else:db.finish_entry(entry['id'])
                 return
         db.update_entry(entry['id'], status='waiting')
     except Exception as exc:

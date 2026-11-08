@@ -101,6 +101,26 @@
     {
       "feature": "Explicit import-keys consent shortcut and per-section presence/transfer report (including vendor tokens), accurate saved-key status and no plaintext credential echo; encrypted export/restore includes Basalam vendors and renderer connection",
       "reference": "PHP connections.json canonical woocommerce/basalam/vendors and render fields. Prior non-imported keys are not available to recover from server alone: reimport original file with explicit credential consent."
+    },
+    {
+      "feature": "PHP Start workspace: profile selection/new/edit/settings-copy/delete, URL-bound engine suggestion, 0/unlimited-with-1000-cap pagination, persisted collapses without DOM destruction, existing-selector handoff; native and already-imported PHP Start preferences",
+      "reference": "PHP 10.641 Start 935xx-93940, collectProfileData 978xx; explicit save, settings-only copy and CSS handoff are documented adaptations, not full visual/profile-settings parity"
+    },
+    {
+      "feature": "True all-listings-then-unique-details mode and per-page inline mode, explicit detail disable, per-job page/checkpoint resume, repeated-page auto-stop and final-page pause race protection",
+      "reference": "detailExtractMode/backendExtractWithDetail, bounded one-page/product PythonAnywhere cron; preserve existing payloads and remote identities"
+    },
+    {
+      "feature": "One public GitHub CSV/XLSX file import per worker step: strict size/row/archive/XML bounds, first worksheet without formulas, prevalidate-before-atomic-upsert, no imported remote IDs or credentials",
+      "reference": "profileProductSourceCard/ghImportProducts; explicit owner/repo/branch/path, no private repository or automatic file/branch browsing"
+    },
+    {
+      "feature": "Start 16 content/stock/gallery/variation/readiness metrics with matching scoped drilldowns, detail/selector coverage and per-vendor local destination counts; real bounded durable local-map history with UTC daily/update modes",
+      "reference": "start_product_stats 22025, START_PRODUCT_METRICS 95314; real remote reconciliation matrix and live-inventory chart explicitly remain pending"
+    },
+    {
+      "feature": "Manual extraction-to-send queue chain: explicit target consent/pinned Basalam vendor, successful nonempty source only, atomic one-time children, scoped pause, finished-only cleanup; five-page readonly audit with profile/engine/config-bound signed continuation",
+      "reference": "manualSyncBox 93842+, comprehensiveTestStart and extract queues; no outbound sends at enqueue/finalize and no message-bot delivery"
     }
   ],
   "pending": [
@@ -108,10 +128,10 @@
     "Visual selector picker and full PHP UI parity",
     "AI/category/content automation, notifications, chat and complete legacy action parity",
     "Whole PHP data/queue/remote-map and unsupported-feature bundle restoration; Python .env/install identity and API keys intentionally remain outside portable web settings",
-    "Full PHP product overview: stock/unknown-stock, gallery-aware image, variations/readiness/content metrics, destination discrepancy matrix and durable inventory history charts",
     "Complete Basalam variation-detail fanout, media uploads/required create payload fields and full multi-shop parallel/fanout workflow",
     "Full SnappShop guest API and anti-block/Emalls/Jina fallback chains, complete Digikala details/variants, raw W3C WebDriver fallback; browser engine routes currently require a compatible trusted remote /render service",
-    "Live first-page audit and complete pagination/detail verification for private production profiles requires authenticated browser execution; synthetic fixture tests are not proof of current remote-site reachability"
+    "Live first-page audit and complete pagination/detail verification for private production profiles requires authenticated browser execution; synthetic fixture tests are not proof of current remote-site reachability",
+    "Complete PHP Start parity: in-page visual picker, optional product copy, complete per-profile periodic/price/filter controls, GitHub private/branch/file browser, true remote inventory/price-discrepancy matrix and inventory chart, uncoded/misc-product operations and message-delivered manual-sync reports"
   ],
   "notes": [
     "This ledger is not a claim of full parity.",
@@ -127,6 +147,7 @@
     "PHP 10.641/9756c32 rechecked unchanged for 1.11.0. Live unauthenticated endpoint probes confirmed health 1.10.0, protected queue/status and disabled public GET cron; query-bearing cron probe is guaranteed rejected before tick. No production queue advanced. Settings file cap raised to 10 MiB, plain/native/PHP decoded cap 6 MiB, scoped authenticated browser transfer request envelope 60 MiB+64KiB; global 2 MiB cap for other routes unchanged. Larger PHP import and encrypted roundtrips, extraction-only API/manual browser flow and send exclusion tested with temporary DBs. No schema/dependency/authority changes; public cron remains explicit opt-in.",
     "PHP 10.641/9756c32 rechecked unchanged for 1.12.0. Official PythonAnywhere AlwaysOnTasks/ScheduledTasks/AsyncInWebApps docs checked: paid Always-on recommended; hourly/daily schedule depends on plan, newer free accounts may lack Tasks. New browser-only authenticated host scheduling uses saved token, fixed installed virtualenv command and owns only this installation; never starts local processes inside WSGI. Worker config defaults disabled, native activation enables it only on API success. Runtime enabled/Task configured/observed live heartbeat are distinct. Existing public cron configuration and credentials/products/remote IDs are preserved. Worker host-specific config/state excluded from portable settings; no dependency/schema/authority change.",
     "PHP 10.641/9756c32 rechecked unchanged for 1.13.0. Imported top-level extractionEngine previously stayed only in legacy metadata and was ignored by the queue; execution now reads both promoted and already-imported values. Credential opt-in remains secure/default false with an explicit consent button and transfer report; no missing original secrets can be reconstructed. Native settings now have eight sections including remote renderer; .env/authority, products/remote IDs and queues remain outside settings restore. Host-local legacy-owner metadata pins prior Basalam IDs across credential imports. New IDs are scoped in product.extra and atomically indexed in existing task_checkpoints for metrics without JSON1, HTML scans or schema changes. Network adapters use existing bounded TLS/URL guards; no bypass of PythonAnywhere outbound restrictions, local browser spawn, dependency/schema/authority changes. Agent did not execute production queues, credentials imports, outbound sends or private live-profile probes.",
-    "1.13.1 compatibility follow-up: prior Python encrypted exports and existing installations could retain numeric vendor IDs inside the opaque PHP vendors list. Snapshot and incoming legacy nested-vendor normalization now keep them exportable/importable with credentials intact. Legacy owner uses canonical numeric vendor identity so zero-padded IDs cannot accidentally lose ownership. 415 Python + 82 JavaScript regressions passed; no production private profile audit or credentials restore was performed by the agent."
+    "1.13.1 compatibility follow-up: prior Python encrypted exports and existing installations could retain numeric vendor IDs inside the opaque PHP vendors list. Snapshot and incoming legacy nested-vendor normalization now keep them exportable/importable with credentials intact. Legacy owner uses canonical numeric vendor identity so zero-padded IDs cannot accidentally lose ownership. 415 Python + 82 JavaScript regressions passed; no production private profile audit or credentials restore was performed by the agent.",
+    "1.14.0: latest PHP source rechecked at 9756c32/10.641. Start rebuilt with real profile/source/range/detail/run/audit/metric/breakdown/history actions; explicit limitations in UI/README. Legacy 8-card/10-count API contract retained as collapsed quick-ID view. New 16-card drilldowns share the same classifier as counts; no JSON1 requirement. History describes local scoped mappings ONLY; never substituted for remote inventory. Start GET is read-only, snapshot POST is browser-admin+CSRF and durable/rate-limited/bounded. New source-chain finalization never invokes a sender, creates children atomically only after successful nonempty source and honors pause races. Public GitHub source is a single bounded read and atomic import with no copied remote identity. Five-page diagnostics are signed/capped/sequential and never write products/jobs. No dependencies/schema/db.py/authority changes. Production private profiles and outbound sends were not exercised by the agent. Validation: 466 Python tests and 97 JavaScript tests passed (75 browser/DOM integration + 22 auto-refresh); new Start tests include real Flask/SQLite save/enqueue/filter/snapshot integration, nonempty-only child creation, pause/final-page races, stock classification, settings/identity preservation and public-file fixtures."
   ]
 }

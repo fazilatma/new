@@ -59,6 +59,7 @@ document.querySelectorAll('.delete').forEach(button => button.onclick = async ()
   try { await api(`/api/profiles/${button.dataset.id}`, 'DELETE'); location.reload(); } catch(error) { message(error.message); }
 });
 handle(document.querySelector('#job-form'), async data => {
+  if(window.S4Start) return window.S4Start.enqueue(data);
   if(data.kind !== 'extract' && !confirm('ارسال به فروشگاه انجام شود؟ قبل از تلاش مجدد، محصولات مقصد را بررسی کنید.')) return false;
   const result = await api('/api/jobs','POST', data);
   window.dispatchEvent(new Event('s4:extraction-enqueued'));
@@ -98,6 +99,7 @@ async function poll() {
     tbody.append(row);
   }
 }
+window.addEventListener('s4:start-queued',()=>poll().catch(error=>message(error.message)));
 async function refresh() { try { await poll(); } catch(error) { message(error.message); } finally { setTimeout(refresh,5000); } }
 refresh();
 

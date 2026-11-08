@@ -79,15 +79,19 @@ def list_products(db, args):
     where, values = scope(args)
     metric = args.get('filter', 'all')
     order = args.get('sort', 'oldest')
-    if metric not in METRICS or order not in SORTS:
+    from .start_page import EXTRA_FILTERS, metric_test
+    extended = metric in EXTRA_FILTERS
+    if (metric not in METRICS and not extended) or order not in SORTS:
         raise ValueError('فیلتر یا مرتب‌سازی محصولات معتبر نیست.')
     limit = number(args, 'limit', 100, minimum=1, maximum=500)
     offset = number(args, 'offset', 0)
     with db.connect() as conn:
         conn.create_function('s4_search', 1, search_text, deterministic=True)
+        conn.create_function('s4_start_metric',6,metric_test,deterministic=True)
+        predicate = f"s4_start_metric(p.image,p.link,p.price_num,p.sku,p.extra,'{metric}')=1" if extended else METRICS[metric][1]
         conn.execute('BEGIN')
         counts = dict(conn.execute(f'SELECT {counts_sql()} FROM products p WHERE {where}', values).fetchone())
-        total = counts[metric]
+        total = conn.execute(f'SELECT count(*) FROM products p WHERE {where} AND ({predicate})',values).fetchone()[0] if extended else counts[metric]
         # Deletions in another tab can invalidate the last requested page.
         if total and offset >= total:
             offset = ((total - 1) // limit) * limit
@@ -95,7 +99,7 @@ def list_products(db, args):
             offset = 0
         rows = conn.execute(f'''SELECT p.*,coalesce(nullif(r.name,''),r.key) AS profile_name,r.key AS profile_key,{BSL_LINKED} AS basalam_linked
             FROM products p JOIN profiles r ON r.id=p.profile_id
-            WHERE {where} AND ({METRICS[metric][1]}) ORDER BY {SORTS[order]} LIMIT ? OFFSET ?''',
+            WHERE {where} AND ({predicate}) ORDER BY {SORTS[order]} LIMIT ? OFFSET ?''',
             (*values, limit, offset)).fetchall()
     products = []
     for row in rows:
