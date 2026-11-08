@@ -224,7 +224,9 @@ const productLimit = 100;
 function safeProductUrl(value, image = false) {
   if(!value) return '';
   try {
-    const url = new URL(value, location.origin);
+    if(typeof value !== 'string' || !/^https?:\/\//i.test(value)) return '';
+    const url = new URL(value);
+    if(url.username || url.password || url.hostname === 'localhost' || url.hostname.endsWith('.localhost') || url.hostname.endsWith('.local')) return '';
     return (image ? url.protocol === 'https:' : ['https:','http:'].includes(url.protocol)) ? url.href : '';
   } catch { return ''; }
 }
@@ -237,9 +239,7 @@ function paintProducts() {
   const grid = document.querySelector('#product-grid');
   const rows = document.querySelector('#product-rows');
   grid.replaceChildren(); rows.replaceChildren();
-  const query = document.querySelector('#products-search').value.trim().toLocaleLowerCase('fa');
-  const filtered = productRows.filter(p => `${p.title || ''} ${p.sku || ''}`.toLocaleLowerCase('fa').includes(query));
-  for(const product of filtered) {
+  for(const product of productRows) {
     const card = document.createElement('article'); card.className = 'product-card';
     const image = document.createElement('div'); image.className = 'product-image'; image.textContent = '📦';
     const src = safeProductUrl(product.image, true);
@@ -261,43 +261,84 @@ function paintProducts() {
       details.append(summary, info); body.append(details);
     }
     const link = safeProductUrl(product.link);
-    if(link) body.append(sourceLink(link));
+    const detailButton = () => {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary product-detail-button';
+      button.textContent = 'جزئیات و گالری'; button.disabled = !Number.isInteger(product.id);
+      button.onclick = () => window.S4Products?.open(product.id, button);
+      return button;
+    };
+    if(product.profile_name) {const profile = document.createElement('p'); profile.className = 'product-profile'; profile.textContent = product.profile_name; body.append(profile);}
+    const actions = document.createElement('div'); actions.className = 'product-card-actions'; actions.append(detailButton());
+    if(link) actions.append(sourceLink(link)); body.append(actions);
     card.append(image,body); grid.append(card);
     const row = document.createElement('tr');
     for(const value of [product.title,product.price,product.sku,product.woo_id || '—',product.basalam_id || '—']) cell(row, value || '—');
-    const last = cell(row, ''); if(link) last.append(sourceLink(link));
+    const last = cell(row, ''); last.append(detailButton()); if(link) last.append(sourceLink(link));
     rows.append(row);
   }
   grid.hidden = tableView; document.querySelector('#product-table-wrap').hidden = !tableView;
-  document.querySelector('#products-status').textContent = filtered.length ? `${filtered.length.toLocaleString('fa-IR')} محصول در این صفحه` : (productRows.length ? 'در صفحهٔ فعلی نتیجه‌ای مطابق جست‌وجو نیست.' : 'هنوز محصولی برای نمایش وجود ندارد. ابتدا استخراج را اجرا کنید.');
+  document.querySelector('#products-status').textContent = productRows.length ? `${productRows.length.toLocaleString('fa-IR')} محصول در این صفحه از ${productTotal.toLocaleString('fa-IR')} نتیجه` : 'نتیجه‌ای برای این جست‌وجو و فیلتر نیست. فیلتر را پاک کنید یا استخراج را اجرا کنید.';
 }
 async function loadProducts() {
   const ticket = ++productsRequest;
   const profile = document.querySelector('#results-profile').value;
   const params = new URLSearchParams({limit:productLimit, offset:productOffset, summary:'1'});
   if(profile) params.set('profile_id', profile);
+  params.set('q', document.querySelector('#products-search').value.trim());
+  params.set('filter', document.querySelector('#products-filter').value);
+  params.set('sort', document.querySelector('#products-sort').value);
+  document.querySelector('#products-prev').disabled = true; document.querySelector('#products-next').disabled = true;
+  document.querySelector('#product-grid').setAttribute('aria-busy','true');
   document.querySelector('#products-status').textContent = 'در حال دریافت محصولات…';
+  for(const format of ['csv','json']) {
+    const anchor = document.querySelector(`#products-${format}`);
+    anchor.hidden = !profile;
+    if(profile) anchor.href = `/api/export/${encodeURIComponent(profile)}?format=${format}`;
+    else anchor.removeAttribute('href');
+  }
+  document.querySelector('#export-hint').hidden = Boolean(profile);
   try {
     const result = await api('/api/products?' + params);
     if(ticket !== productsRequest) return;
     productRows = result.products; productTotal = result.total;
+    if(Number.isSafeInteger(result.offset)) productOffset = result.offset;
     document.querySelector('#products-count').textContent = `${productTotal.toLocaleString('fa-IR')} محصول`;
     document.querySelector('#products-page').textContent = productTotal ? `${productOffset + 1}–${productOffset + productRows.length} از ${productTotal}` : '۰ محصول';
     document.querySelector('#products-prev').disabled = productOffset === 0;
     document.querySelector('#products-next').disabled = productOffset + productLimit >= productTotal;
-    for(const format of ['csv','json']) {
-      const anchor = document.querySelector(`#products-${format}`);
-      anchor.hidden = !profile;
-      if(profile) anchor.href = `/api/export/${encodeURIComponent(profile)}?format=${format}`;
-      else anchor.removeAttribute('href');
-    }
-    document.querySelector('#export-hint').hidden = Boolean(profile);
     paintProducts();
   } catch(error) {
-    if(ticket === productsRequest) document.querySelector('#products-status').textContent = error.message;
-  }
+    if(ticket === productsRequest) {
+      productRows = []; paintProducts();
+      document.querySelector('#products-count').textContent = '—'; document.querySelector('#products-page').textContent = '—';
+      document.querySelector('#products-prev').disabled = true; document.querySelector('#products-next').disabled = true;
+      document.querySelector('#products-status').textContent = error.message;
+    }
+  } finally {if(ticket === productsRequest) document.querySelector('#product-grid').setAttribute('aria-busy','false');}
 }
-document.querySelector('#products-search').oninput = paintProducts;
+let searchTimer;
+document.querySelector('#products-search').oninput = () => {
+  ++productsRequest; clearTimeout(searchTimer); productOffset = 0;
+  document.querySelector('#products-prev').disabled = true; document.querySelector('#products-next').disabled = true;
+  document.querySelector('#products-status').textContent = 'در حال جست‌وجو در همهٔ نتایج…';
+  searchTimer = setTimeout(loadProducts, 250);
+};
+for(const id of ['products-filter','products-sort']) document.querySelector('#'+id).onchange = () => {productOffset = 0; loadProducts();};
+document.querySelector('#products-clear').onclick = () => {
+  clearTimeout(searchTimer); document.querySelector('#products-search').value = '';
+  document.querySelector('#products-filter').value = 'all'; document.querySelector('#products-sort').value = 'newest';
+  document.querySelector('#results-profile').value = '';
+  productOffset = 0; loadProducts();
+};
+window.S4Browse = (metric = 'all', profile = '', name = '') => {
+  clearTimeout(searchTimer); document.querySelector('#products-search').value = '';
+  document.querySelector('#products-filter').value = metric;
+  const select = document.querySelector('#results-profile');
+  if(profile && !Array.from(select.options).some(option => option.value === String(profile))) select.add(new Option(name || `پروفایل #${profile}`, String(profile)));
+  select.value = String(profile);
+  productOffset = 0; activateTab('results');
+  document.querySelector('#products-search').focus(); document.querySelector('#pane-results').scrollIntoView({block:'start'});
+};
 document.querySelector('#results-profile').onchange = () => { productOffset = 0; loadProducts(); };
 document.querySelector('#products-refresh').onclick = loadProducts;
 document.querySelector('#products-prev').onclick = () => { productOffset = Math.max(0,productOffset-productLimit); loadProducts(); };

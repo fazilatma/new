@@ -202,14 +202,21 @@ def create_app(settings=None):
 
     @app.get('/api/products')
     def products():
-        pid = request.args.get('profile_id', type=int)
-        rows = db.list_products(pid, limit=max(1, min(500, int(request.args.get('limit', 100)))),
-                                offset=max(0, int(request.args.get('offset', 0))))
-        if request.args.get('summary') == '1':
-            for row in rows:
-                extra = row.get('extra') or {}
-                row['extra'] = {key:extra[key] for key in ('brand','category','tags','images_count','_detail_preview','_detail_status') if isinstance(extra, dict) and key in extra}
-        return jsonify(ok=True, total=db.count_products(pid), products=rows)
+        from .services.product_browser import list_products
+        return jsonify(list_products(db, request.args))
+
+    @app.get('/api/products/overview')
+    def product_overview():
+        from .services.product_browser import overview
+        return jsonify(overview(db))
+
+    @app.get('/api/products/<int:product_id>')
+    def product_detail(product_id):
+        from .services.product_browser import detail
+        result = detail(db, product_id)
+        if result is None:
+            abort(404)
+        return jsonify(result)
 
     @app.get('/api/export/<int:profile_id>')
     def export(profile_id):

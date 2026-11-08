@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 APP_NAME = "scraper4-pythonanywhere"
-VERSION = "1.8.1"
+VERSION = "1.9.0"
 
 # ریشهٔ پروژه: پوشه‌ای که wsgi.py و .env در آن هستند (pythonanywhere/)
 BASE_DIR = Path(os.environ.get("S4_BASE_DIR") or Path(__file__).resolve().parent.parent)

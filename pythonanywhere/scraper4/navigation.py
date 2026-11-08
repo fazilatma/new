@@ -55,6 +55,6 @@ SETTINGS_MENU = [
     {'key': 'nightly', 'title': '🌙 گزارش شبانهٔ محصولات', 'state': 'pending',
      'description': 'ساخت و ارسال گزارش شبانهٔ محصولات هنوز منتقل نشده است.'},
     {'key': 'profile-stats', 'title': '📊 آمار محصولات هر پروفایل', 'state': 'ready',
-     'description': 'تعداد محصولات در فهرست پروفایل‌ها و محصولات هر پروفایل در نتایج قابل مشاهده است.',
-     'actions': [('selectors', 'profiles-list-section', 'آمار پروفایل‌ها'), ('results', 'results-profile', 'مشاهدهٔ محصولات')]},
+     'description': 'کارت‌های آماری قابل کلیک، تفکیک پروفایل و جست‌وجوی سراسری نتایج؛ آمار فقط دادهٔ محلی است، نه موجودی زندهٔ مقصد.',
+     'actions': [('start', 'product-overview', 'نمای تفصیلی محصولات'), ('results', 'results-profile', 'جست‌وجو و جزئیات محصولات')]},
 ]

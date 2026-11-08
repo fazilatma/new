@@ -69,6 +69,10 @@
     {
       "feature": "Automatic file inspection and preview with local disabled-button explanations; PHP empty associative arrays, section-isolated validation, profiles_cfg vs products-only slicing, PHP false enabled flags and extra selector metadata normalization",
       "reference": "PHP 10.641 backupInspectBundle empty slices, backupSliceEntries and extractNormalizeDetailSelectors; native Python schema remains strict"
+    },
+    {
+      "feature": "PHP-style clickable local-record overview cards and per-profile counts/progress; read-only metric/profile drilldown into true server-side normalized literal search, allowlisted sorting/filtering, clamped pagination and on-demand sanitized stored gallery/specification/description dialog",
+      "reference": "PHP 10.641 start_product_stats, START_PRODUCT_METRICS and loadStartProductOverview/openStartProductOverviewDetail (partial primary-column metrics only; no remote inventory, stock, ready/variation or gallery-aware aggregate counters)"
     }
   ],
   "pending": [
@@ -77,7 +81,8 @@
     "Site-specific engines (Digikala, Snappshop, Emalls-specific adapters)",
     "Visual selector picker and full PHP UI parity",
     "AI/category/content automation, notifications, chat and complete legacy action parity",
-    "Whole PHP data/queue/remote-map and unsupported-feature bundle restoration; Python .env/install identity and API keys intentionally remain outside portable web settings"
+    "Whole PHP data/queue/remote-map and unsupported-feature bundle restoration; Python .env/install identity and API keys intentionally remain outside portable web settings",
+    "Full PHP product overview: stock/unknown-stock, gallery-aware image, variations/readiness/content metrics, destination discrepancy matrix and durable inventory history charts"
   ],
   "notes": [
     "This ledger is not a claim of full parity.",
@@ -87,6 +92,7 @@
     "Latest PHP 10.641 source checked at 9756c32; lexical inventory remains explicitly tied to the previous reference commit. Detail fixtures are algorithm-based, not PHP CLI differential execution.",
     "PHP latest source rechecked unchanged at 9756c32 for 1.7.0. Source category/tags are text only; destination taxonomy IDs remain explicitly configured, not inferred.",
     "Latest PHP rechecked unchanged at 9756c32 for 1.8.0. Selective restore preserves product rows, destination IDs and queue entries. Replace disables omitted profiles instead of deleting them. Hosting tokens require explicit selection; password-encrypted downloads never contain the site encryption/signing authority.",
-    "PHP 10.641/9756c32 rechecked for 1.8.1. Regression fixture reproduces empty Woo arrays plus numeric detail-selector flags; browser test drives actual Flask inspect/preview/apply on a temporary DB. No user/prod backup was read or restored. Unsupported/invalid PHP sections are reported and omitted as whole sections; valid ones remain selectable."
+    "PHP 10.641/9756c32 rechecked for 1.8.1. Regression fixture reproduces empty Woo arrays plus numeric detail-selector flags; browser test drives actual Flask inspect/preview/apply on a temporary DB. No user/prod backup was read or restored. Unsupported/invalid PHP sections are reported and omitted as whole sections; valid ones remain selectable.",
+    "PHP 10.641/9756c32 rechecked unchanged for 1.9.0. Overview aggregates only primary saved-product columns, with an explicit non-live-destination label. Search normalizes Persian/Arabic letters, digits and ZWNJ; SQL values are bound and filters/sorts allowlisted. Read-only routes preserve credentials, products, remote IDs and jobs; no schema/dependency changes. Browser regressions include real Flask temporary-database overview/search/detail integration; no production data used."
   ]
 }
