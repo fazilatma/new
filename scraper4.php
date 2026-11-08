@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.643';
+const APP_VERSION = '10.644';
 
 
 if (!function_exists('str_starts_with')) {
@@ -31085,12 +31085,15 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
         '_extract_list_page_try'=>$page,
         '_extract_list_next_url'=>$nextUrl?:'',
         '_extract_list_last_url'=>'',
-        '_extract_resume_from'=>max(1,$page-1),
+        /* $page is the next unfetched page: the deadline check runs at the top
+           of its iteration. Saving page-1 repeated the one slow successful
+           page forever whenever only one page fitted in a web segment. */
+        '_extract_resume_from'=>max(1,$page),
     ]);
     writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>false,'paused'=>true,'ran_out'=>true,'resume_needed'=>true,'resumable'=>true,'products_saved'=>false,
-        'resume_page'=>max(1,$page-1),'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,
+        'resume_page'=>max(1,$page),'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,
         'last_progress_ts'=>time(),'queue_id'=>$queueId,'extracted'=>count($allProducts),
-        'recent_log'=>['⏸ سقف زمانی فهرست — ادامه از صفحه '.max(1,$page-1),
+        'recent_log'=>['⏸ سقف زمانی فهرست — ادامه از صفحه '.max(1,$page),
             '   • '.count($allProducts).' محصول در حافظهٔ مرحله‌ای نگه داشته شد (نتایج قبلی دست‌نخورده است)',
             '   • پس از رسیدن به پایان آخرین صفحه، محصولات نهایی ثبت می‌شوند'],
         'total_log_count'=>3,'page'=>$page,'profile_key'=>$pkFinal]);
@@ -31098,16 +31101,16 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
     foreach($queue['entries'] as &$qe){
         if(($qe['id']??'')===$queueId){
             $qe['status']='paused';$qe['paused_at']=time();$qe['updated_at']=time();unset($qe['done_at']);
-            $qe['resumable']=true;$qe['resume_needed']=1;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page-1);
+            $qe['resumable']=true;$qe['resume_needed']=1;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page);
             $qe['products_count']=count($allProducts);
-            $qe['error']='سقف زمانی — ادامه از صفحه '.max(1,$page-1);
+            $qe['error']='سقف زمانی — ادامه از صفحه '.max(1,$page);
             break;
         }
     }unset($qe);
     extractWriteQueue($queue);
     extractLockRelease($queueId);
     return ['__early_sent'=>$emitEarlyResponse,'ok'=>true,'queue_id'=>$queueId,'extracted'=>count($allProducts),
-        'ran_out'=>true,'resume_needed'=>true,'resume_page'=>max(1,$page-1),'partial'=>true,
+        'ran_out'=>true,'resume_needed'=>true,'resume_page'=>max(1,$page),'partial'=>true,
         'products_saved'=>false,'profile_key'=>$pkFinal];
 }
 /* ثبت صفحه‌ای که الان تلاش می‌شود — برای resume = try-1 (بدون دست زدن به products) */
@@ -49548,6 +49551,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'bypassed_cron_lock'=>true")!==false
         &&strpos($selfSrc,"{v:'10." . "643'")!==false
         &&version_compare(APP_VERSION,'10.643','>='));
+    $add('10.644','پایان برش فهرست صفحهٔ موفق را تکرار نمی‌کند و صفحهٔ بعد را checkpoint می‌کند',
+        strpos($selfSrc,"'_extract_resume_from'=>max(1,\$page)")!==false
+        &&strpos($selfSrc,"'resume_page'=>max(1,\$page),'total'=>\$progressPageTarget")!==false
+        &&strpos($selfSrc,"\$qe['resume_page']=max(1,\$page);")!==false
+        &&strpos($selfSrc,"{v:'10." . "644'")!==false
+        &&version_compare(APP_VERSION,'10.644','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102270,6 +102279,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.644', t:'➡️ حرکت قطعی صفحه پس از هر برش استخراج', items:[
+    'در پایان بودجه، checkpoint روی صفحهٔ بعدیِ واکشی‌نشده ذخیره می‌شود نه آخرین صفحهٔ موفق.',
+    'منبع کندی که در هر برش فقط یک صفحه پاسخ می‌دهد دیگر همان صفحه را برای همیشه تکرار نمی‌کند.',
+    'آخرین صفحهٔ موفق جداگانه در page_ok باقی می‌ماند تا ایمنی checkpoint بدون عقب‌گرد حفظ شود.'
+  ]},
   {v:'10.643', t:'⏩ استخراج مستقل از قفل سراسری cron', items:[
     'روی هاست بدون CLI، checkpoint استخراج پیش از تلاش برای گرفتن .cron_run.lock اجرا می‌شود.',
     'درخواست قدیمی ماتریس، شبکه یا AI حتی اگر قفل cron را طولانی نگه دارد دیگر نمی‌تواند استخراج پروفایل را متوقف کند.',
