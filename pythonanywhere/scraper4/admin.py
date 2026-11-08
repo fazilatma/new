@@ -17,8 +17,11 @@ def register_admin(app, db, settings):
 
     @bp.get('/healthz')
     def health():
-        return jsonify(ok=True, version=VERSION,
-                       commit=app.config.get('S4_LOADED_COMMIT'))
+        response = jsonify(ok=True, version=VERSION, commit=app.config.get('S4_LOADED_COMMIT'))
+        # A surviving old worker must not impersonate newly installed code.
+        installed = updates.read_release(settings.base_dir).get('commit')
+        response.headers['X-Scraper-Installed-Commit'] = installed if isinstance(installed, str) and updates.SHA.fullmatch(installed) else ''
+        return response
 
     @bp.get('/api/port-status')
     @bp.get('/api/parity/status')

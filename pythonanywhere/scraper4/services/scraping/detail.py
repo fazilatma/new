@@ -15,7 +15,7 @@ from .fetch import validate_url
 from ..support.persian import normalize_text
 from ..support.url import is_image
 
-FIELDS = ('shortDesc', 'longDesc', 'specs', 'images', 'sku', 'brand')
+FIELDS = ('shortDesc', 'longDesc', 'specs', 'images', 'sku', 'brand', 'category', 'tags')
 TAGS = set('p div span h1 h2 h3 h4 h5 h6 ul ol li strong b em i u s del ins br hr a img table caption thead tbody tfoot tr th td dl dt dd blockquote pre code'.split())
 DROP = set('script style iframe object embed form input button select textarea option noscript svg math link meta base template applet frame frameset'.split())
 
@@ -174,7 +174,7 @@ def merge_detail(previous, fresh):
     if 'images' in result and not isinstance(result['images'], list):
         result.pop('images')
         result.pop('images_count', None)
-    for field in ('shortDesc', 'longDesc', 'specs', 'sku', 'brand', 'specs_rows'):
+    for field in ('shortDesc', 'longDesc', 'specs', 'sku', 'brand', 'category', 'tags', 'specs_rows'):
         if fresh.get(field):
             result[field] = fresh[field]
     # PHP extractMergeDetail: a smaller gallery must not erase a richer one.

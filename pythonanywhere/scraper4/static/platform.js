@@ -1,35 +1,47 @@
 (() => {
 const csrf = document.querySelector('meta[name="csrf"]').content;
 async function api(url, method = 'GET', data) {
-  const response = await fetch(url, {method, headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
-    body:data === undefined ? undefined : JSON.stringify(data)});
-  if(response.status === 401) { location.href='/login'; throw Error('ورود دوباره لازم است.'); }
-  const result = await response.json();
-  if(!response.ok) throw Error(result.error || `HTTP ${response.status}`);
-  return result;
+  const mutating = !['GET','HEAD'].includes(method.toUpperCase());
+  if(mutating) window.S4Refresh?.beginMutation();
+  try {
+    const response = await fetch(url, {method, headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+      body:data === undefined ? undefined : JSON.stringify(data)});
+    if(response.status === 401) { location.href='/login'; throw Error('ورود دوباره لازم است.'); }
+    const result = await response.json();
+    if(!response.ok) throw Error(result.error || `HTTP ${response.status}`);
+    return result;
+  } finally { if(mutating) window.S4Refresh?.endMutation(); }
 }
 function handle(form, callback) {
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    try { await callback(Object.fromEntries(new FormData(form))); }
-    catch(error) { message(error.message); }
+    const revision = window.S4Refresh?.revision(form);
+    window.S4Refresh?.submitting(form, true);
+    try {
+      if(await callback(Object.fromEntries(new FormData(form))) !== false) window.S4Refresh?.clean(form, revision);
+    } catch(error) { message(error.message); }
+    finally { window.S4Refresh?.submitting(form, false); }
   });
 }
 const platformForm = document.querySelector('#platform-form');
 const platformResult = document.querySelector('#platform-result');
 function message(text) { document.querySelector('#platform-message').textContent = text; }
-async function loadPlatform() {
+async function loadPlatform(expectedRevision) {
   const data = await api('/api/platform/config');
-  for (const [key, value] of Object.entries(data.fields)) platformForm.elements[key].value = value;
-  // Never refill a credential from a GET response.
-  platformForm.elements.token.value = '';
+  const current = expectedRevision === undefined ? !window.S4Refresh?.isDirty(platformForm) : window.S4Refresh?.revision(platformForm) === expectedRevision;
+  if(current) {
+    for (const [key, value] of Object.entries(data.fields)) platformForm.elements[key].value = value;
+    // Never refill a credential from a GET response.
+    platformForm.elements.token.value = '';
+  }
   document.querySelector('#platform-credential-state').textContent = data.configured ? 'توکن ذخیره شده است؛ مقدار آن دوباره نمایش داده نمی‌شود.' : 'هنوز توکن PythonAnywhere ذخیره نشده است.';
   if (Object.keys(data.test || {}).length) platformResult.textContent = JSON.stringify(data.test, null, 2);
+  return current;
 }
 handle(platformForm, async data => {
+  const revision = window.S4Refresh?.revision(platformForm);
   await api('/api/platform/config', 'POST', data);
-  platformForm.elements.token.value = '';
-  await loadPlatform();
+  if(!await loadPlatform(revision)) { message('اطلاعات ذخیره شد؛ تغییرات جدید فرم هنوز ذخیره نشده‌اند.'); return false; }
   message('توکن رمز‌شده ذخیره شد؛ حالا تست دسترسی و سپس فعال‌سازی Task را بزنید.');
 });
 document.querySelector('#platform-test').onclick = async event => {

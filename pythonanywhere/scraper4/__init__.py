@@ -49,7 +49,7 @@ def create_app(settings=None):
     @app.context_processor
     def build_context():
         return {'app_version': VERSION, 'app_commit': str(loaded_release.get('commit') or 'local')[:12],
-                'settings_menu': SETTINGS_MENU}
+                'app_build': str(loaded_release.get('commit') or ''), 'settings_menu': SETTINGS_MENU}
 
 
     @app.before_request
@@ -208,7 +208,7 @@ def create_app(settings=None):
         if request.args.get('summary') == '1':
             for row in rows:
                 extra = row.get('extra') or {}
-                row['extra'] = {key:extra[key] for key in ('brand','images_count','_detail_preview','_detail_status') if isinstance(extra, dict) and key in extra}
+                row['extra'] = {key:extra[key] for key in ('brand','category','tags','images_count','_detail_preview','_detail_status') if isinstance(extra, dict) and key in extra}
         return jsonify(ok=True, total=db.count_products(pid), products=rows)
 
     @app.get('/api/export/<int:profile_id>')

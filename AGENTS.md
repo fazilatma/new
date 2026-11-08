@@ -4,7 +4,8 @@ Work only on `arena/f3d5d2a0-new`. The production site is
 `https://fazilatma.pythonanywhere.com`. Publishing a Git commit is NOT deployment.
 
 After changing `pythonanywhere/`:
-1. Run the Python tests, JS/shell syntax checks and `git diff --check`.
+1. Run the Python tests, `node --test pythonanywhere/tests/auto_refresh.test.cjs`,
+   JS/shell syntax checks and `git diff --check`.
 2. Commit the code and push `origin arena/f3d5d2a0-new`.
 3. Run `python3 tools/deploy_after_push.py`. It signs the current app source tree
    with the local gitignored `.deployment/signing-key.pem`, publishes a PUBLIC

@@ -4,7 +4,7 @@
   "source_commit": "9756c320ff377e46ac9f80676575b757f6383a1d",
   "verified_on": "2026-11-08",
   "port_branch": "arena/f3d5d2a0-new",
-  "reference": "Laravel/core + legacy PHP DOM/price and first detail-enrichment slice",
+  "reference": "Laravel/core + legacy PHP DOM/price, first detail-enrichment slice and first-node category/tags text",
   "scope": "PythonAnywhere-compatible core port; not complete legacy scraper4.php feature parity",
   "source_version": "10.641",
   "source_sha256": "9cacc29b92a302df1e5063c49c38549067c6480eea01be7fa0e78fd2ebce670d",

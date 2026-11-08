@@ -53,10 +53,18 @@
     {
       "feature": "Opt-in detail CSS selectors, resumable per-product enrichment, sanitized short/long HTML, basic specs table/dl/list rows, gallery/sku/brand and enriched simple Woo/Basalam descriptions",
       "reference": "PHP 10.641 extractNormalizeDetailSelectors, extractHasDetailSelectors, detailCleanHtml, s4ExtractSpecsRowsFromDom and extractMergeDetail (partial, stricter HTML allowlist)"
+    },
+    {
+      "feature": "Activated-build browser auto-refresh on dashboard/platform/login, disk-vs-runtime readiness, draft and in-flight mutation guards, bounded reload attempts",
+      "reference": "PythonAnywhere browser lifecycle, not PHP feature parity"
+    },
+    {
+      "feature": "Opt-in detail category/tags first-node plain text, nonempty merge, resumable enrichment, UI summary, JSON export and legacy import; no destination taxonomy guessing",
+      "reference": "PHP 10.641 s4ExtractDetailNodeValue category/tags text fallback and extractMergeDetail carry list (partial, bounded/whitespace-normalized Python text)"
     }
   ],
   "pending": [
-    "Complete variants, detail price/stock/weight/category handling, automatic detail discovery and advanced specification layouts",
+    "Complete variants, detail price/stock/weight, destination category/tag resolution, automatic detail discovery and advanced specification layouts",
     "Basalam public catalogue adapters and complete send payloads",
     "Site-specific engines (Digikala, Snappshop, Emalls-specific adapters)",
     "Visual selector picker and full PHP UI parity",
@@ -67,6 +75,7 @@
     "DOM fixtures are based on the PHP algorithm; PHP CLI was not available for differential execution.",
     "HTTP queue cron performs one page or detail-product step only. Signed code-only deployment is separate; dependency/schema updates remain CLI operations.",
     "Lexical inventory includes embedded JavaScript declarations; it is not a count of implemented PHP routes.",
-    "Latest PHP 10.641 source checked at 9756c32; lexical inventory remains explicitly tied to the previous reference commit. Detail fixtures are algorithm-based, not PHP CLI differential execution."
+    "Latest PHP 10.641 source checked at 9756c32; lexical inventory remains explicitly tied to the previous reference commit. Detail fixtures are algorithm-based, not PHP CLI differential execution.",
+    "PHP latest source rechecked unchanged at 9756c32 for 1.7.0. Source category/tags are text only; destination taxonomy IDs remain explicitly configured, not inferred."
   ]
 }

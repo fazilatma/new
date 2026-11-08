@@ -1,19 +1,31 @@
 const csrf = document.querySelector('meta[name="csrf"]').content;
 const message = text => { document.querySelector('#message').textContent = text; };
 async function api(url, method = 'GET', data) {
-  const response = await fetch(url, {method, headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf}, body: data === undefined ? undefined : JSON.stringify(data)});
-  if (response.status === 401) { location.href = '/login'; throw Error('ورود دوباره لازم است.'); }
-  const result = await response.json();
-  if (!response.ok) throw Error(result.error || `HTTP ${response.status}`);
-  return result;
+  const mutating = !['GET','HEAD'].includes(method.toUpperCase());
+  if(mutating) window.S4Refresh?.beginMutation();
+  try {
+    const response = await fetch(url, {method, headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf}, body: data === undefined ? undefined : JSON.stringify(data)});
+    if (response.status === 401) { location.href = '/login'; throw Error('ورود دوباره لازم است.'); }
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || `HTTP ${response.status}`);
+    return result;
+  } finally { if(mutating) window.S4Refresh?.endMutation(); }
 }
 function handle(form, callback) {
-  form.addEventListener('submit', async event => { event.preventDefault(); try { await callback(Object.fromEntries(new FormData(form))); } catch(error) { message(error.message); } });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const revision = window.S4Refresh?.revision(form);
+    window.S4Refresh?.submitting(form, true);
+    try {
+      if(await callback(Object.fromEntries(new FormData(form))) !== false) window.S4Refresh?.clean(form, revision);
+    } catch(error) { message(error.message); }
+    finally { window.S4Refresh?.submitting(form, false); }
+  });
 }
 const profileForm = document.querySelector('#profile-form');
 handle(profileForm, async data => {
   const selectors = Object.fromEntries(['container','title','price','link','image','sku'].map(k => [k, data[k]]).filter(([,v]) => v));
-  const detailSelectors = Object.fromEntries(['shortDesc','longDesc','specs','images','sku','brand'].map(key => [key, data['detail_'+key] || '']).filter(([,value]) => value.trim()));
+  const detailSelectors = Object.fromEntries(['shortDesc','longDesc','specs','images','sku','brand','category','tags'].map(key => [key, data['detail_'+key] || '']).filter(([,value]) => value.trim()));
   await api('/api/profiles', 'POST', {detailSelectors, key:data.key, name:data.name, url:data.url, selectors, pagination:{type:data.pagType, val:data.pagVal}});
   location.reload();
 });
@@ -32,10 +44,11 @@ document.querySelectorAll('.edit').forEach(button => button.onclick = async () =
     profileForm.elements.pagType.value = profile.pagination.type || 'query_page';
     profileForm.elements.pagVal.value = profile.pagination.val || '';
     for(const key of ['container','title','price','link','image','sku']) profileForm.elements[key].value = profile.selectors[key] || '';
-    for(const key of ['shortDesc','longDesc','specs','images','sku','brand']) {
+    for(const key of ['shortDesc','longDesc','specs','images','sku','brand','category','tags']) {
       const saved = profile.settings?.detailSelectors?.[key];
       profileForm.elements['detail_'+key].value = typeof saved === 'string' ? saved : (saved?.enabled === false ? '' : saved?.selector || '');
     }
+    window.S4Refresh?.changed(profileForm);
     activateTab('selectors');
     profileForm.scrollIntoView({behavior:'smooth'});
   } catch(error) { message(error.message); }
@@ -45,7 +58,7 @@ document.querySelectorAll('.delete').forEach(button => button.onclick = async ()
   try { await api(`/api/profiles/${button.dataset.id}`, 'DELETE'); location.reload(); } catch(error) { message(error.message); }
 });
 handle(document.querySelector('#job-form'), async data => {
-  if(data.kind !== 'extract' && !confirm('ارسال به فروشگاه انجام شود؟ قبل از تلاش مجدد، محصولات مقصد را بررسی کنید.')) return;
+  if(data.kind !== 'extract' && !confirm('ارسال به فروشگاه انجام شود؟ قبل از تلاش مجدد، محصولات مقصد را بررسی کنید.')) return false;
   const result = await api('/api/jobs','POST', data);
   message(`کار ${result.id} به صف اضافه شد. کران خارجی یا worker آن را ادامه می‌دهد.`);
   await poll();
@@ -53,6 +66,7 @@ handle(document.querySelector('#job-form'), async data => {
 document.querySelectorAll('.connection-form').forEach(form => {
   handle(form, async data => { await api(`/api/connections/${form.dataset.name}`,'POST',data); message('اتصال ذخیره شد.'); });
   api(`/api/connections/${form.dataset.name}`).then(result => {
+    if(window.S4Refresh?.isDirty(form)) return;
     for(const [key,value] of Object.entries(result.fields)) if(form.elements[key]) form.elements[key].value = value;
   }).catch(error => message(error.message));
 });
@@ -197,7 +211,7 @@ document.querySelectorAll('[data-tab]').forEach(button => {
 document.querySelectorAll('[data-open-tab]').forEach(button => button.onclick = () => activateTab(button.dataset.openTab));
 window.addEventListener('hashchange', () => activateTab(location.hash.slice(1), false));
 handle(document.querySelector('#send-form'), async data => {
-  if(!confirm('محصولات این پروفایل به مقصد انتخاب‌شده ارسال شوند؟ اتصال و قیمت‌ها را بررسی کرده‌اید؟')) return;
+  if(!confirm('محصولات این پروفایل به مقصد انتخاب‌شده ارسال شوند؟ اتصال و قیمت‌ها را بررسی کرده‌اید؟')) return false;
   if(!data.category_id) delete data.category_id;
   const result = await api('/api/jobs', 'POST', data);
   activateTab('start');
@@ -240,10 +254,10 @@ function paintProducts() {
     const meta = document.createElement('div'); meta.className = 'product-meta';
     meta.textContent = `${product.sku || 'بدون کد'} · ووکامرس: ${product.woo_id ? 'مرتبط' : 'ارسال نشده'} · باسلام: ${product.basalam_id ? 'مرتبط' : 'ارسال نشده'}`;
     body.append(title, price, meta);
-    if(product.extra?._detail_preview || product.extra?.brand || product.extra?.images_count) {
+    if(product.extra?._detail_preview || product.extra?.brand || product.extra?.category || product.extra?.tags || product.extra?.images_count) {
       const details = document.createElement('details'), summary = document.createElement('summary'), info = document.createElement('p');
       summary.textContent = 'اطلاعات تکمیلی';
-      info.textContent = [product.extra.brand ? `برند: ${product.extra.brand}` : '', product.extra.images_count ? `${product.extra.images_count} تصویر` : '', product.extra._detail_preview || ''].filter(Boolean).join(' · ');
+      info.textContent = [product.extra.category ? `دسته: ${product.extra.category}` : '', product.extra.tags ? `برچسب‌ها: ${product.extra.tags}` : '', product.extra.brand ? `برند: ${product.extra.brand}` : '', product.extra.images_count ? `${product.extra.images_count} تصویر` : '', product.extra._detail_preview || ''].filter(Boolean).join(' · ');
       details.append(summary, info); body.append(details);
     }
     const link = safeProductUrl(product.link);
@@ -310,7 +324,8 @@ agentDeployEnabled.onchange = async () => {
 
 
 document.querySelector('#detail-woo-defaults').onclick = () => {
-  const defaults = {shortDesc:'.woocommerce-product-details__short-description',longDesc:'#tab-description',specs:'.woocommerce-product-attributes',images:'.woocommerce-product-gallery img',sku:'.product_meta .sku',brand:'.product_meta .brand'};
+  const defaults = {shortDesc:'.woocommerce-product-details__short-description',longDesc:'#tab-description',specs:'.woocommerce-product-attributes',images:'.woocommerce-product-gallery img',sku:'.product_meta .sku',brand:'.product_meta .brand',category:'.product_meta .posted_in a',tags:'.product_meta .tagged_as'};
   for(const [key,value] of Object.entries(defaults)) profileForm.elements['detail_'+key].value = value;
+  window.S4Refresh?.changed(profileForm);
   message('سلکتورهای رایج ووکامرس وارد شدند؛ آن‌ها را با سایت مبدأ تطبیق دهید و سپس پروفایل را ذخیره کنید.');
 };
