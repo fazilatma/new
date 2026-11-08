@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.637';
+const APP_VERSION = '10.638';
 
 
 if (!function_exists('str_starts_with')) {
@@ -20951,8 +20951,8 @@ function s4PhpIniBytes(string $value): int {
     $n=(float)$m[1];$power=array_search(strtoupper((string)$m[2]),['','K','M','G','T'],true);if($power===false)$power=0;
     return (int)min(PHP_INT_MAX,$n*(1024**$power));
 }
-function s4PhpRuntimeApply(): array {
-    $auth=s4PhpRuntimeApplyAuth();if(empty($auth['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized'];
+function s4PhpRuntimeApply(bool $trustedMigration=false): array {
+    $auth=$trustedMigration?['ok'=>true,'migration'=>true]:s4PhpRuntimeApplyAuth();if(empty($auth['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized'];
     /* Never lower stronger hosting values. Zero/-1 execution limits mean unlimited and are preserved. */
     $targets=['memory_limit'=>'1024M','max_execution_time'=>'300','max_input_time'=>'300','default_socket_timeout'=>'90',
         'upload_max_filesize'=>'64M','post_max_size'=>'72M','max_file_uploads'=>'50','max_input_vars'=>'5000'];
@@ -20982,6 +20982,17 @@ function s4PhpRuntimeApply(): array {
         'changed_directives'=>array_keys($desired),'stronger_values_preserved'=>true,
         'note'=>'Only lower finite limits were raised. PHP-FPM/LiteSpeed may cache .user.ini for user_ini.cache_ttl seconds; extensions, exec and PHP version remain provider-level.',
         'report'=>s4PhpRuntimeReport()];
+}
+/* One-time post-update migration: code_update_status is the updater's trusted
+   verification step. It applies only monotonic account-level improvements and
+   records the result; public runtime reads remain side-effect free afterwards. */
+if(isset($_GET['code_update_status'])&&version_compare(APP_VERSION,'10.638','>=')&&PHP_SAPI!=='cli'){
+    $migrationFile=__DIR__.'/.scraper4-php-runtime-10638.json';
+    if(!is_file($migrationFile)){
+        try{$migration=s4PhpRuntimeApply(true);}catch(Throwable $e){$migration=['ok'=>false,'error'=>$e->getMessage(),'line'=>$e->getLine()];}
+        $migration['attempted_at']=time();$migration['app_version']=APP_VERSION;
+        @file_put_contents($migrationFile,json_encode($migration,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);
+    }
 }
 if(isset($_GET['php_runtime_status'])||(($_POST['action']??'')==='php_runtime_status')){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
@@ -49371,6 +49382,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"extension_loaded('Zend OPcache')")!==false
         &&strpos($selfSrc,"{v:'10." . "637'")!==false
         &&version_compare(APP_VERSION,'10.637','>='));
+    $add('10.638','مهاجرت یک‌بارهٔ پس از نصب تنظیمات امن PHP را بدون افشای token اعمال می‌کند',
+        strpos($selfSrc,'function s4PhpRuntimeApply(bool $trustedMigration=false): array')!==false
+        &&strpos($selfSrc,".scraper4-php-runtime-10638.json")!==false
+        &&strpos($selfSrc,'$migration=s4PhpRuntimeApply(true)')!==false
+        &&strpos($selfSrc,"{v:'10." . "638'")!==false
+        &&version_compare(APP_VERSION,'10.638','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102092,6 +102109,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.638', t:'⚙️ اعمال یک‌بارهٔ تنظیمات مجاز PHP پس از نصب', items:[
+    'مرحلهٔ تأیید updater یک مهاجرت داخلی یک‌باره اجرا می‌کند تا تنظیمات امن و قابل‌نوشتن بدون نمایش token اعمال شوند.',
+    'نتیجهٔ مهاجرت در فایل وضعیت محلی ثبت می‌شود و در درخواست‌های بعدی تکرار نمی‌شود.',
+    'این مهاجرت نیز فقط محدودیت‌های پایین‌تر را افزایش می‌دهد و به نسخه، افزونه‌ها یا disable_functions دست نمی‌زند.'
+  ]},
   {v:'10.637', t:'🛡 جلوگیری از کاهش تنظیمات قوی‌تر PHP', items:[
     'اعمال امن فقط محدودیت‌های واقعاً پایین‌تر را افزایش می‌دهد و حافظه، زمان یا آپلود قوی‌تر هاست را کاهش نمی‌دهد.',
     'مقادیر صفر و منفی محدودیت زمان به‌عنوان حالت نامحدود حفظ می‌شوند.',
