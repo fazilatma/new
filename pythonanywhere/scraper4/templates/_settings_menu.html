@@ -8,7 +8,7 @@
       <div class="menu-group-body"><p>{{ item.description }}</p>
         {% if item.command %}<p>از پوشهٔ نصب برنامه در Bash اجرا کنید؛ مسیر خروجی باید تازه باشد:</p><code class="menu-command" dir="ltr">{{ item.command }}</code>{% endif %}
         {% if item.kind == 'runtime' %}<button type="button" id="menu-runtime-check" class="secondary">بررسی سلامت برنامه</button><pre id="menu-runtime-result" dir="ltr" role="status" aria-live="polite"></pre>{% endif %}
-        {% if item.kind == 'changelog' %}<ul class="menu-changelog"><li><b dir="ltr">1.4.1</b> — منوی همبرگری به ترتیب PHP و نمایش وضعیت انتقال هر بخش.</li><li><b dir="ltr">1.4.0</b> — رابط تیره و تب‌ها، نمایش نتایج و تأیید نسخهٔ زنده پس از Reload.</li><li><b dir="ltr">1.3.1</b> — GET عمومی کران، با فعال‌سازی از پنل.</li><li><b dir="ltr">1.3.0</b> — تشخیص کارت محصول نزدیک به PHP و کران تک‌مرحله‌ای.</li></ul>{% endif %}
+        {% if item.kind == 'changelog' %}<ul class="menu-changelog"><li><b dir="ltr">1.5.0</b> — اندپوینت استقرار امضاشده و تأیید نسخهٔ زنده پس از push.</li><li><b dir="ltr">1.4.1</b> — منوی همبرگری به ترتیب PHP و نمایش وضعیت انتقال هر بخش.</li><li><b dir="ltr">1.4.0</b> — رابط تیره و تب‌ها، نمایش نتایج و تأیید نسخهٔ زنده پس از Reload.</li><li><b dir="ltr">1.3.1</b> — GET عمومی کران، با فعال‌سازی از پنل.</li><li><b dir="ltr">1.3.0</b> — تشخیص کارت محصول نزدیک به PHP و کران تک‌مرحله‌ای.</li></ul>{% endif %}
         {% if item.actions %}<div class="actions">{% for tab, target, label in item.actions %}<a class="secondary button-link" href="/?section={{ target }}#{{ tab }}" data-menu-tab="{{ tab }}" data-menu-target="{{ target }}">{{ label }}</a>{% endfor %}</div>{% endif %}
       </div>
     </details>

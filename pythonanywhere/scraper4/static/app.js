@@ -282,3 +282,17 @@ document.querySelector('#products-view').onclick = event => {
   event.currentTarget.textContent = tableView ? 'نمای کارت' : 'نمای جدول'; paintProducts();
 };
 activateTab(location.hash.slice(1), false);
+
+
+const agentDeployEnabled = document.querySelector('#agent-deploy-enabled');
+api('/api/deploy/config').then(data => {
+  agentDeployEnabled.checked = data.config.enabled;
+  document.querySelector('#agent-deploy-state').textContent = JSON.stringify({host:data.host, ready:data.ready, mode:data.mode}, null, 2);
+}).catch(error => { document.querySelector('#agent-deploy-state').textContent = error.message; });
+agentDeployEnabled.onchange = async () => {
+  const enabled = agentDeployEnabled.checked;
+  try {
+    await api('/api/deploy/config', 'POST', {enabled});
+    message(enabled ? 'استقرار نسخه‌های دارای امضای معتبر فعال شد.' : 'استقرار عامل غیرفعال شد.');
+  } catch(error) { agentDeployEnabled.checked = !enabled; message(error.message); }
+};

@@ -34,6 +34,9 @@ def create_app(settings=None):
     db = DB(settings.db_path, settings.secret_key)
     app.extensions['s4_db'] = db
     app.extensions['s4_settings'] = settings
+    from .services.updates import read_release
+    loaded_release = read_release(settings.base_dir)
+    app.config['S4_LOADED_COMMIT'] = loaded_release.get('commit')
     failures = defaultdict(list)
 
     def csrf():
@@ -45,9 +48,7 @@ def create_app(settings=None):
 
     @app.context_processor
     def build_context():
-        from .services.updates import read_release
-        release = read_release(settings.base_dir)
-        return {'app_version': VERSION, 'app_commit': str(release.get('commit') or 'local')[:12],
+        return {'app_version': VERSION, 'app_commit': str(loaded_release.get('commit') or 'local')[:12],
                 'settings_menu': SETTINGS_MENU}
 
 
@@ -58,7 +59,9 @@ def create_app(settings=None):
                 '/api/system/status', '/api/updates/status', '/login', '/logout', '/settings/pythonanywhere',
                 '/api/platform/config', '/api/platform/test', '/api/cron/status'):
             return jsonify(ok=False, error='Maintenance in progress'), 503, {'Retry-After': '30'}
-        if request.endpoint == 'admin.health':
+        if request.endpoint in ('admin.health', 'deploy.run'):
+            # deploy.run validates its own Ed25519 release proof, never a public
+            # cron key or session/CSRF bypass for any other route.
             return
         if request.endpoint == 'cron.run' and request.method in ('GET', 'HEAD'):
             if db.checkpoint_read('cron:config').get('public_get') is not True:
@@ -104,7 +107,7 @@ def create_app(settings=None):
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' https:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         response.headers['Cache-Control'] = 'no-store'
-        if request.endpoint == 'cron.run':
+        if request.endpoint in ('cron.run', 'deploy.run'):
             response.headers['X-Robots-Tag'] = 'noindex, nofollow'
         return response
 
@@ -278,6 +281,8 @@ def create_app(settings=None):
 
     from .admin import register_admin
     register_admin(app, db, settings)
+    from .deploy import register_deploy
+    register_deploy(app, db, settings)
     from .cron import register_cron
     register_cron(app, db, settings)
     return app

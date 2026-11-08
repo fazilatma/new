@@ -88,28 +88,40 @@ def check(db, settings):
     return result
 
 
-def download(commit, destination):
+def download(commit, destination, *, timeout=(15, 120), max_bytes=64*1024*1024,
+             budget_seconds=None):
     if not SHA.fullmatch(commit):
         raise ValueError('Invalid release commit')
+    deadline = time.monotonic() + budget_seconds if budget_seconds else None
     archive = destination / 'source.tar.gz'
     try:
         with requests.get(f'https://codeload.github.com/{REPO}/tar.gz/{commit}',
-                          timeout=(15, 120), stream=True) as response:
+                          timeout=timeout, stream=True) as response:
             response.raise_for_status()
             size = 0
             with archive.open('wb') as handle:
                 for chunk in response.iter_content(65536):
                     size += len(chunk)
-                    if size > 64 * 1024 * 1024:
-                        raise ValueError('Release archive exceeds 64 MiB')
+                    if deadline and time.monotonic() > deadline:
+                        raise ValueError('Release download soft deadline exceeded')
+                    if size > max_bytes:
+                        raise ValueError('Release archive exceeds the permitted size')
                     handle.write(chunk)
     except requests.RequestException:
         raise ValueError('GitHub release download failed') from None
     stage = destination / 'stage'
     stage.mkdir()
     total = 0
+    archive_total = 0
+    members = 0
     with tarfile.open(archive, 'r:gz') as source:
         for entry in source:
+            members += 1
+            archive_total += entry.size
+            if members > 10000 or archive_total > 128 * 1024 * 1024:
+                raise ValueError('Release archive expansion exceeds permitted limits')
+            if deadline and time.monotonic() > deadline:
+                raise ValueError('Release extraction soft deadline exceeded')
             parts = PurePosixPath(entry.name).parts
             if len(parts) < 3 or parts[1] != 'pythonanywhere':
                 continue

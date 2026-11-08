@@ -1,0 +1,3 @@
+/.deployment/
+__pycache__/
+*.pyc

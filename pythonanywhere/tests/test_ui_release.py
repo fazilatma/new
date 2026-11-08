@@ -27,7 +27,11 @@ def test_health_is_public_and_identifies_the_running_release(app,settings):
     (settings.base_dir/'.release.json').write_text(json.dumps({'commit':'a'*40}))
     remote = app.test_client()
     response = remote.get('/healthz')
-    assert response.json == {'ok':True,'version':VERSION,'commit':'a'*40}
+    # Updating the file must not let an old WSGI worker impersonate a new build.
+    assert response.json == {'ok':True,'version':VERSION,'commit':None}
+    from scraper4 import create_app
+    fresh = create_app(settings)
+    assert fresh.test_client().get('/healthz').json['commit'] == 'a'*40
     assert response.headers['Cache-Control'] == 'no-store'
     assert remote.get('/api/system/status').status_code == 401
     assert VERSION in remote.get('/login').text

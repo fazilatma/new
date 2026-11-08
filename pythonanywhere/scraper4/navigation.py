@@ -16,7 +16,7 @@ SETTINGS_MENU = [
      'description': 'خلاصهٔ تغییرات اخیر پورت Python؛ نه تاریخچهٔ کامل نسخهٔ PHP.'},
     {'key': 'version', 'title': '🔄 نسخهٔ کد', 'state': 'ready',
      'description': 'نسخه و commit اجراشده را بررسی و درخواست ارتقا را برای Task ثبت کنید. Reload به‌تنهایی کد تازه دانلود نمی‌کند.',
-     'actions': [('settings', 'update-settings', 'مدیریت نسخه و آپدیت')]},
+     'actions': [('settings', 'update-settings', 'مدیریت نسخه و آپدیت'), ('settings', 'agent-deploy-settings', 'استقرار عامل')]},
     {'key': 'woocommerce', 'title': '🛒 ووکامرس', 'state': 'ready',
      'description': 'اتصال رمز‌شدهٔ ووکامرس و دسترسی به فرم ارسال صفی.',
      'actions': [('settings', 'connection-woocommerce', 'تنظیم اتصال'), ('send', 'send-form', 'ارسال به فروشگاه')]},
