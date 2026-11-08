@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.630';
+const APP_VERSION = '10.631';
 
 
 if (!function_exists('str_starts_with')) {
@@ -41407,7 +41407,14 @@ function tasksResumeAllExecute(string $only = 'stale', string $trigger = 'manual
         $periodicBuildOnly = !empty($reconCfgRa['build_only']);
         $reg = tasksRegistry();
         $rows = tasksRowsOrdered($now);
-        foreach (array_merge(tasksProfilePipelineRows($now),tasksProfileExtractionRows($now)) as $_pipelineTask) { $_pipelineTask['rank'] = count($rows) + 1; $rows[] = $_pipelineTask; }
+        /* v10.631: on exec-disabled hosting only one web fallback may start per
+           cron pass. Put profile pipelines/extractions before heavyweight
+           matrix continuation, otherwise a resumable matrix monopolizes every
+           pass and profile jobs remain pending with attempts=0 indefinitely. */
+        $_profileRowsRa=array_merge(tasksProfilePipelineRows($now),tasksProfileExtractionRows($now));
+        foreach($_profileRowsRa as $_priRa=>&$_pipelineTask){$_pipelineTask['rank']=$_priRa+1;}unset($_pipelineTask);
+        foreach($rows as $_baseRa=>&$_baseTaskRa){$_baseTaskRa['rank']=count($_profileRowsRa)+$_baseRa+1;}unset($_baseTaskRa);
+        $rows=array_merge($_profileRowsRa,$rows);unset($_profileRowsRa);
         $done = []; $skipped = []; $dispatchedCount = 0;
         $maxDispatchPerPass = (function_exists('s4CanSpawnCliTask') && s4CanSpawnCliTask()) ? ($isCronAuto ? 6 : 8) : 1;
         $maxDispatchPerPass=min($maxDispatchPerPass,s4CpuGuardMaxParallel($cnRa));
@@ -49204,6 +49211,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'MessengerPanel" '.'open')===false
         &&strpos($selfSrc,"{v:'10." . "630'")!==false
         &&version_compare(APP_VERSION,'10.630','>='));
+    $add('10.631','هاست بدون exec استخراج و همگام‌سازی پروفایل را پیش از ماتریس ادامه می‌دهد',
+        strpos($selfSrc,"\$rows=array_merge(\$_profileRowsRa,\$rows)")!==false
+        &&strpos($selfSrc,"matrix continuation, otherwise a resumable matrix monopolizes every")!==false
+        &&strpos($selfSrc,"{v:'10." . "631'")!==false
+        &&version_compare(APP_VERSION,'10.631','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101889,6 +101901,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.631', t:'🚦 جلوگیری از گرسنگی استخراج روی هاست بدون exec', items:[
+    'در هاست‌هایی مثل نوویکس که worker دائمی به‌علت exec_disabled اجرا نمی‌شود، ادامهٔ پروفایل‌ها و استخراج‌ها پیش از ماتریس انجام می‌شود.',
+    'ماتریس دیگر تنها سهم اجرای هر کران را اشغال نمی‌کند و همگام‌سازی‌های pending با attempts=0 پشت آن نمی‌مانند.',
+    'ترتیب جدید checkpointها را حفظ می‌کند و هر کران فقط ظرفیت امن همان هاست را مصرف می‌کند.'
+  ]},
   {v:'10.630', t:'🧩 رفع خطای تیک و پنل‌های بستهٔ پیام‌رسان', items:[
     'تابع تیک «همه یکسان» به محدودهٔ سراسری منتقل شد تا برداشتن تیک دیگر خطای JavaScript ندهد.',
     'بله، روبیکا و تلگرام هرکدام در یک پنل کشویی مستقل قرار گرفتند و در شروع بسته‌اند.',
