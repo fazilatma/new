@@ -7,6 +7,8 @@ After changing `pythonanywhere/`:
 1. Run the Python tests, `node --test pythonanywhere/tests/auto_refresh.test.cjs`,
    `npm ci --prefix tools/ui-tests` then
    `NODE_PATH=tools/ui-tests/node_modules node --test pythonanywhere/tests/settings_transfer_ui.test.cjs pythonanywhere/tests/product_browser_ui.test.cjs pythonanywhere/tests/selector_preview_ui.test.cjs pythonanywhere/tests/extraction_control_ui.test.cjs pythonanywhere/tests/worker_runtime_ui.test.cjs pythonanywhere/tests/extraction_tools_ui.test.cjs pythonanywhere/tests/start_ui.test.cjs pythonanywhere/tests/profile_menu_ui.test.cjs pythonanywhere/tests/php_original_ui.test.cjs`,
+   `npm ci --prefix tools/browser-tests` then `npm test --prefix tools/browser-tests`
+   (real Chromium with security/CSP and timers enabled, temporary Flask DB),
    JS/shell syntax checks and `git diff --check`.
 2. Commit the code and push `origin arena/f3d5d2a0-new`.
 3. Run `python3 tools/deploy_after_push.py`. It signs the current app source tree

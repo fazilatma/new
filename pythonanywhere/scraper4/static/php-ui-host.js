@@ -1,7 +1,7 @@
 /* Trusted parent: the original PHP client never receives cookie/CSRF authority. */
 (()=>{'use strict';
 const frame=document.getElementById('php-original-ui'),status=document.getElementById('php-ui-status'),revisions=new Map();
-const reads=new Set(['app_ready','load_profile','load_connections','start_product_stats','extract_queue_status','tasks_list','whoami','python_capabilities','woo_queue_status','bsl_queue_status','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts']);
+const reads=new Set(['app_ready','load_profile','load_connections','start_product_stats','extract_queue_status','tasks_list','whoami','python_capabilities','woo_queue_status','bsl_queue_status','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','runtime_health']);
 const writes=new Set(['save_profile','python_enqueue','python_send_enqueue','python_manual_sync','python_queue_control','python_queue_clear','python_profile_duplicate','python_profile_delete']);let busy=false,selectionTicket=0;
 document.getElementById('php-ui-capabilities').onclick=()=>{const help=document.getElementById('php-ui-help');help.open=!help.open;};
 function action(query,fields){return fields.action||query.action||Object.keys(query).find(k=>k!=='_'&&k!=='_v'&&k!=='_ready')||'';}
@@ -34,11 +34,14 @@ window.addEventListener('message',async event=>{
    const payload={action:op,query,fields:m.fields};
    if(op==='save_profile')payload.revision=revisions.get(m.fields.target_key)||null;
    const response=await fetch('/api/php-ui/'+(write?'write':'read'),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':document.querySelector('meta[name="csrf-token"]').content},body:JSON.stringify(payload)});
-   const data=await response.json();
+   let data,code=response.status;
+   try{data=await response.json();if(!data||typeof data!=='object'||typeof data.ok!=='boolean')throw Error('invalid envelope');}
+   catch{code=response.status>=400?response.status:502;data={ok:false,error:response.status===401?'نشست پایان یافته است؛ دوباره وارد شوید.':`پاسخ endpoint معتبر نیست (HTTP ${response.status})؛ وضعیت سرور را بررسی و دوباره تلاش کنید.`};}
+
    if(data.key&&data.revision)revisions.set(data.key,data.revision);
    if(op==='load_profile'&&response.ok&&data.profile&&ticket===selectionTicket){window.S4NativeSelection=data.profile;window.S4NativeTools?.select(data.profile);}
    status.textContent=data.ok?(write?'عملیات پایتون انجام شد؛ اطلاعات واقعی ذخیره/صف شد.':'رابط اصلی PHP · اتصال‌های فعال از پایتون پاسخ می‌گیرند.'):(data.error||'خطای اتصال');
-   answer(response.status,data);
+   answer(code,data);
   }finally{if(write)busy=false;}
  }catch(e){if(ownsBusy)busy=false;status.textContent=e.message;answer(400,{ok:false,error:e.message});}
 });

@@ -195,3 +195,12 @@ def test_native_control_during_remote_http_preserves_remote_id_but_does_not_over
     assert db.get_entry(eid)['status']=={'pause':'paused','cancel':'cancelled'}[control]
     assert db.list_products(p['id'])[0]['woo_id']==444
     assert db.get_entry(eid)['counters']['sent']==1
+
+
+def test_runtime_health_is_real_python_version_not_a_fake_php_runtime(app,client,auth_headers):
+    from scraper4.config import VERSION
+    from scraper4.services.php_ui import manifest
+    r=request(client,auth_headers,'runtime_health')
+    assert r.status_code==200
+    assert r.json=={'ok':True,'runtime':'Python','version':VERSION,'ui_version':manifest()['source_version'],'read_only':True,'processed':False}
+    assert not app.extensions['s4_db'].list_entries()

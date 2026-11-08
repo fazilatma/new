@@ -161,3 +161,28 @@ test('parent guards dirty profile options and ignores late selections; unknown p
  pending[0].resolve({ok:true,status:200,json:async()=>({ok:true,key:'one',revision:'r1',profile:{id:1}})});await e.flush();assert.deepEqual(selected,[2]);
  assert.equal((await e.send({action:'python_open_panel',panel:'constructor'})).status,400);assert.equal(d.querySelector('#php-tools').open,false);
 });
+
+test('frame blocks explicitly unported background jobs locally with 501 errors, not forged success or broker spam',async t=>{
+ const dom=new JSDOM('<html><head></head><body></body></html>',{url:'https://example.test/php-ui/frame',runScripts:'outside-only'});t.after(()=>dom.window.close());const w=dom.window;let forwarded=0;w.postMessage=()=>forwarded++;w.eval(script('php-ui-frame.js'));
+ for(const url of ['?sync_matrix_status=1','?internal_cron_feedback=1','?cron_run=1&internal_browser_keep=1']){
+  await assert.rejects(w.fetch(url),err=>err.status===501&&err.name==='NotSupportedError');
+ }
+ assert.equal(forwarded,0);assert.equal(w.S4NativeDiagnostics.blockedBackground().internal_cron_feedback,1);
+ assert.equal(w.S4NativeDiagnostics.pendingRequests(),0);
+});
+
+test('frame response has JSON content-type and AbortSignal cleans pending requests even with late answers',async t=>{
+ const e=setup(t),dom=new JSDOM('<iframe src="https://example.test/php-ui/frame"></iframe>',{url:'https://example.test/php-ui',runScripts:'outside-only'});t.after(()=>dom.window.close());const w=dom.window.document.querySelector('iframe').contentWindow;let outgoing;dom.window.postMessage=m=>{outgoing=m;};w.document.open();w.document.write('<html><head></head><body></body></html>');w.document.close();w.eval(script('php-ui-frame.js'));
+ const p=w.fetch('?app_ready=1');w.dispatchEvent(new w.MessageEvent('message',{source:dom.window,origin:'https://example.test',data:{type:'s4-php-response',id:outgoing.id,status:200,data:{ok:true,ready:true}}}));const r=await p;assert.match(r.headers.get('Content-Type'),/application\/json/);assert.equal((await r.json()).ready,true);
+ const controller=new w.AbortController(),aborted=w.fetch('?runtime_health=1',{signal:controller.signal}),id=outgoing.id;controller.abort();await assert.rejects(aborted,e=>e.name==='AbortError');assert.equal(w.S4NativeDiagnostics.pendingRequests(),0);
+ w.dispatchEvent(new w.MessageEvent('message',{source:dom.window,origin:'https://example.test',data:{type:'s4-php-response',id,status:200,data:{ok:true}}}));assert.equal(w.S4NativeDiagnostics.pendingRequests(),0);
+});
+
+test('parent reports HTML/invalid JSON/expired-session endpoint failures without leaking raw bodies or throwing JS',async t=>{
+ const e=await trustedHost(t),{w}=e;
+ for(const [status,data]of [[200,{surprise:true}],[502,null],[401,null]]){
+  w.fetch=async()=>({status,ok:status===200,json:async()=>{if(data)return data;throw Error('<html>PRIVATE-ERROR-PAGE</html>');}});
+  const r=await e.send({action:'runtime_health'});assert.equal(r.status,status===200?502:status);assert.equal(r.data.ok,false);assert.ok(!r.data.error.includes('PRIVATE'));assert.match(r.data.error,status===401?/نشست/:/HTTP/);
+ }
+ assert.deepEqual(e.errors,[]);
+});

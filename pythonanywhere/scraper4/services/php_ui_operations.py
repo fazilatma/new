@@ -6,11 +6,12 @@ confirmation. Sends enqueue pinned destinations; no remote HTTP occurs here.
 import json
 import uuid
 from ..db import utc_now
+from ..config import VERSION
 from . import php_ui
 from .basalam.shops import resolve
 from .extraction_diagnostics import SAFE_HINTS
 
-READS={'woo_queue_status','bsl_queue_status','tasks_list','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','python_capabilities'}
+READS={'woo_queue_status','bsl_queue_status','tasks_list','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','python_capabilities','runtime_health'}
 WRITES={'python_send_enqueue','python_manual_sync','python_queue_control','python_queue_clear','python_profile_duplicate','python_profile_delete'}
 
 
@@ -58,6 +59,7 @@ def progress(db,kind):
 
 def read(db,settings,data):
     action=data['action']
+    if action=='runtime_health':return {'ok':True,'runtime':'Python','version':VERSION,'ui_version':php_ui.manifest()['source_version'],'read_only':True,'processed':False}
     if action=='tasks_list':return tasks(db)
     if action in ('woo_queue_status','bsl_queue_status'):return queue(db,'woo_send' if action.startswith('woo') else 'bsl_send')
     if action in ('poll_woo','poll_basalam','poll_bsl','poll_extract'):return progress(db,{'poll_woo':'woo_send','poll_basalam':'bsl_send','poll_bsl':'bsl_send','poll_extract':'extract'}[action])
@@ -180,4 +182,5 @@ def contracts():
     return {'ok':True,'read_actions':sorted(php_ui.READS|READS),'write_actions':sorted(php_ui.WRITES|WRITES),
             'ui_actions':['python_open_panel'],'full_php_parity':False,'heartbeat_can_run_cron':False,
             'trusted_panels':['woocommerce','basalam','backup','general','version','render','guardian','profile-stats','profile','selectors','results','audit'],
+            'boot_policy':{'legacy_background_jobs':False,'automatic_selector_probes':False,'service_worker':False},
             'secret_operations':'trusted_parent_only','unknown_action_http_status':501}

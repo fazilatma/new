@@ -2,3 +2,5 @@
 body>header{flex-shrink:0}.php-tools-dialog{width:min(1200px,96vw);max-height:90dvh;overflow:auto;background:#0f172a;color:#e2e8f0;border:1px solid #475569;border-radius:12px;padding:18px}.php-tools-dialog::backdrop{background:#000b}.php-tools-dialog .section-heading{display:flex;justify-content:space-between}.php-tools-dialog [hidden]{display:none!important}body>dialog{font-size:13px}#settings-menu .menu-intro{line-height:1.8}
 
 body{font-family:var(--app-font,Tahoma,system-ui,sans-serif)}
+
+#php-ui-boot-policy{margin:0;padding:4px 12px;color:#94a3b8;font-size:11px}

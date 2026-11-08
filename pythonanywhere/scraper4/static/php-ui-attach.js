@@ -1,5 +1,8 @@
 /* Deliberate runtime attachments; upstream functions remain intact in the snapshot. */
 (()=>{'use strict';
+// Service-worker access itself throws in a real opaque-origin browser. The
+// upstream lifecycle helper explicitly accepts null for an unavailable worker.
+window.s4RegisterShellWorker=()=>Promise.resolve(null);
 const unsupported=()=>{showToast('این عملیات هنوز به پایتون متصل نیست؛ مدیریت فعلی را استفاده کنید.',true);};
 // Never pretend that a browser-local edit deletes durable/remote products.
 for(const name of ['removeNoPrice','removeBelowMinPrice','clearAll','clearResults','startDetailExtraction','start','startAutoExtract','startManualSync','startWoo','startBsl','saveConn'])if(typeof window[name]==='function')window[name]=unsupported;
@@ -21,6 +24,13 @@ window.setAppFont=k=>{const selected=window.appFontApply(k,true);syncAppFontPrev
 async function call(action,fields={}){const fd=new FormData();fd.set('action',action);for(const [k,v]of Object.entries(fields))fd.set(k,String(v));const d=await(await fetch('',{method:'POST',body:fd})).json();if(!d.ok)throw Error(d.error);return d;}
 const panel=key=>call('python_open_panel',{panel:key}).catch(e=>showToast(e.message,true));
 window.pythonOpenPanel=panel;
+// Profile hydration must never probe a source URL automatically. Explicit
+// original test buttons open the real trusted laboratory instead.
+window.testSel=type=>{const out=document.getElementById('prev-'+type);if(out)out.textContent='آزمایش خودکار غیرفعال است؛ دکمهٔ تست، آزمایشگاه امن را باز می‌کند.';};
+for(const button of document.querySelectorAll('[onclick^="testSel("]'))button.onclick=()=>panel('selectors');
+window.testDetailSel=()=>panel('selectors');
+window.s4RuntimeHealthCheck=async()=>{const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el||s4RuntimeHealthBusy)return;s4RuntimeHealthBusy=true;try{const d=await(await fetch('?runtime_health=1')).json();if(!d.ok)throw Error(d.error||'پاسخ سلامت نامعتبر است.');el.classList.remove('checking','offline');el.classList.add('online');if(tag)tag.textContent='Py';el.title=`Python v${d.version} · رابط PHP v${d.ui_version} · پاسخ واقعی فقط‌خواندنی`;el.setAttribute('aria-label','بک‌اند پایتون پاسخ می‌دهد');}catch(e){el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';el.title='خطای دریافت وضعیت پایتون: '+e.message;}finally{s4RuntimeHealthBusy=false;}};
+
 function saved(){if(!currentProfileKey||!profileFormReady||isDirty)throw Error('ابتدا پروفایل و تغییراتش را صریحاً ذخیره کنید؛ صف از دادهٔ ذخیره‌شده استفاده می‌کند.');return currentProfileKey;}
 const syncFields=target=>{const f={profile:saved(),target};if(target==='woo'||target==='both')f.status=document.getElementById('wcSt').value;if(target==='bsl'||target==='both'){const selected=typeof bslGetSelectedVids==='function'?bslGetSelectedVids():[];const ids=selected===null?bslAllShopEntries().map(shop=>String(shop.vid)):selected;if(!ids.length)throw Error('حداقل یک غرفهٔ ذخیره‌شده انتخاب کنید.');f.vendor_ids=JSON.stringify(ids.map(String));}return f;};
 async function send(target){try{const d=await call('python_send_enqueue',syncFields(target));showToast('ارسال همهٔ محصولات ذخیره‌شده در صف پایتون ثبت شد؛ HTTP مقصد هنوز اجرا نشده.');if(target==='woo')checkWooQueue();else checkBslQueue();return d;}catch(e){showToast(e.message,true);}}
