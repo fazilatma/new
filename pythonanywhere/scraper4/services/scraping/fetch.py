@@ -72,6 +72,7 @@ class HtmlFetcher:
     @staticmethod
     def _attempt(url, timeout, cfg, mode, settings):
         result = dict(ok=False, code=0, error='', url=url, html='', mode=mode)
+        deadline = time.monotonic() + float(cfg['_deadline_seconds']) if cfg.get('_deadline_seconds') else None
         try:
             validate_url(url)
             target, proxies = url, None
@@ -97,8 +98,13 @@ class HtmlFetcher:
             with requests.Session() as session:
                 # trust_env stays enabled: PythonAnywhere free accounts need it.
                 for _ in range(6):
+                    if deadline and time.monotonic() >= deadline:
+                        raise ValueError('HTTP cron fetch budget exceeded')
                     validate_url(target, resolve=True)
-                    with session.get(target, timeout=(settings.connect_timeout, timeout),
+                    remaining = max(0.1, deadline - time.monotonic()) if deadline else None
+                    timeouts = ((min(settings.connect_timeout, remaining), min(timeout, remaining))
+                                if remaining is not None else (settings.connect_timeout, timeout))
+                    with session.get(target, timeout=timeouts,
                                      headers={'User-Agent': settings.user_agent, 'Accept-Language': 'fa,en;q=0.8'},
                                      proxies=proxies, verify=True, allow_redirects=False, stream=True) as response:
                         if response.status_code in (301, 302, 303, 307, 308):
@@ -107,6 +113,8 @@ class HtmlFetcher:
                         result.update(code=response.status_code, url=url if mode == 'worker' else response.url)
                         chunks, size = [], 0
                         for chunk in response.iter_content(65536):
+                            if deadline and time.monotonic() >= deadline:
+                                raise ValueError('HTTP cron fetch budget exceeded')
                             size += len(chunk)
                             if size > MAX_BYTES:
                                 raise ValueError('Response exceeds 12 MiB limit')

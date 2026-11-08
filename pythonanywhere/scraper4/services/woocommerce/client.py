@@ -22,6 +22,7 @@ class WooClient:
         self.consumer_key = consumer_key or ""
         self.consumer_secret = consumer_secret or ""
         self.timeout = timeout
+        self.connect_timeout = 8
         self.verify = verify
 
     @classmethod
@@ -45,7 +46,7 @@ class WooClient:
                 json=data,
                 params=params,
                 headers={"Accept": "application/json"},
-                timeout=(8, self.timeout),
+                timeout=(self.connect_timeout, self.timeout),
                 verify=self.verify,
             )
         except requests.RequestException as exc:

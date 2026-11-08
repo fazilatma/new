@@ -47,19 +47,31 @@ def create_app(settings=None):
         marker = settings.base_dir / '.maintenance.json'
         if marker.exists() and not request.path.startswith('/static/') and request.path not in (
                 '/api/system/status', '/api/updates/status', '/login', '/logout', '/settings/pythonanywhere',
-                '/api/platform/config', '/api/platform/test'):
+                '/api/platform/config', '/api/platform/test', '/api/cron/status'):
             return jsonify(ok=False, error='Maintenance in progress'), 503, {'Retry-After': '30'}
         if request.endpoint == 'admin.health':
             return
         bearer = request.headers.get('Authorization', '')
         if bearer:
             scheme, _, value = bearer.partition(' ')
+            digest = hashlib.sha256(value.encode()).hexdigest()
             expected = db.get_config('api_auth').get('sha256', '')
-            if scheme.lower() != 'bearer' or not value or not expected or not hmac.compare_digest(hashlib.sha256(value.encode()).hexdigest(), expected):
+            cron_expected = db.get_config('cron_auth').get('sha256', '')
+            if scheme.lower() != 'bearer' or not value:
                 return jsonify(ok=False, error='Invalid API token'), 401
-            request.environ['s4.bearer'] = True
+            if expected and hmac.compare_digest(digest, expected):
+                request.environ['s4.bearer'] = True
+            elif cron_expected and hmac.compare_digest(digest, cron_expected):
+                if request.endpoint not in ('cron.run', 'cron.status'):
+                    return jsonify(ok=False, error='Cron key cannot access this endpoint'), 403
+                request.environ['s4.bearer'] = True
+                request.environ['s4.cron'] = True
+            else:
+                return jsonify(ok=False, error='Invalid API token'), 401
         if request.endpoint == 'static':
             return
+        if request.endpoint == 'cron.run' and not session.get('authenticated') and not request.environ.get('s4.bearer'):
+            return jsonify(ok=False, error='Cron Authorization header required'), 401
         if request.method not in ('GET', 'HEAD', 'OPTIONS') and not request.environ.get('s4.bearer'):
             supplied = request.headers.get('X-CSRF-Token') or request.form.get('csrf', '')
             if not supplied or not hmac.compare_digest(supplied, session.get('csrf', '')):
@@ -247,4 +259,6 @@ def create_app(settings=None):
 
     from .admin import register_admin
     register_admin(app, db, settings)
+    from .cron import register_cron
+    register_cron(app, db, settings)
     return app

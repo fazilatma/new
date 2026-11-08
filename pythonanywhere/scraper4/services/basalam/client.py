@@ -36,6 +36,8 @@ class BasalamClient:
         self.api_base = base.rstrip("/") + "/"
         self.token = token or ""
         self.timeout = timeout
+        self.connect_timeout = 10
+        self.max_attempts = 3
         self.proxy = proxy or ""
         self.verify = verify
         self._cats_cache: tuple[float, list] | None = None
@@ -66,8 +68,9 @@ class BasalamClient:
         return headers
 
     def request(self, method: str, endpoint: str, data: Any = None,
-                multipart: bool = False, max_attempts: int = 3,
+                multipart: bool = False, max_attempts: int | None = None,
                 skip_stop: bool = False) -> dict:
+        max_attempts = self.max_attempts if max_attempts is None else max_attempts
         if not skip_stop and self.stopped():
             return {"ok": False, "code": 0, "error": "stopped", "body": None, "raw": ""}
 
@@ -88,7 +91,7 @@ class BasalamClient:
                     try:
                         response = requests.request(
                             method, url, headers=self._headers(), data=fields,
-                            files=files or None, timeout=(10, self.timeout),
+                            files=files or None, timeout=(self.connect_timeout, self.timeout),
                             verify=self.verify, proxies=proxies,
                         )
                     finally:
@@ -99,7 +102,7 @@ class BasalamClient:
                         method, url,
                         headers=self._headers({"Content-Type": "application/json"}),
                         json=data if data is not None else None,
-                        timeout=(10, self.timeout), verify=self.verify, proxies=proxies,
+                        timeout=(self.connect_timeout, self.timeout), verify=self.verify, proxies=proxies,
                     )
             except requests.RequestException as exc:
                 last = {"ok": False, "code": 0, "error": str(exc), "body": None, "raw": ""}

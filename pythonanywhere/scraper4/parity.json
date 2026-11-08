@@ -1,0 +1,54 @@
+{
+  "source": {
+    "branch": "arena/01a0ebf7-new",
+    "commit": "5aa1012d767a1b9f9a9ca43064c7fc3dc35976d3",
+    "version": "10.640",
+    "path": "scraper4.php",
+    "sha256": "79824ce702c945d9bdffcfa0ad2e1eb7dd8f483d32b4f8d4a04ec79af3e1655c",
+    "verified_on": "2026-11-08",
+    "bytes_utf8": 8718674,
+    "lines": 124481
+  },
+  "inventory": {
+    "line_start_function_declarations_in_mixed_source": 2711,
+    "unique_literal_php_request_keys": 670
+  },
+  "migration": "in_progress",
+  "full_php_parity": false,
+  "production_replacement": false,
+  "implemented": [
+    {
+      "feature": "Core selectors, pagination, product keys, Persian helpers",
+      "reference": "Laravel services + legacy helpers"
+    },
+    {
+      "feature": "Scored product-card detection, detail-href ancestor walk, lazy images, DOM-first fallbacks",
+      "reference": "parse_products()"
+    },
+    {
+      "feature": "Resumable SQLite queues; locked one-step cron; pause/resume/cancel",
+      "reference": "Extraction/queue behavior; WSGI adaptation"
+    },
+    {
+      "feature": "WooCommerce and Basalam basic REST clients",
+      "reference": "wooReq / bslReq (partial workflow)"
+    },
+    {
+      "feature": "Price display with preserved Persian units, foreign currency symbols/codes and decimals",
+      "reference": "extractPrice() v10.640; price_num still digits-only"
+    }
+  ],
+  "pending": [
+    "Detail-page enrichment and complete variant mapping",
+    "Basalam public catalogue adapters and complete send payloads",
+    "Site-specific engines (Digikala, Snappshop, Emalls-specific adapters)",
+    "Visual selector picker and full PHP UI parity",
+    "AI/category/content automation, notifications, chat and complete legacy action parity"
+  ],
+  "notes": [
+    "This ledger is not a claim of full parity.",
+    "DOM fixtures are based on the PHP algorithm; PHP CLI was not available for differential execution.",
+    "HTTP cron performs one queue step only; code updates remain CLI/Task operations.",
+    "Lexical inventory includes embedded JavaScript declarations; it is not a count of implemented PHP routes."
+  ]
+}

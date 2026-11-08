@@ -179,7 +179,7 @@ def _image_from_node(node, base_url: str) -> str:
 
 def _walk_json_ld(data, out: list) -> None:
     if isinstance(data, dict):
-        if "Product" in str(data.get("@type") or ""):
+        if "product" in str(data.get("@type") or "").lower():
             out.append(data)
         for value in data.values():
             if isinstance(value, (dict, list)):
@@ -356,15 +356,126 @@ def with_selectors(html: str, base_url: str, selectors: dict) -> dict:
     return products
 
 
-def auto(html: str, base_url: str) -> dict:
-    """وقتی سلکتوری انتخاب نشده (حالتِ «خودکار»).
+def _dom_auto(root, base_url: str) -> dict:
+    """Port of legacy parse_products(): scored grids + detail-href card walk.
 
-    fallbackهای ساخت‌یافته: JSON-LD (Product) و آیتم‌های itemscope/schema.org.
-    تشخیصِ خودکارِ ظرفِ تکرارشونده (آنالیزِ آماریِ DOM نسخهٔ قدیمی) در فازِ ۲
-    پورت می‌شود؛ تا آن‌جا یا سلکتور بدهید یا روی سایت‌های schema.org تکیه کنید.
+    Source: scraper4.php, parse_products(), PHP v10.640 (source SHA in parity.json).
+    Keep the ordered queries/first-complete-grid behavior: product_price must
+    never beat actual cards merely because it matches more DOM nodes.
     """
+    queries = [
+        "//li[contains(@class,'product')]",
+        "//div[contains(@class,'product-card')]",
+        "//div[contains(@class,'product-item')]",
+        "//article[contains(@class,'product')]",
+        "//div[contains(@class,'product') and not(contains(@class,'products'))]",
+        "//div[contains(@class,'card') and .//a and .//img]",
+        "//div[contains(@class,'col') and .//a and .//img and .//*[contains(@class,'price') or contains(text(),'تومان')]]",
+        "//li[contains(@class,'col') and .//a and .//img]",
+        "//div[contains(@class,'item') and .//a and .//img]",
+        "//li[.//a[@href] and .//img and .//*[contains(@class,'price')]]",
+    ]
+    best, best_score = [], 0
+    for query in queries:
+        matches = _safe_xpath(root, query)
+        if len(matches) < 2:
+            continue
+        usable = sum(bool(_safe_xpath(node, './/a[@href]')) and
+                     bool(_safe_xpath(node, './/h1|.//h2|.//h3|.//h4|.//a[@title]|.//*[contains(@class,"title")]|.//img'))
+                     for node in matches)
+        if usable > best_score:
+            best, best_score = matches, usable
+            if usable == len(matches) and usable >= 2:
+                break
+    nodes, seen = [], set()
+
+    def add(node):
+        if node not in seen:
+            nodes.append(node)
+            seen.add(node)
+
+    for node in best:
+        add(node)
+    signals = [
+        "//a[contains(@href,'~id~')]",
+        "//a[contains(@href,'/product/') or contains(@href,'/products/') or contains(@href,'/p/')]",
+        "//a[contains(@href,'/کالا/') or contains(@href,'/مشخصات_')]",
+    ]
+    for query in signals:
+        for anchor in _safe_xpath(root, query):
+            card, found = anchor, False
+            for depth in range(6):
+                if not _is_element(card):
+                    break
+                text = normalize_text(card.text_content())
+                has_image = bool(_safe_xpath(card, './/img'))
+                has_price = bool(price(text)) or 'تومان' in text or 'ریال' in text
+                looks_card = (card.tag.lower() in ('li', 'article', 'section') or
+                              bool(re.search(r'product|card|item|goods|commodity|prd|list', card.get('class', ''), re.I)))
+                if (has_image and (has_price or looks_card)) or (looks_card and depth > 0 and has_price):
+                    found = True
+                    break
+                parent = card.getparent()
+                if not _is_element(parent):
+                    break
+                card = parent
+            if not found:
+                if not _safe_xpath(anchor, './/img'):
+                    continue
+                card = anchor
+            add(card if _is_element(card) else anchor)
+    if not nodes:
+        for node in _safe_xpath(root, "//a[.//img][contains(@href,'product') or contains(@href,'/p/') or contains(@href,'/کالا/')]"):
+            add(node)
+
+    products = {}
+    for node in nodes:
+        row = {'title': '', 'price': '', 'link': '', 'image': '', 'sku': ''}
+        row['link'] = extract_smart_link(node, base_url, node)
+        if not row['link']:
+            anchors = _safe_xpath(node, './/a[@href]')
+            if anchors:
+                row['link'] = absolute(anchors[0].get('href', ''), base_url)
+        for query in ('.//h2[contains(@class,"title")]', './/h3[contains(@class,"title")]',
+                      './/a[contains(@class,"title")]', './/*[contains(@class,"product-title")]',
+                      './/h2', './/h3', './/h4', './/a[@title]/@title'):
+            matches = _safe_xpath(node, query)
+            if matches:
+                value = matches[0]
+                text = normalize_text(value.text_content() if _is_element(value) else str(value))
+                if 2 < len(text) < 200:
+                    row['title'] = text
+                    break
+        if not row['title']:
+            images = _safe_xpath(node, './/img[@alt]')
+            text = normalize_text(images[0].get('alt', '')) if images else ''
+            if 2 < len(text) < 200:
+                row['title'] = text
+        for query in ('.//ins//*[contains(@class,"amount")]',
+                      './/*[contains(@class,"price")]//*[contains(@class,"amount")]',
+                      './/*[contains(@class,"price")]', './/*[contains(@class,"amount")]'):
+            matches = _safe_xpath(node, query)
+            if matches:
+                value = price(matches[0].text_content())
+                if value:
+                    row['price'] = value
+                    break
+        if not row['price']:
+            row['price'] = price(normalize_text(node.text_content()))
+        images = _safe_xpath(node, './/img')
+        if images:
+            row['image'] = _image_from_node(images[0], base_url)
+        if row['title'] or row['link']:
+            products.setdefault(product_key(row), row)
+    return products
+
+
+def auto(html: str, base_url: str) -> dict:
+    """Legacy DOM heuristic first; JSON-LD/microdata remain fallbacks."""
     root = load_dom(html)
-    products = json_ld_fallback(root, base_url, {})
+    products = _dom_auto(root, base_url)
+    if not products:
+        products = json_ld_fallback(root, base_url, {})
 
     if not products:
         for scope in _safe_xpath(root, "//*[@itemscope][@itemtype]"):

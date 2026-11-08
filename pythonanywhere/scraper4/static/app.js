@@ -117,3 +117,24 @@ document.querySelector('#api-token-revoke').onclick = async () => {
   catch(error) { message(error.message); }
 };
 systemPoll();
+
+
+document.querySelector('#cron-key-create').onclick = async () => {
+  if(!confirm('کلید جدید کران ساخته شود؟ کلید قبلی باطل خواهد شد.')) return;
+  try {
+    const data = await api('/api/cron/token','POST',{});
+    document.querySelector('#cron-key-value').textContent = data.token;
+    message('کلید فقط همین‌بار نمایش داده می‌شود؛ آن را در هدر Authorization کران خارجی قرار دهید.');
+  } catch(error) { message(error.message); }
+};
+document.querySelector('#cron-key-revoke').onclick = async () => {
+  try {
+    await api('/api/cron/token','DELETE');
+    document.querySelector('#cron-key-value').textContent = '';
+    message('کلید کران باطل شد.');
+  } catch(error) { message(error.message); }
+};
+document.querySelector('#cron-status').onclick = async () => {
+  try { document.querySelector('#cron-result').textContent = JSON.stringify(await api('/api/cron/status'),null,2); }
+  catch(error) { message(error.message); }
+};

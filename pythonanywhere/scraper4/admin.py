@@ -2,6 +2,8 @@
 import hashlib
 import fcntl
 import secrets
+import json
+from pathlib import Path
 
 from flask import Blueprint, abort, current_app, jsonify, request, session, render_template
 
@@ -15,6 +17,12 @@ def register_admin(app, db, settings):
     @bp.get('/healthz')
     def health():
         return jsonify(ok=True)
+
+    @bp.get('/api/port-status')
+    @bp.get('/api/parity/status')
+    def parity_status():
+        ledger = json.loads(Path(__file__).with_name('parity.json').read_text(encoding='utf-8'))
+        return jsonify(ok=True, **ledger)
 
     @bp.get('/api/endpoints')
     def endpoints():

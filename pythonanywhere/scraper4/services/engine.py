@@ -6,6 +6,8 @@ that product remotely before resuming. No automatic retries of failed writes.
 """
 import fcntl
 import time
+import math
+from dataclasses import replace
 
 from ..db import utc_now
 from .scraping.pagination import build, NEXT_SELECTOR
@@ -18,7 +20,7 @@ from .woocommerce.client import WooClient
 from .basalam.client import BasalamClient
 
 
-def _extract_step(db, settings, entry, profile):
+def _extract_step(db, settings, entry, profile, network_timeout=None):
     payload, counts = entry['payload'], entry['counters']
     page = int(payload.get('_page', 1))
     pages = max(1, min(100, int(payload.get('pages', settings.max_pages))))
@@ -26,7 +28,10 @@ def _extract_step(db, settings, entry, profile):
     kind, val = pagination.get('type', 'query_page'), pagination.get('val', '')
     url = payload.get('_next_url') or (profile['url'] if page == 1 else build(profile['url'], profile['url'], page, kind, val))
     validate_url(url)
-    result = SmartFetcher.get(url, timeout=settings.fetch_timeout, net=settings.net,
+    net = settings.net.as_dict() if network_timeout else settings.net
+    if network_timeout:
+        net['_deadline_seconds'] = 12
+    result = SmartFetcher.get(url, timeout=network_timeout or settings.fetch_timeout, net=net,
                               mode=payload.get('render', 'static'), settings=settings)
     if not result.get('ok'):
         raise ValueError(result.get('error') or 'Fetch failed')
@@ -54,7 +59,7 @@ def _extract_step(db, settings, entry, profile):
     return done
 
 
-def _send_step(db, settings, entry, profile):
+def _send_step(db, settings, entry, profile, network_timeout=None):
     payload, counts = entry['payload'], entry['counters']
     target = 'woo' if entry['kind'] == 'woo_send' else 'basalam'
     remote_column = 'woo_id' if target == 'woo' else 'basalam_id'
@@ -75,6 +80,8 @@ def _send_step(db, settings, entry, profile):
                 raise ValueError('WooCommerce connection is incomplete')
             validate_url(cfg['store_url'])
             client = WooClient.from_connection(cfg, verify=True)
+            if network_timeout:
+                client.timeout, client.connect_timeout = network_timeout, 3
             body = {'name': product['title'], 'type': 'simple', 'status': payload.get('status', 'draft'),
                     'regular_price': str(product['price_num'])}
             if product.get('sku'):
@@ -89,6 +96,8 @@ def _send_step(db, settings, entry, profile):
             if not cfg.get('token') or not cfg.get('vendor_id'):
                 raise ValueError('Basalam token/vendor_id are required')
             client = BasalamClient.from_connection(cfg, api_base=settings.basalam_api_base)
+            if network_timeout:
+                client.timeout, client.connect_timeout, client.max_attempts = network_timeout, 3, 1
             body = {'name': product['title'], 'price': product['price_num'], 'description': product['title']}
             category = payload.get('category_id') or cfg.get('category_id')
             if category:
@@ -109,21 +118,23 @@ def _send_step(db, settings, entry, profile):
     return False
 
 
-def run_entry(db, settings, entry, deadline):
+def run_entry(db, settings, entry, deadline, *, max_steps=None, network_timeout=None):
     profile = db.get_profile(entry['profile_id']) if entry.get('profile_id') else None
     try:
         if not profile:
             raise ValueError('Profile not found')
-        while time.monotonic() < deadline:
+        steps = 0
+        while time.monotonic() < deadline and (max_steps is None or steps < max_steps):
             live = db.get_entry(entry['id'])
             if live['status'] != 'running':
                 return
             if entry['kind'] == 'extract':
-                done = _extract_step(db, settings, entry, profile)
+                done = _extract_step(db, settings, entry, profile, network_timeout)
             elif entry['kind'] in ('woo_send', 'bsl_send'):
-                done = _send_step(db, settings, entry, profile)
+                done = _send_step(db, settings, entry, profile, network_timeout)
             else:
                 raise ValueError('Unknown queue kind')
+            steps += 1
             # Do not overwrite a pause/cancel requested during a network call.
             db.update_entry(entry['id'], payload=entry['payload'], counters=entry['counters'], heartbeat=utc_now())
             if db.get_entry(entry['id'])['status'] != 'running':
@@ -163,19 +174,56 @@ def tick(db, settings, budget_seconds=None, max_entries=25):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {'ok': True, 'busy': True, 'ran': 0}
-        recovered = db.recover_stale(settings.worker_stale_seconds)
-        enqueued = auto_enqueue(db, settings)
-        start = time.monotonic()
-        deadline = start + max(1, int(budget_seconds or settings.tick_budget_seconds))
-        ran = 0
-        while ran < max_entries and time.monotonic() < deadline:
-            entry = db.claim_next()
-            if not entry:
-                break
-            run_entry(db, settings, entry, deadline)
-            ran += 1
-        return {'ok': True, 'ran': ran, 'recovered': recovered, 'enqueued': enqueued,
-                'seconds': round(time.monotonic() - start, 2)}
+        return _tick_locked(db, settings, budget_seconds, max_entries)
+
+
+def _tick_locked(db, settings, budget_seconds=None, max_entries=25, *, max_steps=None, network_timeout=None):
+    recovered = db.recover_stale(settings.worker_stale_seconds)
+    enqueued = auto_enqueue(db, settings)
+    start = time.monotonic()
+    deadline = start + max(1, int(budget_seconds or settings.tick_budget_seconds))
+    ran = 0
+    while ran < max_entries and time.monotonic() < deadline:
+        entry = db.claim_next()
+        if not entry:
+            break
+        run_entry(db, settings, entry, deadline, max_steps=max_steps, network_timeout=network_timeout)
+        ran += 1
+    return {'ok': True, 'ran': ran, 'recovered': recovered, 'enqueued': enqueued,
+            'seconds': round(time.monotonic() - start, 2)}
+
+
+def http_tick(db, settings):
+    """One resumable page/product per authenticated external cron request.
+
+    This is intentionally not maintain(): no pip, code deployment, shell or
+    background thread in WSGI. Timeouts/budget are soft request bounds, not an
+    OS deadline. Use CLI/always-on workers for slow or JS-heavy sources.
+    """
+    if (settings.base_dir / '.maintenance.json').exists():
+        return {'ok': False, 'maintenance': True}
+    with settings.db_path.with_suffix('.worker.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {'ok': True, 'busy': True, 'ran': 0}
+        previous = db.checkpoint_read('cron:last')
+        since = time.time() - previous.get('started_epoch', 0)
+        if since < 45:
+            return {'ok': True, 'throttled': True, 'retry_after_seconds': math.ceil(45 - since), 'ran': 0}
+        started = {'started_at': utc_now(), 'started_epoch': time.time(), 'status': 'running'}
+        db.checkpoint_write('cron:last', started)
+        # Avoid inheriting arbitrarily long pacing / rendering timeouts.
+        bounded = replace(settings, fetch_timeout=8, connect_timeout=3,
+                          net=replace(settings.net, gap_ms=min(settings.net.gap_ms, 500), fallback=False),
+                          render=replace(settings.render, timeout_ms=min(settings.render.timeout_ms, 5000)))
+        try:
+            result = _tick_locked(db, bounded, 15, 1, max_steps=1, network_timeout=8)
+        except Exception:
+            db.checkpoint_write('cron:last', {**started, 'status': 'failed', 'done_at': utc_now()})
+            raise
+        db.checkpoint_write('cron:last', {**started, 'status': 'done', 'done_at': utc_now(), 'result': result})
+        return {**result, 'mode': 'single_step', 'code_updates': False}
 
 
 def selftest(db, settings, network=False):
