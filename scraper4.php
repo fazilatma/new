@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.642';
+const APP_VERSION = '10.643';
 
 
 if (!function_exists('str_starts_with')) {
@@ -36915,6 +36915,15 @@ if(!s4WorkerIsActive()&&function_exists('s4HasAttachedExtractionWork')&&s4HasAtt
 if(function_exists('s4CronMaybeRunDailyAiTest')){
     $GLOBALS['_cronDailyAiTest']=s4CronMaybeRunDailyAiTest($_cronVisualKind.'_cron');
 }
+/* v10.643: extraction owns an independent flock, so it must not wait even to
+   acquire .cron_run.lock. An older matrix/network request may legitimately
+   retain that global lock for minutes; profile checkpoints still advance. */
+if(!s4WorkerIsActive()&&function_exists('s4HasAttachedExtractionWork')&&s4HasAttachedExtractionWork()
+    &&function_exists('s4RunOneAttachedExtractionSegment')){
+    $_preLockExtract=s4RunOneAttachedExtractionSegment('external_cron_prelock',20);
+    cronEmit(['ok'=>!empty($_preLockExtract['ok']),'profile_extraction'=>$_preLockExtract,
+        'priority'=>'profile_before_cron_lock','bypassed_cron_lock'=>true,'version'=>APP_VERSION]);exit;
+}
 
 /* v8.92: «اجرای الان» مثل دکمهٔ «استخراج بک‌اند» رفتار کند.
    کران‌جاب واقعی باید منتظر بماند تا curl نتیجه را بگیرد، ولی دکمهٔ
@@ -49533,6 +49542,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"['paused','waiting','running','failed']")!==false
         &&strpos($selfSrc,"{v:'10." . "642'")!==false
         &&version_compare(APP_VERSION,'10.642','>='));
+    $add('10.643','checkpoint استخراج پیش از تلاش برای قفل سراسری cron اجرا می‌شود',
+        strpos($selfSrc,"s4RunOneAttachedExtractionSegment('external_cron_prelock',20)")!==false
+        &&strpos($selfSrc,"'priority'=>'profile_before_cron_lock'")!==false
+        &&strpos($selfSrc,"'bypassed_cron_lock'=>true")!==false
+        &&strpos($selfSrc,"{v:'10." . "643'")!==false
+        &&version_compare(APP_VERSION,'10.643','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102255,6 +102270,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.643', t:'⏩ استخراج مستقل از قفل سراسری cron', items:[
+    'روی هاست بدون CLI، checkpoint استخراج پیش از تلاش برای گرفتن .cron_run.lock اجرا می‌شود.',
+    'درخواست قدیمی ماتریس، شبکه یا AI حتی اگر قفل cron را طولانی نگه دارد دیگر نمی‌تواند استخراج پروفایل را متوقف کند.',
+    'قفل اختصاصی استخراج همچنان اجرای هم‌زمان یک checkpoint را رد می‌کند و پاسخ cron علت اولویت را گزارش می‌دهد.'
+  ]},
   {v:'10.642', t:'🧩 بازسازی checkpoint گم‌شدهٔ استخراج', items:[
     'پایان بودجهٔ زمانی دیگر done ثبت نمی‌شود؛ وضعیت paused و resume_needed تا پایان واقعی حفظ می‌شود.',
     'اگر ردیف صف پاک شده ولی فایل پیشرفت و staging قابل‌ادامه باشند، cron همان شناسه و checkpoint را اتمیک بازسازی می‌کند.',
