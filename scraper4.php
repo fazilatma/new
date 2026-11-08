@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.631';
+const APP_VERSION = '10.632';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1266,8 +1266,11 @@ function s4WorkerRecoverStaleLockPath(int $staleSec = 180): array {
 function s4WorkerIsActive(int $staleSec = 45): bool {
     $st = s4WorkerStateLoad();
     $hb = (int)($st['heartbeat'] ?? 0);$running=!empty($st['running']);
-    if ($running && $hb > 0 && time() - $hb <= $staleSec) return true;
     $pid=(int)($st['pid']??0);$age=$hb>0?time()-$hb:PHP_INT_MAX;
+    /* v10.632: heartbeat alone is not daemon proof. Web matrix/extraction
+       fallbacks also update worker_state and can inherit running=true from an
+       old daemon. Require the canonical worker flock or a genuinely live PID,
+       otherwise exec-disabled hosts enqueue forever into a phantom worker. */
     /* A PID can remain visible as a zombie after the daemon has exited, and an
        exec child may inherit WORKER_LOCK_FILE's fd after the parent daemon dies.
        Never treat an inherited lock as active once the daemon PID is dead and
@@ -49216,6 +49219,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"matrix continuation, otherwise a resumable matrix monopolizes every")!==false
         &&strpos($selfSrc,"{v:'10." . "631'")!==false
         &&version_compare(APP_VERSION,'10.631','>='));
+    $add('10.632','heartbeat وب بدون PID یا flock به‌اشتباه worker دائمی شناخته نمی‌شود',
+        strpos($selfSrc,"if (\$running && \$hb > 0 && time() - \$hb <= \$staleSec) return true;")===false
+        &&strpos($selfSrc,"heartbeat alone is not daemon proof")!==false
+        &&strpos($selfSrc,"{v:'10." . "632'")!==false
+        &&version_compare(APP_VERSION,'10.632','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101901,6 +101909,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.632', t:'🧟 حذف worker خیالی در هاست نوویکس', items:[
+    'heartbeat فایل worker بدون PID زنده یا flock معتبر دیگر نشانهٔ worker دائمی نیست.',
+    'درخواست وب ماتریس یا استخراج نمی‌تواند running قدیمی را تازه کند و همگام‌سازی‌ها را به صف worker غیرموجود بفرستد.',
+    'روی هاست بدون exec، همگام‌سازی از مسیر مستقیم وب و checkpoint اجرا می‌شود و صف pending بدون attempts باقی نمی‌ماند.'
+  ]},
   {v:'10.631', t:'🚦 جلوگیری از گرسنگی استخراج روی هاست بدون exec', items:[
     'در هاست‌هایی مثل نوویکس که worker دائمی به‌علت exec_disabled اجرا نمی‌شود، ادامهٔ پروفایل‌ها و استخراج‌ها پیش از ماتریس انجام می‌شود.',
     'ماتریس دیگر تنها سهم اجرای هر کران را اشغال نمی‌کند و همگام‌سازی‌های pending با attempts=0 پشت آن نمی‌مانند.',
