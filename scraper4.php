@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.638';
+const APP_VERSION = '10.639';
 
 
 if (!function_exists('str_starts_with')) {
@@ -20916,7 +20916,15 @@ function s4PhpRuntimeReport(): array {
     }
     $disabled=array_values(array_filter(array_map('trim',explode(',',(string)ini_get('disable_functions')))));
     $userIniName=trim((string)ini_get('user_ini.filename'));if($userIniName==='')$userIniName='.user.ini';
-    $userIniPath=__DIR__.'/'.$userIniName;
+    $userIniPath=__DIR__.'/'.$userIniName;$managedIni=[];
+    if(is_file($userIniPath)){
+        $raw=(string)@file_get_contents($userIniPath);
+        if(preg_match('~; BEGIN SCRAPER4 MANAGED PHP(.*?); END SCRAPER4 MANAGED PHP~s',$raw,$mm)){
+            foreach(preg_split('~\\R~',(string)$mm[1]) as $line){
+                if(preg_match('~^\\s*([a-zA-Z0-9_.]+)\\s*=\\s*([^;#]+)~',$line,$kv)&&in_array($kv[1],$iniNames,true))$managedIni[$kv[1]]=trim($kv[2]);
+            }
+        }
+    }
     $cli=[];
     $rawBin=defined('PHP_BINARY')?(string)PHP_BINARY:'';
     foreach(array_unique(array_filter([$rawBin,defined('PHP_BINDIR')?rtrim((string)PHP_BINDIR,'/').'/php':'','/usr/local/bin/php','/usr/bin/php','/opt/cpanel/ea-php83/root/usr/bin/php'])) as $candidate){
@@ -20934,7 +20942,8 @@ function s4PhpRuntimeReport(): array {
             'missing_required'=>$missingRequired,'missing_recommended'=>$missingRecommended],
         'functions'=>$functions,'disable_functions'=>$disabled,'ini'=>$ini,
         'user_ini'=>['name'=>$userIniName,'path'=>basename($userIniPath),'exists'=>is_file($userIniPath),
-            'directory_writable'=>is_writable(__DIR__),'file_writable'=>!is_file($userIniPath)||is_writable($userIniPath)],
+            'directory_writable'=>is_writable(__DIR__),'file_writable'=>!is_file($userIniPath)||is_writable($userIniPath),
+            'managed_settings'=>$managedIni,'cache_ttl'=>(int)ini_get('user_ini.cache_ttl')],
         'cli_candidates'=>$cli,'worker'=>['active'=>function_exists('s4WorkerIsActive')?s4WorkerIsActive():false,
             'exec_available'=>$functions['exec'],'persistent_capable'=>$functions['exec']&&$functions['proc_open']],
         'provider_actions'=>$provider,'recommended_php'=>'8.3'];
@@ -49388,6 +49397,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$migration=s4PhpRuntimeApply(true)')!==false
         &&strpos($selfSrc,"{v:'10." . "638'")!==false
         &&version_compare(APP_VERSION,'10.638','>='));
+    $add('10.639','گزارش PHP تنظیمات مدیریت‌شدهٔ روی دیسک و زمان cache را نشان می‌دهد',
+        strpos($selfSrc,"'managed_settings'=>\$managedIni")!==false
+        &&strpos($selfSrc,"'cache_ttl'=>(int)ini_get('user_ini.cache_ttl')")!==false
+        &&strpos($selfSrc,'u.managed_settings||{}')!==false
+        &&strpos($selfSrc,"{v:'10." . "639'")!==false
+        &&version_compare(APP_VERSION,'10.639','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -95575,6 +95590,7 @@ function phpRuntimeRender(d){
   html+='<div style="margin:6px 0"><b>افزونه‌های ضروری</b><br>'+extLine+'</div><div style="margin:6px 0"><b>افزونه‌های پیشنهادی</b><br>'+recLine+'</div><div style="margin:6px 0"><b>توابع پردازشی</b><br>'+funLine+'</div>';
   html+='<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><tr><th>تنظیم</th><th>مقدار</th><th>دسترسی</th></tr>'+['memory_limit','max_execution_time','max_input_time','default_socket_timeout','upload_max_filesize','post_max_size','max_input_vars','opcache.enable'].map(iniRow).join('')+'</table></div>';
   html+='<div style="margin-top:7px;color:'+(u.file_writable?'#86efac':'#fca5a5')+'">.user.ini: '+(u.file_writable?'قابل نوشتن':'غیرقابل نوشتن')+'</div>';
+  const managed=u.managed_settings||{},managedKeys=Object.keys(managed);if(managedKeys.length)html+='<div style="margin-top:5px;color:#fde68a">تنظیمات نوشته‌شده'+(u.cache_ttl?' (کش تا '+esc(String(u.cache_ttl))+' ثانیه)':'')+': '+managedKeys.map(k=>esc(k)+'='+esc(managed[k])).join(' · ')+'</div>';
   if((d.provider_actions||[]).length)html+='<div class="alert alert-warn" style="margin-top:7px"><b>نیازمند اقدام هاست:</b><br>'+d.provider_actions.map(x=>'• '+esc(x)).join('<br>')+'</div>';
   box.innerHTML=html;if(badge){const good=(ex.missing_required||[]).length===0&&!!fn.exec;badge.textContent=good?'آماده':'نیازمند تنظیم';badge.className='cst '+(good?'on':'off');}
 }
@@ -102109,6 +102125,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.639', t:'🧾 نمایش وضعیت واقعی .user.ini و کش PHP', items:[
+    'گزارش فقط کلیدهای مجاز داخل بخش مدیریت‌شدهٔ برنامه را از دیسک می‌خواند و نمایش می‌دهد.',
+    'زمان user_ini.cache_ttl مشخص می‌کند تغییر نوشته شده چه مدت ممکن است هنوز در PHP-FPM یا LiteSpeed دیده نشود.',
+    'هیچ بخش نامرتبط یا محرمانه‌ای از .user.ini در endpoint یا رابط نمایش داده نمی‌شود.'
+  ]},
   {v:'10.638', t:'⚙️ اعمال یک‌بارهٔ تنظیمات مجاز PHP پس از نصب', items:[
     'مرحلهٔ تأیید updater یک مهاجرت داخلی یک‌باره اجرا می‌کند تا تنظیمات امن و قابل‌نوشتن بدون نمایش token اعمال شوند.',
     'نتیجهٔ مهاجرت در فایل وضعیت محلی ثبت می‌شود و در درخواست‌های بعدی تکرار نمی‌شود.',
