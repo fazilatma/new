@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.639';
+const APP_VERSION = '10.640';
 
 
 if (!function_exists('str_starts_with')) {
@@ -28911,6 +28911,46 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
     exit;
 }
 
+/* v10.640: exec-disabled hosts need a real attached owner, not a queued daemon
+   job that can never be claimed. Select the least-recently serviced extraction
+   checkpoint and run one bounded segment. The queue/worker locks remain the
+   authority, and explicit user stops are never overridden. */
+function s4RunOneAttachedExtractionSegment(string $source='web_cron',int $budgetSec=20):array{
+    if(s4WorkerIsActive())return['ok'=>true,'skipped'=>'persistent_worker_active'];
+    $q=extractReadQueue();$candidates=[];$now=time();
+    foreach((array)($q['entries']??[])as$row){
+        if(!is_array($row))continue;$qid=trim((string)($row['id']??''));$pk=trim((string)($row['profile_key']??''));$st=(string)($row['status']??'');
+        if($qid===''||$pk===''||!in_array($st,['paused','waiting','running'],true))continue;
+        if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user'||extractStopRequestedForQueue($qid,false))continue;
+        if(extractLockHeldForQueue($qid))continue;
+        if($st==='running'){
+            $recent=max((int)($row['resume_requested_at']??0),(int)($row['updated_at']??0),(int)($row['started_at']??0));
+            if($recent>0&&$now-$recent<40)continue;
+            $paused=extractQueuePauseStaleRow($qid,0,true);if(!$paused)continue;$row=(array)($paused['row']??$row);
+        }
+        $candidates[]=$row;
+    }
+    if(!$candidates)return['ok'=>true,'skipped'=>'no_resumable_extraction'];
+    usort($candidates,static fn($a,$b)=>((int)($a['updated_at']??0)<=> (int)($b['updated_at']??0))?:strcmp((string)($a['id']??''),(string)($b['id']??'')));
+    $row=$candidates[0];$qid=(string)$row['id'];$pk=(string)$row['profile_key'];
+    $profiles=loadProfiles();if(!is_array($profiles[$pk]??null))return['ok'=>false,'error'=>'profile_not_found','queue_id'=>$qid];
+    $prep=extractResumePrepare($pk,loadConnections(),$qid,true);
+    if(empty($prep['ok']))return['ok'=>true,'skipped'=>'checkpoint_busy','reason'=>(string)($prep['reason']??''),'queue_id'=>$qid];
+    $phase=(string)($prep['phase']??$row['resume_phase']??$row['phase']??'list');if(!in_array($phase,['list','detail'],true))$phase='list';
+    $pr=loadProfiles()[$pk]??$profiles[$pk];$runPhase=$phase==='list'&&!empty($pr['_extract_want_detail'])?'all':$phase;
+    $detailMode=normalizeDetailExtractMode($pr['detailExtractMode']??'two_stage');
+    $GLOBALS['_extractCronSliceSec']=max(15,min(25,$budgetSec));
+    header('Cache-Control: no-store');header('X-Accel-Buffering: no');@ini_set('zlib.output_compression','0');
+    try{$res=runBackendExtract($pk,$source,false,$runPhase,false,(string)($prep['queue_id']??$qid),-1,$detailMode);}
+    catch(Throwable $e){$res=['ok'=>false,'error'=>$e->getMessage(),'resume_needed'=>true];}
+    return['ok'=>!empty($res['ok']),'ran'=>true,'source'=>$source,'queue_id'=>$qid,'profile_key'=>$pk,'phase'=>$phase,
+        'resume_needed'=>!empty($res['resume_needed'])||!empty($res['ran_out']),'result'=>$res];
+}
+if(isset($_GET['internal_extract_feedback'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Access-Control-Allow-Origin: *');
+    echo json_encode(s4RunOneAttachedExtractionSegment('browser_attached',20),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
+}
+
 if (isset($_GET['extract_recover_stuck']) || isset($_POST['extract_recover_stuck'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $nowRec = time();
@@ -36972,6 +37012,17 @@ register_shutdown_function(function () use ($cronLockFp) {
         @fclose($cronLockFp);
     }
 });
+/* v10.640: On a host without a persistent daemon, extraction checkpoints are
+   the first-class cron workload. Run exactly one attached bounded segment and
+   return; the next pulse fairly picks the oldest remaining row. Heavy matrix
+   work cannot consume this pulse or force a five-minute stale wait. */
+if(!s4WorkerIsActive()&&function_exists('s4RunOneAttachedExtractionSegment')){
+    $_cronExtract=s4RunOneAttachedExtractionSegment('external_cron_attached',20);
+    if(!empty($_cronExtract['ran'])){
+        cronEmit(['ok'=>!empty($_cronExtract['ok']),'profile_extraction'=>$_cronExtract,
+            'priority'=>'profile_before_matrix','version'=>APP_VERSION]);exit;
+    }
+}
 
 /* =====================================================================
    v10.21 (۳۴ج): «نبضِ کران» — علتِ قطع‌شدنِ اعلانِ دوره‌ای
@@ -46167,6 +46218,12 @@ if(isset($_GET['internal_matrix_feedback'])){
     $cn=loadConnections();$enabled=!array_key_exists('internal_cron_enabled',$cn)||!empty($cn['internal_cron_enabled']);
     if(!$enabled){echo json_encode(['ok'=>true,'skipped'=>'internal_cron_disabled']);exit;}
     if(s4WorkerIsActive()){echo json_encode(['ok'=>true,'skipped'=>'persistent_worker_active','revived_fix'=>s4WorkerReviveFailedMatrixFix()]);exit;}
+    /* Profile extraction owns the scarce attached web request before matrix. */
+    foreach((array)(extractReadQueue()['entries']??[])as$_mxEx){
+        if(!is_array($_mxEx)||!in_array((string)($_mxEx['status']??''),['paused','waiting','running'],true))continue;
+        $_mxQid=trim((string)($_mxEx['id']??''));if($_mxQid===''||!empty($_mxEx['stopped_by_user'])||(string)($_mxEx['paused_by']??'')==='user')continue;
+        if(!extractStopRequestedForQueue($_mxQid,false)){echo json_encode(['ok'=>true,'skipped'=>'profile_extraction_priority','queue_id'=>$_mxQid]);exit;}
+    }
     $job=s4WorkerClaimMatrixWebJob();if(!$job){echo json_encode(['ok'=>true,'skipped'=>'no_pending_matrix_job']);exit;}
     $jid=(string)($job['id']??'');$type=(string)($job['type']??'');$payload=is_array($job['payload']??null)?$job['payload']:[];$payload['resume']=true;
     try{
@@ -49403,6 +49460,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'u.managed_settings||{}')!==false
         &&strpos($selfSrc,"{v:'10." . "639'")!==false
         &&version_compare(APP_VERSION,'10.639','>='));
+    $add('10.640','هاست بدون exec هر checkpoint استخراج را پیش از ماتریس با request متصل و محدود ادامه می‌دهد',
+        strpos($selfSrc,'function s4RunOneAttachedExtractionSegment(string $source=')!==false
+        &&strpos($selfSrc,"if(isset(\$_GET['internal_extract_feedback']))")!==false
+        &&strpos($selfSrc,"'priority'=>'profile_before_matrix'")!==false
+        &&strpos($selfSrc,"const cronReference=location.origin+location.pathname;")!==false
+        &&strpos($selfSrc,"'skipped'=>'profile_extraction_priority'")!==false
+        &&strpos($selfSrc,"{v:'10." . "640'")!==false
+        &&version_compare(APP_VERSION,'10.640','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102125,6 +102190,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.640', t:'🚑 ادامهٔ فوری استخراج Noviex بدون worker دائمی', items:[
+    'نبض مرورگر به‌جای آدرس ثابت 42web همیشه همان نصب بازشده، از جمله Noviex، را زنده نگه می‌دارد.',
+    'روی هاست بدون exec هر cron یک checkpoint استخراج را با اتصال باز و برش حداکثر ۲۰ ثانیه‌ای اجرا می‌کند؛ دیگر منتظر stale پنج‌دقیقه‌ای نمی‌ماند.',
+    'checkpointهای استخراج به‌صورت منصفانه و قدیمی‌ترین‌اول پیش از ماتریس اجرا می‌شوند و توقف صریح کاربر دست‌نخورده می‌ماند.',
+    'ماتریس تا وقتی استخراج قابل‌ادامه وجود دارد request محدود وب را تصاحب نمی‌کند.'
+  ]},
   {v:'10.639', t:'🧾 نمایش وضعیت واقعی .user.ini و کش PHP', items:[
     'گزارش فقط کلیدهای مجاز داخل بخش مدیریت‌شدهٔ برنامه را از دیسک می‌خواند و نمایش می‌دهد.',
     'زمان user_ini.cache_ttl مشخص می‌کند تغییر نوشته شده چه مدت ممکن است هنوز در PHP-FPM یا LiteSpeed دیده نشود.',
@@ -124375,7 +124446,9 @@ async function s4RuntimeHealthCheck(force=false){
    فاصلهٔ ذخیره‌شده، lock و enabled را enforce می‌کند؛ چند tab امن هستند. */
 (function opsFeedbackPulse(){
   if(window._s4OpsPulse)return;window._s4OpsPulse=true;
-  const cronReference='https://scraper4.42web.io/scraper4.php';
+  /* Always drive the installation currently open. A fixed 42web URL made
+     Noviex tabs keep another host alive while their own checkpoints waited. */
+  const cronReference=location.origin+location.pathname;
   const localBeat=()=>fetch('?ops_feedback=1&repair=1',{cache:'no-store',credentials:'same-origin',keepalive:true}).catch(()=>{});
   const cronBeat=()=>{
     const u=cronReference+'?internal_cron_feedback=1&_pulse='+Date.now();
@@ -124386,13 +124459,18 @@ async function s4RuntimeHealthCheck(force=false){
     const u=cronReference+'?cron_run=1&internal_browser_keep=1&_pulse='+Date.now();
     fetch(u,{method:'GET',mode:'no-cors',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4BrowserCronBusy=false;});
   };
+  const extractBeat=()=>{
+    if(window._s4ExtractFeedbackBusy)return;window._s4ExtractFeedbackBusy=true;
+    const u=cronReference+'?internal_extract_feedback=1&_pulse='+Date.now();
+    fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4ExtractFeedbackBusy=false;});
+  };
   const matrixBeat=()=>{
     if(window._s4MatrixFeedbackBusy)return;window._s4MatrixFeedbackBusy=true;
     const u=cronReference+'?internal_matrix_feedback=1&_pulse='+Date.now();
-    fetch(u,{method:'GET',mode:'no-cors',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4MatrixFeedbackBusy=false;});
+    fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4MatrixFeedbackBusy=false;});
   };
-  const wake=()=>{localBeat();cronBeat();cronRunBeat();matrixBeat();};
-  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(matrixBeat,20000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
+  const wake=()=>{localBeat();cronBeat();extractBeat();cronRunBeat();setTimeout(matrixBeat,2500);};
+  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(extractBeat,25000);setInterval(matrixBeat,30000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
   window.addEventListener('pageshow',wake);window.addEventListener('online',wake);
   window.addEventListener('focus',wake);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
