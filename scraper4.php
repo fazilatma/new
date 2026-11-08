@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.640';
+const APP_VERSION = '10.641';
 
 
 if (!function_exists('str_starts_with')) {
@@ -28915,6 +28915,18 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
    job that can never be claimed. Select the least-recently serviced extraction
    checkpoint and run one bounded segment. The queue/worker locks remain the
    authority, and explicit user stops are never overridden. */
+function s4HasAttachedExtractionWork():bool{
+    if(s4WorkerIsActive())return false;$now=time();
+    foreach((array)(extractReadQueue()['entries']??[])as$row){
+        if(!is_array($row)||!in_array((string)($row['status']??''),['paused','waiting','running'],true))continue;
+        $qid=trim((string)($row['id']??''));$pk=trim((string)($row['profile_key']??''));if($qid===''||$pk==='')continue;
+        if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user'||extractStopRequestedForQueue($qid,false))continue;
+        if((string)($row['status']??'')==='running'&&extractLockHeldForQueue($qid))return true;
+        $recent=max((int)($row['resume_requested_at']??0),(int)($row['updated_at']??0),(int)($row['started_at']??0));
+        if((string)($row['status']??'')!=='running'||$recent<=0||$now-$recent>=40)return true;
+    }
+    return false;
+}
 function s4RunOneAttachedExtractionSegment(string $source='web_cron',int $budgetSec=20):array{
     if(s4WorkerIsActive())return['ok'=>true,'skipped'=>'persistent_worker_active'];
     $q=extractReadQueue();$candidates=[];$now=time();
@@ -36862,7 +36874,14 @@ if((string)getenv('S4_INTERNAL_CRON')!=='1'){
 $GLOBALS['_syncSendReconciliation']=syncPipelineReconcileMissingSendQueues(true);
 $GLOBALS['_cellEqualizeReconciliation']=syncCellEqualizeReconcile();
 /* v10.472: با هر بار رسیدن کران (داخلی یا خارجی)، دکمهٔ «ادامه همه» در مدیریت وظایف خودکار زده می‌شود */
-$GLOBALS['_cronTasksResumeAll']=s4CronAutoResumeAllTasks($_cronVisualKind.'_cron');
+/* v10.641: On no-CLI hosting, do not spend the single dispatch slot queuing
+   manual_sync/matrix work for a daemon that cannot exist while extraction
+   checkpoints are waiting. The attached runner below owns this pulse. */
+if(!s4WorkerIsActive()&&function_exists('s4HasAttachedExtractionWork')&&s4HasAttachedExtractionWork()){
+    $GLOBALS['_cronTasksResumeAll']=['ok'=>true,'skipped'=>'attached_extraction_priority','count'=>0,'trigger'=>$_cronVisualKind.'_cron'];
+}else{
+    $GLOBALS['_cronTasksResumeAll']=s4CronAutoResumeAllTasks($_cronVisualKind.'_cron');
+}
 /* v10.476: اجرای خودکار روزانهٔ تست مدل‌های هوش مصنوعی و انتخاب مستر + پشتیبان‌ها بر اساس آمار تست */
 if(function_exists('s4CronMaybeRunDailyAiTest')){
     $GLOBALS['_cronDailyAiTest']=s4CronMaybeRunDailyAiTest($_cronVisualKind.'_cron');
@@ -37016,12 +37035,15 @@ register_shutdown_function(function () use ($cronLockFp) {
    the first-class cron workload. Run exactly one attached bounded segment and
    return; the next pulse fairly picks the oldest remaining row. Heavy matrix
    work cannot consume this pulse or force a five-minute stale wait. */
-if(!s4WorkerIsActive()&&function_exists('s4RunOneAttachedExtractionSegment')){
+if(!s4WorkerIsActive()&&function_exists('s4RunOneAttachedExtractionSegment')
+    &&function_exists('s4HasAttachedExtractionWork')&&s4HasAttachedExtractionWork()){
+    /* Extraction has its own authoritative flock. Do not hold the global cron
+       flock across slow source HTTP: one slow page previously made every later
+       cron report "previous cron still owns the lock". */
+    if(is_resource($cronLockFp))@flock($cronLockFp,LOCK_UN);
     $_cronExtract=s4RunOneAttachedExtractionSegment('external_cron_attached',20);
-    if(!empty($_cronExtract['ran'])){
-        cronEmit(['ok'=>!empty($_cronExtract['ok']),'profile_extraction'=>$_cronExtract,
-            'priority'=>'profile_before_matrix','version'=>APP_VERSION]);exit;
-    }
+    cronEmit(['ok'=>!empty($_cronExtract['ok']),'profile_extraction'=>$_cronExtract,
+        'priority'=>'profile_before_matrix','cron_lock_released'=>true,'version'=>APP_VERSION]);exit;
 }
 
 /* =====================================================================
@@ -49468,6 +49490,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'skipped'=>'profile_extraction_priority'")!==false
         &&strpos($selfSrc,"{v:'10." . "640'")!==false
         &&version_compare(APP_VERSION,'10.640','>='));
+    $add('10.641','استخراج متصل قفل سراسری cron را نگه نمی‌دارد و dispatch بی‌worker را مصرف نمی‌کند',
+        strpos($selfSrc,'function s4HasAttachedExtractionWork():bool')!==false
+        &&strpos($selfSrc,"'skipped'=>'attached_extraction_priority'")!==false
+        &&strpos($selfSrc,"if(is_resource(\$cronLockFp))@flock(\$cronLockFp,LOCK_UN);")!==false
+        &&strpos($selfSrc,"'cron_lock_released'=>true")!==false
+        &&strpos($selfSrc,"{v:'10." . "641'")!==false
+        &&version_compare(APP_VERSION,'10.641','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102190,6 +102219,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.641', t:'🔓 حذف انسداد cron هنگام استخراج متصل', items:[
+    'پیش از درخواست کند مبدأ، قفل سراسری cron آزاد می‌شود؛ قفل اختصاصی استخراج همچنان از اجرای تکراری جلوگیری می‌کند.',
+    'تا وقتی checkpoint استخراج وجود دارد، Resume All سهم یگانهٔ هاست بدون CLI را صرف manual_sync یا ماتریسِ بدون worker نمی‌کند.',
+    'cronهای هم‌زمان هنگام مشغول‌بودن استخراج با پاسخ سبک خارج می‌شوند و ماتریس را جلوتر از استخراج راه نمی‌اندازند.'
+  ]},
   {v:'10.640', t:'🚑 ادامهٔ فوری استخراج Noviex بدون worker دائمی', items:[
     'نبض مرورگر به‌جای آدرس ثابت 42web همیشه همان نصب بازشده، از جمله Noviex، را زنده نگه می‌دارد.',
     'روی هاست بدون exec هر cron یک checkpoint استخراج را با اتصال باز و برش حداکثر ۲۰ ثانیه‌ای اجرا می‌کند؛ دیگر منتظر stale پنج‌دقیقه‌ای نمی‌ماند.',
