@@ -155,6 +155,8 @@ def auto_enqueue(db, settings):
 
 
 def tick(db, settings, budget_seconds=None, max_entries=25):
+    if (settings.base_dir / '.maintenance.json').exists():
+        return {'ok': False, 'error': 'Maintenance recovery required; run maintain first'}
     path = settings.db_path.with_suffix('.worker.lock')
     with path.open('a') as lock:
         try:

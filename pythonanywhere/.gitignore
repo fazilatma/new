@@ -6,3 +6,6 @@ __pycache__/
 .pytest_cache/
 *.pyc
 pythonanywhere_wsgi.py
+
+.release.json
+.maintenance.json

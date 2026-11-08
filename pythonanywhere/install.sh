@@ -48,8 +48,17 @@ path = base / 'pythonanywhere_wsgi.py'
 path.write_text('import sys\nfrom pathlib import Path\nAPP_DIR = ' + repr(str(base)) + '\nif APP_DIR not in sys.path:\n    sys.path.insert(0, APP_DIR)\nfrom scraper4 import create_app\napplication = create_app()\n', encoding='utf-8')
 print('\nGenerated WSGI configuration:', path)
 PY
+if [[ "${S4_AUTO_CONFIGURE:-0}" != 1 ]]; then
 printf '\nNEXT: PythonAnywhere → Web → Add a new web app → Manual configuration.\n'
 printf 'Select the same Python version as your virtualenv.\nVirtualenv: %s\nSource code / working directory: %s\n' "$VENV" "$APP_DIR"
 printf 'Replace the contents of the Web-tab WSGI configuration with this file:\n  %s/pythonanywhere_wsgi.py\nThen press Reload.\n' "$APP_DIR"
 printf '\nRun the queue in Bash or a Scheduled Task:\n  cd %q && %q -m scraper4 tick --budget 240\n' "$APP_DIR" "$VENV/bin/python"
 printf '\nDo not run flask/serve or Node as a public server on PythonAnywhere.\n'
+
+fi
+
+# On-platform bootstrap opts into automatic API provisioning. No token in URLs.
+if [[ "${S4_AUTO_CONFIGURE:-0}" == 1 ]]; then
+  "$VENV/bin/python" -m scraper4 configure
+  printf '\nWeb/WSGI, reload and recurring maintenance task configured through the API.\n'
+fi

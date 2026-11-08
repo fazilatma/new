@@ -1,5 +1,6 @@
 """Flask application factory: WSGI only serves short requests and job polling."""
 import csv
+import hashlib
 import hmac
 import io
 import json
@@ -11,7 +12,7 @@ from collections import defaultdict
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
 
-from .config import Settings
+from .config import Settings, VERSION
 from .db import DB
 from .services.scraping.fetch import validate_url
 from .services.scraping.pagination import TYPES, build_urls
@@ -43,13 +44,25 @@ def create_app(settings=None):
 
     @app.before_request
     def protect():
+        marker = settings.base_dir / '.maintenance.json'
+        if marker.exists() and request.path not in ('/api/system/status', '/api/updates/status', '/login'):
+            return jsonify(ok=False, error='Maintenance in progress'), 503, {'Retry-After': '30'}
+        if request.endpoint == 'admin.health':
+            return
+        bearer = request.headers.get('Authorization', '')
+        if bearer:
+            scheme, _, value = bearer.partition(' ')
+            expected = db.get_config('api_auth').get('sha256', '')
+            if scheme.lower() != 'bearer' or not value or not expected or not hmac.compare_digest(hashlib.sha256(value.encode()).hexdigest(), expected):
+                return jsonify(ok=False, error='Invalid API token'), 401
+            request.environ['s4.bearer'] = True
         if request.endpoint == 'static':
             return
-        if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        if request.method not in ('GET', 'HEAD', 'OPTIONS') and not request.environ.get('s4.bearer'):
             supplied = request.headers.get('X-CSRF-Token') or request.form.get('csrf', '')
             if not supplied or not hmac.compare_digest(supplied, session.get('csrf', '')):
                 abort(400, 'CSRF validation failed. Refresh the page.')
-        if request.endpoint != 'login' and not session.get('authenticated'):
+        if request.endpoint != 'login' and not session.get('authenticated') and not request.environ.get('s4.bearer'):
             if request.path.startswith('/api/'):
                 return jsonify(ok=False, error='Authentication required'), 401
             return redirect(url_for('login'))
@@ -106,7 +119,7 @@ def create_app(settings=None):
 
     @app.get('/api/ping')
     def ping():
-        return jsonify(ok=True, version='1.0.0', source_commit='5aa1012d767a1b9f9a9ca43064c7fc3dc35976d3')
+        return jsonify(ok=True, version=VERSION, source_commit='5aa1012d767a1b9f9a9ca43064c7fc3dc35976d3')
 
     @app.get('/api/pagination/preview')
     def preview():
@@ -230,4 +243,6 @@ def create_app(settings=None):
         db.put_config(name, cfg)
         return jsonify(ok=True)
 
+    from .admin import register_admin
+    register_admin(app, db, settings)
     return app

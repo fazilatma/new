@@ -1,5 +1,8 @@
 """python -m scraper4 {init,tick,selftest,import-legacy,backup,serve}"""
 import argparse
+import fcntl
+import subprocess
+import sys
 import json
 import sqlite3
 from pathlib import Path
@@ -61,6 +64,12 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('init')
     commands.add_parser('selftest')
+    configure = commands.add_parser('configure')
+    configure.add_argument('--replace-existing', action='store_true')
+    maintenance = commands.add_parser('maintain')
+    maintenance.add_argument('--budget', type=int, default=240)
+    update = commands.add_parser('update')
+    update.add_argument('--check-only', action='store_true')
     worker = commands.add_parser('tick')
     worker.add_argument('--budget', type=int, default=None)
     imp = commands.add_parser('import-legacy')
@@ -76,6 +85,30 @@ def main():
     db = DB(settings.db_path, settings.secret_key)
     if args.command == 'init':
         result = {'ok': True, 'database': str(settings.db_path)}
+    elif args.command == 'configure':
+        from .services.platform import PythonAnywhere, prompt_configuration
+        from .services.updates import update_config
+        cfg = prompt_configuration(db)
+        result = PythonAnywhere(cfg).provision(db, settings, replace_existing=args.replace_existing)
+        db.checkpoint_write('updates:config', update_config(db))
+    elif args.command in ('maintain', 'update'):
+        from .services import updates
+        lock_path = settings.db_path.with_suffix('.worker.lock')
+        with lock_path.open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print(json.dumps({'ok': True, 'busy': True}))
+                return
+            if args.command == 'update':
+                updates.request_operation(db, 'check' if args.check_only else 'update')
+            result = updates.maintain(db, settings)
+        if args.command == 'maintain':
+            # A fresh interpreter imports the newly installed worker modules.
+            worker = subprocess.run([sys.executable, '-m', 'scraper4', 'tick', '--budget', str(args.budget)],
+                                    cwd=settings.base_dir, check=False)
+            if worker.returncode:
+                result = {'ok': False, 'error': 'Worker process failed', 'maintenance': result}
     elif args.command == 'tick':
         result = tick(db, settings, budget_seconds=args.budget)
     elif args.command == 'selftest':

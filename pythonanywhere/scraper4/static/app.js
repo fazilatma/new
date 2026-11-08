@@ -76,3 +76,44 @@ async function poll() {
 }
 async function refresh() { try { await poll(); } catch(error) { message(error.message); } finally { setTimeout(refresh,5000); } }
 refresh();
+
+// Management operations are queued; a Scheduled Task performs them outside WSGI.
+const systemState = document.querySelector('#system-state');
+async function systemPoll() {
+  try {
+    const data = await api('/api/system/status');
+    const update = data.updates;
+    const operation = update.operation || {};
+    systemState.textContent = JSON.stringify({domain:data.platform.domain, platform:data.platform.provisioning,
+      auto_update:update.config, current:update.current, latest:update.state.latest,
+      update_available:update.state.available, error:update.state.error,
+      operation:operation}, null, 2);
+    document.querySelector('#auto-update').checked = update.config.enabled;
+  } catch(error) { systemState.textContent = error.message; }
+  finally { setTimeout(systemPoll,15000); }
+}
+document.querySelectorAll('[data-maintenance]').forEach(button => button.onclick = async () => {
+  if(['apply','rollback'].includes(button.dataset.maintenance) && !confirm('تغییر نسخهٔ برنامه از طریق Task انجام شود؟ قبل از ارتقا نسخهٔ پشتیبان گرفته می‌شود.')) return;
+  try {
+    const path = ['reload','configure'].includes(button.dataset.maintenance) ? '/api/system/' : '/api/updates/';
+    const result = await api(path + button.dataset.maintenance, 'POST', {});
+    message(`درخواست ${result.operation.action} ثبت شد؛ Task زمان‌بندی‌شده آن را اجرا می‌کند.`);
+  } catch(error) { message(error.message); }
+});
+document.querySelector('#auto-update').onchange = async event => {
+  try { await api('/api/updates/config', 'POST', {enabled:event.target.checked, interval_seconds:3600}); message('تنظیم اتوآپدیت ذخیره شد.'); }
+  catch(error) { message(error.message); }
+};
+document.querySelector('#api-token-create').onclick = async () => {
+  if(!confirm('کلید جدید همهٔ دسترسی‌های مدیر را دارد و کلید قبلی را باطل می‌کند. ادامه؟')) return;
+  try {
+    const result = await api('/api/auth/token','POST',{});
+    document.querySelector('#api-token-value').textContent = result.token;
+    message('کلید فقط همین‌بار نمایش داده می‌شود؛ آن را محرمانه نگه دارید.');
+  } catch(error) { message(error.message); }
+};
+document.querySelector('#api-token-revoke').onclick = async () => {
+  try { await api('/api/auth/token','DELETE'); document.querySelector('#api-token-value').textContent = ''; message('کلید API باطل شد.'); }
+  catch(error) { message(error.message); }
+};
+systemPoll();

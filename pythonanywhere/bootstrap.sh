@@ -10,7 +10,7 @@ APP_DIR="${S4_INSTALL_DIR:-$HOME/scraper4-python/pythonanywhere}"
 PYTHON_BIN="${PYTHON_BIN:-python3.11}"
 VENV="${S4_VENV:-$HOME/.virtualenvs/scraper4}"
 
-for tool in curl mktemp cp; do
+for tool in curl mktemp cp flock; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Required command not found: $tool" >&2; exit 1; }
 done
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || {
@@ -36,10 +36,21 @@ fi
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
 ARCHIVE="$TEMP_DIR/source.tar.gz"
+VERSION_FILE="$TEMP_DIR/commit.json"
+curl --fail --show-error --silent --location --retry 3 --connect-timeout 20 --max-time 60 \
+  "https://api.github.com/repos/$REPOSITORY/commits/arena%2Ff3d5d2a0-new" -o "$VERSION_FILE"
+COMMIT="$("$PYTHON_BIN" - "$VERSION_FILE" <<'PYVERSION'
+import json, re, sys
+sha = json.load(open(sys.argv[1]))['sha']
+if not re.fullmatch(r'[0-9a-f]{40}', sha):
+    raise SystemExit('Invalid release commit')
+print(sha)
+PYVERSION
+)"
 STAGE="$TEMP_DIR/app"
 echo "Downloading the PythonAnywhere port from $REPOSITORY ($SOURCE_REF)..."
 curl --fail --show-error --silent --location --retry 3 --connect-timeout 20 --max-time 300 \
-  "https://codeload.github.com/$REPOSITORY/tar.gz/refs/heads/$SOURCE_REF" -o "$ARCHIVE"
+  "https://codeload.github.com/$REPOSITORY/tar.gz/$COMMIT" -o "$ARCHIVE"
 
 # Extract only regular files below pythonanywhere/, never runtime data or links.
 "$PYTHON_BIN" - "$ARCHIVE" "$STAGE" <<'PY'
@@ -50,7 +61,7 @@ from pathlib import Path, PurePosixPath
 
 archive, target = sys.argv[1], Path(sys.argv[2])
 target.mkdir(parents=True)
-excluded = {'.env', '.venv', 'data', 'logs', '__pycache__', '.pytest_cache', 'pythonanywhere_wsgi.py'}
+excluded = {'.env', '.venv', 'data', 'logs', '__pycache__', '.pytest_cache', 'pythonanywhere_wsgi.py', '.release.json', '.maintenance.json'}
 with tarfile.open(archive, 'r:gz') as source:
     for entry in source:
         parts = PurePosixPath(entry.name).parts
@@ -75,6 +86,13 @@ if [[ -f "$APP_DIR/.env" ]]; then
     echo "Set S4_VENV to the existing environment before upgrading." >&2
     exit 1
   fi
+  LOCK_PATH="$(cd "$APP_DIR" && "$VENV/bin/python" -c 'from scraper4.config import Settings; print(Settings.load().db_path.with_suffix(".worker.lock"))')"
+  mkdir -p "$(dirname "$LOCK_PATH")"
+  exec 9>"$LOCK_PATH"
+  if ! flock -n 9; then
+    echo "A worker/update is active. No files changed; retry after it finishes." >&2
+    exit 1
+  fi
   mkdir -p "$HOME/scraper4-backups"
   BACKUP="$HOME/scraper4-backups/pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ)-$$.sqlite3"
   echo "Backing up existing data to $BACKUP"
@@ -84,4 +102,9 @@ fi
 mkdir -p "$APP_DIR"
 cp -R "$STAGE/." "$APP_DIR/"
 echo "Installing in $APP_DIR"
-PYTHON_BIN="$PYTHON_BIN" S4_VENV="$VENV" bash "$APP_DIR/install.sh"
+PYTHON_BIN="$PYTHON_BIN" S4_VENV="$VENV" S4_AUTO_CONFIGURE="${S4_AUTO_CONFIGURE:-1}" bash "$APP_DIR/install.sh"
+"$PYTHON_BIN" - "$APP_DIR" "$COMMIT" <<'PYRELEASE'
+import json, sys
+from pathlib import Path
+(Path(sys.argv[1]) / '.release.json').write_text(json.dumps({'commit': sys.argv[2]}))
+PYRELEASE

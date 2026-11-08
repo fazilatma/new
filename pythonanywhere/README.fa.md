@@ -280,3 +280,112 @@ S4_COOKIE_SECURE=0 .venv/bin/python -m scraper4 serve --port 5000
 
 برای عیب‌یابی: لاگ error وب‌اپ در Web را بخوانید، مسیر virtualenv/Python را تطبیق دهید و
 `python -m scraper4 selftest` را در پوشهٔ برنامه اجرا کنید. اگر صف waiting مانده، Task اجرا نشده است.
+
+## نسخهٔ ۱.۱ — نصب بدون تنظیم دستی Web، اتوآپدیت و API مدیریت
+
+### نصب/ارتقای خودکار
+
+```bash
+set -o pipefail
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/f3d5d2a0-new/pythonanywhere/bootstrap.sh | bash
+```
+
+**رفتار جدید این دستور:** بعد از نصب بسته، Web، virtualenv، فایل WSGI، Reload و یک Scheduled Task
+از طریق API رسمی PythonAnywhere تنظیم می‌شوند. مراحل دستی Web که بالاتر آمده‌اند فقط برای
+نصب با ZIP/حالت بدون API باقی مانده‌اند.
+
+پیش‌نیاز یک‌باره: در **Account → API Token** حساب PythonAnywhere توکن بسازید. اگر `API_TOKEN`
+در محیط کنسول موجود باشد، هلپر خودکار آن را می‌خواند؛ در غیر این صورت فقط در ترمینال محلی
+(`/dev/tty`، بدون نمایش توکن) از شما می‌گیرد. توکن را در چت، URL، کد یا Git قرار ندهید.
+تنظیمات اتصال به API در دیتابیس به‌صورت رمز‌شده با `S4_SECRET_KEY` نگهداری می‌شود.
+
+- دو API host رسمی `www.pythonanywhere.com` و `eu.pythonanywhere.com` پشتیبانی می‌شوند.
+- دامنه و نام کاربری پیش‌فرض از حساب تعیین می‌شوند؛ در ورود تعاملی توکن می‌توانید اصلاحشان کنید.
+- نصب‌کننده هیچ وب‌اپ یا Task نامرتبط را حذف نمی‌کند. اگر دامنهٔ موجود متعلق به پوشهٔ دیگری باشد،
+  برای جلوگیری از ازکارافتادن سایت دیگر، تنظیم آن متوقف می‌شود. فقط با رضایت صریح، از پوشهٔ برنامه اجرا کنید:
+  `~/.virtualenvs/scraper4/bin/python -m scraper4 configure --replace-existing`.
+- نسخهٔ Python وب‌اپ موجود باید با virtualenv یکی باشد؛ تغییر مفسر وب‌اپ موجود خودکار انجام نمی‌شود.
+- تکرار تنظیمات Task شناخته‌شدهٔ همین برنامه را به‌روزرسانی می‌کند، نه اینکه هر بار Task جدید بسازد.
+- Task پیش‌فرض ساعتی در دقیقهٔ ۷ است؛ اگر API زمان‌بندی ساعتی را با HTTP 400 رد کند، روزانه
+  ساعت ۰۳:۰۷ UTC امتحان می‌شود. quota یا محدودیت‌های API/پلن قابل دورزدن نیستند.
+- اگر account policy/expiry مانع فعال‌سازی Task شود، هلپر خطا می‌دهد؛ بدون Task فعال نمی‌توان
+  اجرای دوره‌ای یا حذف کامل کار دستی را تضمین کرد. این کد برای API وب‌اپ‌های کلاسیک WSGI است.
+
+برای حسابی که **قبلاً این برنامه را نصب کرده**، اجرای دوبارهٔ همان دستور curl کافی است؛
+پس از یک‌بار تنظیم API، دیگر برای آپدیت معمول به کنسول یا Reload دستی نیاز نیست.
+برای نصب محلی یا صرفاً دریافت فایل‌ها بدون API:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fazilatma/new/arena/f3d5d2a0-new/pythonanywhere/bootstrap.sh | S4_AUTO_CONFIGURE=0 bash
+```
+
+### اتوآپدیت چگونه اجرا می‌شود؟
+
+فرمان Task جدید:
+
+```bash
+cd "$HOME/scraper4-python/pythonanywhere" && \
+  "$HOME/.virtualenvs/scraper4/bin/python" -m scraper4 maintain --budget 240
+```
+
+در هر نوبت، ابتدا درخواست‌های مدیریت/نسخهٔ جدید بررسی و سپس worker در یک فرایند تازه اجرا می‌شود.
+Task قدیمی همین برنامه با فرمان `tick` در تنظیم خودکار به `maintain` تبدیل می‌شود.
+
+- اتوآپدیت پیش‌فرض روشن و فاصلهٔ بررسی حداقل یک ساعت است؛ تناوب عملی به Task حساب بستگی دارد.
+- فقط مخزن ثابت `fazilatma/new` و شاخهٔ `arena/f3d5d2a0-new` مجازند؛ API اجازهٔ تغییر مخزن،
+  اجرای shell دلخواه، انتخاب مسیر فایل یا نصب URL دلخواه را نمی‌دهد.
+- SHA جدید از GitHub خوانده می‌شود و همان کامیت دقیق دانلود می‌شود تا تغییر شاخه وسط دانلود اثر نگذارد.
+- قبل از جایگزینی، کد و SQLite پشتیبان گرفته می‌شوند؛ دو snapshot آخر در `data/releases` نگهداری می‌شوند.
+- هنگام جایگزینی، وب maintenance/503 می‌دهد. import، syntax و selftest نسخهٔ جدید در فرایند جدا بررسی می‌شوند.
+- `.env`، فایل‌های runtime و داده‌ها بازنویسی نمی‌شوند؛ Git checkout/reset در مسیر نصب اجرا نمی‌شود.
+- پس از نصب، API پایتون‌انی‌ور Reload می‌زند. در خطای اعتبارسنجی/Reload، کد قبلی برگردانده می‌شود.
+- اگر فرایند وسط نصب قطع شود، اجرای بعدی Task تلاش می‌کند snapshot کد را بازیابی کند.
+- rollback فقط کد را برمی‌گرداند، نه دیتابیس زنده یا نسخهٔ وابستگی‌های pip را. نصب وابستگی‌ها تراکنشی نیست.
+  نسخه‌های آینده باید schema سازگار داشته باشند؛ migration مخرب بدون طراحی جداگانه مجاز نیست.
+- بازگشت نسخه، اتوآپدیت را خاموش می‌کند تا در نوبت بعد دوباره همان نسخه نصب نشود؛ پس از رفع مشکل
+  آن را از پنل روشن کنید. پشتیبان SQLite برای بازیابی اضطراری موجود است و خودکار روی دادهٔ زنده restore نمی‌شود.
+- با روشن بودن اتوآپدیت، به کد و تغییرات آیندهٔ این شاخه اعتماد می‌کنید. دسترسی نوشتن GitHub را محدود نگه دارید.
+
+وضعیت، خطاها، روشن/خاموش کردن اتوآپدیت و دکمه‌های بررسی/آپدیت/Reload/بازتنظیم/rollback در پنل اضافه شده‌اند.
+درخواست‌ها **غیرهمزمان** هستند؛ پاسخ ۲۰۲ به معنی ثبت درخواست است، نه پایان آن. اجرا در نوبت بعدی Task
+صورت می‌گیرد، نه بلافاصله در WSGI. API نمی‌تواند بدون scheduler/worker از پیش فعال، خودش را زمان‌بندی کند.
+
+### اندپوینت‌های جدید
+
+| روش | مسیر | کاربرد |
+| --- | --- | --- |
+| GET | `/healthz` | سلامت عمومی ساده؛ در maintenance پاسخ ۵۰۳ |
+| GET | `/api/endpoints` | فهرست تمام مسیرهای API و متدها |
+| GET | `/api/system/status` | سلامت، آمار، تنظیم Task و وضعیت عملیات |
+| GET | `/api/updates/status` | نسخهٔ نصب‌شده/جدید، تنظیمات و درخواست اخیر |
+| POST | `/api/updates/check` | صف بررسی نسخه |
+| POST | `/api/updates/apply` | صف نصب آخرین نسخهٔ شاخهٔ ثابت |
+| POST | `/api/updates/rollback` | صف بازگشت کد و خاموش کردن اتوآپدیت |
+| POST | `/api/updates/config` | `{"enabled":true,"interval_seconds":3600}`؛ بازهٔ مجاز ۳۰۰ تا ۶۰۴۸۰۰ ثانیه |
+| POST | `/api/system/reload` | صف Reload وب‌اپ با API پلتفرم |
+| POST | `/api/system/configure` | صف بازتنظیم Web/WSGI و Task با اطلاعات ذخیره‌شده |
+| POST | `/api/auth/token` | ایجاد/تعویض کلید اتوماسیون، فقط با نشست مرورگر و CSRF |
+| DELETE | `/api/auth/token` | ابطال کلید اتوماسیون، فقط با نشست مرورگر و CSRF |
+
+تمام مسیرهای `/api/` به نشست ورود همراه CSRF یا **Bearer token** معتبر نیاز دارند؛ هیچ GETای
+کد را آپدیت یا Reload نمی‌کند. برای استفادهٔ بدون مرورگر، یک‌بار از پنل کلید API بسازید و امن نگه دارید.
+کلید API با توکن PythonAnywhere فرق دارد، دسترسی کامل مدیر دارد و فقط یک‌بار نمایش داده می‌شود؛
+هش آن ذخیره می‌شود و با ساخت کلید تازه، قبلی فوراً باطل می‌شود.
+
+مثال (توکن واقعی را در history ترمینال ننویسید):
+
+```bash
+read -rsp 'Application API token: ' S4_API_TOKEN; echo
+export S4_API_TOKEN
+export S4_APP_URL='https://YOUR-USERNAME.pythonanywhere.com'
+curl -fsS -H "Authorization: Bearer $S4_API_TOKEN" "$S4_APP_URL/api/endpoints"
+curl -fsS -X POST -H "Authorization: Bearer $S4_API_TOKEN" \
+  -H 'Content-Type: application/json' -d '{}' "$S4_APP_URL/api/updates/apply"
+curl -fsS -H "Authorization: Bearer $S4_API_TOKEN" "$S4_APP_URL/api/updates/status"
+unset S4_API_TOKEN
+```
+
+قرارداد API پلتفرم با سورس رسمی
+[pythonanywhere-core](https://github.com/pythonanywhere/pythonanywhere-core) بررسی شده است.
+تست‌ها API پلتفرم، دانلود و Reload را mock می‌کنند؛ بدون حساب/توکن شما استقرار زنده روی PythonAnywhere
+بررسی نشده و محدودیت پلن/شبکهٔ حساب همچنان برقرار است.
