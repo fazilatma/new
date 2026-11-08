@@ -59,7 +59,7 @@ document.querySelector('#platform-activate').onclick = async event => {
   try {
     const result = await api('/api/platform/activate', 'POST', {});
     platformResult.textContent = JSON.stringify(result, null, 2);
-    message('Task فعال شد؛ بررسی خودکار و اجرای صف از نوبت بعدی Task انجام می‌شود.');
+    message(result.note || 'Task فعال شد؛ بررسی خودکار و اجرای صف از نوبت بعدی Task انجام می‌شود.');
   } catch (error) { message(error.message); }
   finally { document.querySelector('#platform-activate').disabled = false; }
 };

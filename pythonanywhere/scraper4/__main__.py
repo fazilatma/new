@@ -83,6 +83,8 @@ def main():
     maintenance.add_argument('--budget', type=int, default=240)
     update = commands.add_parser('update')
     update.add_argument('--check-only', action='store_true')
+    daemon = commands.add_parser('worker', help='CLI-only persistent queue supervisor; enable in web panel first')
+    daemon.add_argument('--max-runtime', type=int, default=0, help='0 for Always-on, otherwise seconds up to 43200')
     worker = commands.add_parser('tick')
     worker.add_argument('--budget', type=int, default=None)
     imp = commands.add_parser('import-legacy')
@@ -129,6 +131,9 @@ def main():
                                     cwd=settings.base_dir, check=False)
             if worker.returncode:
                 result = {'ok': False, 'error': 'Worker process failed', 'maintenance': result}
+    elif args.command == 'worker':
+        from .services.worker_runtime import cli_worker
+        result = cli_worker(db, settings, args.max_runtime)
     elif args.command == 'tick':
         result = tick(db, settings, budget_seconds=args.budget)
     elif args.command == 'selftest':

@@ -135,10 +135,11 @@ class PythonAnywhere:
         db.checkpoint_write('platform:status', result)
         return result
 
-    def ensure_task(self, settings, *, python):
+    def ensure_task(self, settings, *, python, long_running=False):
         """Bounded initial scheduler setup; never run a worker inside WSGI."""
         base = settings.base_dir.resolve()
-        command = 'cd ' + shlex.quote(str(base)) + ' && ' + shlex.quote(str(python)) + ' -m scraper4 maintain --budget 240'
+        prefix = 'cd ' + shlex.quote(str(base)) + ' && ' + shlex.quote(str(python)) + ' -m scraper4 '
+        command = prefix + ('worker --max-runtime 3300' if long_running else 'maintain --budget 240')
         tasks = self.call('GET', 'schedule/')
         if not isinstance(tasks, list):
             raise PlatformError('Unexpected PythonAnywhere task list')
@@ -148,8 +149,15 @@ class PythonAnywhere:
             except ValueError:
                 return False
             return (len(parts) >= 7 and parts[:3] == ['cd', str(base), '&&'] and
-                    parts[4:6] == ['-m', 'scraper4'] and parts[6] in ('tick', 'maintain'))
+                    parts[4:6] == ['-m', 'scraper4'] and parts[6] in ('tick', 'maintain', 'worker'))
         matches = [task for task in tasks if task.get('command') == command or owns_task(task)]
+        def is_worker(task):
+            return shlex.split(task.get('command', ''))[6:7] == ['worker']
+        matches.sort(key=lambda task: not is_worker(task))
+        if not long_running and matches and is_worker(matches[0]):
+            return {'ok': True, 'task': 'preserved_worker', 'task_id': matches[0]['id'],
+                    'interval': matches[0].get('interval'), 'enabled': matches[0].get('enabled'),
+                    'note': 'Task worker موجود بدون تغییر حفظ شد؛ برای فعال‌سازی و بررسی اجرا از بخش کران داخلی و worker استفاده کنید.'}
         payload = {'command': command, 'enabled': True, 'interval': 'hourly', 'minute': 7}
         path = 'schedule/' + str(matches[0]['id']) + '/' if matches else 'schedule/'
         method = 'PATCH' if matches else 'POST'
@@ -164,6 +172,7 @@ class PythonAnywhere:
             if status not in (400, 403) or exc.category == 'authentication':
                 raise
             payload.update(interval='daily', hour=3)
+            if long_running: payload['command'] = prefix + 'worker --max-runtime 6600'
             task = self.call(method, path, json=payload)
         if not isinstance(task, dict) or not task.get('id') or task.get('enabled') is False or task.get('can_enable') is False:
             raise PlatformError('Scheduled task could not be enabled; check your account task quota')

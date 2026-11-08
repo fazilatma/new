@@ -324,4 +324,6 @@ def create_app(settings=None):
     register_cron(app, db, settings)
     from .settings_transfer import register_settings_transfer
     register_settings_transfer(app, db, settings)
+    from .worker import register_worker
+    register_worker(app, db, settings)
     return app

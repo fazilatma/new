@@ -30,7 +30,7 @@ SETTINGS_MENU = [
      'description': 'تشخیص محصولات حذف‌شده از مبدأ و اعمال سیاست روی مقصد هنوز منتقل نشده است؛ این بخش هیچ محصولی را حذف نمی‌کند.'},
     {'key': 'general', 'title': '⚙️ تنظیمات عمومی', 'state': 'ready',
      'description': 'تنظیم میزبانی، کران دقیقه‌ای و مدیریت اجرای برنامه.',
-     'actions': [('settings', 'platform-settings', 'PythonAnywhere'), ('settings', 'cron-settings', 'کران خارجی')]},
+     'actions': [('settings', 'platform-settings', 'PythonAnywhere'), ('settings', 'cron-settings', 'کران خارجی'), ('settings', 'worker-runtime', 'کران داخلی و worker طولانی‌مدت')]},
     {'key': 'guardian', 'title': '🩺 نگهبان صف ارسال', 'state': 'partial',
      'description': 'مشاهده، مکث، ادامه و لغو صف و اجرای دستی یک مرحلهٔ استخراج موجود است؛ اجرای دستی هیچ صف ارسال را اجرا نمی‌کند. نگهبان پیشرفتهٔ PHP هنوز کامل نیست.',
      'actions': [('start', 'queue-panel', 'مشاهده و کنترل صف'), ('start', 'extraction-control', 'وضعیت و اجرای استخراج')]},
