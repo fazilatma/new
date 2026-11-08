@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.628';
+const APP_VERSION = '10.629';
 
 
 if (!function_exists('str_starts_with')) {
@@ -27758,11 +27758,12 @@ if (isset($_POST['ai_content_auto'])) {
 }
 $notifMessengerInput=function(array $raw):array{
     $ids=is_array($raw['chat_ids']??null)?$raw['chat_ids']:[];
+    $conversation=trim((string)($ids['conversations']??$ids['customer_chat']??$ids['vendor_chat']??$raw['conversation_chat_id']??''));
     return ['enabled'=>!empty($raw['enabled']),'token'=>trim((string)($raw['token']??'')),
         'chat_id'=>trim((string)($raw['chat_id']??'')),
+        'all_same'=>!array_key_exists('all_same',$raw)||!empty($raw['all_same']),
         'chat_ids'=>[
-            'customer_chat'=>trim((string)($ids['customer_chat']??$raw['customer_chat_id']??'')),
-            'vendor_chat'=>trim((string)($ids['vendor_chat']??$raw['vendor_chat_id']??'')),
+            'conversations'=>$conversation,
             'orders'=>trim((string)($ids['orders']??$raw['orders_chat_id']??'')),
             'visits'=>trim((string)($ids['visits']??$raw['visits_chat_id']??'')),
         ]];
@@ -49174,16 +49175,25 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"stale.map((t,i)=>")===false
         &&strpos($selfSrc,"{v:'10." . "627'")!==false
         &&version_compare(APP_VERSION,'10.627','>='));
-    $__notifCfg628=['chat_id'=>'legacy','chat_ids'=>['customer_chat'=>'customers','vendor_chat'=>'vendors','orders'=>'orders','visits'=>'visits']];
-    $add('10.628','هر پیام‌رسان برای چهار نوع اعلان مقصد مستقل و fallback سازگار دارد',
+    $__notifCfg628=['chat_id'=>'legacy','all_same'=>false,'chat_ids'=>['customer_chat'=>'customers','vendor_chat'=>'vendors','orders'=>'orders','visits'=>'visits']];
+    $add('10.628','مقصدهای نوع اعلان با fallback سازگار حفظ می‌شوند',
         notifMessengerChatId($__notifCfg628,'chat_customer')==='customers'
-        &&notifMessengerChatId($__notifCfg628,'chat_vendor')==='vendors'
+        &&notifMessengerChatId($__notifCfg628,'chat_vendor')==='customers'
         &&notifMessengerChatId($__notifCfg628,'order')==='orders'
         &&notifMessengerChatId($__notifCfg628,'site_visit')==='visits'
         &&notifMessengerChatId(['chat_id'=>'legacy','chat_ids'=>[]],'order')==='legacy'
         &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
         &&strpos($selfSrc,"{v:'10." . "628'")!==false
         &&version_compare(APP_VERSION,'10.628','>='));
+    $__notifCfg629=['chat_id'=>'common','all_same'=>false,'chat_ids'=>['conversations'=>'talk','orders'=>'orders','visits'=>'visits']];
+    $add('10.629','مشتری و ادمین یک مقصد گفتگو دارند و تیک همه یکسان قفل مقصدهای جدا را کنترل می‌کند',
+        notifMessengerChatId($__notifCfg629,'chat_customer')==='talk'
+        &&notifMessengerChatId($__notifCfg629,'chat_vendor')==='talk'
+        &&notifMessengerChatId(array_merge($__notifCfg629,['all_same'=>true]),'order')==='common'
+        &&strpos($selfSrc,"function messengerSameToggle(prefix)")!==false
+        &&substr_count($selfSrc,'AllSame" checked onchange="messengerSameToggle')===3
+        &&strpos($selfSrc,"{v:'10." . "629'")!==false
+        &&version_compare(APP_VERSION,'10.629','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -63524,23 +63534,29 @@ function notifMessengerConfigured(array $cn, string $channel): bool {
     if (!is_array($cfg) || trim((string)($cfg['token'] ?? '')) === '') return false;
     if (trim((string)($cfg['chat_id'] ?? '')) !== '') return true;
     $ids = is_array($cfg['chat_ids'] ?? null) ? $cfg['chat_ids'] : [];
-    foreach (['customer_chat', 'vendor_chat', 'orders', 'visits'] as $key) {
+    foreach (['conversations', 'customer_chat', 'vendor_chat', 'orders', 'visits'] as $key) {
         if (trim((string)($ids[$key] ?? '')) !== '') return true;
     }
     return false;
 }
-/** Resolve a notification class to its dedicated destination, preserving the legacy Chat ID as fallback. */
+/** Resolve a notification class. Customer/admin always share one conversation destination. */
 function notifMessengerChatId(array $cfg, ?string $feed): string {
+    $ids = is_array($cfg['chat_ids'] ?? null) ? $cfg['chat_ids'] : [];
+    $general = trim((string)($cfg['chat_id'] ?? ''));
+    $allSame = !array_key_exists('all_same', $cfg) || !empty($cfg['all_same']);
+    if ($allSame && $general !== '') return $general;
     $map = [
-        'chat_customer' => 'customer_chat', 'customer_chat' => 'customer_chat',
-        'chat_vendor' => 'vendor_chat', 'vendor_chat' => 'vendor_chat', 'admin_chat' => 'vendor_chat',
+        'chat_customer' => 'conversations', 'customer_chat' => 'conversations',
+        'chat_vendor' => 'conversations', 'vendor_chat' => 'conversations', 'admin_chat' => 'conversations',
         'order' => 'orders', 'orders' => 'orders',
         'visit' => 'visits', 'visits' => 'visits', 'site_visit' => 'visits',
     ];
-    $ids = is_array($cfg['chat_ids'] ?? null) ? $cfg['chat_ids'] : [];
     $key = $map[(string)$feed] ?? '';
-    $specific = $key !== '' ? trim((string)($ids[$key] ?? '')) : '';
-    return $specific !== '' ? $specific : trim((string)($cfg['chat_id'] ?? ''));
+    /* v10.629 migration: both old conversation keys collapse into one shared value. */
+    $specific = $key === 'conversations'
+        ? trim((string)($ids['conversations'] ?? $ids['customer_chat'] ?? $ids['vendor_chat'] ?? ''))
+        : ($key !== '' ? trim((string)($ids[$key] ?? '')) : '');
+    return $specific !== '' ? $specific : $general;
 }
 function notifMessengerReady(array $cn, string $channel): bool {
     $cfg = $cn[$channel] ?? null;
@@ -92003,30 +92019,30 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div id="ntab-messenger" class="ntabpane">
 <div class="crow"><label>بله فعال:</label><input type="checkbox" id="balehEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token بله:</label><input type="password" id="balehToken" dir="ltr" placeholder="Bot Token" style="flex:1"></div>
-<div class="crow"><label>Chat ID عمومی:</label><input type="text" id="balehChatId" dir="ltr" placeholder="مقصد پیش‌فرض (سازگاری با تنظیم قبلی)" style="flex:1"></div>
-<div class="crow"><label>گفتگوی مشتری:</label><input type="text" id="balehCustomerChatId" dir="ltr" placeholder="Chat ID گفتگوی مشتری" style="flex:1"></div>
-<div class="crow"><label>گفتگوی غرفه‌دار:</label><input type="text" id="balehVendorChatId" dir="ltr" placeholder="Chat ID گفتگوهای ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>Chat ID مشترک:</label><input type="text" id="balehChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها" style="flex:1"></div>
+<div class="crow"><label>همه یکسان:</label><input type="checkbox" id="balehAllSame" checked onchange="messengerSameToggle('baleh')" style="width:16px;height:16px"><span style="font-size:10px;color:#94a3b8">همهٔ اعلان‌ها به Chat ID مشترک بروند</span></div>
+<div class="crow"><label>گفتگوها:</label><input type="text" id="balehConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
 <div class="crow"><label>سفارش‌ها:</label><input type="text" id="balehOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
 <div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="balehVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
 <div class="crow" style="margin-top:8px;padding-top:8px;border-top:1px solid #334155"><b style="font-size:11px">🟠 روبیکا</b></div>
 <div class="crow"><label>روبیکا فعال:</label><input type="checkbox" id="rubikaEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token روبیکا:</label><input type="password" id="rubikaToken" dir="ltr" placeholder="Bot Token" style="flex:1"></div>
-<div class="crow"><label>Chat ID عمومی:</label><input type="text" id="rubikaChatId" dir="ltr" placeholder="مقصد پیش‌فرض (سازگاری با تنظیم قبلی)" style="flex:1"></div>
-<div class="crow"><label>گفتگوی مشتری:</label><input type="text" id="rubikaCustomerChatId" dir="ltr" placeholder="Chat ID گفتگوی مشتری" style="flex:1"></div>
-<div class="crow"><label>گفتگوی غرفه‌دار:</label><input type="text" id="rubikaVendorChatId" dir="ltr" placeholder="Chat ID گفتگوهای ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>Chat ID مشترک:</label><input type="text" id="rubikaChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها" style="flex:1"></div>
+<div class="crow"><label>همه یکسان:</label><input type="checkbox" id="rubikaAllSame" checked onchange="messengerSameToggle('rubika')" style="width:16px;height:16px"><span style="font-size:10px;color:#94a3b8">همهٔ اعلان‌ها به Chat ID مشترک بروند</span></div>
+<div class="crow"><label>گفتگوها:</label><input type="text" id="rubikaConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
 <div class="crow"><label>سفارش‌ها:</label><input type="text" id="rubikaOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
 <div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="rubikaVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
 <!-- v10.78 (92): تلگرام — سومین پیام‌رسان -->
 <div class="crow" style="margin-top:8px;padding-top:8px;border-top:1px solid #334155"><b style="font-size:11px">✈️ تلگرام</b></div>
 <div class="crow"><label>تلگرام فعال:</label><input type="checkbox" id="telegramEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token تلگرام:</label><input type="password" id="telegramToken" dir="ltr" placeholder="Bot Token (از BotFather)" style="flex:1"></div>
-<div class="crow"><label>Chat ID عمومی:</label><input type="text" id="telegramChatId" dir="ltr" placeholder="مقصد پیش‌فرض (با -100 برای گروه)" style="flex:1"></div>
-<div class="crow"><label>گفتگوی مشتری:</label><input type="text" id="telegramCustomerChatId" dir="ltr" placeholder="Chat ID گفتگوی مشتری" style="flex:1"></div>
-<div class="crow"><label>گفتگوی غرفه‌دار:</label><input type="text" id="telegramVendorChatId" dir="ltr" placeholder="Chat ID گفتگوهای ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>Chat ID مشترک:</label><input type="text" id="telegramChatId" dir="ltr" placeholder="مقصد همهٔ اعلان‌ها (با -100 برای گروه)" style="flex:1"></div>
+<div class="crow"><label>همه یکسان:</label><input type="checkbox" id="telegramAllSame" checked onchange="messengerSameToggle('telegram')" style="width:16px;height:16px"><span style="font-size:10px;color:#94a3b8">همهٔ اعلان‌ها به Chat ID مشترک بروند</span></div>
+<div class="crow"><label>گفتگوها:</label><input type="text" id="telegramConversationChatId" dir="ltr" placeholder="مشتری و ادمین/غرفه‌دار" style="flex:1"></div>
 <div class="crow"><label>سفارش‌ها:</label><input type="text" id="telegramOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
 <div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="telegramVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
-<div style="font-size:10px;color:#94a3b8;line-height:1.8;margin:6px 0">هر مقصد اختصاصی اگر خالی باشد، همان Chat ID عمومی پیام‌رسان استفاده می‌شود.</div>
-<div class="crow" style="margin-top:8px"><label>مقصد تست:</label><select id="notifTestRoute" style="flex:1"><option value="">عمومی</option><option value="Customer">گفتگوی مشتری</option><option value="Vendor">گفتگوی غرفه‌دار/ادمین</option><option value="Orders">سفارش‌ها</option><option value="Visits">بازدیدهای سایت</option></select></div>
+<div style="font-size:10px;color:#94a3b8;line-height:1.8;margin:6px 0">با برداشتن تیک «همه یکسان»، مقصد مشترک گفتگوهای مشتری و ادمین، سفارش‌ها و بازدیدها جداگانه قابل ویرایش می‌شود. فیلد خالی از Chat ID مشترک استفاده می‌کند.</div>
+<div class="crow" style="margin-top:8px"><label>مقصد تست:</label><select id="notifTestRoute" style="flex:1"><option value="">مشترک</option><option value="Conversation">گفتگوهای مشتری و ادمین</option><option value="Orders">سفارش‌ها</option><option value="Visits">بازدیدهای سایت</option></select></div>
 <div class="cact" style="margin-top:10px">
 <button class="btn btn-purple" onclick="testNotif('baleh')">🔔 تست بله</button>
 <button class="btn btn-orange" onclick="testNotif('rubika')">🔔 تست روبیکا</button><button class="btn btn-gray" onclick="testNotif('telegram')">✈️ تست تلگرام</button>
@@ -101853,6 +101869,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.629', t:'💬 مقصد مشترک گفتگو و تیک «همه یکسان»', items:[
+    'گفتگوهای مشتری و ادمین/غرفه‌دار در هر پیام‌رسان همیشه از یک Chat ID مشترک گفتگو استفاده می‌کنند.',
+    'برای بله، روبیکا و تلگرام تیک «همه یکسان» افزوده شد؛ در حالت روشن همهٔ اعلان‌ها به Chat ID مشترک می‌روند.',
+    'با برداشتن تیک، فیلدهای گفتگو، سفارش و بازدید قابل ویرایش و تست مستقل می‌شوند.'
+  ]},
   {v:'10.628', t:'🔀 مقصد مستقل اعلان‌ها در هر پیام‌رسان', items:[
     'برای بله، روبیکا و تلگرام چهار Chat ID مستقل برای گفتگوی مشتری، گفتگوی غرفه‌دار/ادمین، سفارش و بازدید سایت افزوده شد.',
     'اعلان گفتگوی مشتری و غرفه‌دار اکنون با نوع صریح به مقصد درست می‌رود و سفارش‌ها نیز به مقصد سفارش همان پیام‌رسان هدایت می‌شوند.',
@@ -112860,7 +112881,8 @@ applyAiNet(cn.ai_net||{});
 /* Provider catalogs and a hidden test modal are loaded when their settings
    panel is opened; they are not prerequisites for the Start page. */
 // v8.17: Restore Baleh/Rubika settings
-const applyMessenger=(prefix,cfg)=>{cfg=cfg||{};const ids=cfg.chat_ids||{};const fields={Customer:'customer_chat',Vendor:'vendor_chat',Orders:'orders',Visits:'visits'};if($(prefix+'Enabled'))$(prefix+'Enabled').checked=!!cfg.enabled;if($(prefix+'Token')&&cfg.token)$(prefix+'Token').value=cfg.token;if($(prefix+'ChatId'))$(prefix+'ChatId').value=cfg.chat_id||'';Object.keys(fields).forEach(s=>{const el=$(prefix+s+'ChatId');if(el)el.value=ids[fields[s]]||'';});};
+function messengerSameToggle(prefix){const same=!!$(prefix+'AllSame')?.checked;['Conversation','Orders','Visits'].forEach(s=>{const el=$(prefix+s+'ChatId');if(el){el.disabled=same;el.style.opacity=same?'.55':'1';}});}
+const applyMessenger=(prefix,cfg)=>{cfg=cfg||{};const ids=cfg.chat_ids||{};if($(prefix+'Enabled'))$(prefix+'Enabled').checked=!!cfg.enabled;if($(prefix+'Token')&&cfg.token)$(prefix+'Token').value=cfg.token;if($(prefix+'ChatId'))$(prefix+'ChatId').value=cfg.chat_id||'';if($(prefix+'AllSame'))$(prefix+'AllSame').checked=cfg.all_same===undefined?true:!!cfg.all_same;const conversation=ids.conversations||ids.customer_chat||ids.vendor_chat||'';if($(prefix+'ConversationChatId'))$(prefix+'ConversationChatId').value=conversation;if($(prefix+'OrdersChatId'))$(prefix+'OrdersChatId').value=ids.orders||'';if($(prefix+'VisitsChatId'))$(prefix+'VisitsChatId').value=ids.visits||'';messengerSameToggle(prefix);};
 const bl=cn.baleh||{};applyMessenger('baleh',bl);if($('balehS')&&bl.token){$('balehS').textContent='فعال';$('balehS').className='cst on';}
 const rb=cn.rubika||{};applyMessenger('rubika',rb);
 const tgm=cn.telegram||{};applyMessenger('telegram',tgm);
@@ -113661,8 +113683,8 @@ fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendo
 
 // v8.06: Save AI settings
 fd.append('ai_net',JSON.stringify(getAiNet()));
-// v10.628: Save general fallback plus four independent destinations for every messenger.
-const messengerPayload=prefix=>({enabled:$(prefix+'Enabled')?.checked?1:0,token:$(prefix+'Token')?.value||'',chat_id:$(prefix+'ChatId')?.value||'',chat_ids:{customer_chat:$(prefix+'CustomerChatId')?.value||'',vendor_chat:$(prefix+'VendorChatId')?.value||'',orders:$(prefix+'OrdersChatId')?.value||'',visits:$(prefix+'VisitsChatId')?.value||''}});
+// v10.629: Save common mode plus shared conversations, orders, and visits for every messenger.
+const messengerPayload=prefix=>({enabled:$(prefix+'Enabled')?.checked?1:0,token:$(prefix+'Token')?.value||'',chat_id:$(prefix+'ChatId')?.value||'',all_same:$(prefix+'AllSame')?.checked?1:0,chat_ids:{conversations:$(prefix+'ConversationChatId')?.value||'',orders:$(prefix+'OrdersChatId')?.value||'',visits:$(prefix+'VisitsChatId')?.value||''}});
 fd.append('baleh',JSON.stringify(messengerPayload('baleh')));
 fd.append('rubika',JSON.stringify(messengerPayload('rubika')));
 fd.append('telegram',JSON.stringify(messengerPayload('telegram')));
@@ -113985,7 +114007,8 @@ function testNotif(type){
     else if(type==='telegram'){prefix='telegram';label='تلگرام';}
     else{showToast('نوع نامعتبر',1);return;}
     token=$(prefix+'Token')?.value?.trim()||'';
-    chatId=$(prefix+route+'ChatId')?.value?.trim()||$(prefix+'ChatId')?.value?.trim()||'';
+    const allSame=!!$(prefix+'AllSame')?.checked;
+    chatId=(!allSame&&route?$(prefix+route+'ChatId')?.value?.trim():'')||$(prefix+'ChatId')?.value?.trim()||'';
     if(!token||!chatId){showToast('Token و Chat ID مقصد انتخاب‌شده را وارد کنید',1);return;}
     r.innerHTML='<div style="color:#facc15;font-size:11px;padding:4px">⏳ تست '+label+'...</div>';
     const fd=new FormData();fd.append('action','test_notif');fd.append('notif_type',type);fd.append('token',token);fd.append('chat_id',chatId);
