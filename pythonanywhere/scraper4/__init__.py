@@ -12,6 +12,7 @@ from collections import defaultdict
 from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
 
+from .navigation import SETTINGS_MENU
 from .config import Settings, VERSION
 from .db import DB
 from .services.scraping.fetch import validate_url
@@ -46,7 +47,8 @@ def create_app(settings=None):
     def build_context():
         from .services.updates import read_release
         release = read_release(settings.base_dir)
-        return {'app_version': VERSION, 'app_commit': str(release.get('commit') or 'local')[:12]}
+        return {'app_version': VERSION, 'app_commit': str(release.get('commit') or 'local')[:12],
+                'settings_menu': SETTINGS_MENU}
 
 
     @app.before_request

@@ -1,0 +1,18 @@
+<dialog id="settings-menu" class="settings-menu" aria-labelledby="settings-menu-title" aria-modal="true">
+  <div class="settings-menu-head"><h2 id="settings-menu-title">☰ تنظیمات عمومی</h2><button type="button" id="settings-menu-wide" class="secondary" aria-pressed="false">تمام‌عرض</button><button type="button" id="settings-menu-close" class="secondary" aria-label="بستن منو">✕</button></div>
+  <div class="settings-menu-body">
+    <p class="menu-intro">ترتیب بخش‌ها مطابق منوی PHP است. امکانات منتقل‌نشده فقط توضیح دارند و عملیاتی اجرا نمی‌کنند.</p>
+    {% for item in settings_menu %}
+    <details class="menu-group" data-menu-key="{{ item.key }}">
+      <summary><span class="menu-title">{{ item.title }}</span><span class="menu-state {{ item.state }}">{{ {'ready':'آماده','partial':'بخشی آماده','pending':'در حال انتقال'}[item.state] }}</span></summary>
+      <div class="menu-group-body"><p>{{ item.description }}</p>
+        {% if item.command %}<p>از پوشهٔ نصب برنامه در Bash اجرا کنید؛ مسیر خروجی باید تازه باشد:</p><code class="menu-command" dir="ltr">{{ item.command }}</code>{% endif %}
+        {% if item.kind == 'runtime' %}<button type="button" id="menu-runtime-check" class="secondary">بررسی سلامت برنامه</button><pre id="menu-runtime-result" dir="ltr" role="status" aria-live="polite"></pre>{% endif %}
+        {% if item.kind == 'changelog' %}<ul class="menu-changelog"><li><b dir="ltr">1.4.1</b> — منوی همبرگری به ترتیب PHP و نمایش وضعیت انتقال هر بخش.</li><li><b dir="ltr">1.4.0</b> — رابط تیره و تب‌ها، نمایش نتایج و تأیید نسخهٔ زنده پس از Reload.</li><li><b dir="ltr">1.3.1</b> — GET عمومی کران، با فعال‌سازی از پنل.</li><li><b dir="ltr">1.3.0</b> — تشخیص کارت محصول نزدیک به PHP و کران تک‌مرحله‌ای.</li></ul>{% endif %}
+        {% if item.actions %}<div class="actions">{% for tab, target, label in item.actions %}<a class="secondary button-link" href="/?section={{ target }}#{{ tab }}" data-menu-tab="{{ tab }}" data-menu-target="{{ target }}">{{ label }}</a>{% endfor %}</div>{% endif %}
+      </div>
+    </details>
+    {% endfor %}
+    <p class="menu-foot">Python v{{ app_version }} · همسان‌سازی کامل PHP هنوز تمام نشده است.</p>
+  </div>
+</dialog>

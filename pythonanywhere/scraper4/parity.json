@@ -40,6 +40,10 @@
     {
       "feature": "Partial PHP-like dark tabbed UI: start/settings/selectors/results/send, product cards/table and profile exports",
       "reference": "PHP mainTabs and dark palette; not the complete visual picker/UI"
+    },
+    {
+      "feature": "PHP-order hamburger inventory with 22 sections, native accessible drawer, live runtime status and links to existing forms; pending features explanatory only",
+      "reference": "settingsPanel, PHP 10.640; full settings feature parity remains pending"
     }
   ],
   "pending": [

@@ -83,3 +83,37 @@ def test_wrong_source_directory_is_not_reloaded_or_overwritten(db,settings,monke
 def test_bootstrap_reloads_only_after_recording_release():
     script=(Path(__file__).resolve().parents[1]/'bootstrap.sh').read_text()
     assert script.index("PYRELEASE\n",script.index("<<'PYRELEASE'")) < script.index('-m scraper4 reload-web --if-configured')
+
+
+
+def test_hamburger_inventory_matches_php_top_to_bottom(client):
+    from scraper4.navigation import SETTINGS_MENU
+    expected = ['runtime','orders','backup','changelog','version','woocommerce',
+                'basalam','ai','notifications','removed','general','guardian','source',
+                'render','reconcile','categories','destination-edit','woo-images',
+                'auto-reply','manual-reply','nightly','profile-stats']
+    assert [item['key'] for item in SETTINGS_MENU] == expected
+    page = BeautifulSoup(client.get('/').text, 'html.parser')
+    dialog = page.select_one('dialog#settings-menu')
+    assert dialog and not dialog.has_attr('open')
+    assert [item['data-menu-key'] for item in dialog.select('.menu-group')] == expected
+    trigger = page.select_one('#hamburgerBtn')
+    assert trigger['aria-expanded'] == 'false'
+    assert trigger['aria-controls'] == dialog['id']
+    for action in dialog.select('[data-menu-target]'):
+        assert page.find(id=action['data-menu-target']), action['data-menu-target']
+        assert page.find(id='pane-'+action['data-menu-tab'])
+    for item in SETTINGS_MENU:
+        if item['state'] == 'pending':
+            assert not item.get('actions') and not item.get('command')
+            group = dialog.select_one('[data-menu-key="'+item['key']+'"]')
+            assert not group.select('a,button,input,form')
+            assert 'در حال انتقال' in group.text
+
+
+def test_menu_available_on_dedicated_settings_page_not_public_login(app,client):
+    page = BeautifulSoup(client.get('/settings/pythonanywhere').text, 'html.parser')
+    assert page.select_one('#hamburgerBtn') and page.select_one('#settings-menu')
+    assert page.select_one('script[src*="menu.js"]')
+    assert '/?section=cron-settings#settings' in str(page)
+    assert 'settings-menu' not in app.test_client().get('/login').text
