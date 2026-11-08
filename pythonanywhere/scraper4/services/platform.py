@@ -255,3 +255,42 @@ def installed_python(settings):
     except (OSError, ValueError, KeyError, TypeError):
         raise PlatformError('Installed virtualenv metadata is missing; rerun the token-free installer') from None
     return python
+
+
+def reload_installed_web(db, settings, *, if_configured=False):
+    """CLI-only post-install reload, followed by public version/commit verification.
+
+    No token prompt, scheduler dependency, provisioning or WSGI overwrites.
+    The credential never leaves the PythonAnywhere API Authorization header.
+    """
+    import time
+    from ..config import VERSION
+    from .updates import read_release
+
+    cfg = db.get_config('pythonanywhere')
+    if not cfg.get('token'):
+        if if_configured:
+            return {'ok': True, 'skipped': True, 'reason': 'No saved PythonAnywhere API token; configure Web and Reload manually'}
+        raise PlatformError('Save a PythonAnywhere API token in the web panel first')
+    api = PythonAnywhere(cfg, timeout=(3, 10))
+    web = api.call('GET', api.web_path)
+    source = web.get('source_directory', '') if isinstance(web, dict) else ''
+    if source and Path(source).resolve() != settings.base_dir.resolve():
+        raise PlatformError('Installed directory differs from the configured Web source directory; no WSGI files were changed. Check Web source/WSGI paths before reloading.')
+    api.reload()
+    expected = read_release(settings.base_dir).get('commit')
+    for attempt in range(6):
+        if attempt:
+            time.sleep(2)
+        try:
+            response = requests.get('https://' + api.domain + '/healthz',
+                params={'build': expected or VERSION}, timeout=(3, 5),
+                headers={'Cache-Control': 'no-cache'}, allow_redirects=False)
+            live = response.json() if response.status_code == 200 else {}
+            if (isinstance(live, dict) and live.get('ok') is True and live.get('version') == VERSION
+                    and (not expected or live.get('commit') == expected)):
+                return {'ok': True, 'domain': api.domain, 'version': VERSION,
+                        'commit': expected, 'live_verified': True}
+        except (requests.RequestException, ValueError):
+            pass
+    raise PlatformError('Code installed and Reload accepted, but the live version/commit could not be verified. Check Web WSGI/source paths and the error log; do not assume the upgrade is live.')

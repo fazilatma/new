@@ -99,9 +99,9 @@ PY
 if [[ "${S4_AUTO_CONFIGURE:-0}" != 1 ]]; then
 printf '\nInstalled without requesting a PythonAnywhere API token.\n'
 printf 'After opening the panel, enter it under PythonAnywhere connection settings.\n'
-printf '\nNEXT: PythonAnywhere → Web → Add a new web app → Manual configuration.\n'
+printf '\nFIRST INSTALL ONLY: PythonAnywhere → Web → Add a new web app → Manual configuration.\n'
 printf 'Select the same Python version as your virtualenv.\nVirtualenv: %s\nSource code / working directory: %s\n' "$VENV" "$APP_DIR"
-printf 'Replace the contents of the Web-tab WSGI configuration with this file:\n  %s/pythonanywhere_wsgi.py\nThen press Reload.\n' "$APP_DIR"
+printf 'Replace the contents of the Web-tab WSGI configuration with this file:\n  %s/pythonanywhere_wsgi.py\nFor an existing app, keep its WSGI configuration; bootstrap will try Reload using the saved API token.\nWithout a saved API token, press Reload manually.\n' "$APP_DIR"
 printf '\nRun the queue in Bash or a Scheduled Task:\n  cd %q && %q -m scraper4 tick --budget 240\n' "$APP_DIR" "$VENV/bin/python"
 printf '\nDo not run flask/serve or Node as a public server on PythonAnywhere.\n'
 

@@ -151,3 +151,10 @@ import json, sys
 from pathlib import Path
 (Path(sys.argv[1]) / '.release.json').write_text(json.dumps({'commit': sys.argv[2]}))
 PYRELEASE
+
+# Reuse the encrypted on-server credential. No CLI token prompt or Task needed.
+# Check the actual running build so a successful download cannot look like a
+# successful deployment when Web still imports an old directory.
+if [[ "${S4_RELOAD_AFTER_INSTALL:-1}" == 1 ]]; then
+  (cd "$APP_DIR" && "$VENV/bin/python" -m scraper4 reload-web --if-configured)
+fi

@@ -30,7 +30,8 @@ def test_bearer_auth_and_revoke(app,client,auth_headers):
 
 
 def test_endpoints_and_public_health(app,client):
-    assert app.test_client().get('/healthz').json == {'ok':True}
+    assert app.test_client().get('/healthz').json['ok'] is True
+    assert app.test_client().get('/healthz').json['version']
     endpoints = client.get('/api/endpoints').json['endpoints']
     assert any(e['path']=='/api/updates/apply' and e['methods']==['POST'] for e in endpoints)
 

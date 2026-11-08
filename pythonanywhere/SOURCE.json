@@ -7,5 +7,6 @@
   "reference": "Laravel core + legacy parse_products DOM heuristic (phase 2 started)",
   "scope": "PythonAnywhere-compatible core port; not complete legacy scraper4.php feature parity",
   "source_version": "10.640",
-  "source_sha256": "79824ce702c945d9bdffcfa0ad2e1eb7dd8f483d32b4f8d4a04ec79af3e1655c"
+  "source_sha256": "79824ce702c945d9bdffcfa0ad2e1eb7dd8f483d32b4f8d4a04ec79af3e1655c",
+  "ui_reference": "Legacy PHP mainTabs, dark slate/blue palette and product results cards; partial UI parity"
 }

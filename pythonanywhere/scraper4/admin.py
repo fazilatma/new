@@ -9,6 +9,7 @@ from flask import Blueprint, abort, current_app, jsonify, request, session, rend
 
 from .services import updates
 from .services.engine import selftest
+from .config import VERSION
 
 
 def register_admin(app, db, settings):
@@ -16,7 +17,8 @@ def register_admin(app, db, settings):
 
     @bp.get('/healthz')
     def health():
-        return jsonify(ok=True)
+        return jsonify(ok=True, version=VERSION,
+                       commit=updates.read_release(settings.base_dir).get('commit'))
 
     @bp.get('/api/port-status')
     @bp.get('/api/parity/status')
@@ -33,6 +35,7 @@ def register_admin(app, db, settings):
     def system_status():
         platform = db.get_config('pythonanywhere')
         return jsonify(ok=True, selftest=selftest(db, settings), updates=updates.status(db, settings),
+                       runtime={'version': VERSION, 'source_directory': str(settings.base_dir)},
                        platform={'configured': bool(platform.get('token')), 'domain': platform.get('domain'),
                                  'provisioning': db.checkpoint_read('platform:status')}, stats=db.stats())
 

@@ -1,3 +1,4 @@
-<!doctype html>
-<html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="csrf" content="{{ csrf_token() }}"><title>تنظیم توکن PythonAnywhere | اسکریپر</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"><script defer src="{{ url_for('static', filename='platform.js') }}"></script></head>
-<body><header><a href="/">بازگشت به پنل</a><h1>تنظیمات PythonAnywhere</h1><form action="/logout" method="post"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="secondary">خروج</button></form></header><main>{% include '_platform_form.html' %}<p>اگر برنامه در حالت نگهداری باشد، می‌توانید اینجا توکن را اصلاح کنید. فعال‌سازی Task در حالت نگهداری متوقف است؛ Task موجود در نوبت بعدی برای بازیابی و Reload تلاش می‌کند.</p></main></body></html>
+{% extends 'layout.html' %}
+{% block title %}اتصال PythonAnywhere · {{ app_version }}{% endblock %}
+{% block scripts %}<script defer src="{{ url_for('static', filename='platform.js', v=app_version) }}"></script>{% endblock %}
+{% block content %}<p><a href="/#settings">← بازگشت به تنظیمات اسکرپر</a></p>{% include '_platform_form.html' %}<p class="notice">اگر برنامه در حالت نگهداری باشد، می‌توانید اینجا توکن را اصلاح کنید. فعال‌سازی Task در حالت نگهداری متوقف است؛ Task موجود در نوبت بعدی برای بازیابی و Reload تلاش می‌کند.</p>{% endblock %}

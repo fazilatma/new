@@ -36,6 +36,10 @@
     {
       "feature": "Price display with preserved Persian units, foreign currency symbols/codes and decimals",
       "reference": "extractPrice() v10.640; price_num still digits-only"
+    },
+    {
+      "feature": "Partial PHP-like dark tabbed UI: start/settings/selectors/results/send, product cards/table and profile exports",
+      "reference": "PHP mainTabs and dark palette; not the complete visual picker/UI"
     }
   ],
   "pending": [

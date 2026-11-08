@@ -31,6 +31,7 @@ document.querySelectorAll('.edit').forEach(button => button.onclick = async () =
     profileForm.elements.pagType.value = profile.pagination.type || 'query_page';
     profileForm.elements.pagVal.value = profile.pagination.val || '';
     for(const key of ['container','title','price','link','image','sku']) profileForm.elements[key].value = profile.selectors[key] || '';
+    activateTab('selectors');
     profileForm.scrollIntoView({behavior:'smooth'});
   } catch(error) { message(error.message); }
 });
@@ -41,7 +42,7 @@ document.querySelectorAll('.delete').forEach(button => button.onclick = async ()
 handle(document.querySelector('#job-form'), async data => {
   if(data.kind !== 'extract' && !confirm('ارسال به فروشگاه انجام شود؟ قبل از تلاش مجدد، محصولات مقصد را بررسی کنید.')) return;
   const result = await api('/api/jobs','POST', data);
-  message(`کار ${result.id} به صف اضافه شد. worker را از کنسول یا Tasks اجرا کنید.`);
+  message(`کار ${result.id} به صف اضافه شد. کران خارجی یا worker آن را ادامه می‌دهد.`);
   await poll();
 });
 document.querySelectorAll('.connection-form').forEach(form => {
@@ -84,7 +85,7 @@ async function systemPoll() {
     const data = await api('/api/system/status');
     const update = data.updates;
     const operation = update.operation || {};
-    systemState.textContent = JSON.stringify({domain:data.platform.domain, platform:data.platform.provisioning,
+    systemState.textContent = JSON.stringify({running:data.runtime, domain:data.platform.domain, platform:data.platform.provisioning,
       auto_update:update.config, current:update.current, latest:update.state.latest,
       update_available:update.state.available, error:update.state.error,
       operation:operation}, null, 2);
@@ -158,3 +159,126 @@ publicCron.onchange = async () => {
     message(error.message);
   } finally { publicCron.disabled = false; }
 };
+
+// Match the PHP navigation without exposing unavailable PHP-only controls.
+const tabNames = ['start','settings','selectors','results','send'];
+function activateTab(name, updateHash = true) {
+  if(!tabNames.includes(name)) name = 'start';
+  for(const key of tabNames) {
+    const active = key === name;
+    document.querySelector(`#pane-${key}`).classList.toggle('active', active);
+    document.querySelector(`#pane-${key}`).hidden = !active;
+    const tab = document.querySelector(`#tab-${key}`);
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+  if(updateHash) history.replaceState(null, '', '#' + name);
+  if(name === 'results') loadProducts();
+}
+document.querySelectorAll('[data-tab]').forEach(button => {
+  button.onclick = () => activateTab(button.dataset.tab);
+  button.onkeydown = event => {
+    let index = tabNames.indexOf(button.dataset.tab);
+    if(event.key === 'ArrowLeft') index = (index + 1) % tabNames.length;
+    else if(event.key === 'ArrowRight') index = (index + tabNames.length - 1) % tabNames.length;
+    else if(event.key === 'Home') index = 0;
+    else if(event.key === 'End') index = tabNames.length - 1;
+    else return;
+    event.preventDefault(); activateTab(tabNames[index]);
+    document.querySelector(`#tab-${tabNames[index]}`).focus();
+  };
+});
+document.querySelectorAll('[data-open-tab]').forEach(button => button.onclick = () => activateTab(button.dataset.openTab));
+window.addEventListener('hashchange', () => activateTab(location.hash.slice(1), false));
+handle(document.querySelector('#send-form'), async data => {
+  if(!confirm('محصولات این پروفایل به مقصد انتخاب‌شده ارسال شوند؟ اتصال و قیمت‌ها را بررسی کرده‌اید؟')) return;
+  if(!data.category_id) delete data.category_id;
+  const result = await api('/api/jobs', 'POST', data);
+  activateTab('start');
+  message(`ارسال ${result.id} به صف اضافه شد؛ کران یا worker آن را ادامه می‌دهد.`);
+  await poll();
+});
+
+let productOffset = 0, productTotal = 0, productRows = [], productsRequest = 0, tableView = false;
+const productLimit = 100;
+function safeProductUrl(value, image = false) {
+  if(!value) return '';
+  try {
+    const url = new URL(value, location.origin);
+    return (image ? url.protocol === 'https:' : ['https:','http:'].includes(url.protocol)) ? url.href : '';
+  } catch { return ''; }
+}
+function sourceLink(url) {
+  const a = document.createElement('a');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = 'مشاهدهٔ منبع ↗';
+  return a;
+}
+function paintProducts() {
+  const grid = document.querySelector('#product-grid');
+  const rows = document.querySelector('#product-rows');
+  grid.replaceChildren(); rows.replaceChildren();
+  const query = document.querySelector('#products-search').value.trim().toLocaleLowerCase('fa');
+  const filtered = productRows.filter(p => `${p.title || ''} ${p.sku || ''}`.toLocaleLowerCase('fa').includes(query));
+  for(const product of filtered) {
+    const card = document.createElement('article'); card.className = 'product-card';
+    const image = document.createElement('div'); image.className = 'product-image'; image.textContent = '📦';
+    const src = safeProductUrl(product.image, true);
+    if(src) {
+      const img = document.createElement('img'); img.src = src; img.alt = product.title || ''; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
+      img.onerror = () => { img.remove(); image.textContent = '📦'; };
+      image.replaceChildren(img);
+    }
+    const body = document.createElement('div'); body.className = 'product-body';
+    const title = document.createElement('h3'); title.textContent = product.title || 'بدون عنوان';
+    const price = document.createElement('div'); price.className = 'product-price'; price.textContent = product.price || 'قیمت ثبت نشده';
+    const meta = document.createElement('div'); meta.className = 'product-meta';
+    meta.textContent = `${product.sku || 'بدون کد'} · ووکامرس: ${product.woo_id ? 'مرتبط' : 'ارسال نشده'} · باسلام: ${product.basalam_id ? 'مرتبط' : 'ارسال نشده'}`;
+    body.append(title, price, meta);
+    const link = safeProductUrl(product.link);
+    if(link) body.append(sourceLink(link));
+    card.append(image,body); grid.append(card);
+    const row = document.createElement('tr');
+    for(const value of [product.title,product.price,product.sku,product.woo_id || '—',product.basalam_id || '—']) cell(row, value || '—');
+    const last = cell(row, ''); if(link) last.append(sourceLink(link));
+    rows.append(row);
+  }
+  grid.hidden = tableView; document.querySelector('#product-table-wrap').hidden = !tableView;
+  document.querySelector('#products-status').textContent = filtered.length ? `${filtered.length.toLocaleString('fa-IR')} محصول در این صفحه` : (productRows.length ? 'در صفحهٔ فعلی نتیجه‌ای مطابق جست‌وجو نیست.' : 'هنوز محصولی برای نمایش وجود ندارد. ابتدا استخراج را اجرا کنید.');
+}
+async function loadProducts() {
+  const ticket = ++productsRequest;
+  const profile = document.querySelector('#results-profile').value;
+  const params = new URLSearchParams({limit:productLimit, offset:productOffset});
+  if(profile) params.set('profile_id', profile);
+  document.querySelector('#products-status').textContent = 'در حال دریافت محصولات…';
+  try {
+    const result = await api('/api/products?' + params);
+    if(ticket !== productsRequest) return;
+    productRows = result.products; productTotal = result.total;
+    document.querySelector('#products-count').textContent = `${productTotal.toLocaleString('fa-IR')} محصول`;
+    document.querySelector('#products-page').textContent = productTotal ? `${productOffset + 1}–${productOffset + productRows.length} از ${productTotal}` : '۰ محصول';
+    document.querySelector('#products-prev').disabled = productOffset === 0;
+    document.querySelector('#products-next').disabled = productOffset + productLimit >= productTotal;
+    for(const format of ['csv','json']) {
+      const anchor = document.querySelector(`#products-${format}`);
+      anchor.hidden = !profile;
+      if(profile) anchor.href = `/api/export/${encodeURIComponent(profile)}?format=${format}`;
+      else anchor.removeAttribute('href');
+    }
+    document.querySelector('#export-hint').hidden = Boolean(profile);
+    paintProducts();
+  } catch(error) {
+    if(ticket === productsRequest) document.querySelector('#products-status').textContent = error.message;
+  }
+}
+document.querySelector('#products-search').oninput = paintProducts;
+document.querySelector('#results-profile').onchange = () => { productOffset = 0; loadProducts(); };
+document.querySelector('#products-refresh').onclick = loadProducts;
+document.querySelector('#products-prev').onclick = () => { productOffset = Math.max(0,productOffset-productLimit); loadProducts(); };
+document.querySelector('#products-next').onclick = () => { productOffset += productLimit; loadProducts(); };
+document.querySelector('#products-view').onclick = event => {
+  tableView = !tableView; event.currentTarget.setAttribute('aria-pressed', String(tableView));
+  event.currentTarget.textContent = tableView ? 'نمای کارت' : 'نمای جدول'; paintProducts();
+};
+activateTab(location.hash.slice(1), false);

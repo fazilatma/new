@@ -71,6 +71,8 @@ def main():
     configure.add_argument('--api-username')
     configure.add_argument('--api-domain')
     commands.add_parser('diagnose-platform')
+    reload_web = commands.add_parser('reload-web')
+    reload_web.add_argument('--if-configured', action='store_true')
     maintenance = commands.add_parser('maintain')
     maintenance.add_argument('--budget', type=int, default=240)
     update = commands.add_parser('update')
@@ -97,6 +99,9 @@ def main():
                                    username=args.api_username, domain=args.api_domain)
         result = PythonAnywhere(cfg).provision(db, settings, replace_existing=args.replace_existing)
         db.checkpoint_write('updates:config', update_config(db))
+    elif args.command == 'reload-web':
+        from .services.platform import reload_installed_web
+        result = reload_installed_web(db, settings, if_configured=args.if_configured)
     elif args.command == 'diagnose-platform':
         from .services.platform import diagnose
         result = diagnose(db)

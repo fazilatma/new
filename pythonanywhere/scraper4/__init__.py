@@ -42,6 +42,13 @@ def create_app(settings=None):
 
     app.jinja_env.globals['csrf_token'] = csrf
 
+    @app.context_processor
+    def build_context():
+        from .services.updates import read_release
+        release = read_release(settings.base_dir)
+        return {'app_version': VERSION, 'app_commit': str(release.get('commit') or 'local')[:12]}
+
+
     @app.before_request
     def protect():
         marker = settings.base_dir / '.maintenance.json'
