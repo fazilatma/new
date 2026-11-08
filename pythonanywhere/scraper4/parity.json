@@ -61,6 +61,10 @@
     {
       "feature": "Opt-in detail category/tags first-node plain text, nonempty merge, resumable enrichment, UI summary, JSON export and legacy import; no destination taxonomy guessing",
       "reference": "PHP 10.641 s4ExtractDetailNodeValue category/tags text fallback and extractMergeDetail carry list (partial, bounded/whitespace-normalized Python text)"
+    },
+    {
+      "feature": "Browser settings export/import with seven selectable sections, portable password-encrypted AES-GCM files, no-secret inspection, signed expiring preview, merge/replace, atomic SQL restore and encrypted previous-settings undo; PHP profiles_cfg and store-connection bundle adapter",
+      "reference": "PHP 10.641 backupSectionMap, backupInspectBundle, backupBuildBundle and backupRestoreBundle (bounded settings-only parity; products/queues and unsupported PHP files excluded)"
     }
   ],
   "pending": [
@@ -68,7 +72,8 @@
     "Basalam public catalogue adapters and complete send payloads",
     "Site-specific engines (Digikala, Snappshop, Emalls-specific adapters)",
     "Visual selector picker and full PHP UI parity",
-    "AI/category/content automation, notifications, chat and complete legacy action parity"
+    "AI/category/content automation, notifications, chat and complete legacy action parity",
+    "Whole PHP data/queue/remote-map and unsupported-feature bundle restoration; Python .env/install identity and API keys intentionally remain outside portable web settings"
   ],
   "notes": [
     "This ledger is not a claim of full parity.",
@@ -76,6 +81,7 @@
     "HTTP queue cron performs one page or detail-product step only. Signed code-only deployment is separate; dependency/schema updates remain CLI operations.",
     "Lexical inventory includes embedded JavaScript declarations; it is not a count of implemented PHP routes.",
     "Latest PHP 10.641 source checked at 9756c32; lexical inventory remains explicitly tied to the previous reference commit. Detail fixtures are algorithm-based, not PHP CLI differential execution.",
-    "PHP latest source rechecked unchanged at 9756c32 for 1.7.0. Source category/tags are text only; destination taxonomy IDs remain explicitly configured, not inferred."
+    "PHP latest source rechecked unchanged at 9756c32 for 1.7.0. Source category/tags are text only; destination taxonomy IDs remain explicitly configured, not inferred.",
+    "Latest PHP rechecked unchanged at 9756c32 for 1.8.0. Selective restore preserves product rows, destination IDs and queue entries. Replace disables omitted profiles instead of deleting them. Hosting tokens require explicit selection; password-encrypted downloads never contain the site encryption/signing authority."
   ]
 }

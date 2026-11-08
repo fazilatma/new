@@ -296,4 +296,6 @@ def create_app(settings=None):
     register_deploy(app, db, settings)
     from .cron import register_cron
     register_cron(app, db, settings)
+    from .settings_transfer import register_settings_transfer
+    register_settings_transfer(app, db, settings)
     return app
