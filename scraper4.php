@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.636';
+const APP_VERSION = '10.637';
 
 
 if (!function_exists('str_starts_with')) {
@@ -20902,7 +20902,8 @@ function s4PhpRuntimeReport(): array {
     $recommended=['imagick','pdo_sqlite','sqlite3','posix','sockets','bcmath','gmp','phar','apcu','brotli'];
     $optional=['redis','igbinary','memcached','inotify','sysvsem','sysvmsg','sysvshm'];
     $ext=[];
-    foreach(array_merge($required,$recommended,$optional) as $name)$ext[$name]=extension_loaded($name);
+    foreach(array_merge($required,$recommended,$optional) as $name)$ext[$name]=$name==='opcache'
+        ? (extension_loaded('Zend OPcache')||function_exists('opcache_get_status')) : extension_loaded($name);
     $functions=[];
     foreach(['exec','shell_exec','proc_open','popen','system','passthru','set_time_limit','fastcgi_finish_request'] as $name)
         $functions[$name]=function_exists($name);
@@ -20945,10 +20946,23 @@ function s4PhpRuntimeApplyAuth(): array {
     $wp=function_exists('s4CodeUpdateAdminAuth')?s4CodeUpdateAdminAuth():['ok'=>false];
     return ['ok'=>$tokenOk||!empty($wp['ok']),'token'=>$tokenOk,'wordpress'=>!empty($wp['ok'])];
 }
+function s4PhpIniBytes(string $value): int {
+    $v=trim($value);if($v==='-1')return PHP_INT_MAX;if(!preg_match('~^([0-9]+(?:\\.[0-9]+)?)\\s*([KMGT]?)~i',$v,$m))return 0;
+    $n=(float)$m[1];$power=array_search(strtoupper((string)$m[2]),['','K','M','G','T'],true);if($power===false)$power=0;
+    return (int)min(PHP_INT_MAX,$n*(1024**$power));
+}
 function s4PhpRuntimeApply(): array {
     $auth=s4PhpRuntimeApplyAuth();if(empty($auth['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized'];
-    $desired=['memory_limit'=>'1024M','max_execution_time'=>'300','max_input_time'=>'300','default_socket_timeout'=>'90',
+    /* Never lower stronger hosting values. Zero/-1 execution limits mean unlimited and are preserved. */
+    $targets=['memory_limit'=>'1024M','max_execution_time'=>'300','max_input_time'=>'300','default_socket_timeout'=>'90',
         'upload_max_filesize'=>'64M','post_max_size'=>'72M','max_file_uploads'=>'50','max_input_vars'=>'5000'];
+    $sizeKeys=['memory_limit','upload_max_filesize','post_max_size'];$unlimitedKeys=['max_execution_time','max_input_time'];$desired=[];
+    foreach($targets as $key=>$target){$current=trim((string)ini_get($key));$improve=false;
+        if(in_array($key,$sizeKeys,true))$improve=s4PhpIniBytes($current)<s4PhpIniBytes($target);
+        elseif(in_array($key,$unlimitedKeys,true))$improve=(int)$current>0&&(int)$current<(int)$target;
+        else $improve=(int)$current<(int)$target;
+        if($improve)$desired[$key]=$target;
+    }
     $name=trim((string)ini_get('user_ini.filename'));if($name==='')$name='.user.ini';$path=__DIR__.'/'.$name;
     if(is_file($path)&&!is_writable($path))return ['ok'=>false,'http'=>500,'error'=>'user_ini_not_writable','path'=>basename($path)];
     if(!is_file($path)&&!is_writable(__DIR__))return ['ok'=>false,'http'=>500,'error'=>'plugin_directory_not_writable','path'=>basename($path)];
@@ -20965,7 +20979,8 @@ function s4PhpRuntimeApply(): array {
     if($written===false||!@rename($tmp,$path)){@unlink($tmp);return ['ok'=>false,'http'=>500,'error'=>'user_ini_write_failed','path'=>basename($path)];}
     $runtime=[];foreach($desired as $key=>$value){$old=(string)ini_get($key);$r=@ini_set($key,$value);$runtime[$key]=['before'=>$old,'requested'=>$value,'runtime_applied'=>$r!==false,'effective_now'=>(string)ini_get($key)];}
     return ['ok'=>true,'path'=>basename($path),'backup'=>basename($backup),'existing_content_preserved'=>true,'settings'=>$runtime,
-        'note'=>'PHP-FPM/LiteSpeed may cache .user.ini for user_ini.cache_ttl seconds; extensions, exec and PHP version remain provider-level.',
+        'changed_directives'=>array_keys($desired),'stronger_values_preserved'=>true,
+        'note'=>'Only lower finite limits were raised. PHP-FPM/LiteSpeed may cache .user.ini for user_ini.cache_ttl seconds; extensions, exec and PHP version remain provider-level.',
         'report'=>s4PhpRuntimeReport()];
 }
 if(isset($_GET['php_runtime_status'])||(($_POST['action']??'')==='php_runtime_status')){
@@ -49350,6 +49365,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"['ok'=>false,'error'=>\$e->getMessage(),'line'=>\$e->getLine(),'version'=>APP_VERSION]")!==false
         &&strpos($selfSrc,"{v:'10." . "636'")!==false
         &&version_compare(APP_VERSION,'10.636','>='));
+    $add('10.637','اعمال تنظیمات PHP هرگز مقادیر قوی‌تر هاست را کاهش نمی‌دهد',
+        strpos($selfSrc,'function s4PhpIniBytes(string $value): int')!==false
+        &&strpos($selfSrc,"'stronger_values_preserved'=>true")!==false
+        &&strpos($selfSrc,"extension_loaded('Zend OPcache')")!==false
+        &&strpos($selfSrc,"{v:'10." . "637'")!==false
+        &&version_compare(APP_VERSION,'10.637','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102071,6 +102092,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.637', t:'🛡 جلوگیری از کاهش تنظیمات قوی‌تر PHP', items:[
+    'اعمال امن فقط محدودیت‌های واقعاً پایین‌تر را افزایش می‌دهد و حافظه، زمان یا آپلود قوی‌تر هاست را کاهش نمی‌دهد.',
+    'مقادیر صفر و منفی محدودیت زمان به‌عنوان حالت نامحدود حفظ می‌شوند.',
+    'OPcache با نام واقعی Zend OPcache نیز تشخیص داده می‌شود تا گزارش کمبود اشتباه نباشد.'
+  ]},
   {v:'10.636', t:'🧯 سازگاری گزارش PHP با تفاوت‌های هاست', items:[
     'ثابت‌های سطح دسترسی ini و مشخصات سیستم با fallback سازگار خوانده می‌شوند.',
     'خطاهای محیطی endpoint به‌جای پاسخ خالی به JSON ساختاریافته با خط و نسخه تبدیل می‌شوند.',
