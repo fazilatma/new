@@ -1,0 +1,24 @@
+{
+  "app": "scraper",
+  "version": "10.641",
+  "kind": "settings-export",
+  "sections": [
+    "profiles_cfg",
+    "conn_main",
+    "ai_providers"
+  ],
+  "files": {
+    "profiles.json": {
+      "size": 516,
+      "b64": "eyJzYW1wbGUtc2hvcCI6eyJuYW1lIjoi2YHYsdmI2LTar9in2Ycg2KLYstmF2KfbjNi024wgUEhQIiwidXJsIjoiaHR0cHM6Ly9leGFtcGxlLmNvbS9zaG9wIiwicGFnVHlwZSI6InF1ZXJ5X3BhZ2UiLCJwYWdWYWwiOiIiLCJzZWxlY3RvcnMiOltdLCJkZXRhaWxTZWxlY3RvcnMiOnsibG9uZ0Rlc2MiOnsiZW5hYmxlZCI6MSwic2VsZWN0b3IiOiIjZGVzY3JpcHRpb24iLCJsYWJlbCI6Im1ldGFkYXRhIGtlcHQgYnkgUEhQIn0sImJyYW5kIjp7ImVuYWJsZWQiOjAsInNlbGVjdG9yIjoiLm9mZiJ9LCJza3UiOnsiZW5hYmxlZCI6IjAiLCJzZWxlY3RvciI6Ii5vZmYifSwiY2F0ZWdvcnkiOnsiZW5hYmxlZCI6dHJ1ZSwic2VsZWN0b3IiOiIucG9zdGVkX2luIGEifSwid2VpZ2h0Ijp7ImVuYWJsZWQiOnRydWUsInNlbGVjdG9yIjoiLndlaWdodCJ9fSwiZ2FsbGVyeSI6eyJlbmFibGVkIjp0cnVlfSwicHJvZHVjdHMiOltbInNhbXBsZSIseyJ0aXRsZSI6IkRvIG5vdCBpbXBvcnQgdGhpcyBwcm9kdWN0In1dXX19"
+    },
+    "connections.json": {
+      "size": 107,
+      "b64": "eyJ3b29jb21tZXJjZSI6W10sImJhc2FsYW0iOnsidG9rZW4iOiJGQUtFLUZJWFRVUkUtVE9LRU4tTk9ULUEtQ1JFREVOVElBTCIsInZlbmRvcl9pZCI6MTIsImNhdGVnb3J5X2lkIjowfX0="
+    },
+    "ai_providers.json": {
+      "size": 21,
+      "b64": "eyJmaXh0dXJlLW9ubHkiOnRydWV9"
+    }
+  }
+}

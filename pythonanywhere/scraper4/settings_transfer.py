@@ -59,8 +59,11 @@ def register_settings_transfer(app, db, settings):
 
     @bp.post('/api/settings/inspect')
     def inspect():
-        with db.connect() as conn:
-            bundle = transfer.source_for(body(), conn, db.secret_key)
+        try:
+            with db.connect() as conn:
+                bundle = transfer.source_for(body(), conn, db.secret_key)
+        except transfer.NoImportableSections as exc:
+            return jsonify(ok=True, available=[], counts={}, warnings=exc.warnings)
         return jsonify(ok=True, available=list(bundle['sections']), warnings=bundle.get('warnings', []),
                        counts={key: len(value) if key == 'profiles' else int(bool(value))
                                for key, value in bundle['sections'].items()})

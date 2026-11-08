@@ -337,3 +337,65 @@ def test_http_duplicate_keys_and_invalid_json_are_rejected_safely(client, auth_h
         response = client.post('/api/settings/inspect', data=raw, content_type='application/json', headers=auth_headers)
         assert response.status_code == 400
     assert client.post('/api/settings/export', data='{}', content_type='text/plain', headers=auth_headers).status_code == 400
+
+
+def test_php_source_fixture_empty_arrays_and_selector_metadata_are_importable(db, settings):
+    from pathlib import Path
+    file = (Path(__file__).parent / 'fixtures/php_settings_10_641.json').read_text()
+    decoded = transfer.decode('\ufeff' + file, '')
+    assert set(decoded['sections']) == {'profiles', 'basalam'}
+    row = decoded['sections']['profiles'][0]
+    assert row['selectors'] == {}
+    assert row['settings']['detailSelectors'] == {'longDesc': '#description', 'category': '.posted_in a'}
+    assert row['settings']['legacy_detailSelectors']['longDesc']['enabled'] == 1
+    assert row['settings']['legacy_profile_settings']['gallery']['enabled']
+    assert 'ووکامرس' in str(decoded['warnings']) and 'خالی' in str(decoded['warnings'])
+    data = {'file': file, 'sections': ['profiles', 'basalam'], 'mode': 'merge', 'credentials': True}
+    execute(db, settings, data)
+    assert db.get_profile('sample-shop')['settings']['detailSelectors']['longDesc'] == '#description'
+    assert db.get_config('basalam')['vendor_id'] == '12'
+    assert db.list_products() == [] and db.list_entries() == []
+
+
+@pytest.mark.parametrize('enabled', [False, 0, '', '0', None, [], {}])
+def test_php_detail_disabled_values_follow_php_truthiness(enabled):
+    assert transfer.php_detail_selectors({'longDesc': {'enabled': enabled, 'selector': '#off', 'ui_label': 'metadata'}}) == {}
+    assert transfer.php_detail_selectors({'longDesc': {'enabled': 1, 'selector': ' #on ', 'ui_label': 'metadata'}, 'weight': '.not-supported'}) == {'longDesc': '#on'}
+
+
+def test_php_products_only_slice_does_not_block_connection_inspection(client, auth_headers):
+    file = php_bundle({'profiles.json': {'shop': {'products': [['p', {'title': 'Only product'}]]}},
+        'connections.json': {'woocommerce': [], 'basalam': {'vendor_id': 12, 'token': 'fake'}}})
+    file['sections'] = ['profiles_products', 'conn_main']
+    response = client.post('/api/settings/inspect', json={'file': file}, headers=auth_headers)
+    assert response.status_code == 200 and response.json['available'] == ['basalam']
+    assert 'برش محصولات' in str(response.json['warnings'])
+
+
+def test_invalid_php_section_does_not_hide_valid_sections_or_echo_values(client, auth_headers, app):
+    file = php_bundle({'profiles.json': {'good': {'url': 'https://example.com/shop'},
+        'bad': {'url': 'http://127.0.0.1/private-DO-NOT-ECHO'}},
+        'connections.json': {'woocommerce': [], 'basalam': {'token': 'DO-NOT-ECHO', 'vendor_id': 12}}})
+    response = client.post('/api/settings/inspect', json={'file': file}, headers=auth_headers)
+    assert response.status_code == 200 and response.json['available'] == ['basalam']
+    assert 'نامعتبر' in str(response.json['warnings'])
+    assert 'DO-NOT-ECHO' not in response.text
+    assert app.extensions['s4_db'].list_profiles() == []
+
+
+def test_unsupported_or_empty_php_bundle_is_explained_without_allowing_apply(client, auth_headers, app):
+    for file in [php_bundle({'profiles.json': [], 'connections.json': {'woocommerce': [], 'basalam': []}}),
+                 php_bundle({'ai_providers.json': {'not-yet-supported': True}})]:
+        response = client.post('/api/settings/inspect', json={'file': file}, headers=auth_headers)
+        assert response.status_code == 200 and response.json['available'] == []
+        assert response.json['warnings']
+        response = client.post('/api/settings/preview', json={'file': file}, headers=auth_headers)
+        assert response.status_code == 400 and 'هیچ بخش' in response.json['error']
+    assert app.extensions['s4_db'].list_profiles() == []
+
+
+def test_php_empty_mapping_compatibility_does_not_weaken_native_validation():
+    with pytest.raises(ValueError):
+        transfer.decode(transfer.encrypt(bundle({'woocommerce': []}), PASSWORD), PASSWORD)
+    with pytest.raises(ValueError):
+        transfer.decode(php_bundle({'connections.json': {'basalam': [1, 2, 3]}}), '')

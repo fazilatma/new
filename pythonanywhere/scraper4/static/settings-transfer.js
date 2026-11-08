@@ -8,12 +8,15 @@
   let inspection = null, preview = null, busy = false, generation = 0;
   const boxes = form => [...form.querySelectorAll('input[name="section"]')];
   const selected = form => boxes(form).filter(box => box.checked && !box.disabled).map(box => box.value);
-  const message = text => { status.textContent = text; };
+  const localStatus = doc.querySelector('#settings-import-state'), hint = doc.querySelector('#settings-apply-hint');
+  const message = text => { status.textContent = text; localStatus.textContent = text; };
+  let autoTimer = null, queued = null;
   const labels = Object.fromEntries(boxes(importing).map(box => [box.value, box.parentElement.textContent.trim()]));
   function sync() {
     inspectButton.disabled = busy;
-    previewButton.disabled = busy || !inspection;
+    previewButton.disabled = busy || !inspection || !selected(importing).length;
     applyButton.disabled = busy || !preview || preview.active_jobs > 0;
+    hint.textContent = busy ? 'در حال بررسی؛ لطفاً منتظر بمانید…' : !inspection ? 'فایل را انتخاب کنید؛ بخش‌ها خودکار بررسی می‌شوند. فایل Python به رمز نیاز دارد.' : !selected(importing).length ? 'حداقل یک بخش موجود و قابل انتقال را انتخاب کنید.' : !preview ? 'برای فعال‌شدن تأیید، پیش‌نمایش معتبر لازم است؛ پیام همین بخش را بررسی کنید.' : preview.active_jobs > 0 ? `${preview.active_jobs} کار فعال است؛ پس از اتمام یا لغو آن‌ها دوباره پیش‌نمایش بگیرید.` : 'پیش‌نمایش آماده است؛ اکنون می‌توانید تأیید و اعمال کنید.';
     exporting.querySelector('[type="submit"]').disabled = busy;
     doc.querySelectorAll('[data-transfer-select],button[type="reset"]').forEach(button => {button.disabled = busy;});
   }
@@ -23,9 +26,29 @@
     doc.querySelector('#transfer-file-fields').hidden = importing.elements.source.value === 'previous';
     sync();
   }
-  importing.addEventListener('input', event => invalidate(['file','password','source'].includes(event.target.name)));
-  importing.addEventListener('change', event => invalidate(['file','password','source'].includes(event.target.name)));
-  importing.addEventListener('reset', () => {invalidate(true); setTimeout(() => invalidate(true), 0);});
+  function queueAutomatic(action) {
+    queued = action;
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(() => {
+      if(busy) return; // run() drains the newest pending selection on completion.
+      const next = queued; queued = null;
+      if(next === 'inspect') inspectFile(true);
+      else if(next === 'preview' && inspection && selected(importing).length) makePreview();
+    }, 0);
+  }
+  importing.addEventListener('input', event => {
+    invalidate(['file','password','source'].includes(event.target.name));
+  });
+  importing.addEventListener('change', event => {
+    const source = ['file','password','source'].includes(event.target.name);
+    invalidate(source);
+    queueAutomatic(source ? 'inspect' : 'preview');
+  });
+  importing.addEventListener('reset', () => {
+    queued = null; clearTimeout(autoTimer); invalidate(true);
+    const epoch = generation;
+    setTimeout(() => {if(epoch === generation) invalidate(true);}, 0);
+  });
   async function api(path, data) {
     const mutating = data !== undefined;
     if(mutating) window.S4Refresh?.beginMutation();
@@ -45,7 +68,7 @@
     const revision = window.S4Refresh?.revision(form);
     try { await callback(revision); }
     catch(error) {message(error.message);}
-    finally {busy = false; window.S4Refresh?.submitting(form, false); sync();}
+    finally {busy = false; window.S4Refresh?.submitting(form, false); sync(); if(queued) queueAutomatic(queued);}
   }
   async function payload() {
     const epoch = generation;
@@ -55,7 +78,12 @@
       const file = importing.elements.file.files[0];
       if(!file) throw Error('ابتدا فایل JSON را انتخاب کنید.');
       if(file.size > 1500000) throw Error('سقف حجم فایل ۱٫۵ مگابایت است؛ در PHP خروجی بدون محصولات بگیرید.');
-      data.file = await file.text();
+      data.file = typeof file.text === 'function' ? await file.text() : await new Promise((resolve,reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(Error('خواندن فایل ممکن نشد؛ فایل را دوباره انتخاب کنید.'));
+        reader.readAsText(file);
+      });
     }
     if(epoch !== generation) throw Error('فرم تغییر کرد؛ دوباره بررسی کنید.');
     return data;
@@ -65,22 +93,37 @@
     const form = which === 'export' ? exporting : importing;
     for(const box of boxes(form)) if(!box.disabled && (which === 'export' || inspection)) box.checked = choice === 'all';
     window.S4Refresh?.changed(form);
-    if(which === 'import') invalidate();
+    if(which === 'import') {invalidate(); queueAutomatic('preview');}
   });
-  inspectButton.onclick = () => run(importing, async () => {
+  function inspectFile(automatic = false) {
+    queued = null; clearTimeout(autoTimer);
+    return run(importing, async () => {
     preview = null; result.textContent = '';
+    inspection = null; fieldset.disabled = true;
+    message('در حال خواندن فایل و شناسایی بخش‌های قابل انتقال…');
     const data = await payload(), epoch = generation;
+    if(data.source === 'file' && !data.password) {
+      let header;
+      try {header = JSON.parse(data.file.replace(/^\uFEFF/,''));} catch {throw Error('فایل JSON معتبر نیست؛ خروجی تنظیمات PHP یا Python را انتخاب کنید.');}
+      if(!header || typeof header !== 'object' || Array.isArray(header)) throw Error('ساختار فایل تنظیمات شناخته نشد؛ خروجی تنظیمات PHP یا Python را انتخاب کنید.');
+      if(header.format === 'scraper4-settings-encrypted') throw Error('این فایل خروجی رمزگذاری‌شدهٔ Python است؛ رمز مستقل فایل را وارد و بررسی را بزنید. فایل PHP به رمز نیاز ندارد.');
+    }
     const value = await api('/api/settings/inspect', data);
     if(epoch !== generation) throw Error('فرم تغییر کرد؛ دوباره فایل را بررسی کنید.');
     inspection = value; preview = null; fieldset.disabled = false;
     for(const box of boxes(importing)) {
       const available = value.available.includes(box.value);
       box.disabled = !available; box.checked = available && box.value !== 'pythonanywhere';
-      doc.querySelector(`[data-transfer-available="${box.value}"]`).textContent = available ? `(${value.counts[box.value]})` : '— در فایل نیست';
+      doc.querySelector(`[data-transfer-available="${box.value}"]`).textContent = available ? `(${value.counts[box.value]})` : '— دادهٔ قابل انتقال ندارد';
     }
-    message(['فایل بررسی شد؛ بخش‌ها و روش اعمال را انتخاب و پیش‌نمایش بگیرید.', ...(value.warnings || [])].join('\n'));
-  });
-  previewButton.onclick = () => run(importing, async () => {
+    message([value.available.length ? 'فایل بررسی شد؛ بخش‌های موجود فعال شدند. پیش‌نمایش خودکار هیچ تنظیمی را ذخیره نمی‌کند.' : 'هیچ بخش پشتیبانی‌شدهٔ دارای تنظیمات در این فایل نیست؛ علت‌ها در زیر آمده‌اند.', ...(value.warnings || [])].join('\n'));
+    if(automatic && selected(importing).length) queueAutomatic('preview');
+    });
+  }
+  inspectButton.onclick = () => inspectFile(true);
+  function makePreview() {
+    queued = null; clearTimeout(autoTimer);
+    return run(importing, async () => {
     preview = null; result.textContent = '';
     const data = await payload(), epoch = generation;
     if(!data.sections.length) throw Error('حداقل یک بخش موجود را انتخاب کنید.');
@@ -92,8 +135,10 @@
       `${labels[change.section]}: ${change.changed ? 'تغییر می‌کند' : 'بدون تغییر'}`),
       ...value.warnings, `کران GET عمومی پس از بازیابی: ${value.public_cron ? 'روشن' : 'خاموش'}`,
       value.active_jobs ? `${value.active_jobs} کار فعال وجود دارد؛ ابتدا تمام یا لغو شوند.` : 'صف فعال مسدودکننده‌ای نیست.'].join('\n');
-    message('پیش‌نمایش آماده است؛ تا تأیید شما هیچ تنظیمی تغییر نمی‌کند.');
-  });
+    message(['پیش‌نمایش آماده است؛ تا تأیید شما هیچ تنظیمی تغییر نمی‌کند.', ...(inspection.warnings || [])].join('\n'));
+    });
+  }
+  previewButton.onclick = makePreview;
   importing.addEventListener('submit', event => {
     event.preventDefault();
     if(!preview || busy) return;

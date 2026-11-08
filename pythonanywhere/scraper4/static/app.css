@@ -34,3 +34,5 @@ body.menu-open{overflow:hidden}
 .build-update-notice {position:sticky;top:0;z-index:1000;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:.75rem;padding:.8rem 1rem;background:#183b30;color:#e0fff0;border-bottom:1px solid #378361;font-size:.9rem}
 .build-update-notice[hidden] {display:none}
 .build-update-notice button {white-space:nowrap}
+
+.transfer-status {white-space:pre-line;overflow-wrap:anywhere}

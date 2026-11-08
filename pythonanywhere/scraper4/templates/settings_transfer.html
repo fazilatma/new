@@ -21,8 +21,9 @@
 <form id="settings-import-form">
 <label>منبع بازیابی<select name="source"><option value="file">فایل پشتیبان</option><option value="previous" id="transfer-previous" disabled>نسخهٔ خودکار قبل از آخرین بازیابی</option></select></label>
 <div id="transfer-file-fields"><label>فایل JSON (حداکثر ۱٫۵ مگابایت)<input type="file" name="file" accept=".json,application/json"></label><label>رمز فایل Python (برای بستهٔ PHP لازم نیست)<input type="password" name="password" maxlength="1024" autocomplete="off"></label></div>
-<button type="button" id="settings-inspect" class="secondary">۱. بررسی فایل و بخش‌های موجود</button>
-<fieldset id="transfer-import-sections" disabled><legend>فقط بخش‌های انتخاب‌شده تغییر می‌کنند</legend>
+<button type="button" id="settings-inspect" class="secondary">۱. بررسی دوبارهٔ فایل و بخش‌های موجود</button>
+<p id="settings-import-state" class="notice transfer-status" role="status" aria-live="polite">پس از انتخاب فایل، بررسی و پیش‌نمایش خودکار انجام می‌شود؛ اعمال تنظیمات فقط با تأیید شماست.</p>
+<fieldset id="transfer-import-sections" aria-describedby="settings-import-state" disabled><legend>فقط بخش‌های انتخاب‌شده تغییر می‌کنند</legend>
 {% for key,title in transfer_sections.items() %}<label><input type="checkbox" name="section" value="{{ key }}"> {{ title }} <span data-transfer-available="{{ key }}"></span></label>{% endfor %}
 </fieldset><div class="actions"><button type="button" data-transfer-select="import:all" class="secondary">انتخاب همهٔ بخش‌های موجود</button><button type="button" data-transfer-select="import:none" class="secondary">هیچ‌کدام</button></div>
 <label>روش اعمال<select name="mode"><option value="merge">ادغام با تنظیمات فعلی</option><option value="replace">جایگزینی بخش‌های انتخاب‌شده</option></select></label>
@@ -31,7 +32,8 @@
 <p>قبل از اعمال، همهٔ کارهای در انتظار/در حال اجرا/مکث‌شده باید تمام یا لغو شوند؛ هیچ کاری حذف نمی‌شود. بازیابی خودکار ارسال، استخراج، Reload یا ساخت Task را اجرا نمی‌کند.</p>
 <button type="button" id="settings-preview" class="secondary" disabled>۲. پیش‌نمایش تغییرات</button>
 <pre id="settings-preview-result" role="status" aria-live="polite"></pre>
-<button type="submit" id="settings-apply" disabled>۳. تأیید و اعمال تنظیمات</button><button type="reset" class="secondary">پاک‌کردن فرم</button>
+<p id="settings-apply-hint" role="status" aria-live="polite"></p>
+<button type="submit" id="settings-apply" aria-describedby="settings-apply-hint" disabled>۳. تأیید و اعمال تنظیمات</button><button type="reset" class="secondary">پاک‌کردن فرم</button>
 </form></section></div>
 <p class="notice">بستهٔ PHP: فقط profiles.json و تنظیمات اتصال ووکامرس/باسلام خوانده می‌شوند؛ فایل‌های دیگر، داده‌های محصولات، صف و قابلیت‌های منتقل‌نشده بازیابی نمی‌شوند و موارد کنارگذاشته‌شده گزارش می‌شوند. برای فایل سبک در PHP فقط «تنظیمات پروفایل‌ها» و «تنظیمات اتصال» را انتخاب کنید.</p>
 {% endblock %}

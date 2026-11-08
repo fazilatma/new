@@ -65,6 +65,10 @@
     {
       "feature": "Browser settings export/import with seven selectable sections, portable password-encrypted AES-GCM files, no-secret inspection, signed expiring preview, merge/replace, atomic SQL restore and encrypted previous-settings undo; PHP profiles_cfg and store-connection bundle adapter",
       "reference": "PHP 10.641 backupSectionMap, backupInspectBundle, backupBuildBundle and backupRestoreBundle (bounded settings-only parity; products/queues and unsupported PHP files excluded)"
+    },
+    {
+      "feature": "Automatic file inspection and preview with local disabled-button explanations; PHP empty associative arrays, section-isolated validation, profiles_cfg vs products-only slicing, PHP false enabled flags and extra selector metadata normalization",
+      "reference": "PHP 10.641 backupInspectBundle empty slices, backupSliceEntries and extractNormalizeDetailSelectors; native Python schema remains strict"
     }
   ],
   "pending": [
@@ -82,6 +86,7 @@
     "Lexical inventory includes embedded JavaScript declarations; it is not a count of implemented PHP routes.",
     "Latest PHP 10.641 source checked at 9756c32; lexical inventory remains explicitly tied to the previous reference commit. Detail fixtures are algorithm-based, not PHP CLI differential execution.",
     "PHP latest source rechecked unchanged at 9756c32 for 1.7.0. Source category/tags are text only; destination taxonomy IDs remain explicitly configured, not inferred.",
-    "Latest PHP rechecked unchanged at 9756c32 for 1.8.0. Selective restore preserves product rows, destination IDs and queue entries. Replace disables omitted profiles instead of deleting them. Hosting tokens require explicit selection; password-encrypted downloads never contain the site encryption/signing authority."
+    "Latest PHP rechecked unchanged at 9756c32 for 1.8.0. Selective restore preserves product rows, destination IDs and queue entries. Replace disables omitted profiles instead of deleting them. Hosting tokens require explicit selection; password-encrypted downloads never contain the site encryption/signing authority.",
+    "PHP 10.641/9756c32 rechecked for 1.8.1. Regression fixture reproduces empty Woo arrays plus numeric detail-selector flags; browser test drives actual Flask inspect/preview/apply on a temporary DB. No user/prod backup was read or restored. Unsupported/invalid PHP sections are reported and omitted as whole sections; valid ones remain selectable."
   ]
 }

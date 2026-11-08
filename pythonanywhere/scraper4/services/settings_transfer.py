@@ -48,6 +48,12 @@ EXCLUDED = ['products', 'remote_ids', 'queue_entries', 'progress/logs', '.env/ru
             'panel password/session/encryption key', 'admin/cron API keys', 'deployment authority and signing keys']
 
 
+class NoImportableSections(ValueError):
+    def __init__(self, warnings):
+        self.warnings = warnings
+        super().__init__('هیچ بخش پشتیبانی‌شدهٔ دارای تنظیمات در این بسته پیدا نشد. ' + ' '.join(warnings))
+
+
 class Conflict(ValueError):
     """Preview expired/stale, worker busy or nonterminal jobs exist."""
 
@@ -83,6 +89,8 @@ def parse_json(raw):
                     raise ValueError('Duplicate JSON keys')
                 out[key] = value
             return out
+        if isinstance(raw, str):
+            raw = raw.removeprefix('\ufeff')
         return json.loads(raw, object_pairs_hook=pairs, parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Invalid JSON number')))
     except (ValueError, TypeError, RecursionError, UnicodeError):
         raise ValueError('فایل JSON معتبر نیست؛ کلید تکراری یا ساختار نامعتبر دارد.') from None
@@ -146,9 +154,56 @@ def decode(file, password):
     return validate(bundle)
 
 
+def php_detail_selectors(raw):
+    """PHP extractNormalizeDetailSelectors: extra UI metadata and PHP false values.
+
+    Only the already-supported fields execute. The original config is retained
+    separately; the stricter native Python API contract remains unchanged.
+    """
+    if raw == [] or raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError('ساختار سلکتورهای جزئیات PHP معتبر نیست.')
+    normalized = {}
+    for field, config in raw.items():
+        if field not in FIELDS:
+            continue
+        if isinstance(config, str):
+            value = config
+        elif isinstance(config, dict):
+            enabled = config.get('enabled', True)
+            if enabled is None or enabled is False or enabled == 0 or enabled == '' or enabled == '0' or enabled == [] or enabled == {}:
+                continue
+            value = config.get('selector') if config.get('selector') is not None else ''
+        else:
+            continue
+        if not isinstance(value, str):
+            raise ValueError('سلکتور جزئیات PHP باید متنی باشد.')
+        if value.strip():
+            normalized[field] = value.strip()
+    return normalize_selectors(normalized)
+
+
 def from_php(file):
-    """Allowlisted PHP backupBuildBundle files, never an archive extraction."""
-    sections, ignored = {}, []
+    """Allowlisted settings slices. A bad/empty section cannot hide valid ones."""
+    sections, ignored, warnings = {}, [], []
+    declared = file.get('sections')
+    if declared is not None and (not isinstance(declared, list) or any(not isinstance(v, str) for v in declared)):
+        raise ValueError('فهرست بخش‌های بستهٔ PHP معتبر نیست.')
+
+    def add(section, value):
+        # PHP encodes an empty associative array as []; it is not an invalid
+        # connection, nor an instruction to clear destination settings.
+        if value == [] or value == {}:
+            warnings.append(SECTIONS[section] + ': این بخش در فایل خالی است و تغییری اعمال نمی‌کند.')
+            return
+        try:
+            validate({'format': FORMAT, 'schema': 1, 'sections': {section: value}})
+        except ValueError:
+            warnings.append(SECTIONS[section] + ': تنظیمات این بخش نامعتبر یا هنوز پشتیبانی‌نشده است؛ بخش‌های سالم قابل انتخاب‌اند.')
+            return
+        sections[section] = value
+
     for name, meta in file['files'].items():
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_.-]+', name) or name in ('.', '..'):
             raise ValueError('نام فایل داخل بستهٔ PHP مجاز نیست.')
@@ -160,44 +215,60 @@ def from_php(file):
             if len(raw) > MAX_PLAIN:
                 raise ValueError()
             data = parse_json(raw)
+            if data == []:
+                data = {}
             if not isinstance(data, dict):
                 raise ValueError()
         except (TypeError, KeyError, ValueError):
             raise ValueError('محتوای فایل پشتیبانی‌شدهٔ PHP معتبر نیست.') from None
         if name == 'profiles.json':
-            rows = []
+            # PHP profiles_products is a different slice, with no URL/selectors.
+            # It must not break inspection of a connection-only settings restore.
+            if declared is not None and 'profiles_products' in declared and 'profiles_cfg' not in declared and 'profiles' not in declared:
+                warnings.append('فایل profiles.json فقط برش محصولات دارد؛ تنظیمات پروفایل از آن وارد نمی‌شود.')
+                continue
+            rows, invalid = [], False
             for key, row in data.items():
-                if not isinstance(row, dict):
-                    raise ValueError('پروفایل PHP معتبر نیست.')
-                config = copy.deepcopy(row.get('settings') or row.get('detail') or {})
-                if not isinstance(config, dict):
-                    raise ValueError('تنظیمات پروفایل PHP معتبر نیست.')
-                unmapped = {k: v for k, v in row.items() if k not in {'key', 'url', 'name', 'selectors', 'pagType', 'pagVal', 'settings', 'detail', 'enabled', 'detailSelectors', 'products', 'productsOrder'}}
-                if unmapped:
-                    config['legacy_profile_settings'] = unmapped
-                if isinstance(row.get('detailSelectors'), dict):
-                    config['detailSelectors'] = normalize_selectors({k: v for k, v in row['detailSelectors'].items() if k in FIELDS})
-                    config['legacy_detailSelectors'] = row['detailSelectors']
-                rows.append({'key': key, 'url': row.get('url', ''), 'name': row.get('name', ''),
-                             'selectors': row.get('selectors') or {}, 'pagination': {'type': row.get('pagType') or 'query_page', 'val': row.get('pagVal') or ''},
-                             'settings': config, 'enabled': row.get('enabled', True) not in (False, 0)})
-            sections['profiles'] = rows
+                try:
+                    if not isinstance(row, dict):
+                        raise ValueError()
+                    config = copy.deepcopy(row.get('settings') or row.get('detail') or {})
+                    if not isinstance(config, dict):
+                        raise ValueError()
+                    unmapped = {k: v for k, v in row.items() if k not in {'key', 'url', 'name', 'selectors', 'pagType', 'pagVal', 'settings', 'detail', 'enabled', 'detailSelectors', 'products', 'productsOrder'}}
+                    if unmapped:
+                        config['legacy_profile_settings'] = unmapped
+                    if 'detailSelectors' in row:
+                        config['detailSelectors'] = php_detail_selectors(row['detailSelectors'])
+                        config['legacy_detailSelectors'] = row['detailSelectors']
+                    rows.append({'key': key, 'url': row.get('url', ''), 'name': row.get('name', ''),
+                                 'selectors': row.get('selectors') or {}, 'pagination': {'type': row.get('pagType') or 'query_page', 'val': row.get('pagVal') or ''},
+                                 'settings': config, 'enabled': row.get('enabled', True) not in (False, 0)})
+                except ValueError:
+                    invalid = True
+                    break
+            if invalid:
+                warnings.append('تنظیمات پروفایل‌های PHP معتبر نیست؛ برای جلوگیری از ورود ناقص، کل این بخش کنار گذاشته شد.')
+            else:
+                add('profiles', rows)
         else:
             for name, value in data.items():
                 name = {'woo': 'woocommerce', 'bsl': 'basalam'}.get(name, name)
                 if name in ('woocommerce', 'basalam'):
-                    if not isinstance(value, dict):
-                        raise ValueError('اتصال PHP معتبر نیست.')
-                    value = copy.deepcopy(value)
-                    for field in ('vendor_id', 'category_id'):
-                        if field in value:
-                            value[field] = str(value[field] or '')
-                    sections[name] = value
+                    if isinstance(value, dict):
+                        value = copy.deepcopy(value)
+                        for field in ('vendor_id', 'category_id'):
+                            if field in value:
+                                value[field] = str(value[field] or '')
+                    add(name, value)
                 else:
                     ignored.append('connections:' + str(name)[:80])
-    return {'format': FORMAT, 'schema': 1, 'sections': sections,
-            'warnings': ['فقط تنظیمات پروفایل و اتصال‌های پشتیبانی‌شدهٔ PHP منتقل می‌شوند؛ محصولات، صف و فایل‌های دیگر اجرا یا بازیابی نمی‌شوند.'] +
-                        (['بخش‌های پشتیبانی‌نشده در فایل: ' + '، '.join(ignored)] if ignored else [])}
+    warnings.insert(0, 'فقط تنظیمات پروفایل و اتصال‌های پشتیبانی‌شدهٔ PHP منتقل می‌شوند؛ محصولات، صف و فایل‌های دیگر اجرا یا بازیابی نمی‌شوند.')
+    if ignored:
+        warnings.append('بخش‌های پشتیبانی‌نشده در فایل: ' + '، '.join(ignored))
+    if not sections:
+        raise NoImportableSections(warnings)
+    return {'format': FORMAT, 'schema': 1, 'sections': sections, 'warnings': warnings}
 
 
 def validate(bundle):
