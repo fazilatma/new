@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.634';
+const APP_VERSION = '10.635';
 
 
 if (!function_exists('str_starts_with')) {
@@ -20888,6 +20888,95 @@ const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
+
+
+/* =====================================================================
+ * v10.635: PHP runtime diagnostics and safe account-level tuning.
+ * Reading never exposes tokens or environment values. Applying requires the
+ * same deploy token / WordPress administrator nonce as code installation.
+ * Missing extensions and system-level disable_functions are reported only:
+ * shared hosting cannot safely change either from application PHP.
+ * ===================================================================== */
+function s4PhpRuntimeReport(): array {
+    $required=['curl','json','openssl','mbstring','fileinfo','mysqli','pdo','pdo_mysql','dom','xmlreader','xmlwriter','zip','gd','intl','sodium','opcache'];
+    $recommended=['imagick','pdo_sqlite','sqlite3','posix','sockets','bcmath','gmp','phar','apcu','brotli'];
+    $optional=['redis','igbinary','memcached','inotify','sysvsem','sysvmsg','sysvshm'];
+    $ext=[];
+    foreach(array_merge($required,$recommended,$optional) as $name)$ext[$name]=extension_loaded($name);
+    $functions=[];
+    foreach(['exec','shell_exec','proc_open','popen','system','passthru','set_time_limit','fastcgi_finish_request'] as $name)
+        $functions[$name]=function_exists($name);
+    $iniNames=['memory_limit','max_execution_time','max_input_time','default_socket_timeout','upload_max_filesize','post_max_size','max_file_uploads','max_input_vars','output_buffering','opcache.enable','opcache.memory_consumption','realpath_cache_size','user_ini.filename','user_ini.cache_ttl','disable_functions'];
+    $ini=[];$all=@ini_get_all(null,true);
+    foreach($iniNames as $name){
+        $meta=is_array($all[$name]??null)?$all[$name]:[];$access=(int)($meta['access']??0);
+        $ini[$name]=['value'=>(string)ini_get($name),'global'=>(string)($meta['global_value']??''),'access'=>$access,
+            'runtime_changeable'=>(bool)($access&PHP_INI_USER),'directory_changeable'=>(bool)($access&PHP_INI_PERDIR)];
+    }
+    $disabled=array_values(array_filter(array_map('trim',explode(',',(string)ini_get('disable_functions')))));
+    $userIniName=trim((string)ini_get('user_ini.filename'));if($userIniName==='')$userIniName='.user.ini';
+    $userIniPath=__DIR__.'/'.$userIniName;
+    $cli=[];
+    $rawBin=defined('PHP_BINARY')?(string)PHP_BINARY:'';
+    foreach(array_unique(array_filter([$rawBin,defined('PHP_BINDIR')?rtrim((string)PHP_BINDIR,'/').'/php':'','/usr/local/bin/php','/usr/bin/php','/opt/cpanel/ea-php83/root/usr/bin/php'])) as $candidate){
+        $cli[]=['path'=>$candidate,'exists'=>is_file($candidate),'executable'=>is_executable($candidate)];
+    }
+    $missingRequired=array_values(array_filter($required,static fn($x)=>empty($ext[$x])));
+    $missingRecommended=array_values(array_filter($recommended,static fn($x)=>empty($ext[$x])));
+    $provider=[];
+    if(!$functions['exec'])$provider[]='Remove exec from disable_functions and permit PHP CLI/background processes.';
+    if(!$functions['proc_open'])$provider[]='Remove proc_open from disable_functions for supervised child processes.';
+    if($missingRequired)$provider[]='Enable required extensions: '.implode(', ',$missingRequired).'.';
+    return ['ok'=>true,'app_version'=>APP_VERSION,'php'=>['version'=>PHP_VERSION,'version_id'=>PHP_VERSION_ID,'sapi'=>PHP_SAPI,
+        'os'=>PHP_OS_FAMILY,'architecture'=>PHP_INT_SIZE*8,'zts'=>(bool)PHP_ZTS,'binary'=>basename($rawBin)],
+        'extensions'=>['required'=>$required,'recommended'=>$recommended,'optional'=>$optional,'loaded'=>$ext,
+            'missing_required'=>$missingRequired,'missing_recommended'=>$missingRecommended],
+        'functions'=>$functions,'disable_functions'=>$disabled,'ini'=>$ini,
+        'user_ini'=>['name'=>$userIniName,'path'=>basename($userIniPath),'exists'=>is_file($userIniPath),
+            'directory_writable'=>is_writable(__DIR__),'file_writable'=>!is_file($userIniPath)||is_writable($userIniPath)],
+        'cli_candidates'=>$cli,'worker'=>['active'=>function_exists('s4WorkerIsActive')?s4WorkerIsActive():false,
+            'exec_available'=>$functions['exec'],'persistent_capable'=>$functions['exec']&&$functions['proc_open']],
+        'provider_actions'=>$provider,'recommended_php'=>'8.3'];
+}
+function s4PhpRuntimeApplyAuth(): array {
+    $cfg=function_exists('vc_load')?vc_load():[];$expected=trim((string)($cfg['deploy_token']??''));
+    $given=trim((string)($_SERVER['HTTP_X_S4_UPDATE_TOKEN']??($_POST['token']??'')));
+    $tokenOk=$expected!==''&&$given!==''&&hash_equals($expected,$given);
+    $wp=function_exists('s4CodeUpdateAdminAuth')?s4CodeUpdateAdminAuth():['ok'=>false];
+    return ['ok'=>$tokenOk||!empty($wp['ok']),'token'=>$tokenOk,'wordpress'=>!empty($wp['ok'])];
+}
+function s4PhpRuntimeApply(): array {
+    $auth=s4PhpRuntimeApplyAuth();if(empty($auth['ok']))return ['ok'=>false,'http'=>403,'error'=>'unauthorized'];
+    $desired=['memory_limit'=>'1024M','max_execution_time'=>'300','max_input_time'=>'300','default_socket_timeout'=>'90',
+        'upload_max_filesize'=>'64M','post_max_size'=>'72M','max_file_uploads'=>'50','max_input_vars'=>'5000'];
+    $name=trim((string)ini_get('user_ini.filename'));if($name==='')$name='.user.ini';$path=__DIR__.'/'.$name;
+    if(is_file($path)&&!is_writable($path))return ['ok'=>false,'http'=>500,'error'=>'user_ini_not_writable','path'=>basename($path)];
+    if(!is_file($path)&&!is_writable(__DIR__))return ['ok'=>false,'http'=>500,'error'=>'plugin_directory_not_writable','path'=>basename($path)];
+    $before=is_file($path)?(string)@file_get_contents($path):'';
+    $start='; BEGIN SCRAPER4 MANAGED PHP';$end='; END SCRAPER4 MANAGED PHP';
+    $lines=[$start,'; Safe account-level settings. Extensions and disable_functions require the hosting provider.'];
+    foreach($desired as $key=>$value)$lines[]=$key.' = '.$value;
+    $managed=implode("\n",$lines)."\n".$end;
+    $pattern='~(?:^|\\R)'.preg_quote($start,'~').'.*?'.preg_quote($end,'~').'(?=\\R|$)~s';
+    $clean=preg_replace($pattern,'',$before);if(!is_string($clean))$clean=$before;
+    $next=rtrim($clean).($clean!==''?"\n\n":'').$managed."\n";
+    $backup='';if($before!==''){$backup=$path.'.before-s4';@file_put_contents($backup,$before,LOCK_EX);}
+    $tmp=$path.'.tmp.'.(int)getmypid();$written=@file_put_contents($tmp,$next,LOCK_EX);
+    if($written===false||!@rename($tmp,$path)){@unlink($tmp);return ['ok'=>false,'http'=>500,'error'=>'user_ini_write_failed','path'=>basename($path)];}
+    $runtime=[];foreach($desired as $key=>$value){$old=(string)ini_get($key);$r=@ini_set($key,$value);$runtime[$key]=['before'=>$old,'requested'=>$value,'runtime_applied'=>$r!==false,'effective_now'=>(string)ini_get($key)];}
+    return ['ok'=>true,'path'=>basename($path),'backup'=>basename($backup),'existing_content_preserved'=>true,'settings'=>$runtime,
+        'note'=>'PHP-FPM/LiteSpeed may cache .user.ini for user_ini.cache_ttl seconds; extensions, exec and PHP version remain provider-level.',
+        'report'=>s4PhpRuntimeReport()];
+}
+if(isset($_GET['php_runtime_status'])||(($_POST['action']??'')==='php_runtime_status')){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    echo json_encode(s4PhpRuntimeReport(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+if(isset($_POST['php_runtime_apply'])||(($_POST['action']??'')==='php_runtime_apply')){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');
+    $out=s4PhpRuntimeApply();if(empty($out['ok']))http_response_code((int)($out['http']??400));
+    echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
 
 function s4CodeUpdateHttp(string $url,string $token='',int $timeout=90):array{
     if(!function_exists('curl_init'))return ['ok'=>false,'code'=>0,'error'=>'curl_unavailable','body'=>''];
@@ -49244,6 +49333,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"a lock without the daemon PID")!==false
         &&strpos($selfSrc,"{v:'10." . "634'")!==false
         &&version_compare(APP_VERSION,'10.634','>='));
+    $add('10.635','پنل و endpoint امن تشخیص و تنظیم PHP وجود دارد',
+        strpos($selfSrc,'function s4PhpRuntimeReport(): array')!==false
+        &&strpos($selfSrc,"isset(\$_GET['php_runtime_status'])")!==false
+        &&strpos($selfSrc,"isset(\$_POST['php_runtime_apply'])")!==false
+        &&strpos($selfSrc,'BEGIN SCRAPER4 MANAGED PHP')!==false
+        &&strpos($selfSrc,'id="phpRuntimeSmenu"')!==false
+        &&strpos($selfSrc,'function phpRuntimeApply()')!==false
+        &&strpos($selfSrc,"{v:'10." . "635'")!==false
+        &&version_compare(APP_VERSION,'10.635','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -90896,6 +90994,19 @@ html[data-skin="gloss"] .progress-bar{
 <div class="settings-panel-head"><h2>☰ تنظیمات عمومی</h2><span id="connSaveInd" style="font-size:13px;min-width:16px;text-align:center;transition:color .3s" title=""></span><div class="settings-panel-actions"><button class="panel-fullwidth-btn" id="fullBtn" onclick="toggleFullSettings()" title="تمام عرض کردن منو و محتویات آن"><span aria-hidden="true">⛶</span><span>تمام‌عرض</span></button><button class="btn btn-gray" onclick="toggleSettingsPanel()" style="font-size:14px;padding:4px 10px" title="بستن منو">✕</button></div></div>
 <div class="settings-panel-body" style="padding:0">
 
+<!-- v10.635: PHP runtime diagnostics and safe account-level tuning -->
+<div class="smenu" id="phpRuntimeSmenu">
+<div class="smenu-hdr" style="background:linear-gradient(90deg,#065f46,#0f172a)" onclick="toggleSmenu(this);phpRuntimeLoad(false)"><h3>🐘 تنظیمات و سلامت PHP</h3><span class="cst off" id="phpRuntimeBadge">بررسی نشده</span><span class="arrow">▼</span></div>
+<div class="smenu-body">
+<div style="font-size:10.5px;color:#94a3b8;line-height:1.9;margin-bottom:8px">نسخه، افزونه‌ها، محدودیت‌ها، PHP CLI و امکان اجرای worker را بررسی می‌کند. «اعمال تنظیمات امن» فقط بخش مدیریت‌شدهٔ <code>.user.ini</code> را می‌نویسد؛ فعال‌کردن افزونه‌ها و exec فقط در اختیار هاست است.</div>
+<div class="cact" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+<button type="button" class="btn btn-cyan" onclick="phpRuntimeLoad(true)">🔍 آزمایش دوباره</button>
+<button type="button" class="btn btn-green" id="phpRuntimeApplyBtn" onclick="phpRuntimeApply()">🛠 اعمال تنظیمات امن</button>
+</div>
+<div id="phpRuntimeResult" style="font-size:10.5px;line-height:1.8;color:#cbd5e1"><span style="color:#64748b">برای مشاهدهٔ گزارش، این بخش را باز کنید.</span></div>
+</div>
+</div>
+
 <!-- v10.470: زیرمنوی جامع «مدیریت سفارشات» (باسلام چندغرفه + ووکامرس) -->
 <div class="smenu" id="omSmenuRoot">
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#1d4ed8,#0f172a)" onclick="toggleSmenu(this);omEnsureLoaded()"><h3>📦 مدیریت سفارشات</h3><span class="cst off" id="omHdrBadge">باسلام + ووکامرس</span><span class="arrow">▼</span></div>
@@ -95403,6 +95514,29 @@ function toggleFullSettings(){
     if(p && p.classList.contains('open')) toggleSettingsPanel();
   });
 })();
+/* v10.635: hamburger PHP runtime report. */
+window._phpRuntimeLoaded=false;
+function phpRuntimePill(ok,label){return '<span style="display:inline-block;margin:2px;padding:2px 7px;border-radius:999px;border:1px solid '+(ok?'#047857;color:#6ee7b7;background:#064e3b55':'#b91c1c;color:#fca5a5;background:#7f1d1d55')+'">'+(ok?'✓ ':'✗ ')+esc(label)+'</span>';}
+function phpRuntimeRender(d){
+  const box=$('phpRuntimeResult'),badge=$('phpRuntimeBadge');if(!box||!d)return;
+  if(!d.ok){box.innerHTML='<div class="alert alert-error">'+esc(d.error||'خطای گزارش PHP')+'</div>';return;}
+  const p=d.php||{},ex=d.extensions||{},loaded=ex.loaded||{},fn=d.functions||{},ini=d.ini||{},u=d.user_ini||{},worker=d.worker||{};
+  const extLine=(ex.required||[]).map(x=>phpRuntimePill(!!loaded[x],x)).join('');
+  const recLine=(ex.recommended||[]).map(x=>phpRuntimePill(!!loaded[x],x)).join('');
+  const funLine=['exec','shell_exec','proc_open','popen','posix_kill'].filter(x=>x in fn||x==='posix_kill').map(x=>phpRuntimePill(x==='posix_kill'?!!loaded.posix:!!fn[x],x)).join('');
+  const iniRow=k=>{const v=ini[k]||{};return '<tr><td>'+esc(k)+'</td><td dir="ltr">'+esc(v.value||'—')+'</td><td>'+(v.directory_changeable?'قابل تنظیم':(v.runtime_changeable?'فقط runtime':'سطح هاست'))+'</td></tr>';};
+  let html='<div style="background:#0b1324;border:1px solid #334155;border-radius:9px;padding:9px;margin-bottom:7px"><b style="color:#67e8f9">PHP '+esc(p.version||'')+'</b> · '+esc(p.sapi||'')+' · '+esc(p.os||'')+' '+esc(String(p.architecture||''))+'bit<br>worker دائمی: '+(worker.active?'🟢 فعال':(worker.persistent_capable?'🟡 قابل اجرا ولی غیرفعال':'🔴 غیرقابل اجرا در تنظیم فعلی'))+'</div>';
+  html+='<div style="margin:6px 0"><b>افزونه‌های ضروری</b><br>'+extLine+'</div><div style="margin:6px 0"><b>افزونه‌های پیشنهادی</b><br>'+recLine+'</div><div style="margin:6px 0"><b>توابع پردازشی</b><br>'+funLine+'</div>';
+  html+='<div style="overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><tr><th>تنظیم</th><th>مقدار</th><th>دسترسی</th></tr>'+['memory_limit','max_execution_time','max_input_time','default_socket_timeout','upload_max_filesize','post_max_size','max_input_vars','opcache.enable'].map(iniRow).join('')+'</table></div>';
+  html+='<div style="margin-top:7px;color:'+(u.file_writable?'#86efac':'#fca5a5')+'">.user.ini: '+(u.file_writable?'قابل نوشتن':'غیرقابل نوشتن')+'</div>';
+  if((d.provider_actions||[]).length)html+='<div class="alert alert-warn" style="margin-top:7px"><b>نیازمند اقدام هاست:</b><br>'+d.provider_actions.map(x=>'• '+esc(x)).join('<br>')+'</div>';
+  box.innerHTML=html;if(badge){const good=(ex.missing_required||[]).length===0&&!!fn.exec;badge.textContent=good?'آماده':'نیازمند تنظیم';badge.className='cst '+(good?'on':'off');}
+}
+function phpRuntimeLoad(force){if(window._phpRuntimeLoaded&&!force)return;const box=$('phpRuntimeResult');if(box)box.innerHTML='<span style="color:#facc15">⏳ در حال بررسی PHP…</span>';fetch('?php_runtime_status=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(d=>{window._phpRuntimeLoaded=true;phpRuntimeRender(d);}).catch(e=>{if(box)box.innerHTML='<div class="alert alert-error">خطا در خواندن تنظیمات PHP</div>';});}
+function phpRuntimeApply(){
+  const box=$('phpRuntimeResult'),btn=$('phpRuntimeApplyBtn');if(btn)btn.disabled=true;if(box)box.insertAdjacentHTML('afterbegin','<div style="color:#facc15">⏳ دریافت مجوز و اعمال بخش امن .user.ini…</div>');
+  fetch('?vc_deploy_info=1&_='+Date.now(),{cache:'no-store'}).then(r=>r.json()).then(a=>{const fd=new FormData();fd.append('action','php_runtime_apply');fd.append('php_runtime_apply','1');if(a.token)fd.append('token',a.token);if(a.nonce)fd.append('_wpnonce',a.nonce);return fetch('',{method:'POST',body:fd}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d;});}).then(d=>{showToast('✓ تنظیمات امن PHP نوشته شد');window._phpRuntimeLoaded=false;phpRuntimeRender(d.report);}).catch(e=>{showToast('اعمال تنظیمات PHP: '+e.message,1);phpRuntimeLoad(true);}).finally(()=>{if(btn)btn.disabled=false;});
+}
 /* v9.94 (۸ب): بعد از پایانِ ترنزیشنِ باز شدن، کلاس smenu-done می‌گیرد تا سقفِ
    max-height برداشته و overflow باز شود؛ موقعِ بستن اول برمی‌گردد به حالتِ
    سقف‌دار وگرنه انیمیشنِ بسته‌شدن اصلاً دیده نمی‌شود. */
@@ -101929,6 +102063,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.635', t:'🐘 پنل تشخیص و تنظیم امن PHP', items:[
+    'بخش تازهٔ منوی همبرگری نسخه و SAPI، افزونه‌ها، توابع exec، PHP CLI، محدودیت‌های ini و قابلیت worker را یکجا آزمایش می‌کند.',
+    'اندپوینت php_runtime_status گزارش ماشینی بدون توکن و دادهٔ حساس می‌دهد؛ php_runtime_apply با مجوز نصب‌کننده بخش مدیریت‌شدهٔ .user.ini را اتمیک می‌نویسد.',
+    'تنظیمات سطح هاست مانند نسخهٔ PHP، افزونه‌های مفقود و disable_functions فقط گزارش می‌شوند و هرگز با دورزدن امنیت تغییر نمی‌کنند.'
+  ]},
   {v:'10.634', t:'🔐 تشخیص قطعی worker واقعی', items:[
     'flock موروثیِ پردازهٔ وب یا child بدون PID معتبر دیگر worker دائمی محسوب نمی‌شود.',
     'worker واقعی باید هم state فعال و تازه، هم PID ثبت‌شده و هم flock اصلی را هم‌زمان داشته باشد.',
