@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.641';
+const APP_VERSION = '10.642';
 
 
 if (!function_exists('str_starts_with')) {
@@ -28915,10 +28915,38 @@ if (isset($_GET['extract_resume']) || (($_POST['action'] ?? '') === 'extract_res
    job that can never be claimed. Select the least-recently serviced extraction
    checkpoint and run one bounded segment. The queue/worker locks remain the
    authority, and explicit user stops are never overridden. */
+function s4RestoreMissingExtractionRowFromProgress():array{
+    $p=readProgress(EXTRACT_PROGRESS_FILE);
+    $needs=!empty($p['resumable'])&&empty($p['cancelled'])&&empty($p['stopped'])
+        &&(empty($p['products_saved'])||!empty($p['ran_out'])||!empty($p['resume_needed']));
+    $qid=trim((string)($p['queue_id']??''));$pk=trim((string)($p['profile_key']??''));
+    if(!$needs||$qid===''||$pk==='')return['ok'=>true,'restored'=>false,'reason'=>'no_progress_checkpoint'];
+    $profiles=loadProfiles();$pr=is_array($profiles[$pk]??null)?$profiles[$pk]:[];
+    if(!$pr)return['ok'=>false,'restored'=>false,'reason'=>'profile_not_found'];
+    $lf=@fopen(EXTRACT_QUEUE_FILE.'.lock','c');if(!$lf)return['ok'=>false,'restored'=>false,'reason'=>'queue_lock_open_failed'];
+    if(!@flock($lf,LOCK_EX|LOCK_NB)){@fclose($lf);return['ok'=>true,'restored'=>false,'reason'=>'queue_busy'];}
+    $restored=false;
+    try{
+        $q=json_decode((string)@file_get_contents(EXTRACT_QUEUE_FILE),true);if(!is_array($q))$q=[];if(!is_array($q['entries']??null))$q['entries']=[];
+        foreach($q['entries']as$e){if(!is_array($e))continue;if((string)($e['id']??'')===$qid||((string)($e['profile_key']??'')===$pk&&in_array((string)($e['status']??''),['paused','waiting','running'],true)))return['ok'=>true,'restored'=>false,'reason'=>'row_exists'];}
+        $phase=(string)($p['resume_phase']??$p['extract_stage']??$p['phase']??'list');$phase=$phase==='detail'?'detail':'list';
+        $q['entries'][]=['id'=>$qid,'status'=>'paused','profile_key'=>$pk,'profile_name'=>(string)($pr['name']??$pk),'url'=>(string)($pr['url']??''),
+            'products_count'=>(int)($p['extracted']??0),'run_extracted'=>(int)($p['extracted']??0),'total'=>(int)($p['total']??0),
+            'current'=>(int)($p['current']??0),'resume_page'=>max(1,(int)($p['resume_page']??$p['page']??$p['current']??1)),
+            'resumable'=>true,'resume_needed'=>1,'resume_phase'=>$phase,'phase'=>$phase,'partial'=>true,
+            'trigger'=>'checkpoint_recovery','origin_trigger'=>'periodic','started_at'=>(int)($p['started_at']??time()),
+            'updated_at'=>time(),'paused_at'=>time(),'error'=>'checkpoint بدون ردیف صف بازیابی شد'];
+        $json=json_encode($q,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+        if(is_string($json)&&@file_put_contents(EXTRACT_QUEUE_FILE,$json,LOCK_EX)!==false)$restored=true;
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    if($restored){$p['running']=false;$p['done']=false;$p['paused']=true;$p['resume_needed']=true;$p['last_progress_ts']=time();writeProgress(EXTRACT_PROGRESS_FILE,$p);}
+    return['ok'=>$restored,'restored'=>$restored,'queue_id'=>$qid,'profile_key'=>$pk];
+}
 function s4HasAttachedExtractionWork():bool{
-    if(s4WorkerIsActive())return false;$now=time();
+    if(s4WorkerIsActive())return false;s4RestoreMissingExtractionRowFromProgress();$now=time();
     foreach((array)(extractReadQueue()['entries']??[])as$row){
-        if(!is_array($row)||!in_array((string)($row['status']??''),['paused','waiting','running'],true))continue;
+        if(!is_array($row)||!in_array((string)($row['status']??''),['paused','waiting','running','failed'],true))continue;
+        if((string)($row['status']??'')==='failed'&&empty($row['resumable'])&&empty($row['resume_needed']))continue;
         $qid=trim((string)($row['id']??''));$pk=trim((string)($row['profile_key']??''));if($qid===''||$pk==='')continue;
         if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user'||extractStopRequestedForQueue($qid,false))continue;
         if((string)($row['status']??'')==='running'&&extractLockHeldForQueue($qid))return true;
@@ -28929,10 +28957,11 @@ function s4HasAttachedExtractionWork():bool{
 }
 function s4RunOneAttachedExtractionSegment(string $source='web_cron',int $budgetSec=20):array{
     if(s4WorkerIsActive())return['ok'=>true,'skipped'=>'persistent_worker_active'];
-    $q=extractReadQueue();$candidates=[];$now=time();
+    $restored=s4RestoreMissingExtractionRowFromProgress();$q=extractReadQueue();$candidates=[];$now=time();
     foreach((array)($q['entries']??[])as$row){
         if(!is_array($row))continue;$qid=trim((string)($row['id']??''));$pk=trim((string)($row['profile_key']??''));$st=(string)($row['status']??'');
-        if($qid===''||$pk===''||!in_array($st,['paused','waiting','running'],true))continue;
+        if($qid===''||$pk===''||!in_array($st,['paused','waiting','running','failed'],true))continue;
+        if($st==='failed'&&empty($row['resumable'])&&empty($row['resume_needed']))continue;
         if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user'||extractStopRequestedForQueue($qid,false))continue;
         if(extractLockHeldForQueue($qid))continue;
         if($st==='running'){
@@ -31058,7 +31087,7 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
         '_extract_list_last_url'=>'',
         '_extract_resume_from'=>max(1,$page-1),
     ]);
-    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'ran_out'=>true,'resumable'=>true,'products_saved'=>false,
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>false,'paused'=>true,'ran_out'=>true,'resume_needed'=>true,'resumable'=>true,'products_saved'=>false,
         'resume_page'=>max(1,$page-1),'total'=>$progressPageTarget,'current'=>$page,'started_at'=>$startedAt,
         'last_progress_ts'=>time(),'queue_id'=>$queueId,'extracted'=>count($allProducts),
         'recent_log'=>['⏸ سقف زمانی فهرست — ادامه از صفحه '.max(1,$page-1),
@@ -31068,8 +31097,8 @@ if($_listDeadline>0 && $page>$_startPage && time()>=$_listDeadline && count($all
     $queue=extractReadQueue();
     foreach($queue['entries'] as &$qe){
         if(($qe['id']??'')===$queueId){
-            $qe['status']='paused';$qe['done_at']=time();
-            $qe['resumable']=true;$qe['resume_page']=max(1,$page-1);
+            $qe['status']='paused';$qe['paused_at']=time();$qe['updated_at']=time();unset($qe['done_at']);
+            $qe['resumable']=true;$qe['resume_needed']=1;$qe['resume_phase']='list';$qe['resume_page']=max(1,$page-1);
             $qe['products_count']=count($allProducts);
             $qe['error']='سقف زمانی — ادامه از صفحه '.max(1,$page-1);
             break;
@@ -31161,11 +31190,11 @@ writeProgress(EXTRACT_PROGRESS_FILE,['running'=>true,'done'=>false,'products_sav
 if($page===1)break;
 if($_pageFailStreak>=2 && count($allProducts)>0){
     $_rpF=max(1,$page-1);
-    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>true,'products_saved'=>false,'error'=>'صفحات متوالی باز نشد','resumable'=>true,'resume_page'=>$_rpF,'extracted'=>count($allProducts),'page'=>$page,'queue_id'=>$queueId,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>array_merge($logs,['⏸ دو صفحه پشت‌سرهم شکست — نتایج قبلی دست‌نخورده ماند؛ ادامه از صفحه '.$_rpF]),'total_log_count'=>$page+1,'profile_key'=>$pkFinal]);
+    writeProgress(EXTRACT_PROGRESS_FILE,['running'=>false,'done'=>false,'paused'=>true,'resume_needed'=>true,'products_saved'=>false,'error'=>'صفحات متوالی باز نشد','resumable'=>true,'resume_page'=>$_rpF,'extracted'=>count($allProducts),'page'=>$page,'queue_id'=>$queueId,'started_at'=>$startedAt,'last_progress_ts'=>time(),'recent_log'=>array_merge($logs,['⏸ دو صفحه پشت‌سرهم شکست — نتایج قبلی دست‌نخورده ماند؛ ادامه از صفحه '.$_rpF]),'total_log_count'=>$page+1,'profile_key'=>$pkFinal]);
     $queue=extractReadQueue();
     foreach($queue['entries'] as &$qe){
         if(($qe['id']??'')===$queueId){
-            $qe['status']='failed';$qe['done_at']=time();$qe['resumable']=true;$qe['resume_page']=$_rpF;
+            $qe['status']='paused';$qe['paused_at']=time();$qe['updated_at']=time();unset($qe['done_at']);$qe['resumable']=true;$qe['resume_needed']=1;$qe['resume_phase']='list';$qe['resume_page']=$_rpF;
             $qe['products_count']=count($allProducts);
             $qe['error']='صفحه باز نشد — ادامه از '.$_rpF;break;
         }
@@ -49497,6 +49526,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'cron_lock_released'=>true")!==false
         &&strpos($selfSrc,"{v:'10." . "641'")!==false
         &&version_compare(APP_VERSION,'10.641','>='));
+    $add('10.642','checkpoint زمان‌بری بدون ردیف صف بازسازی و هرگز done کاذب نمی‌شود',
+        strpos($selfSrc,'function s4RestoreMissingExtractionRowFromProgress():array')!==false
+        &&strpos($selfSrc,"'checkpoint_recovery'")!==false
+        &&strpos($selfSrc,"'done'=>false,'paused'=>true,'ran_out'=>true,'resume_needed'=>true")!==false
+        &&strpos($selfSrc,"['paused','waiting','running','failed']")!==false
+        &&strpos($selfSrc,"{v:'10." . "642'")!==false
+        &&version_compare(APP_VERSION,'10.642','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102219,6 +102255,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.642', t:'🧩 بازسازی checkpoint گم‌شدهٔ استخراج', items:[
+    'پایان بودجهٔ زمانی دیگر done ثبت نمی‌شود؛ وضعیت paused و resume_needed تا پایان واقعی حفظ می‌شود.',
+    'اگر ردیف صف پاک شده ولی فایل پیشرفت و staging قابل‌ادامه باشند، cron همان شناسه و checkpoint را اتمیک بازسازی می‌کند.',
+    'شکست موقت دو صفحه نیز paused می‌ماند و به‌جای تبدیل‌شدن به پایان کاذب، در نوبت‌های خودکار بعدی ادامه پیدا می‌کند.',
+    'ردیف failed فقط وقتی checkpoint قابل‌ادامه دارد وارد runner می‌شود؛ خطاهای قطعی همچنان تکرار بی‌نهایت نمی‌شوند.'
+  ]},
   {v:'10.641', t:'🔓 حذف انسداد cron هنگام استخراج متصل', items:[
     'پیش از درخواست کند مبدأ، قفل سراسری cron آزاد می‌شود؛ قفل اختصاصی استخراج همچنان از اجرای تکراری جلوگیری می‌کند.',
     'تا وقتی checkpoint استخراج وجود دارد، Resume All سهم یگانهٔ هاست بدون CLI را صرف manual_sync یا ماتریسِ بدون worker نمی‌کند.',
