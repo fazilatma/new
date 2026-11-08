@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.627';
+const APP_VERSION = '10.628';
 
 
 if (!function_exists('str_starts_with')) {
@@ -27756,10 +27756,21 @@ if (isset($_POST['ai_content_auto'])) {
         'bsl_cats' => !isset($aca['bsl_cats']) || !empty($aca['bsl_cats']),
     ];
 }
-if (isset($_POST['baleh'])) { $bl = json_decode($_POST['baleh'], true) ?: []; $conn['baleh'] = ['enabled'=>!empty($bl['enabled']),'token'=>trim($bl['token']??''),'chat_id'=>trim($bl['chat_id']??'')]; }
-if (isset($_POST['rubika'])) { $rb = json_decode($_POST['rubika'], true) ?: []; $conn['rubika'] = ['enabled'=>!empty($rb['enabled']),'token'=>trim($rb['token']??''),'chat_id'=>trim($rb['chat_id']??'')]; }
+$notifMessengerInput=function(array $raw):array{
+    $ids=is_array($raw['chat_ids']??null)?$raw['chat_ids']:[];
+    return ['enabled'=>!empty($raw['enabled']),'token'=>trim((string)($raw['token']??'')),
+        'chat_id'=>trim((string)($raw['chat_id']??'')),
+        'chat_ids'=>[
+            'customer_chat'=>trim((string)($ids['customer_chat']??$raw['customer_chat_id']??'')),
+            'vendor_chat'=>trim((string)($ids['vendor_chat']??$raw['vendor_chat_id']??'')),
+            'orders'=>trim((string)($ids['orders']??$raw['orders_chat_id']??'')),
+            'visits'=>trim((string)($ids['visits']??$raw['visits_chat_id']??'')),
+        ]];
+};
+if (isset($_POST['baleh'])) { $bl = json_decode($_POST['baleh'], true) ?: []; $conn['baleh'] = $notifMessengerInput($bl); }
+if (isset($_POST['rubika'])) { $rb = json_decode($_POST['rubika'], true) ?: []; $conn['rubika'] = $notifMessengerInput($rb); }
 /* v10.78 (92): تلگرام — سومین پیام‌رسان، با همان ساختار بله/روبیکا */
-if (isset($_POST['telegram'])) { $tgm = json_decode($_POST['telegram'], true) ?: []; $conn['telegram'] = ['enabled'=>!empty($tgm['enabled']),'token'=>trim($tgm['token']??''),'chat_id'=>trim($tgm['chat_id']??'')]; }
+if (isset($_POST['telegram'])) { $tgm = json_decode($_POST['telegram'], true) ?: []; $conn['telegram'] = $notifMessengerInput($tgm); }
 if (isset($_POST['notif_events'])) { $ne = json_decode($_POST['notif_events'], true) ?: []; $conn['notif_events'] = ['order_new'=>!empty($ne['order_new']),'order_status'=>!empty($ne['order_status']),'chat_msg'=>!empty($ne['chat_msg']),'product_status'=>!empty($ne['product_status']),'product_new'=>!empty($ne['product_new']),'order_refund'=>!empty($ne['order_refund']),'src_price'=>!empty($ne['src_price']),'src_stock'=>!empty($ne['src_stock']),'run_fail'=>!empty($ne['run_fail']),'retire'=>!empty($ne['retire']),'cron_ping'=>!empty($ne['cron_ping']),/* v10.35 (۴۷د): گزارشِ همگام‌سازی — پیش‌فرض روشن، پس نبودِ کلید یعنی روشن */'sync_report'=>!isset($ne['sync_report'])||!empty($ne['sync_report'])]; }
 /* v10.392: a short, user-defined installation/host label is appended to every notification. */
 if (isset($_POST['notif_source_text'])) $conn['notif_source_text'] = mb_substr(trim((string)$_POST['notif_source_text']), 0, 160);
@@ -49163,6 +49174,16 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"stale.map((t,i)=>")===false
         &&strpos($selfSrc,"{v:'10." . "627'")!==false
         &&version_compare(APP_VERSION,'10.627','>='));
+    $__notifCfg628=['chat_id'=>'legacy','chat_ids'=>['customer_chat'=>'customers','vendor_chat'=>'vendors','orders'=>'orders','visits'=>'visits']];
+    $add('10.628','هر پیام‌رسان برای چهار نوع اعلان مقصد مستقل و fallback سازگار دارد',
+        notifMessengerChatId($__notifCfg628,'chat_customer')==='customers'
+        &&notifMessengerChatId($__notifCfg628,'chat_vendor')==='vendors'
+        &&notifMessengerChatId($__notifCfg628,'order')==='orders'
+        &&notifMessengerChatId($__notifCfg628,'site_visit')==='visits'
+        &&notifMessengerChatId(['chat_id'=>'legacy','chat_ids'=>[]],'order')==='legacy'
+        &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
+        &&strpos($selfSrc,"{v:'10." . "628'")!==false
+        &&version_compare(APP_VERSION,'10.628','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -63500,9 +63521,26 @@ function bslAnyChatRouteOn(array $cn): bool {
 function notifMessengerConfigured(array $cn, string $channel): bool {
     if (!in_array($channel, ['baleh', 'rubika', 'telegram'], true)) return false;
     $cfg = $cn[$channel] ?? null;
-    return is_array($cfg)
-        && trim((string)($cfg['token'] ?? '')) !== ''
-        && trim((string)($cfg['chat_id'] ?? '')) !== '';
+    if (!is_array($cfg) || trim((string)($cfg['token'] ?? '')) === '') return false;
+    if (trim((string)($cfg['chat_id'] ?? '')) !== '') return true;
+    $ids = is_array($cfg['chat_ids'] ?? null) ? $cfg['chat_ids'] : [];
+    foreach (['customer_chat', 'vendor_chat', 'orders', 'visits'] as $key) {
+        if (trim((string)($ids[$key] ?? '')) !== '') return true;
+    }
+    return false;
+}
+/** Resolve a notification class to its dedicated destination, preserving the legacy Chat ID as fallback. */
+function notifMessengerChatId(array $cfg, ?string $feed): string {
+    $map = [
+        'chat_customer' => 'customer_chat', 'customer_chat' => 'customer_chat',
+        'chat_vendor' => 'vendor_chat', 'vendor_chat' => 'vendor_chat', 'admin_chat' => 'vendor_chat',
+        'order' => 'orders', 'orders' => 'orders',
+        'visit' => 'visits', 'visits' => 'visits', 'site_visit' => 'visits',
+    ];
+    $ids = is_array($cfg['chat_ids'] ?? null) ? $cfg['chat_ids'] : [];
+    $key = $map[(string)$feed] ?? '';
+    $specific = $key !== '' ? trim((string)($ids[$key] ?? '')) : '';
+    return $specific !== '' ? $specific : trim((string)($cfg['chat_id'] ?? ''));
 }
 function notifMessengerReady(array $cn, string $channel): bool {
     $cfg = $cn[$channel] ?? null;
@@ -63921,7 +63959,7 @@ function notifRecordAutoSent(string $coreMsg, ?string $feed): void {
     }
 }
 
-function notifSend(array $cn, string $msg, ?string $feed = null, array $media = []): array {
+function notifSend(array $cn, string $msg, ?string $feed = null, array $media = [], ?string $route = null): array {
     $_coreMsgForDedup = $msg;
     if (notifShouldSuppressAutoDuplicate($cn, $_coreMsgForDedup, $feed)) {
         return ['suppressed_duplicate' => 'sent_before'];
@@ -63929,12 +63967,13 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
     /* Add exactly the saved textbox text; no website URL, instance ID, or version. */
     $msg=notifAppendSourceText($msg,$cn);
     $out = [];
-    $bt = $cn['baleh']['token'] ?? '';  $bc = $cn['baleh']['chat_id'] ?? '';
-    $rt = $cn['rubika']['token'] ?? ''; $rc = $cn['rubika']['chat_id'] ?? '';
-    $tt = $cn['telegram']['token'] ?? ''; $tc = $cn['telegram']['chat_id'] ?? '';   // v10.78 (92): تلگرام
-    $sendBaleh = notifMessengerReady($cn, 'baleh');
-    $sendRubika = notifMessengerReady($cn, 'rubika');
-    $sendTelegram = notifMessengerReady($cn, 'telegram');
+    $destinationClass = $route ?? $feed;
+    $bt = $cn['baleh']['token'] ?? '';  $bc = notifMessengerChatId((array)($cn['baleh'] ?? []), $destinationClass);
+    $rt = $cn['rubika']['token'] ?? ''; $rc = notifMessengerChatId((array)($cn['rubika'] ?? []), $destinationClass);
+    $tt = $cn['telegram']['token'] ?? ''; $tc = notifMessengerChatId((array)($cn['telegram'] ?? []), $destinationClass);   // v10.628: مقصد مستقل هر نوع اعلان
+    $sendBaleh = notifMessengerReady($cn, 'baleh') && $bc !== '';
+    $sendRubika = notifMessengerReady($cn, 'rubika') && $rc !== '';
+    $sendTelegram = notifMessengerReady($cn, 'telegram') && $tc !== '';
     /* v10.109: لینک‌های داخل متن — پیش‌نمایش وب برای تلگرام/بله */
     $wantPreview = $media !== [] || (bool)preg_match('~https?://\S+~u', $msg);
     if ($sendBaleh)  { $rb = bslSendToBaleh($bt, $bc, $msg, $wantPreview); $out['baleh'] = $rb['ok'] ? 'sent' : 'fail'; if (!$rb['ok'] && $rb['error'] !== '') $out['baleh_err'] = $rb['error']; if ($rb['ok'] && ($rb['message_id'] ?? '') !== '') { $out['baleh_msg_id'] = $rb['message_id']; msgrSaveMsg('bale', $rb['message_id'], 0, 0); } }   // v10.79 (93)
@@ -65664,7 +65703,7 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                 /* Commit this chat signature before slow messenger/media calls to prevent replay after timeout. */
                 notifSaveState($st);
                 $_media109 = bslChatCollectMedia($f['nc'], $body);
-                $sentTo = notifSend($cn, $msg, null, $_media109);
+                $sentTo = notifSend($cn, $msg, null, $_media109, !empty($f['is_admin']) ? 'chat_vendor' : 'chat_customer');
                 /* v10.85 (99): message_id با context چت برای webhook */
                 $_ncCh85 = (int)($f['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($f['nc']['shop'] ?? 1); $_ncWh85 = (string)($f['nc']['who'] ?? '');
                 foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
@@ -91964,15 +92003,30 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div id="ntab-messenger" class="ntabpane">
 <div class="crow"><label>بله فعال:</label><input type="checkbox" id="balehEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token بله:</label><input type="password" id="balehToken" dir="ltr" placeholder="Bot Token" style="flex:1"></div>
-<div class="crow"><label>Chat ID:</label><input type="text" id="balehChatId" dir="ltr" placeholder="شناسه چت" style="flex:1"></div>
+<div class="crow"><label>Chat ID عمومی:</label><input type="text" id="balehChatId" dir="ltr" placeholder="مقصد پیش‌فرض (سازگاری با تنظیم قبلی)" style="flex:1"></div>
+<div class="crow"><label>گفتگوی مشتری:</label><input type="text" id="balehCustomerChatId" dir="ltr" placeholder="Chat ID گفتگوی مشتری" style="flex:1"></div>
+<div class="crow"><label>گفتگوی غرفه‌دار:</label><input type="text" id="balehVendorChatId" dir="ltr" placeholder="Chat ID گفتگوهای ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>سفارش‌ها:</label><input type="text" id="balehOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
+<div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="balehVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
+<div class="crow" style="margin-top:8px;padding-top:8px;border-top:1px solid #334155"><b style="font-size:11px">🟠 روبیکا</b></div>
 <div class="crow"><label>روبیکا فعال:</label><input type="checkbox" id="rubikaEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token روبیکا:</label><input type="password" id="rubikaToken" dir="ltr" placeholder="Bot Token" style="flex:1"></div>
-<div class="crow"><label>Chat ID:</label><input type="text" id="rubikaChatId" dir="ltr" placeholder="شناسه چت" style="flex:1"></div>
+<div class="crow"><label>Chat ID عمومی:</label><input type="text" id="rubikaChatId" dir="ltr" placeholder="مقصد پیش‌فرض (سازگاری با تنظیم قبلی)" style="flex:1"></div>
+<div class="crow"><label>گفتگوی مشتری:</label><input type="text" id="rubikaCustomerChatId" dir="ltr" placeholder="Chat ID گفتگوی مشتری" style="flex:1"></div>
+<div class="crow"><label>گفتگوی غرفه‌دار:</label><input type="text" id="rubikaVendorChatId" dir="ltr" placeholder="Chat ID گفتگوهای ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>سفارش‌ها:</label><input type="text" id="rubikaOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
+<div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="rubikaVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
 <!-- v10.78 (92): تلگرام — سومین پیام‌رسان -->
 <div class="crow" style="margin-top:8px;padding-top:8px;border-top:1px solid #334155"><b style="font-size:11px">✈️ تلگرام</b></div>
 <div class="crow"><label>تلگرام فعال:</label><input type="checkbox" id="telegramEnabled" style="width:16px;height:16px"></div>
 <div class="crow"><label>Token تلگرام:</label><input type="password" id="telegramToken" dir="ltr" placeholder="Bot Token (از BotFather)" style="flex:1"></div>
-<div class="crow"><label>Chat ID:</label><input type="text" id="telegramChatId" dir="ltr" placeholder="شناسهٔ کاربر یا گروه (با -100)" style="flex:1"></div>
+<div class="crow"><label>Chat ID عمومی:</label><input type="text" id="telegramChatId" dir="ltr" placeholder="مقصد پیش‌فرض (با -100 برای گروه)" style="flex:1"></div>
+<div class="crow"><label>گفتگوی مشتری:</label><input type="text" id="telegramCustomerChatId" dir="ltr" placeholder="Chat ID گفتگوی مشتری" style="flex:1"></div>
+<div class="crow"><label>گفتگوی غرفه‌دار:</label><input type="text" id="telegramVendorChatId" dir="ltr" placeholder="Chat ID گفتگوهای ادمین/غرفه‌دار" style="flex:1"></div>
+<div class="crow"><label>سفارش‌ها:</label><input type="text" id="telegramOrdersChatId" dir="ltr" placeholder="Chat ID سفارش‌ها" style="flex:1"></div>
+<div class="crow"><label>بازدیدهای سایت:</label><input type="text" id="telegramVisitsChatId" dir="ltr" placeholder="Chat ID بازدیدها" style="flex:1"></div>
+<div style="font-size:10px;color:#94a3b8;line-height:1.8;margin:6px 0">هر مقصد اختصاصی اگر خالی باشد، همان Chat ID عمومی پیام‌رسان استفاده می‌شود.</div>
+<div class="crow" style="margin-top:8px"><label>مقصد تست:</label><select id="notifTestRoute" style="flex:1"><option value="">عمومی</option><option value="Customer">گفتگوی مشتری</option><option value="Vendor">گفتگوی غرفه‌دار/ادمین</option><option value="Orders">سفارش‌ها</option><option value="Visits">بازدیدهای سایت</option></select></div>
 <div class="cact" style="margin-top:10px">
 <button class="btn btn-purple" onclick="testNotif('baleh')">🔔 تست بله</button>
 <button class="btn btn-orange" onclick="testNotif('rubika')">🔔 تست روبیکا</button><button class="btn btn-gray" onclick="testNotif('telegram')">✈️ تست تلگرام</button>
@@ -101799,6 +101853,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.628', t:'🔀 مقصد مستقل اعلان‌ها در هر پیام‌رسان', items:[
+    'برای بله، روبیکا و تلگرام چهار Chat ID مستقل برای گفتگوی مشتری، گفتگوی غرفه‌دار/ادمین، سفارش و بازدید سایت افزوده شد.',
+    'اعلان گفتگوی مشتری و غرفه‌دار اکنون با نوع صریح به مقصد درست می‌رود و سفارش‌ها نیز به مقصد سفارش همان پیام‌رسان هدایت می‌شوند.',
+    'Chat ID عمومی قبلی به‌عنوان مقصد جایگزین حفظ شده و تست اتصال می‌تواند هر مقصد اختصاصی را جداگانه آزمایش کند.'
+  ]},
   {v:'10.627', t:'🛡 ادامهٔ مستقیم و بازیابی سراسری عملیات سرور', items:[
     'دکمه‌های ادامه/ازسرگیری بدون پرسش بله یا خیر مستقیماً همان checkpoint را اجرا می‌کنند.',
     'کران، worker مرده و jobهای ownerless را با اثبات آزادبودن قفل دوباره صف می‌کند و روی هاست بدون exec آن‌ها را برای worker وب نگه می‌دارد.',
@@ -112801,9 +112860,10 @@ applyAiNet(cn.ai_net||{});
 /* Provider catalogs and a hidden test modal are loaded when their settings
    panel is opened; they are not prerequisites for the Start page. */
 // v8.17: Restore Baleh/Rubika settings
-const bl=cn.baleh||{};if($('balehEnabled'))$('balehEnabled').checked=!!bl.enabled;if($('balehToken')&&bl.token)$('balehToken').value=bl.token;if($('balehChatId')&&bl.chat_id)$('balehChatId').value=bl.chat_id;if($('balehS')&&bl.token){$('balehS').textContent='فعال';$('balehS').className='cst on';}
-const rb=cn.rubika||{};if($('rubikaEnabled'))$('rubikaEnabled').checked=!!rb.enabled;if($('rubikaToken')&&rb.token)$('rubikaToken').value=rb.token;if($('rubikaChatId')&&rb.chat_id)$('rubikaChatId').value=rb.chat_id;
-const tgm=cn.telegram||{};if($('telegramEnabled'))$('telegramEnabled').checked=!!tgm.enabled;if($('telegramToken')&&tgm.token)$('telegramToken').value=tgm.token;if($('telegramChatId')&&tgm.chat_id)$('telegramChatId').value=tgm.chat_id;
+const applyMessenger=(prefix,cfg)=>{cfg=cfg||{};const ids=cfg.chat_ids||{};const fields={Customer:'customer_chat',Vendor:'vendor_chat',Orders:'orders',Visits:'visits'};if($(prefix+'Enabled'))$(prefix+'Enabled').checked=!!cfg.enabled;if($(prefix+'Token')&&cfg.token)$(prefix+'Token').value=cfg.token;if($(prefix+'ChatId'))$(prefix+'ChatId').value=cfg.chat_id||'';Object.keys(fields).forEach(s=>{const el=$(prefix+s+'ChatId');if(el)el.value=ids[fields[s]]||'';});};
+const bl=cn.baleh||{};applyMessenger('baleh',bl);if($('balehS')&&bl.token){$('balehS').textContent='فعال';$('balehS').className='cst on';}
+const rb=cn.rubika||{};applyMessenger('rubika',rb);
+const tgm=cn.telegram||{};applyMessenger('telegram',tgm);
 const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
 if($('notifSourceText'))$('notifSourceText').value=String(cn.notif_source_text||'');if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
 updN();syncMatrixRenderDestinations(b);
@@ -113601,10 +113661,11 @@ fd.append('basalam',JSON.stringify({enabled:1,token:$('bsTk').value.trim(),vendo
 
 // v8.06: Save AI settings
 fd.append('ai_net',JSON.stringify(getAiNet()));
-// v8.17: Save Baleh/Rubika
-fd.append('baleh',JSON.stringify({enabled:$('balehEnabled')?.checked?1:0,token:$('balehToken')?.value||'',chat_id:$('balehChatId')?.value||''}));
-fd.append('rubika',JSON.stringify({enabled:$('rubikaEnabled')?.checked?1:0,token:$('rubikaToken')?.value||'',chat_id:$('rubikaChatId')?.value||''}));
-fd.append('telegram',JSON.stringify({enabled:$('telegramEnabled')?.checked?1:0,token:$('telegramToken')?.value||'',chat_id:$('telegramChatId')?.value||''}));
+// v10.628: Save general fallback plus four independent destinations for every messenger.
+const messengerPayload=prefix=>({enabled:$(prefix+'Enabled')?.checked?1:0,token:$(prefix+'Token')?.value||'',chat_id:$(prefix+'ChatId')?.value||'',chat_ids:{customer_chat:$(prefix+'CustomerChatId')?.value||'',vendor_chat:$(prefix+'VendorChatId')?.value||'',orders:$(prefix+'OrdersChatId')?.value||'',visits:$(prefix+'VisitsChatId')?.value||''}});
+fd.append('baleh',JSON.stringify(messengerPayload('baleh')));
+fd.append('rubika',JSON.stringify(messengerPayload('rubika')));
+fd.append('telegram',JSON.stringify(messengerPayload('telegram')));
 fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_source_text',$('notifSourceText')?.value||'');fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('internal_cron_enabled',$('internalCronEnabled')?.checked?1:0);fd.append('internal_cron_sec',$('internalCronSec')?.value||60);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
 fd.append('ai_content_auto',JSON.stringify({
   enabled:!!($('aiContentAutoEnabled')&&$('aiContentAutoEnabled').checked),
@@ -113917,12 +113978,15 @@ document.addEventListener('DOMContentLoaded',function(){
 function testNotif(type){
     const r=$('notifTR');
     r.innerHTML='';
-    let token,chatId,label;
-    if(type==='baleh'){token=$('balehToken')?.value?.trim()||'';chatId=$('balehChatId')?.value?.trim()||'';label='بله';}
-    else if(type==='rubika'){token=$('rubikaToken')?.value?.trim()||'';chatId=$('rubikaChatId')?.value?.trim()||'';label='روبیکا';}
-    else if(type==='telegram'){token=$('telegramToken')?.value?.trim()||'';chatId=$('telegramChatId')?.value?.trim()||'';label='تلگرام';}
+    const route=String($('notifTestRoute')?.value||'');
+    let token,chatId,label,prefix;
+    if(type==='baleh'){prefix='baleh';label='بله';}
+    else if(type==='rubika'){prefix='rubika';label='روبیکا';}
+    else if(type==='telegram'){prefix='telegram';label='تلگرام';}
     else{showToast('نوع نامعتبر',1);return;}
-    if(!token||!chatId){showToast('Token و Chat ID را وارد کنید',1);return;}
+    token=$(prefix+'Token')?.value?.trim()||'';
+    chatId=$(prefix+route+'ChatId')?.value?.trim()||$(prefix+'ChatId')?.value?.trim()||'';
+    if(!token||!chatId){showToast('Token و Chat ID مقصد انتخاب‌شده را وارد کنید',1);return;}
     r.innerHTML='<div style="color:#facc15;font-size:11px;padding:4px">⏳ تست '+label+'...</div>';
     const fd=new FormData();fd.append('action','test_notif');fd.append('notif_type',type);fd.append('token',token);fd.append('chat_id',chatId);
     fetch('',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
