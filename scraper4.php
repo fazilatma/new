@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.633';
+const APP_VERSION = '10.634';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1281,10 +1281,13 @@ function s4WorkerIsActive(int $staleSec = 45): bool {
         if ($free) @flock($fp, LOCK_UN);
         @fclose($fp);
     }
-    if ($lockHeld && ($pid <= 0 || s4WorkerPidAlive($pid) || $age <= max(120, $staleSec * 3))) return true;
-    /* Without lock ownership, accept a living PID only for a short handoff
-       window; never let a zombie suppress cron watchdog recovery forever. */
-    return $running&&$age<=max(120,$staleSec*2)&&s4WorkerPidAlive($pid);
+    /* v10.634: a lock without the daemon PID is commonly an fd inherited by a
+       web/exec child. It is not a worker. Require running + fresh heartbeat +
+       a recorded PID + canonical flock; when POSIX probing is available the PID
+       must also be alive. The daemon takes the flock before writing its state. */
+    if(!$running||$pid<=1||$age>max(120,$staleSec*3)||!$lockHeld)return false;
+    if(function_exists('posix_kill')&&!s4WorkerPidAlive($pid))return false;
+    return true;
 }
 
 function s4WorkerEnqueue(string $type, array $payload, string $label = ''): array {
@@ -49236,6 +49239,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"Only a direct user Continue")!==false
         &&strpos($selfSrc,"{v:'10." . "633'")!==false
         &&version_compare(APP_VERSION,'10.633','>='));
+    $add('10.634','flock موروثی بدون PID معتبر worker دائمی محسوب نمی‌شود',
+        strpos($selfSrc,"if(!\$running||\$pid<=1||\$age>max(120,\$staleSec*3)||!\$lockHeld)return false;")!==false
+        &&strpos($selfSrc,"a lock without the daemon PID")!==false
+        &&strpos($selfSrc,"{v:'10." . "634'")!==false
+        &&version_compare(APP_VERSION,'10.634','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -101921,6 +101929,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.634', t:'🔐 تشخیص قطعی worker واقعی', items:[
+    'flock موروثیِ پردازهٔ وب یا child بدون PID معتبر دیگر worker دائمی محسوب نمی‌شود.',
+    'worker واقعی باید هم state فعال و تازه، هم PID ثبت‌شده و هم flock اصلی را هم‌زمان داشته باشد.',
+    'نوویکس دیگر همگام‌سازی را به صف daemon غیرموجود تحویل نمی‌دهد و مسیر مستقیم وب اجرا می‌شود.'
+  ]},
   {v:'10.633', t:'⏹ توقف صریح پایدار در کران', items:[
     'کران دیگر پس از پایان مهلت کوتاه ۴۵ ثانیه‌ای، عملیات صریحاً متوقف‌شده را خودکار ادامه نمی‌دهد.',
     'ساخت ماتریس متوقف‌شده منابع نوویکس را دوباره اشغال نمی‌کند؛ فقط کلیک مستقیم ادامه می‌تواند آن را فعال کند.',
