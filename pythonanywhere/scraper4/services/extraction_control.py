@@ -39,7 +39,7 @@ def status(db):
             'note': 'ثبت در صف به‌تنهایی کار را اجرا نمی‌کند. برای پیشرفت از کران/worker یا دکمهٔ اجرای یک مرحله استفاده کنید؛ وضعیت کران، اثبات فعال‌بودن یک زمان‌بندی خارجی نیست.'}
 
 
-def step(db, settings):
+def step(db, settings, *, entry_id=None):
     if (settings.base_dir / '.maintenance.json').exists():
         return {'ok': False, 'error': 'برنامه در حالت نگهداری است.'}, 503
     with settings.db_path.with_suffix('.worker.lock').open('a') as lock:
@@ -52,7 +52,18 @@ def step(db, settings):
         if since < 45:
             return {'ok': True, 'throttled': True, 'ran': 0, 'retry_after_seconds': math.ceil(45 - since),
                     'message': 'برای مرحلهٔ دستی بعدی دست‌کم ۴۵ ثانیه فاصله لازم است.'}, 200
-        entry = db.claim_next(('extract',))
+        if entry_id is None:
+            entry = db.claim_next(('extract',))
+        else:
+            # Native Start must run its selected job, never an older unrelated
+            # profile or a sender. Shared flock + atomic waiting-only claim.
+            with db.connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                row=conn.execute("SELECT id FROM queue_entries WHERE id=? AND kind='extract' AND status='waiting'",(entry_id,)).fetchone()
+                if row:
+                    now=utc_now()
+                    conn.execute("UPDATE queue_entries SET status='running',started_at=?,heartbeat=?,updated_at=? WHERE id=?",(now,now,now,entry_id))
+            entry=db.get_entry(entry_id) if row else None
         if not entry:
             return {'ok': True, 'ran': 0, 'message': 'استخراج در انتظار وجود ندارد؛ کار مکث‌شده/ناموفق را پس از بررسی جداگانه ادامه دهید.'}, 200
         started = {'started_epoch': time.time(), 'started_at': utc_now(), 'job_id': entry['id'], 'status': 'running'}

@@ -79,7 +79,7 @@ def render(db):
     text=re.sub(r'<\?(?:php|=).*?\?>',slot,text,flags=re.S)
     if '<?' in text:raise ValueError('Unresolved PHP slot')
     head,tail=text.rsplit('</body>',1)
-    return head+'<script src="/static/php-ui-attach.js"></script></body>'+tail
+    return head+'<script src="/static/php-ui-attach.js"></script><script src="/static/php-ui-start.js"></script></body>'+tail
 
 
 def find(db,value):
@@ -233,7 +233,7 @@ def enqueue(db,data):
     fields=data['fields'];p=find(db,fields.get('profile',''));pages=integer(fields.get('pages','10'),maximum=1000);opts=start_page.options(p)
     with db.connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        if conn.execute("SELECT id FROM queue_entries WHERE profile_id=? AND kind='extract' AND status IN ('waiting','running','paused')",(p['id'],)).fetchone():raise ValueError('همین پروفایل استخراج فعال یا مکث‌شده دارد.')
+        if conn.execute("SELECT id FROM queue_entries WHERE profile_id=? AND kind='extract' AND status IN ('waiting','running','paused','failed')",(p['id'],)).fetchone():raise ValueError('همین پروفایل استخراج فعال، مکث‌شده یا ناموفق دارد؛ ابتدا آن را بررسی و ادامه یا لغو کنید.')
         now=utc_now();payload={'pages':pages,'render':'static','with_detail':opts['with_detail'],'detail_mode':opts['detail_mode'],'_send_after':[]}
         cursor=conn.execute("INSERT INTO queue_entries(kind,profile_id,status,payload,counters,created_at,updated_at,heartbeat) VALUES ('extract',?,'waiting',?,'{}',?,?,?)",(p['id'],json.dumps(payload),now,now,now))
         job=cursor.lastrowid

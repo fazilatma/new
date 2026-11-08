@@ -1,8 +1,8 @@
 /* Trusted parent: the original PHP client never receives cookie/CSRF authority. */
 (()=>{'use strict';
 const frame=document.getElementById('php-original-ui'),status=document.getElementById('php-ui-status'),revisions=new Map();
-const reads=new Set(['app_ready','load_profile','load_connections','start_product_stats','extract_queue_status','tasks_list','whoami','python_capabilities','woo_queue_status','bsl_queue_status','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','runtime_health']);
-const writes=new Set(['save_profile','python_enqueue','python_send_enqueue','python_manual_sync','python_queue_control','python_queue_clear','python_profile_duplicate','python_profile_delete']);let busy=false,selectionTicket=0;
+const reads=new Set(['app_ready','load_profile','load_connections','start_product_stats','extract_queue_status','tasks_list','whoami','python_capabilities','woo_queue_status','bsl_queue_status','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','runtime_health','python_start_status','python_github_catalog']);
+const writes=new Set(['save_profile','python_enqueue','python_send_enqueue','python_manual_sync','python_queue_control','python_queue_clear','python_profile_duplicate','python_profile_delete','python_extract_start','python_extract_step']);let busy=false,selectionTicket=0;
 document.getElementById('php-ui-capabilities').onclick=()=>{const help=document.getElementById('php-ui-help');help.open=!help.open;};
 function action(query,fields){return fields.action||query.action||Object.keys(query).find(k=>k!=='_'&&k!=='_v'&&k!=='_ready')||'';}
 window.addEventListener('message',async event=>{
@@ -27,7 +27,7 @@ window.addEventListener('message',async event=>{
    if(m.fields.autosave==='1'){answer(409,{ok:false,error:'native_explicit_save_required'});return;}
    if(busy){answer(409,{ok:false,error:'عملیات دیگری منتظر تأیید یا ذخیره است.'});return;}
    busy=true;ownsBusy=true;
-   const summary={operation:op==='save_profile'?'ذخیرهٔ صریح پروفایل؛ محصولات تغییر نمی‌کنند':op==='python_profile_delete'?'حذف برگشت‌ناپذیر پروفایل و همهٔ محصولات و شناسه‌های محلی آن؛ محصولات فروشگاه مقصد حذف نمی‌شوند':op==='python_profile_duplicate'?'کپی فقط تنظیمات ذخیره‌شدهٔ پروفایل؛ بدون محصولات و شناسه‌های مقصد':'تغییر صف/پروفایل؛ صف ارسال روی همهٔ محصولات ذخیره‌شدهٔ همین پروفایل است، نه فقط نمای فیلترشده. ادامهٔ ارسال ناموفق نیاز به بررسی مقصد و شناسه‌ها دارد؛ مکث/لغو درخواست درحال پرواز را برنمی‌گرداند.',fields:m.fields};
+   const summary={operation:op==='python_extract_start'?'ثبت استخراج و اجرای واقعی یک مرحله از همین پروفایل؛ ادامهٔ صفحات/جزئیات با worker/کران یا دکمهٔ مرحلهٔ بعد. هیچ صف ارسالی اجرا نمی‌شود':op==='python_extract_step'?'اجرای یک مرحله از استخراج مشخص‌شده؛ بدون اجرای ارسال و بدون ادامهٔ خودکار کار ناموفق':op==='save_profile'?'ذخیرهٔ صریح پروفایل؛ محصولات تغییر نمی‌کنند':op==='python_profile_delete'?'حذف برگشت‌ناپذیر پروفایل و همهٔ محصولات و شناسه‌های محلی آن؛ محصولات فروشگاه مقصد حذف نمی‌شوند':op==='python_profile_duplicate'?'کپی فقط تنظیمات ذخیره‌شدهٔ پروفایل؛ بدون محصولات و شناسه‌های مقصد':'تغییر صف/پروفایل؛ صف ارسال روی همهٔ محصولات ذخیره‌شدهٔ همین پروفایل است، نه فقط نمای فیلترشده. ادامهٔ ارسال ناموفق نیاز به بررسی مقصد و شناسه‌ها دارد؛ مکث/لغو درخواست درحال پرواز را برنمی‌گرداند.',fields:m.fields};
    if(!confirm('تأیید عملیات پایتون از رابط PHP\n\n'+JSON.stringify(summary,null,2))){busy=false;answer(409,{ok:false,error:'با درخواست شما لغو شد.'});return;}
   }
   try{

@@ -2,6 +2,7 @@
 from flask import Blueprint, Response, abort, jsonify, render_template, request, session
 from .services import php_ui as service
 from .services import php_ui_operations as operations
+from .services import php_ui_start as start
 
 
 def register_php_ui(app,db,settings):
@@ -24,11 +25,14 @@ def register_php_ui(app,db,settings):
     @bp.post('/api/php-ui/read')
     def read():
         value=data()
+        if value['action'] in start.READS:return jsonify(start.read(db,settings,value))
         if value['action'] not in service.READS|operations.READS:return jsonify(ok=False,error=service.UNSUPPORTED,unsupported=True),501
         return jsonify(operations.read(db,settings,value) if value['action'] in operations.READS else service.read(db,settings,value))
     @bp.post('/api/php-ui/write')
     def write():
         value=data()
+        if value['action'] in start.WRITES:
+            payload,code=start.write(db,settings,value);return jsonify(payload),code
         if value['action'] not in service.WRITES|operations.WRITES:return jsonify(ok=False,error=service.UNSUPPORTED,unsupported=True),501
         return jsonify(operations.write(db,settings,value) if value['action'] in operations.WRITES else service.save(db,value) if value['action']=='save_profile' else service.enqueue(db,value))
     app.register_blueprint(bp)

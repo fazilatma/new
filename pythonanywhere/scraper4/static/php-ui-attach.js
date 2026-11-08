@@ -8,7 +8,7 @@ window.s4RegisterShellWorker=()=>Promise.resolve(null);
 const viewportStyle=document.createElement('style');viewportStyle.id='php-ui-viewport-adapter';
 viewportStyle.textContent=`body{padding-top:calc(66px + env(safe-area-inset-top))}body>.container{max-width:none;width:100%;min-width:0}#hdrTools{top:calc(10px + env(safe-area-inset-top))}.settings-panel{height:100vh;height:100dvh}@media(max-width:899px){body{padding-bottom:calc(90px + env(safe-area-inset-bottom))}}`;
 document.head.append(viewportStyle);
-const unsupported=()=>{showToast('این عملیات هنوز به پایتون متصل نیست؛ مدیریت فعلی را استفاده کنید.',true);};
+const unsupported=()=>{showToast('این عملیات هنوز به پایتون متصل نیست؛ محدودیت‌ها را در اطلاعات رابط و ابزارهای امن ببینید.',true);};
 // Never pretend that a browser-local edit deletes durable/remote products.
 for(const name of ['removeNoPrice','removeBelowMinPrice','clearAll','clearResults','startDetailExtraction','start','startAutoExtract','startManualSync','startWoo','startBsl','saveConn'])if(typeof window[name]==='function')window[name]=unsupported;
 // Upstream's late syncConfig wrapper drops includeProducts; restore that argument

@@ -40,6 +40,12 @@ must be installed through the CLI; never silently substitute a new key or
 weaken TLS/signature checks. Private artifacts live only in `.deployment/`.
 
 
+## Active user interface scope
+From this request onward, feature work is only on the original `/php-ui` interface,
+especially working Start buttons and actual extraction/diagnostics. Do not add
+features to the alternative dashboard. Shared engine/security bug fixes needed
+by the original client remain in scope; keep the existing default intact.
+
 ## Ongoing PHP parity work (standing user request)
 For EVERY subsequent user prompt, complete the next bounded, tested PHP parity
 slice alongside the explicit request, unless the user changes this instruction.

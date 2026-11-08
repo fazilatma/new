@@ -2,8 +2,8 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),zlib=require('node:zlib');
 const {spawn}=require('node:child_process'),{chromium:playwright}=require('playwright-core'),chromium=require('@sparticuz/chromium').default;
 const root=path.resolve(__dirname,'../..');
-async function setup(t){
- const server=spawn('python3',[path.join(__dirname,'server.py')],{cwd:root,env:{...process.env,PYTHONPATH:path.join(root,'pythonanywhere')},stdio:['ignore','pipe','pipe']});let log='';server.stderr.on('data',s=>log+=s);t.after(()=>server.kill());
+async function setup(t,mode=""){
+ const server=spawn('python3',[path.join(__dirname,'server.py')],{cwd:root,env:{...process.env,PYTHONPATH:path.join(root,'pythonanywhere'),S4_BROWSER_EXTRACTION_FIXTURE:mode},stdio:['ignore','pipe','pipe']});let log='';server.stderr.on('data',s=>log+=s);t.after(()=>server.kill());
  const port=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Flask startup timeout: '+log)),15000);server.once('exit',code=>{clearTimeout(timer);reject(Error('Flask exited '+code+': '+log));});server.stdout.once('data',s=>{clearTimeout(timer);try{resolve(JSON.parse(s).port);}catch(e){reject(e);}});});
  // On non-Lambda Linux these three libraries may not be installed. The pinned
  // npm package already ships them. No OS install/network dependency is needed.
@@ -46,7 +46,7 @@ test('opaque original client boots and restores/selects profiles with real timer
  await child.evaluate(()=>switchMainTab('selectors'));await frame.locator('[onclick="testSel(\'container\')"]').click();await page.locator('#php-tools[open]').waitFor();assert.equal(await page.locator('[data-python-tool=selectors]').isVisible(),true);await page.locator('#php-tools-close').click();
  const diagnostics=await child.evaluate(()=>S4NativeDiagnostics.blockedBackground());assert.ok(diagnostics.sync_matrix_status>0&&diagnostics.internal_cron_feedback>0);
  assert.ok(!actions.some(a=>['test_selector','cron_run','ops_feedback','sync_matrix_status','internal_cron_feedback'].includes(a)),JSON.stringify(actions));
- assert.ok(!actions.some(a=>a.startsWith('python_')&&a!=='python_contracts'&&a!=='python_capabilities'));
+ assert.ok(!actions.some(a=>a.startsWith('python_')&&!['python_contracts','python_capabilities','python_start_status'].includes(a)));
  const after=await(await page.request.get(origin+'/__test__/snapshot')).json();assert.deepEqual(after,before);
  assert.deepEqual(errors,[]);assert.deepEqual(httpErrors,[]);
  // This stale v8.22 assertion is literally in upstream; do not filter console,
@@ -95,4 +95,59 @@ test('failed original frame retains visible recovery; help can close with Escape
  assert.equal(await page.locator('#php-ui-about').evaluate(el=>el.open),false);
  await page.locator('#settings-menu-close').click();
  assert.equal(await page.locator('#settings-menu').evaluate(el=>el.open),false);
+});
+
+test('original Start buttons save dirty settings, extract the selected profile, continue real pages, diagnose and stop without running unrelated jobs', {timeout:90000},async t=>{
+ const {page,origin}=await setup(t,'success'),errors=[],dialogs=[];page.on('pageerror',e=>errors.push(e.message));
+ page.on('dialog',async d=>{dialogs.push(d.message());await d.accept();});
+ await page.goto(origin+'/php-ui');const f=page.frameLocator('#php-original-ui');await f.locator('#python-start-control').waitFor();
+ await f.locator('#hdrProfileSelect').selectOption('one');await f.locator('#profileName').filter({visible:true}).waitFor();
+ const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await page.waitForFunction(()=>true);
+ await child.waitForFunction(()=>profileFormReady&&currentProfileKey==='one');await page.waitForTimeout(1200);await child.waitForFunction(()=>profileFormReady);await child.evaluate(()=>switchMainTab('start'));
+ await f.locator('#pages').fill('2');await f.locator('#startBtn').click();
+ await f.locator('#python-start-jobs').getByText('▶ مرحلهٔ بعد',{exact:true}).waitFor({timeout:5000}).catch(async e=>{t.diagnostic(JSON.stringify({message:await f.locator('#python-start-message').innerText(),state:await(await page.request.get(origin+'/__test__/extract-state')).json(),dialogs}));throw e;});
+ let state=await(await page.request.get(origin+'/__test__/extract-state')).json();let selected=state.jobs.filter(j=>j.profile_id===1&&j.kind==='extract');
+ assert.equal(selected.length,1);assert.equal(selected[0].status,'waiting');assert.equal(selected[0].payload._page,2);assert.equal(state.products.length,2);
+ assert.ok(state.jobs.filter(j=>j.id!==selected[0].id).every(j=>j.status==='waiting'));await child.waitForFunction(()=>profileFormReady);
+ await f.locator('#python-start-jobs').getByText('▶ مرحلهٔ بعد',{exact:true}).click();await f.locator('#python-start-message').filter({hasText:'ثانیه'}).waitFor();
+ assert.equal((await(await page.request.get(origin+'/__test__/extract-state')).json()).products.length,2);
+ const csrf=await page.locator('meta[name=csrf]').getAttribute('content');assert.equal((await page.request.post(origin+'/__test__/age-step',{data:{},headers:{'X-CSRF-Token':csrf}})).status(),200);
+ await f.locator('#python-start-jobs').getByText('▶ مرحلهٔ بعد',{exact:true}).click();await f.locator('#python-start-jobs').getByText(/پایان‌یافته/).waitFor({timeout:5000}).catch(async e=>{t.diagnostic(JSON.stringify({message:await f.locator('#python-start-message').innerText(),state:await(await page.request.get(origin+'/__test__/extract-state')).json()}));throw e;});
+ state=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal(state.products.length,3);assert.equal(state.jobs.find(j=>j.id===selected[0].id).status,'done');
+ await child.evaluate(()=>switchMainTab('start'));await f.locator('[onclick="comprehensiveTestStart()"]').click();await page.locator('#php-tools[open]').waitFor();await page.locator('#audit-message').filter({hasText:'پایان تست'}).waitFor();
+ assert.ok(Number(await page.locator('#audit-done').innerText())>=2);await page.locator('#php-tools-close').click();
+ await child.waitForFunction(()=>profileFormReady);await child.evaluate(()=>switchMainTab('start'));await f.locator('#startBackendBtn').click();
+ await f.locator('#python-start-jobs').getByText('مکث',{exact:true}).waitFor();await f.locator('#python-start-jobs').getByText('مکث',{exact:true}).click();
+ await f.locator('#python-start-jobs').getByText(/مکث‌شده/).waitFor();
+ assert.ok(dialogs.some(s=>s.includes('اجرای واقعی')));assert.deepEqual(errors,[]);
+});
+
+test('original Start displays actual safe HTTP403 diagnosis, blocks duplicate/automatic retries and opens explicit source test', {timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'denied'),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+ await page.goto(origin+'/php-ui');const f=page.frameLocator('#php-original-ui');await f.locator('#python-start-control').waitFor();await f.locator('#hdrProfileSelect').selectOption('one');
+ const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await child.waitForFunction(()=>profileFormReady);await child.evaluate(()=>switchMainTab('start'));
+ await f.locator('#startBackendBtn').click();await f.locator('#python-start-jobs').getByText(/HTTP 403/).waitFor();
+ assert.match(await f.locator('#python-start-message').innerText(),/دسترسی/);assert.ok(!(await f.locator('#python-start-control').innerText()).includes('PRIVATE-FIXTURE'));
+ await f.locator('#startBtn').click();await f.locator('#python-start-message').filter({hasText:'ناموفق'}).waitFor();
+ const state=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal(state.jobs.filter(j=>j.profile_id===1&&j.kind==='extract').length,1);
+ await f.locator('#python-start-jobs').getByText('آزمایش مبدأ / عیب‌یابی',{exact:true}).click();await page.locator('#audit-results').filter({hasText:'خطا'}).waitFor();
+ assert.deepEqual(errors,[]);
+});
+
+test('original Start public GitHub search/import and no-selector trial are real opt-in actions, not boot traffic', {timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'success'),errors=[],actions=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+ page.on('request',r=>{if(r.url().includes('/api/php-ui/'))actions.push(r.postDataJSON()?.action);});
+ await page.goto(origin+'/php-ui');const f=page.frameLocator('#php-original-ui');await f.locator('#python-start-control').waitFor();await f.locator('#hdrProfileSelect').selectOption('one');
+ const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await child.waitForFunction(()=>profileFormReady);await page.waitForTimeout(1200);await child.waitForFunction(()=>profileFormReady);await child.evaluate(()=>switchMainTab('start'));
+ const before=await(await page.request.get(origin+'/__test__/extract-state')).json();
+ await f.locator('#startManualBtn').click();await page.locator('#audit-message').filter({hasText:'پایان تست'}).waitFor();
+ assert.equal(await page.locator('#extraction-audit-form [name=engine]').inputValue(),'heuristic');await page.locator('#php-tools-close').click();
+ assert.deepEqual((await(await page.request.get(origin+'/__test__/extract-state')).json()).products,before.products);
+ await child.evaluate(()=>loadStartProductOverview(true));await f.locator('.spo-card').first().waitFor();
+ await f.locator('.spo-card').first().click();await page.locator('#php-tools[open]').waitFor();await page.locator('#product-grid .product-card').first().waitFor();assert.equal(await page.locator('#results-profile').inputValue(),'');await page.locator('#php-tools-close').click();
+ await f.locator('#profileProductSource').selectOption('github');assert.ok(!actions.includes('python_github_catalog'));
+ await f.locator('[onclick="ghSourceRefresh()"]').first().click();await f.locator('#ghFileSelect').selectOption('products.csv');
+ await f.locator('#ghImportBtn').click();await f.locator('#python-start-jobs').getByText(/پایان‌یافته/).waitFor();
+ const state=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.ok(state.products.some(p=>p.title==='CSV fixture'));assert.equal(state.jobs.filter(j=>j.profile_id===1&&j.kind==='extract').length,1);
+ assert.ok(state.jobs.filter(j=>j.profile_id!==1).every(j=>j.status==='waiting'));assert.deepEqual(errors,[]);
 });

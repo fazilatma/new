@@ -179,8 +179,9 @@ def write(db,settings,data):
 
 
 def contracts():
-    return {'ok':True,'read_actions':sorted(php_ui.READS|READS),'write_actions':sorted(php_ui.WRITES|WRITES),
+    from . import php_ui_start
+    return {'ok':True,'read_actions':sorted(php_ui.READS|READS|php_ui_start.READS),'write_actions':sorted(php_ui.WRITES|WRITES|php_ui_start.WRITES),
             'ui_actions':['python_open_panel'],'full_php_parity':False,'heartbeat_can_run_cron':False,
-            'trusted_panels':['woocommerce','basalam','backup','general','version','render','guardian','profile-stats','profile','selectors','results','audit','help'],
+            'trusted_panels':['woocommerce','basalam','backup','general','version','render','guardian','profile-stats','profile','selectors','results','audit','help','audit-one','audit-pages','audit-all','trial']+['metric:'+{'all':'total','has_image':'with_image','web_link':'linked'}.get(k,k) for k in php_ui.start_page.METRICS],
             'boot_policy':{'legacy_background_jobs':False,'automatic_selector_probes':False,'service_worker':False},
             'secret_operations':'trusted_parent_only','unknown_action_http_status':501}

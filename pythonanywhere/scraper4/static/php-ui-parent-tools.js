@@ -7,6 +7,15 @@ const labels={profile:'تنظیمات و پاک‌سازی پروفایل انت
 function changeSelection(p){if(!p)return;selected=p;window.dispatchEvent(new CustomEvent('s4:profile-selected',{detail:{id:p.id}}));}
 function open(key){
  if(key==='help'){if(!about.open){aboutReturnFocus=document.activeElement;about.showModal();document.getElementById('php-ui-about-close').focus();}return true;}
+ const metrics={total:'all',priced:'priced',no_price:'no_price',in_stock:'in_stock',out_stock:'out_stock',stock_unknown:'stock_unknown',with_image:'has_image',no_image:'no_image',gallery:'gallery',variations:'variations',linked:'web_link',sku:'sku',description:'description',category:'category',brand:'brand',ready:'ready'};
+ if(typeof key==='string'&&key.startsWith('metric:')&&Object.hasOwn(metrics,key.slice(7))){open('results');window.S4Browse(metrics[key.slice(7)],'');return true;}
+ const tests={'audit-one':['1','configured',false],'audit-pages':['2','configured',false],'audit-all':['5','configured',true],trial:['1','heuristic',false]};
+ if(Object.hasOwn(tests,key)){
+  const [pages,engine,all]=tests[key];if(!all&&!selected)throw Error('ابتدا پروفایل ذخیره‌شده را انتخاب کنید.');
+  open('audit');const f=document.getElementById('extraction-audit-form');
+  const pick=(name,value)=>{const s=f.elements[name];if(!Array.from(s.options).some(o=>o.value===String(value)))s.add(new Option(String(value),String(value)));s.value=String(value);};
+  pick('profile_id',all?'all':selected.id);pick('pages',pages);pick('engine',engine);f.requestSubmit();return true;
+ }
  if(keys.has(key)){window.S4Menu.open(key);if(key==='guardian')jobs();return true;}
  if(!Object.hasOwn(labels,key))return false;
  for(const section of dialog.querySelectorAll('[data-python-tool]'))section.hidden=section.dataset.pythonTool!==key;
@@ -20,7 +29,7 @@ function open(key){
 document.getElementById('hamburgerBtn').addEventListener('click',()=>{if(about.open){aboutReturnFocus=null;about.close();}},{capture:true});
 document.getElementById('php-ui-recovery').onclick=()=>open('help');
 document.getElementById('php-ui-about-close').onclick=()=>about.close();
-about.addEventListener('close',()=>{aboutReturnFocus?.focus();aboutReturnFocus=null;});
+about.addEventListener('close',()=>{if(document.activeElement===document.body||about.contains(document.activeElement))aboutReturnFocus?.focus();aboutReturnFocus=null;});
 document.getElementById('php-tools-close').onclick=()=>dialog.close();
 window.S4NativeTools={open,select:changeSelection};
 if(window.S4NativeSelection)changeSelection(window.S4NativeSelection);

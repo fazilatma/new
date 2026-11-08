@@ -32,7 +32,7 @@ function setup(t){
  const vc=new VirtualConsole(),errors=[];vc.on('jsdomError',e=>{if(!e.message.includes('Could not parse CSS'))errors.push(e.message);});
  const dom=new JSDOM(seed.html,{url:'https://example.test/php-ui/frame',runScripts:'outside-only',pretendToBeVisual:true,virtualConsole:vc});t.after(()=>dom.window.close());
  const w=dom.window;w.setTimeout=()=>1;w.setInterval=()=>1;w.confirm=()=>false;w.scrollTo=()=>{};w.requestAnimationFrame=()=>1;w.postMessage=()=>{};w.matchMedia=()=>({matches:false,addEventListener(){}});
- w.eval(script('php-ui-frame.js'));w.eval([...w.document.querySelectorAll('script:not([src])')].map(s=>s.textContent).join('\n')+'\n'+script('php-ui-attach.js')+'\nwindow.__inspect=()=>({currentProfileKey,profiles,profileFormReady,dirty:window._profileProductsDirty,cleared:window._userClearedProducts,pruned:window._userPrunedProducts});');
+ w.eval(script('php-ui-frame.js'));w.eval([...w.document.querySelectorAll('script:not([src])')].map(s=>s.textContent).join('\n')+'\n'+script('php-ui-attach.js')+'\n'+script('php-ui-start.js')+'\nwindow.__inspect=()=>({currentProfileKey,profiles,profileFormReady,dirty:window._profileProductsDirty,cleared:window._userClearedProducts,pruned:window._userPrunedProducts});');
  const request=(url,body,method='POST')=>JSON.parse(execFileSync('python3',['-c',bridge,dir,JSON.stringify({url,body,method})],{cwd:root,env,encoding:'utf8',maxBuffer:16000000}));
  const flush=async()=>{for(let i=0;i<10;i++)await new Promise(r=>setImmediate(r));};
  return {w,d:w.document,seed,request,flush,errors};
@@ -53,7 +53,7 @@ test('original selection/results/save flow works with actual Flask compatibility
  const e=setup(t),{w,d}=e,revisions=new Map(),calls=[];
  w.fetch=async(input,opts={})=>{
   const query=Object.fromEntries(new URL(input||'',w.location.href).searchParams),fields=Object.fromEntries(opts.body?.entries?.()||[]),action=fields.action||query.action||Object.keys(query).find(k=>!k.startsWith('_'));
-  const write=['save_profile','python_enqueue'].includes(action),body={action,query,fields};if(action==='save_profile')body.revision=revisions.get(fields.target_key)||null;
+  const write=['save_profile','python_enqueue','python_extract_start','python_extract_step'].includes(action),body={action,query,fields};if(action==='save_profile')body.revision=revisions.get(fields.target_key)||null;
   const r=e.request('/api/php-ui/'+(write?'write':'read'),body);calls.push({action,status:r.status,error:r.data.error,...(action==='save_profile'?{fields}: {})});if(r.data.key&&r.data.revision)revisions.set(r.data.key,r.data.revision);
   return {ok:r.status<300,status:r.status,json:async()=>r.data,text:async()=>JSON.stringify(r.data)};
  };
@@ -62,7 +62,7 @@ test('original selection/results/save flow works with actual Flask compatibility
  assert.ok(calls.some(x=>x.action==='save_profile'&&x.status===200),JSON.stringify({calls,state:w.__inspect()}));
  const loaded=e.request('/api/php-ui/read',{action:'load_profile',query:{load_profile:'one'},fields:{}}).data;
  assert.equal(loaded.profile.titleSuffix,'پایتون');assert.equal(loaded.profile.priceVal,15);assert.equal(loaded.profile.products[0][1].price_num,1000);assert.equal(loaded.profile.products[0][1].woo_id,77);
- await w.backendExtractFor();await e.flush();assert.ok(calls.some(x=>x.action==='python_enqueue'&&x.status===200));assert.deepEqual(e.errors,[]);
+ await w.backendExtractFor();await e.flush();assert.ok(calls.some(x=>x.action==='python_extract_start'&&x.status===200));assert.deepEqual(e.errors,[]);
 });
 
 test('original statistics renderer accepts real local metrics without inventing remote matrix inventory',t=>{

@@ -1,6 +1,7 @@
 """Disposable real-browser fixture, NEVER a production entrypoint."""
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,7 +19,31 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
     from scraper4.services.scraping.fetch import HtmlFetcher
     def forbidden(*args,**kwargs):
         raise AssertionError('Browser boot must never fetch a source/destination')
-    HtmlFetcher.get=staticmethod(forbidden)
+    mode=os.environ.get('S4_BROWSER_EXTRACTION_FIXTURE','')
+    if mode:
+        other=db.upsert_profile('other','https://example.com/other','Unrelated fixture')
+        db.enqueue('extract',other['id']);db.enqueue('woo_send',other['id'])
+        def fixture(url,**kwargs):
+            if not url.startswith('https://example.com/'):raise AssertionError('Unexpected source')
+            if mode=='denied':return {'ok':False,'code':403,'error':'PRIVATE-FIXTURE-TOKEN'}
+            return {'ok':True,'code':200,'url':url,'html':'<article class="product"><h2>Fixture '+('page two' if 'page=2' in url else 'page one')+'</h2></article>'}
+        HtmlFetcher.get=staticmethod(fixture)
+        from scraper4.services import github_products
+        import base64
+        def github_fixture(path,params=None):
+            if path.endswith('/branches'):return [{'name':'main'}]
+            if '/git/trees/' in path:return {'tree':[{'path':'products.csv','type':'blob','size':100}], 'truncated':False}
+            if '/contents/' in path:
+                raw=b'title,price,link\nCSV fixture,2500,https://example.com/csv-product\n'
+                return {'type':'file','encoding':'base64','size':len(raw),'content':base64.b64encode(raw).decode()}
+            raise AssertionError('Unexpected GitHub fixture endpoint')
+        github_products.api_read=github_fixture
+        @app.get('/__test__/extract-state')
+        def extract_state():return {'jobs':db.list_entries(),'products':db.list_products(p['id'])}
+        @app.post('/__test__/age-step')
+        def age_step():
+            value=db.checkpoint_read('extract:manual:last');value['started_epoch']=0;db.checkpoint_write('extract:manual:last',value);return {'ok':True}
+    else:HtmlFetcher.get=staticmethod(forbidden)
     @app.get('/__test__/snapshot')
     def snapshot():
         with db.connect() as conn:

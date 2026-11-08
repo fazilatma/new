@@ -113,7 +113,7 @@ def create_app(settings=None):
         elif request.endpoint == 'php_ui.frame':
             # Opaque sandbox: original inline code has NO cookie/CSRF/network authority.
             response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-            response.headers['Content-Security-Policy'] = "default-src 'none'; script-src 'unsafe-inline' " + " ".join(scheme + request.host + path for scheme in ('https://','http://') for path in ('/static/php-ui-frame.js','/static/php-ui-attach.js')) + "; style-src 'unsafe-inline'; font-src " + " ".join(scheme + request.host + '/static/fonts/' for scheme in ('https://','http://')) + "; img-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; sandbox allow-scripts allow-modals"
+            response.headers['Content-Security-Policy'] = "default-src 'none'; script-src 'unsafe-inline' " + " ".join(scheme + request.host + path for scheme in ('https://','http://') for path in ('/static/php-ui-frame.js','/static/php-ui-attach.js','/static/php-ui-start.js')) + "; style-src 'unsafe-inline'; font-src " + " ".join(scheme + request.host + '/static/fonts/' for scheme in ('https://','http://')) + "; img-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; sandbox allow-scripts allow-modals"
         if request.endpoint == 'static' and request.path.startswith('/static/fonts/'):
             response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Cache-Control'] = 'no-store'
