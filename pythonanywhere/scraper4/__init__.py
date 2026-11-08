@@ -51,6 +51,14 @@ def create_app(settings=None):
             return jsonify(ok=False, error='Maintenance in progress'), 503, {'Retry-After': '30'}
         if request.endpoint == 'admin.health':
             return
+        if request.endpoint == 'cron.run' and request.method in ('GET', 'HEAD'):
+            if db.checkpoint_read('cron:config').get('public_get') is not True:
+                return jsonify(ok=False, error='Public GET cron is disabled; enable it in the admin panel'), 403
+            # A HEAD check must never advance a job (Flask adds HEAD to GET routes).
+            if request.method == 'HEAD':
+                return app.response_class(status=200)
+            request.environ['s4.public_cron'] = True
+            return
         bearer = request.headers.get('Authorization', '')
         if bearer:
             scheme, _, value = bearer.partition(' ')
@@ -87,6 +95,8 @@ def create_app(settings=None):
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' https:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         response.headers['Cache-Control'] = 'no-store'
+        if request.endpoint == 'cron.run':
+            response.headers['X-Robots-Tag'] = 'noindex, nofollow'
         return response
 
     @app.errorhandler(ValueError)

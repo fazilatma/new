@@ -138,3 +138,23 @@ document.querySelector('#cron-status').onclick = async () => {
   try { document.querySelector('#cron-result').textContent = JSON.stringify(await api('/api/cron/status'),null,2); }
   catch(error) { message(error.message); }
 };
+
+
+const publicCron = document.querySelector('#cron-public-get');
+api('/api/cron/config').then(data => { publicCron.checked = data.config.public_get; })
+  .catch(error => message(error.message));
+publicCron.onchange = async () => {
+  const enabled = publicCron.checked;
+  if (enabled && !confirm('کران بدون کلید عمومی می‌شود. هر بازدیدکننده می‌تواند صف استخراج/ارسال ثبت‌شده را جلو ببرد و منابع حساب را مصرف کند. تأیید می‌کنید؟')) {
+    publicCron.checked = false;
+    return;
+  }
+  publicCron.disabled = true;
+  try {
+    await api('/api/cron/config', 'POST', {public_get: enabled});
+    message(enabled ? 'GET عمومی فعال شد؛ آدرس /api/cron/run بدون کلید قابل فراخوانی است.' : 'GET عمومی خاموش شد؛ POST دارای کلید همچنان در دسترس است.');
+  } catch(error) {
+    publicCron.checked = !enabled;
+    message(error.message);
+  } finally { publicCron.disabled = false; }
+};
