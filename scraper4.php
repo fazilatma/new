@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.645';
+const APP_VERSION = '10.646';
 
 
 if (!function_exists('str_starts_with')) {
@@ -29012,7 +29012,17 @@ function s4RunOneAttachedExtractionSegment(string $source='web_cron',int $budget
     if(!$candidates)return['ok'=>true,'skipped'=>'no_resumable_extraction'];
     usort($candidates,static fn($a,$b)=>((int)($a['updated_at']??0)<=> (int)($b['updated_at']??0))?:strcmp((string)($a['id']??''),(string)($b['id']??'')));
     $row=$candidates[0];$qid=(string)$row['id'];$pk=(string)$row['profile_key'];
-    $profiles=loadProfiles();if(!is_array($profiles[$pk]??null))return['ok'=>false,'error'=>'profile_not_found','queue_id'=>$qid];
+    $profiles=loadProfiles();
+    if(!is_array($profiles[$pk]??null)){
+        /* A human cannot Continue a deleted profile: close that orphan so it
+           cannot monopolize every cron, while preserving the row as evidence. */
+        $qDead=extractReadQueue();foreach($qDead['entries']as&$dead){
+            if(!is_array($dead)||(string)($dead['id']??'')!==$qid)continue;
+            $dead['status']='failed';$dead['resumable']=false;$dead['resume_needed']=0;$dead['done_at']=time();$dead['updated_at']=time();
+            $dead['error']='پروفایل حذف شده یا وجود ندارد؛ ردیف یتیم بسته شد';unset($dead['resuming'],$dead['resume_requested_at']);break;
+        }unset($dead);extractWriteQueue($qDead);
+        return['ok'=>true,'ran'=>true,'terminalized'=>true,'reason'=>'profile_not_found','queue_id'=>$qid,'profile_key'=>$pk];
+    }
     $prep=extractResumePrepare($pk,loadConnections(),$qid,true);
     if(empty($prep['ok']))return['ok'=>true,'skipped'=>'checkpoint_busy','reason'=>(string)($prep['reason']??''),'queue_id'=>$qid];
     $phase=(string)($prep['phase']??$row['resume_phase']??$row['phase']??'list');if(!in_array($phase,['list','detail'],true))$phase='list';
@@ -49608,6 +49618,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"scraper4.42web.io/scraper4.php?cron_run=1")!==false
         &&strpos($selfSrc,"{v:'10." . "645'")!==false
         &&version_compare(APP_VERSION,'10.645','>='));
+    $add('10.646','نگهبان cron ردیف یتیم پروفایل حذف‌شده را قطعی می‌بندد و به بعدی می‌رود',
+        strpos($selfSrc,"'terminalized'=>true,'reason'=>'profile_not_found'")!==false
+        &&strpos($selfSrc,"\$dead['resumable']=false;\$dead['resume_needed']=0")!==false
+        &&strpos($selfSrc,"{v:'10." . "646'")!==false
+        &&version_compare(APP_VERSION,'10.646','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102330,6 +102345,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.646', t:'🧹 عبور نگهبان از ردیف پروفایل حذف‌شده', items:[
+    'اگر checkpoint به پروفایلی اشاره کند که دیگر وجود ندارد، Continue بی‌معناست؛ ردیف با دلیل روشن failed و غیرقابل‌ادامه می‌شود.',
+    'ردیف یتیم دیگر هر cron را به خود اختصاص نمی‌دهد و تیک بعدی به کار معتبر بعدی می‌رسد.',
+    'ردیف برای گزارش و بررسی باقی می‌ماند و هیچ دادهٔ پروفایل موجودی حذف نمی‌شود.'
+  ]},
   {v:'10.645', t:'👤 نگهبان انسانی cron و پل امن 42web', items:[
     'هر cron دقیقاً مانند کاربر انسانی فهرست کارهای stale را به‌ترتیب اولویت می‌بیند و Continue را بدون cooldown چهار‌دقیقه‌ای اجرا می‌کند.',
     'مالک زنده و توقف صریح کاربر همچنان محترم‌اند و روی هاست بدون CLI در هر تیک فقط یک کار بازیابی می‌شود.',
