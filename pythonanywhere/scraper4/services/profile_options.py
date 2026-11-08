@@ -6,7 +6,7 @@ on already queued jobs during deployment.
 """
 import hashlib
 import json
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, DecimalException, ROUND_HALF_UP
 from ..db import utc_now
 
 DEFAULTS={'titleSuffix':'','priceMode':'none','priceVal':0,'roundPrice':0,'useCustomCol':False,'customColName':'وضعیت','customColVal':'موجود','minPrice':10000,'wooProfileCatId':0,'bslProfileCatId':0,
@@ -45,17 +45,17 @@ def editor(profile):
 
 def adjust(amount,mode,value,rounding=0):
     try:
-        n=Decimal(str(amount));v=Decimal(str(value or 0))
-        if not n.is_finite() or not v.is_finite():raise ValueError()
+        n=Decimal(str(amount));v=Decimal(str(value or 0));r=Decimal(str(rounding or 0))
+        if not n.is_finite() or not v.is_finite() or not r.is_finite() or r<0:raise ValueError()
         if mode=='percent':n*=1+v/100
         elif mode=='multiplier':n*=v
         elif mode!='none':raise ValueError()
         n=n.quantize(Decimal('1'),rounding=ROUND_HALF_UP)
-        if rounding:n=(n/Decimal(str(rounding))).quantize(Decimal('1'),rounding=ROUND_HALF_UP)*Decimal(str(rounding))
+        if r:n=(n/r).quantize(Decimal('1'),rounding=ROUND_HALF_UP)*r
         n=n.quantize(Decimal('1'),rounding=ROUND_HALF_UP)
         if n<0 or n>10**15:raise ValueError()
         return int(n)
-    except (InvalidOperation,TypeError,ValueError):raise ValueError('قیمت محاسبه‌شده معتبر یا در محدودهٔ مجاز نیست.') from None
+    except (DecimalException,TypeError,ValueError):raise ValueError('قیمت محاسبه‌شده معتبر یا در محدودهٔ مجاز نیست.') from None
 
 
 def price(profile,amount,target=None):

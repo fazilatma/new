@@ -121,3 +121,13 @@ def test_php_below_min_cleanup_keeps_zero_for_separate_no_price_action(app,clien
     root=f'/api/profile-settings/{p["id"]}'
     assert client.post(root+'/cleanup-preview',json={'mode':'below_min'},headers=auth_headers).json['count']==1
     assert client.post(root+'/cleanup-preview',json={'mode':'no_price'},headers=auth_headers).json['count']==1
+
+
+@pytest.mark.parametrize('rounding',[0,'0','0.0',None,''])
+def test_destination_form_zero_rounding_is_not_decimal_division_by_zero(rounding):
+    assert options.adjust(1200,'none','0',rounding)==1200
+
+
+@pytest.mark.parametrize('rounding',['NaN','Infinity','-10','not-a-number'])
+def test_bad_destination_rounding_raises_safe_value_error(rounding):
+    with pytest.raises(ValueError):options.adjust(1200,'none',0,rounding)

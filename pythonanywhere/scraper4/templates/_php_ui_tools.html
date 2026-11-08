@@ -1,0 +1,8 @@
+<dialog id="php-tools" class="php-tools-dialog" aria-labelledby="php-tools-title"><div class="section-heading"><h2 id="php-tools-title">ابزارهای متصل پایتون</h2><button id="php-tools-close" type="button">✕ بستن</button></div>
+<p>این ابزار در همین صفحه و خارج از sandbox اجرا می‌شود؛ کلیدها و سند پاک‌سازی به کد PHP تحویل داده نمی‌شوند.</p>
+<section data-python-tool="profile" hidden>{% include '_profile_settings.html' %}</section>
+<section data-python-tool="selectors" hidden><form id="profile-form"><label>آدرس فهرست<input name="url" type="url" dir="ltr"></label><div class="pair">{% for k in ['container','title','price','link','image','sku'] %}<label>{{ k }}<input name="{{ k }}" dir="ltr"></label>{% endfor %}{% for k in ['shortDesc','longDesc','specs','images','sku','brand','category','tags'] %}<label>detail {{ k }}<input name="detail_{{ k }}" dir="ltr"></label>{% endfor %}</div>{% include '_selector_preview.html' %}</form></section>
+<section data-python-tool="audit" hidden>{% include '_extraction_audit.html' %}</section>
+<section data-python-tool="results" hidden>{% include '_product_overview.html' %}{% include '_php_ui_results.html' %}</section>
+</dialog>{% include '_product_detail.html' %}
+<div hidden id="php-menu-mounts"><section id="queue-panel"><h2>کنترل واقعی صف پایتون</h2><p>ارسال ناموفق ممکن است در مقصد موفق شده باشد؛ قبل از ادامه، مقصد و شناسه‌ها را بررسی کنید. مکث/لغو درخواستِ درحال پرواز را پس نمی‌گیرد.</p><button id="php-jobs-refresh" type="button">تازه‌سازی صف</button><p id="php-jobs-status" role="status"></p><div class="table-wrap"><table><thead><tr><th>کار</th><th>پروفایل</th><th>وضعیت</th><th>کنترل</th></tr></thead><tbody id="php-jobs"></tbody></table></div></section>{% include '_extraction_control.html' %}</div>

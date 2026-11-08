@@ -16,13 +16,14 @@ from pathlib import Path
 from ..db import utc_now
 from . import profile_options, start_page
 from .extraction_diagnostics import SAFE_HINTS
+from .basalam.shops import public_shops
 from .scraping.engines import ENGINES, profile_engine
 from .scraping.fetch import validate_url
 from .scraping.pagination import TYPES
 from .scraping.detail import normalize_selectors
 
 ROOT=Path(__file__).resolve().parents[1]
-READS={'app_ready','load_profile','load_connections','start_product_stats','extract_queue_status','tasks_list','whoami','python_capabilities'}
+READS={'app_ready','load_profile','load_connections','start_product_stats','extract_queue_status','whoami'}
 WRITES={'save_profile','python_enqueue'}
 UNSUPPORTED='این عملیات رابط PHP هنوز به پایتون متصل نیست؛ هیچ تغییری انجام نشد.'
 
@@ -102,7 +103,7 @@ def load(db,p):
         for k in ('images','brand','category','tags','in_stock','stock','stock_status','longDesc','shortDesc','variations'):
             if k in data:product[k]=data[k]
         products.append([row['key'],product])
-    return {'url':p['url'],'name':p['name'],'updatedAt':stamp(p['updated_at']),'pages':opts['pages'],'extractionEngine':profile_engine(p),
+    return {'id':p['id'],'url':p['url'],'name':p['name'],'updatedAt':stamp(p['updated_at']),'pages':opts['pages'],'extractionEngine':profile_engine(p),
             'pagType':p['pagination'].get('type','query_page'),'pagVal':p['pagination'].get('val',''),'selectors':p['selectors'],
             'detailSelectors':{k:{'enabled':True,'selector':v} for k,v in normalize_selectors(settings.get('detailSelectors',{})).items()},
             **values,'wooCategoryId':values['wooProfileCatId'],'bslCategoryId':values['bslProfileCatId'],
@@ -144,11 +145,10 @@ def read(db,settings,data):
         for name in ('woocommerce','basalam'):
             cfg=db.get_config(name)
             out[name]={k:('••••' if k in ('token','consumer_key','consumer_secret') and cfg[k] else cfg[k]) for k in ('store_url','vendor_id','category_id','token','consumer_key','consumer_secret','price_mode','price_val','price_round') if k in cfg}
+        out['basalam']['vendors']=[{**v,'token':'••••' if v['token_configured'] else ''} for v in public_shops(db.get_config('basalam')) if not v['is_default']]
         return {'ok':True,'connections':out,'read_only':True}
     if op=='extract_queue_status':return queue(db)
-    if op=='tasks_list':raise ValueError(UNSUPPORTED) # Different task-manager contract: do not forge it.
     if op=='whoami':return {'ok':True,'version':manifest()['source_version'],'runtime':'Python','source_sha':manifest()['source_sha256']}
-    if op=='python_capabilities':return {'ok':True,'reads':sorted(READS-{'tasks_list'}),'writes':sorted(WRITES),'full_php_parity':False}
     raise ValueError(UNSUPPORTED)
 
 

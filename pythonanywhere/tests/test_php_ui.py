@@ -17,7 +17,7 @@ def form(**kwargs):
 def test_original_ui_is_pinned_entire_client_not_a_redesign():
     raw=(php_ui.ROOT/'upstream/php-ui.html').read_bytes();m=php_ui.manifest()
     assert len(raw)==m['client_bytes'] and hashlib.sha256(raw).hexdigest()==m['client_sha256']
-    assert m['source_commit']=='67f69a0fb1b6959c093254650d1314fdf754b0e3'
+    assert m['source_commit']=='aec65b64fbee0db82e06b1c6b7a684c7741b879d'
     assert raw.startswith(b'<!DOCTYPE html>') and raw.rstrip().endswith(b'</html>')
     assert len(re.findall(rb'<\?(?:php|=).*?\?>',raw,re.S))==m['php_slot_count']==39
     assert b'function collectProfileData(' in raw and b'function backendExtractFor(' in raw
@@ -59,7 +59,7 @@ def test_native_reads_are_csrf_browser_only_and_never_run_cron_or_queue(app,clie
     assert db.list_entries()==before and db.checkpoint_read('cron:config')=={}
 
 
-@pytest.mark.parametrize('action',['cron_run','internal_cron_feedback','internal_extract_feedback','manual_sync','save_connections','woo_backend','tasks_list','delete_profile'])
+@pytest.mark.parametrize('action',['cron_run','internal_cron_feedback','internal_extract_feedback','manual_sync','save_connections','woo_backend','delete_profile'])
 def test_unknown_and_unattached_actions_never_fake_success_or_write(app,client,auth_headers,action):
     db=app.extensions['s4_db']
     with db.connect() as c:before=list(c.iterdump())

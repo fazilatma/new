@@ -1,13 +1,13 @@
 {
   "source": {
     "branch": "arena/01a0ebf7-new",
-    "commit": "67f69a0fb1b6959c093254650d1314fdf754b0e3",
-    "version": "10.644",
+    "commit": "aec65b64fbee0db82e06b1c6b7a684c7741b879d",
+    "version": "10.646",
     "path": "scraper4.php",
-    "sha256": "21ab150697203dc8cda755ed40c843ac45df0054e204effd912ca9f165d697f8",
+    "sha256": "20405af62a26cb5731bc9b0cac3a48e7243072663fdd1d9f155da34c8233613f",
     "verified_on": "2026-11-08",
-    "bytes_utf8": 8729506,
-    "lines": 124590
+    "bytes_utf8": 8736736,
+    "lines": 124667
   },
   "inventory": {
     "line_start_function_declarations_in_mixed_source": 2711,
@@ -140,7 +140,7 @@
     },
     {
       "feature": "Full original PHP client document copied intact, including both original inline scripts, all CSS/HTML/IDs/handlers and full menu/tab layout. 39 PHP output slots rendered explicitly by Python; no PHP code execution. Pinned source/client hashes and reproducible vendoring tool. Route /php-ui beside working dashboard.",
-      "reference": "scraper4.php 90295-124590, PHP10.644/67f69a0; upstream/manifest.json and upstream/php-ui.html"
+      "reference": "PHP10.646/aec65b6; exact client boundary and hashes in upstream/manifest.json"
     },
     {
       "feature": "Opaque-origin sandbox for original client, strict trusted parent broker: no raw credential/cookie/CSRF access, no direct fetch/XHR/SSE/worker/images/external frames. Parent validates exact WindowProxy + null origin, CSRF on allowlisted operations and explicit confirmation of all writes. Exact paths for scripts/fonts/frame prevent GET cron execution via subresource/navigation tricks.",
@@ -149,6 +149,18 @@
     {
       "feature": "Original profile dropdown/load/apply/results/settings/selector save and Start metrics/queue rendering attached to actual Python services. Atomic stale-revision/active-job guarded explicit metadata/options/selector save; raw products/remote IDs never rewritten. Extraction enqueues durable jobs without executing or sending. Unknown actions/heartbeat/cron return501; autosave and unsupported changed features rejected.",
       "reference": "Actual unmodified original functions integration-tested with real Flask API; late upstream syncConfig collector drops includeProducts argument, repaired only in external attachment"
+    },
+    {
+      "feature": "Native original send buttons, explicit manual extract-to-send chain, queue/task/progress reads, scoped pause/explicit cancel/terminal clear, settings-only profile duplicate and guarded explicit local profile deletion; real transactional SQLite jobs, no HTTP or implicit work in native write endpoints.",
+      "reference": "services/php_ui_operations.py; failed send reconciliation and reserved-target/concurrent enqueue guards; actual scripts + Flask integration and worker with simulated destinations"
+    },
+    {
+      "feature": "Original hamburger opens trusted same-page global settings/backup/host/worker/cron/update/renderer controllers; native profile options/cleanup, independent selector lab, engine audit, paginated all-product browser/details and queue control dialog. Secret keys, cleanup proofs and CSRF stay in parent; opaque child receives only masked connections and public results.",
+      "reference": "php_ui_host.html, php-ui-parent-tools.js, reused existing controllers, 12 full-original-script/host DOM regressions"
+    },
+    {
+      "feature": "Destination text-form zero rounding no longer causes Decimal division-by-zero in profile preview/sends; rejects nonfinite/negative rounding safely.",
+      "reference": "profile_options.adjust; tests for zero/string-zero/null/bad rounding; discovered with actual same-page Flask form flow"
     }
   ],
   "pending": [
@@ -161,7 +173,7 @@
     "Live first-page audit and complete pagination/detail verification for private production profiles requires authenticated browser execution; synthetic fixture tests are not proof of current remote-site reachability",
     "Complete PHP Start parity: in-page visual picker, optional product copy, complete per-profile periodic/filter controls, GitHub private/branch/file browser, true remote inventory/price-discrepancy matrix and inventory chart, uncoded/misc-product operations and message-delivered manual-sync reports",
     "Independent extraction pre-global-lock priority from PHP 10.643: Python deliberately keeps safe single-flock queue ownership; shared work may wait for the active segment rather than bypass its lock.",
-    "Original-client /php-ui is opt-in, not default yet. Native secret connection/global configuration writes, scheduling/autosave, send/shop/AI/chat/order/variant/media/matrix/visual picker adapters, external source frames/images, non-default color palettes and persistent appearance preferences remain unconnected. Existing default dashboard remains for supported operations. Native results are bounded at1000, not a complete huge-profile result view."
+    "Original-client /php-ui remains opt-in, not default/browser-verified. Direct legacy secret/global writes and autosave stay disabled; supported operations use the same-page trusted parent. Full shop/AI/chat/order/variant/media/matrix/visual-picker adapters, source frames/images, non-default palettes, persistent isolated appearance and complete worker/task parity remain open. Native result payload caps at1000 but trusted pagination browses all products; queue panes show only100 recent rows. Full host-folder backups and product-copy semantics are not implemented."
   ],
   "notes": [
     "This ledger is not a claim of full parity.",
@@ -181,6 +193,7 @@
     "1.14.0: latest PHP source rechecked at 9756c32/10.641. Start rebuilt with real profile/source/range/detail/run/audit/metric/breakdown/history actions; explicit limitations in UI/README. Legacy 8-card/10-count API contract retained as collapsed quick-ID view. New 16-card drilldowns share the same classifier as counts; no JSON1 requirement. History describes local scoped mappings ONLY; never substituted for remote inventory. Start GET is read-only, snapshot POST is browser-admin+CSRF and durable/rate-limited/bounded. New source-chain finalization never invokes a sender, creates children atomically only after successful nonempty source and honors pause races. Public GitHub source is a single bounded read and atomic import with no copied remote identity. Five-page diagnostics are signed/capped/sequential and never write products/jobs. No dependencies/schema/db.py/authority changes. Production private profiles and outbound sends were not exercised by the agent. Validation: 466 Python tests and 97 JavaScript tests passed (75 browser/DOM integration + 22 auto-refresh); new Start tests include real Flask/SQLite save/enqueue/filter/snapshot integration, nonempty-only child creation, pause/final-page races, stock classification, settings/identity preservation and public-file fixtures.",
     "1.15.0: source advanced to PHP 10.642/438d53c and was inspected, including new JSON-queue recovery. Python uses durable SQLite rows and does not auto-resume user-paused or failed work, especially ambiguous sends. Global settings now run within their own menu sections; original nodes are mounted/restored rather than cloned. Profile options save is browser+CSRF and blocked by alive jobs of that profile; no product rewrites or automatic resends. Cleanup has signed stale-sensitive confirmation and 1000-row cap; raw prices/remote IDs survive non-cleanup actions. Woo global destination pricing previously ignored by sender now applies; UI/README require preview review before sending. Font preference is browser-local; OFL assets and licenses ship with code. No dependency/schema/db.py/authority change. Agent did not read private production errors, execute production queues, change cron opt-in, import credentials or send destination products. Full parity and all-account extraction fixes are not claimed.",
     "Final source recheck advanced to 10.644/67f69a0. Inspected 10.643 independent pre-global-lock PHP extraction and 10.644 next-unfetched-page checkpoint fix: Python already advances _page only after page product persistence and has existing one-page-per-tick continuation regressions. Python retains its single safe flock; it does not claim independent extraction bypass of a busy global queue lock. PHP JSON-queue recovery/prescheduling differs from durable SQLite queue ownership.",
-    "1.16.0 changes migration foundation from manually rewritten lookalike to exact vendored original PHP client. This is full source-client transfer but explicitly NOT full functionality migration or default-UI replacement. All non-PHP literal source remains in immutable upstream fragment; security and backend adaptations are separate. Original inline script is allowed ONLY in an opaque, network-denied sandbox, not an authenticated same-origin document. No schema/dependency/authority change, private credential read, cron change, queue processing or destination send during release validation."
+    "1.16.0 changes migration foundation from manually rewritten lookalike to exact vendored original PHP client. This is full source-client transfer but explicitly NOT full functionality migration or default-UI replacement. All non-PHP literal source remains in immutable upstream fragment; security and backend adaptations are separate. Original inline script is allowed ONLY in an opaque, network-denied sandbox, not an authenticated same-origin document. No schema/dependency/authority change, private credential read, cron change, queue processing or destination send during release validation.",
+    "1.17.0: latest source advanced to PHP10.646/aec65b6 and exact client re-vendored (2995175 bytes/39 slots). Inspected 10.645 bridge/watchdog and 10.646 orphan terminalization: Python deliberately never maps heartbeat to cron, never auto-resumes failed sends and existing worker terminalizes missing-profile rows once; new regression verifies following valid work runs. 562 Python +95 DOM +22 refresh regressions passed on temporary DBs/fixture sources/simulated HTTP. No production private-data reads, destination sends, extraction runs, cron/host scheduling changes or credential imports by the agent. No db.py/schema/dependency/deployment-authority change. jsdom is not Chromium/PHP CLI or live-account validation. Detailed endpoint/scope report: pythonanywhere/ENDPOINTS.fa.md."
   ]
 }
