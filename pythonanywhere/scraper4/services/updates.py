@@ -25,7 +25,7 @@ from ..db import utc_now
 REPO = 'fazilatma/new'
 REF = 'arena/f3d5d2a0-new'
 EXCLUDED = {'.env', '.venv', 'data', 'logs', '__pycache__', '.pytest_cache',
-            'pythonanywhere_wsgi.py', '.release.json', '.maintenance.json'}
+            'pythonanywhere_wsgi.py', '.release.json', '.maintenance.json', '.runtime.json'}
 SHA = re.compile(r'^[0-9a-f]{40}$')
 ROOT_FILES = {'.env.example', '.gitignore', 'README.fa.md', 'SOURCE.json',
               'bootstrap.sh', 'install.sh', 'requirements-dev.txt', 'requirements.txt', 'wsgi.py'}
@@ -305,6 +305,8 @@ def maintain(db, settings):
     cfg = update_config(db)
     action = request.get('action') if explicit else 'auto'
     state = db.checkpoint_read('updates:state')
+    if not explicit and not db.get_config('pythonanywhere').get('token'):
+        return {'ok': True, 'skipped': True, 'reason': 'Enter PythonAnywhere API token in the web panel to enable automatic updates'}
     if not explicit and (not cfg['enabled'] or time.time() - state.get('checked_epoch', 0) < cfg['interval_seconds']):
         return {'ok': True, 'skipped': True}
     if explicit:

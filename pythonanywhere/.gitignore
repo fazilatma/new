@@ -9,3 +9,5 @@ pythonanywhere_wsgi.py
 
 .release.json
 .maintenance.json
+
+.runtime.json

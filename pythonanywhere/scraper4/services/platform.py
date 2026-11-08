@@ -4,6 +4,7 @@ Credentials are encrypted in connections, never embedded in task commands.
 No endpoint accepts an arbitrary API host, shell command or WSGI path.
 """
 import getpass
+import json
 import os
 import re
 import shlex
@@ -35,7 +36,8 @@ def operation_name(method, path):
 
 
 class PythonAnywhere:
-    def __init__(self, config):
+    def __init__(self, config, *, timeout=(10, 60)):
+        self.timeout = timeout
         self.config = dict(config)
         self.site = config.get('site', 'www.pythonanywhere.com')
         self.username = config.get('username', '')
@@ -51,7 +53,7 @@ class PythonAnywhere:
         try:
             response = requests.request(method, self.base + path,
                 headers={'Authorization': 'Token ' + self.config['token'], 'User-Agent': 'scraper4-pa/1.1'},
-                timeout=(10, 60), allow_redirects=False, **kwargs)
+                timeout=self.timeout, allow_redirects=False, **kwargs)
         except requests.RequestException:
             raise PlatformError(f'PythonAnywhere API network error during {operation}; check account connectivity', operation=operation, category='network') from None
         if allow_404 and response.status_code == 404:
@@ -129,6 +131,13 @@ class PythonAnywhere:
         self.reload()
         result = {'ok': True, 'domain': self.domain, 'web': 'configured', 'task': 'pending'}
         db.checkpoint_write('platform:status', result)
+        result.update(self.ensure_task(settings, python=python))
+        db.checkpoint_write('platform:status', result)
+        return result
+
+    def ensure_task(self, settings, *, python):
+        """Bounded initial scheduler setup; never run a worker inside WSGI."""
+        base = settings.base_dir.resolve()
         command = 'cd ' + shlex.quote(str(base)) + ' && ' + shlex.quote(str(python)) + ' -m scraper4 maintain --budget 240'
         tasks = self.call('GET', 'schedule/')
         if not isinstance(tasks, list):
@@ -158,9 +167,7 @@ class PythonAnywhere:
             task = self.call(method, path, json=payload)
         if not isinstance(task, dict) or not task.get('id') or task.get('enabled') is False or task.get('can_enable') is False:
             raise PlatformError('Scheduled task could not be enabled; check your account task quota')
-        result.update(task='configured', task_id=task['id'], interval=task.get('interval', payload['interval']))
-        db.checkpoint_write('platform:status', result)
-        return result
+        return {'ok': True, 'task': 'configured', 'task_id': task['id'], 'interval': task.get('interval', payload['interval'])}
 
 
 def prompt_configuration(db, *, reset_api=False, site=None, username=None, domain=None):
@@ -202,12 +209,12 @@ def prompt_configuration(db, *, reset_api=False, site=None, username=None, domai
     return cfg
 
 
-def diagnose(db):
+def diagnose(db, *, timeout=(5, 10)):
     """Only GET requests. Returns no token, headers, paths or raw API bodies."""
     cfg = db.get_config('pythonanywhere')
     if not cfg:
         return {'ok': False, 'error': 'API not configured; run configure first', 'checks': []}
-    api = PythonAnywhere(cfg)
+    api = PythonAnywhere(cfg, timeout=timeout)
     checks = []
     for name, path in (('webapps_read', 'webapps/'), ('webapp_read', api.web_path), ('tasks_read', 'schedule/')):
         try:
@@ -223,3 +230,28 @@ def diagnose(db):
             'hint': ('Token worked on at least one route; inspect the failing operation/plan permissions'
                      if works else 'Check token, username, API site and account API access; 403 alone is not conclusive'),
             'checks': checks}
+
+
+def web_defaults():
+    site = os.environ.get('PYTHONANYWHERE_SITE', 'www.pythonanywhere.com')
+    if site not in SITES:
+        site = 'www.pythonanywhere.com'
+    username = os.environ.get('PYTHONANYWHERE_USERNAME', getpass.getuser())
+    suffix = 'eu.pythonanywhere.com' if site == 'eu.pythonanywhere.com' else 'pythonanywhere.com'
+    return {'site': site, 'username': username, 'domain': username.lower() + '.' + suffix}
+
+
+def installed_python(settings):
+    """WSGI sys.executable may be uWSGI, not the virtualenv's Python.
+
+    Only the local installer may write this metadata; HTTP cannot supply a path.
+    """
+    try:
+        runtime = json.loads((settings.base_dir / '.runtime.json').read_text())
+        python = Path(runtime['python'])
+        if (not python.is_absolute() or not python.is_file() or
+                not os.access(python, os.X_OK) or not (python.parent.parent / 'pyvenv.cfg').is_file()):
+            raise ValueError()
+    except (OSError, ValueError, KeyError, TypeError):
+        raise PlatformError('Installed virtualenv metadata is missing; rerun the token-free installer') from None
+    return python

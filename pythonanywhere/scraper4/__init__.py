@@ -45,7 +45,9 @@ def create_app(settings=None):
     @app.before_request
     def protect():
         marker = settings.base_dir / '.maintenance.json'
-        if marker.exists() and request.path not in ('/api/system/status', '/api/updates/status', '/login'):
+        if marker.exists() and not request.path.startswith('/static/') and request.path not in (
+                '/api/system/status', '/api/updates/status', '/login', '/logout', '/settings/pythonanywhere',
+                '/api/platform/config', '/api/platform/test'):
             return jsonify(ok=False, error='Maintenance in progress'), 503, {'Retry-After': '30'}
         if request.endpoint == 'admin.health':
             return

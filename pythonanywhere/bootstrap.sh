@@ -104,7 +104,7 @@ from pathlib import Path, PurePosixPath
 
 archive, target = sys.argv[1], Path(sys.argv[2])
 target.mkdir(parents=True)
-excluded = {'.env', '.venv', 'data', 'logs', '__pycache__', '.pytest_cache', 'pythonanywhere_wsgi.py', '.release.json', '.maintenance.json'}
+excluded = {'.env', '.venv', 'data', 'logs', '__pycache__', '.pytest_cache', 'pythonanywhere_wsgi.py', '.release.json', '.maintenance.json', '.runtime.json'}
 with tarfile.open(archive, 'r:gz') as source:
     for entry in source:
         parts = PurePosixPath(entry.name).parts
@@ -145,7 +145,7 @@ fi
 mkdir -p "$APP_DIR"
 cp -R "$STAGE/." "$APP_DIR/"
 echo "Installing in $APP_DIR"
-PYTHON_BIN="$PYTHON_BIN" S4_VENV="$VENV" S4_AUTO_CONFIGURE="${S4_AUTO_CONFIGURE:-1}" bash "$APP_DIR/install.sh"
+PYTHON_BIN="$PYTHON_BIN" S4_VENV="$VENV" S4_AUTO_CONFIGURE="${S4_AUTO_CONFIGURE:-0}" bash "$APP_DIR/install.sh"
 "$PYTHON_BIN" - "$APP_DIR" "$COMMIT" <<'PYRELEASE'
 import json, sys
 from pathlib import Path
