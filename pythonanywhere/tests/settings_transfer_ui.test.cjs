@@ -78,7 +78,7 @@ test('encrypted export downloads, defaults omit hosting, clears passwords withou
 test('mismatched passwords and oversized files never reach the transfer API',async t=>{
   const e=setup(t);await e.flush();e.input(e.exporting.elements.password,'backup-password-123');e.input(e.exporting.elements.repeat,'different-password');
   e.submit(e.exporting);await e.flush();assert(!e.calls.some(call=>call.url.endsWith('/export')));
-  e.file(1500001);e.d.querySelector('#settings-inspect').click();await e.flush();
+  e.file(10485761);e.d.querySelector('#settings-inspect').click();await e.flush();
   assert(!e.calls.some(call=>call.url.endsWith('/inspect')));assert(e.d.querySelector('#transfer-message').textContent.includes('حجم'));
 });
 test('inspection enables only available sections; hosting and credential import require opt-in',async t=>{
@@ -251,4 +251,14 @@ test('preview errors are local while valid checkboxes stay usable; explicit cred
   e.importing.elements.credentials.dispatchEvent(new e.w.Event('change',{bubbles:true}));await e.flush();
   assert.equal(e.d.querySelector('#settings-apply').disabled,false);
   assert.equal(e.calls.some(call=>call.url.endsWith('/import')),false);
+});
+
+test('settings files above old size limit now reach inspection without automatic apply',async t=>{
+  const e=setup(t);await e.flush();e.file(2400000,'{"app":"scraper","files":{}}');await e.flush();
+  assert(e.calls.some(c=>c.url.endsWith('/inspect')));assert(!e.calls.some(c=>c.url.endsWith('/import')));
+  assert.equal(e.importing.elements.file.dataset.maxFileBytes,'10485760');
+});
+test('host HTML 413 produces an actionable file-limit error instead of unreadable-response message',async t=>{
+  const e=setup(t);await e.flush();const old=e.w.fetch;e.w.fetch=(url,options)=>url.endsWith('/inspect')?Promise.resolve({ok:false,status:413,json:async()=>{throw Error('HTML');}}):old(url,options);
+  e.file(2400000,'{"app":"scraper","files":{}}');await e.flush();assert(e.d.querySelector('#settings-import-state').textContent.includes('۱۰ MiB'));assert.equal(e.d.querySelector('#settings-apply').disabled,true);
 });

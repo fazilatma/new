@@ -79,6 +79,7 @@
     } finally {if(ticket === overviewRequest) overview.setAttribute('aria-busy', 'false');}
   }
   $('#overview-refresh').onclick = refreshOverview;
+  window.addEventListener('s4:extraction-updated', refreshOverview);
   refreshOverview();
   setInterval(() => {if(!document.hidden && !overview.contains(document.activeElement) && $('#pane-start')?.classList.contains('active')) refreshOverview();}, 60000);
 

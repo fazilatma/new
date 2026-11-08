@@ -28,8 +28,10 @@ from .support.crypto import seal, unseal
 FORMAT = 'scraper4-settings'
 ENCRYPTED = FORMAT + '-encrypted'
 ITERATIONS = 600000
-MAX_PLAIN = 900000
-MAX_FILE = 1500000
+MAX_PLAIN = 6 * 1024 * 1024
+MAX_FILE = 10 * 1024 * 1024
+# JSON-string transport can expand controls/quotes up to six times.
+MAX_REQUEST = MAX_FILE * 6 + 65536
 UNDO = 'settings_restore_undo'
 SECTIONS = {
     'profiles': 'پروفایل‌ها و سلکتورها (بدون محصولات)',
@@ -120,7 +122,7 @@ def key_for(password, salt):
 def encrypt(bundle, password):
     raw = canonical(bundle)
     if len(raw) > MAX_PLAIN:
-        raise ValueError('تنظیمات از سقف ۹۰۰ کیلوبایت بیشتر است؛ بخش‌های کمتری را انتخاب کنید.')
+        raise ValueError('تنظیمات از سقف ۶ MiB دادهٔ رمزگشایی‌شده بیشتر است؛ بخش‌های کمتری را انتخاب کنید.')
     salt, nonce = os.urandom(16), os.urandom(12)
     encrypted = AESGCM(key_for(password, salt)).encrypt(nonce, raw, ENCRYPTED.encode())
     enc = lambda value: base64.b64encode(value).decode('ascii')

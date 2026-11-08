@@ -60,6 +60,7 @@ document.querySelectorAll('.delete').forEach(button => button.onclick = async ()
 handle(document.querySelector('#job-form'), async data => {
   if(data.kind !== 'extract' && !confirm('ارسال به فروشگاه انجام شود؟ قبل از تلاش مجدد، محصولات مقصد را بررسی کنید.')) return false;
   const result = await api('/api/jobs','POST', data);
+  window.dispatchEvent(new Event('s4:extraction-enqueued'));
   message(`کار ${result.id} به صف اضافه شد. کران خارجی یا worker آن را ادامه می‌دهد.`);
   await poll();
 });
@@ -370,3 +371,5 @@ document.querySelector('#detail-woo-defaults').onclick = () => {
   window.S4Refresh?.changed(profileForm);
   message('سلکتورهای رایج ووکامرس وارد شدند؛ آن‌ها را با سایت مبدأ تطبیق دهید و سپس پروفایل را ذخیره کنید.');
 };
+
+window.addEventListener('s4:extraction-updated', () => {poll().catch(error => message(error.message)); if(document.querySelector('#pane-results').classList.contains('active')) loadProducts();});

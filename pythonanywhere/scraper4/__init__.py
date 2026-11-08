@@ -242,6 +242,19 @@ def create_app(settings=None):
         return Response('\ufeff' + out.getvalue(), mimetype='text/csv; charset=utf-8',
                         headers={'Content-Disposition': f'attachment; filename=products-{profile_id}.csv'})
 
+    @app.get('/api/extraction/status')
+    def extraction_status():
+        from .services.extraction_control import status
+        return jsonify(status(db))
+
+    @app.post('/api/extraction/step')
+    def extraction_step():
+        if request.args or request.get_json() != {}:
+            raise ValueError('درخواست اجرای مرحله فقط یک شیء JSON خالی است؛ کار یا URL دلخواه انتخاب نمی‌شود.')
+        from .services.extraction_control import step
+        result, code = step(db, settings)
+        return jsonify(result), code
+
     @app.route('/api/jobs', methods=['GET', 'POST'])
     def jobs():
         if request.method == 'GET':

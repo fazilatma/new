@@ -15,6 +15,8 @@ def register_settings_transfer(app, db, settings):
     def browser_only():
         if not session.get('authenticated') or request.environ.get('s4.bearer'):
             abort(403)
+        if request.endpoint in ('settings_transfer.inspect', 'settings_transfer.preview', 'settings_transfer.restore'):
+            request.max_content_length = transfer.MAX_REQUEST
 
     def body():
         if not request.is_json:
@@ -29,7 +31,7 @@ def register_settings_transfer(app, db, settings):
 
     @bp.get('/settings/backup')
     def page():
-        return render_template('settings_transfer.html', transfer_sections=transfer.SECTIONS)
+        return render_template('settings_transfer.html', transfer_sections=transfer.SECTIONS, max_file_bytes=transfer.MAX_FILE)
 
     @bp.get('/api/settings/sections')
     def sections():

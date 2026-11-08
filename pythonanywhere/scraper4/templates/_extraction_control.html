@@ -1,0 +1,8 @@
+<section id="extraction-control" aria-labelledby="extraction-control-title">
+  <div class="section-heading"><h2 id="extraction-control-title">🩺 وضعیت و اجرای استخراج</h2><div class="actions"><button type="button" class="secondary" data-open-tab="settings">تنظیم کران خارجی</button><button type="button" id="extraction-refresh" class="secondary">بررسی وضعیت</button><button type="button" id="extraction-step">اجرای یک مرحلهٔ استخراج</button></div></div>
+  <p class="muted">افزودن به صف به‌تنهایی کار را اجرا نمی‌کند. دکمهٔ اجرا فقط قدیمی‌ترین استخراجِ در انتظار را یک مرحله جلو می‌برد و محصولات استخراج‌شده را ذخیره می‌کند؛ هیچ صف ارسال ووکامرس/باسلام اجرا نمی‌شود. ادامهٔ خودکار به کران یا worker نیاز دارد.</p>
+  <p id="extraction-status" role="status" aria-live="polite">در حال بررسی وضعیت…</p>
+  <p id="extraction-action-status" role="status" aria-live="polite"></p>
+  <div class="table-wrap"><table><thead><tr><th>کار / پروفایل</th><th>وضعیت</th><th>محصولات تشخیص‌داده‌شده</th><th>آخرین صفحه</th><th>هشدار / خطا</th></tr></thead><tbody id="extraction-jobs"></tbody></table></div>
+  <p class="muted">«تمام‌شده» لزوماً به معنی یافتن محصول نیست؛ تعداد و هشدار را بررسی کنید. مرحلهٔ جزئیات ممکن است فقط یک محصول را پردازش کند. اجرای دستی حداقل ۴۵ ثانیه فاصله دارد و کارهای ناموفق خودکار تکرار نمی‌شوند.</p>
+</section>

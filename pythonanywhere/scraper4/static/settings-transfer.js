@@ -56,7 +56,7 @@
       const response = await fetch(path, {method:mutating ? 'POST' : 'GET', cache:'no-store', credentials:'same-origin',
         headers:{'Content-Type':'application/json','X-CSRF-Token':csrf}, ...(mutating ? {body:JSON.stringify(data)} : {})});
       let value;
-      try { value = await response.json(); } catch { throw Error('پاسخ سرور خوانده نشد؛ نتیجه را بررسی کنید و پیش‌نمایش تازه بگیرید.'); }
+      try { value = await response.json(); } catch { throw Error(response.status === 413 ? 'برنامه یا میزبان حجم درخواست را نپذیرفت؛ سقف فایل تنظیمات ۱۰ MiB است.' : 'پاسخ سرور خوانده نشد؛ نتیجه را بررسی کنید و پیش‌نمایش تازه بگیرید.'); }
       if(!response.ok) throw Error(value.error || `HTTP ${response.status}`);
       return value;
     } finally {if(mutating) window.S4Refresh?.endMutation();}
@@ -77,7 +77,7 @@
     if(data.source === 'file') {
       const file = importing.elements.file.files[0];
       if(!file) throw Error('ابتدا فایل JSON را انتخاب کنید.');
-      if(file.size > 1500000) throw Error('سقف حجم فایل ۱٫۵ مگابایت است؛ در PHP خروجی بدون محصولات بگیرید.');
+      if(file.size > Number(importing.elements.file.dataset.maxFileBytes || 10485760)) throw Error('سقف حجم فایل تنظیمات ۱۰ MiB است؛ در PHP خروجی بدون محصولات بگیرید.');
       data.file = typeof file.text === 'function' ? await file.text() : await new Promise((resolve,reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);

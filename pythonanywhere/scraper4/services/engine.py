@@ -15,7 +15,7 @@ from .scraping.pagination import build, NEXT_SELECTOR
 from .scraping.parser import parse_products, load_dom, query_inside
 from .scraping.detail import normalize_selectors, parse_detail, merge_detail, sanitize_fragment, text_html, web_url
 from .scraping.fetch import validate_url
-from .scraping.smart_fetch import SmartFetcher
+from .scraping.smart_fetch import SmartFetcher, looks_like_js_shell
 from .support.persian import price_num
 from .support.url import absolute
 from .woocommerce.client import WooClient
@@ -39,10 +39,16 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
         net['_deadline_seconds'] = 12
     result = SmartFetcher.get(url, timeout=network_timeout or settings.fetch_timeout, net=net,
                               mode=payload.get('render', 'static'), settings=settings)
+    counts.update(last_http_status=result.get('code', 0), last_html_chars=len(result.get('html') or ''),
+                  js_shell=bool(result.get('js_shell_detected') or looks_like_js_shell(result.get('html') or '')),
+                  render_failed=bool(result.get('render_error')))
     if not result.get('ok'):
         raise ValueError(result.get('error') or 'Fetch failed')
     html, effective = result.get('html', ''), result.get('url') or url
     products = parse_products(html, effective, profile['selectors'])
+    counts['last_page_products'] = len(products)
+    counts['warning'] = ('هیچ محصولی در این صفحه تشخیص داده نشد؛ سلکتور کارت، آدرس فهرست و نیاز سایت به JavaScript را بررسی کنید.' if not products
+                         else 'رندر JavaScript ناموفق بود؛ نتیجه از HTML ایستا استخراج شد.' if counts['render_failed'] else '')
     eligible = [key for key, row in products.items() if row.get('link')]
     if payload['_detail_selectors'] and len(eligible) > 1000:
         raise ValueError('Detail extraction supports at most 1000 linked products per listing page; narrow the selectors')
