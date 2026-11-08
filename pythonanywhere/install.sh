@@ -3,13 +3,56 @@
 set -euo pipefail
 umask 077
 APP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python3.11}"
+# BEGIN PYTHON DETECTION (kept identical in bootstrap.sh and install.sh)
 VENV="${S4_VENV:-$HOME/.virtualenvs/scraper4}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "Python 3.11+ is required. Set PYTHON_BIN to a Python version available on your account." >&2
+PYTHON_BIN="${PYTHON_BIN:-}"
+s4_python_ok() {
+  command -v "$1" >/dev/null 2>&1 &&
+    "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+if [[ -n "$PYTHON_BIN" ]]; then
+  if ! s4_python_ok "$PYTHON_BIN"; then
+    echo "Selected interpreter '$PYTHON_BIN' is missing or older than Python 3.10." >&2
+    echo "Unset PYTHON_BIN to auto-detect, or select an installed Python 3.10+ interpreter." >&2
+    exit 1
+  fi
+elif s4_python_ok "$VENV/bin/python"; then
+  PYTHON_BIN="$VENV/bin/python"
+else
+  for candidate in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
+    if s4_python_ok "$candidate"; then
+      PYTHON_BIN="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "No usable Python 3.10+ interpreter was found on this account." >&2
+  echo "Available Python commands:" >&2
+  for candidate in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      "$candidate" --version >&2 || true
+    fi
+  done
+  echo "Use a PythonAnywhere system image with Python 3.10+, then rerun this helper." >&2
   exit 1
 fi
-"$PYTHON_BIN" -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11+ required"'
+if [[ -x "$VENV/bin/python" ]]; then
+  if ! s4_python_ok "$VENV/bin/python"; then
+    echo "Existing virtualenv is older than Python 3.10: $VENV" >&2
+    echo "Choose a different environment with S4_VENV; existing environments are not deleted." >&2
+    exit 1
+  fi
+  selected_version="$("$PYTHON_BIN" -c 'import sys; print("%s.%s" % sys.version_info[:2])')"
+  existing_version="$("$VENV/bin/python" -c 'import sys; print("%s.%s" % sys.version_info[:2])')"
+  if [[ "$selected_version" != "$existing_version" ]]; then
+    echo "Selected Python $selected_version differs from existing virtualenv Python $existing_version." >&2
+    echo "Unset PYTHON_BIN to reuse it, or set S4_VENV to a new path." >&2
+    exit 1
+  fi
+fi
+printf 'Using Python: %s (%s)\n' "$PYTHON_BIN" "$("$PYTHON_BIN" -c 'import platform; print(platform.python_version())')"
+# END PYTHON DETECTION
 mkdir -p "$(dirname "$VENV")"
 if [[ ! -x "$VENV/bin/python" ]]; then "$PYTHON_BIN" -m venv "$VENV"; fi
 "$VENV/bin/python" -m pip install --upgrade pip
