@@ -70,6 +70,7 @@ def pin_legacy_owner(conn, old_cfg):
     # Metadata is host-local and not part of portable settings.
     vid=str(old_cfg.get('vendor_id') or '')
     if not vid.isdigit() or int(vid)<=0: return
+    vid=str(int(vid))
     now=utc_now()
     conn.execute('''INSERT OR IGNORE INTO task_checkpoints (task,state,created_at,updated_at)
                     VALUES (?,?,?,?)''',('basalam:legacy_owner',json.dumps({'vendor_id':vid}),now,now))

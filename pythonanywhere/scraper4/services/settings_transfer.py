@@ -340,7 +340,10 @@ def validate(bundle):
             if section == 'render' and value.get('url'):
                 validate_url(value['url'])
             if section == 'basalam':
-                from .basalam.shops import validate_config
+                from .basalam.shops import validate_config, normalize_config
+                # Older Python exports retained numeric PHP vendor IDs nested
+                # under vendors; normalize that previously opaque legacy list.
+                if 'vendors' in value: value['vendors']=normalize_config(value).get('vendors',[])
                 validate_config(value)
                 for key in ('vendor_id', 'category_id'):
                     if value.get(key) and not re.fullmatch(r'[0-9]+', value[key]):
@@ -364,9 +367,8 @@ def snapshot(conn, secret):
         row = conn.execute('SELECT config FROM connections WHERE name=?', (name,)).fetchone()
         sections[name] = unseal(row['config'], secret) if row else {}
         if name == 'basalam':
-            for field in ('vendor_id', 'category_id'):
-                if type(sections[name].get(field)) is int:
-                    sections[name][field] = str(sections[name][field] or '')
+            from .basalam.shops import normalize_config
+            sections[name] = normalize_config(sections[name])
     for section, task in CHECKPOINTS.items():
         row = conn.execute('SELECT state FROM task_checkpoints WHERE task=?', (task,)).fetchone()
         sections[section] = {**DEFAULTS[section], **(json.loads(row['state']) if row else {})}

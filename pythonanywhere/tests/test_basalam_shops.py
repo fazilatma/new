@@ -173,3 +173,21 @@ def test_failed_ambiguous_write_never_records_another_shops_id(db,settings,monke
     jid=db.enqueue('bsl_send',p['id'],{'vendor_id':'20'});tick(db,settings);tick(db,settings)
     assert db.get_entry(jid)['status']=='failed' and len(called)==1
     assert db.list_products(p['id'])[0]['basalam_id']==111 and not db.list_products(p['id'])[0]['extra']
+
+
+def test_preexisting_python_import_with_numeric_php_vendor_ids_remains_exportable(db,settings):
+    db.put_config('basalam',{'vendor_id':10,'token':'main','vendors':[{'vendor_id':20,'token':'nested','category_id':4}]})
+    with db.connect() as conn:snap=transfer.snapshot(conn,db.secret_key)
+    transfer.validate(snap)
+    assert snap['sections']['basalam']['vendor_id']=='10' and snap['sections']['basalam']['vendors'][0]['vendor_id']=='20'
+    assert transfer.decode(transfer.encrypt(snap,'long-test-password'),'long-test-password')['sections']['basalam']['vendors'][0]['token']=='nested'
+    # Older Python encrypted exports already allowed otherwise-opaque vendors.
+    old={'format':transfer.FORMAT,'schema':1,'sections':{'basalam':{'vendor_id':'10','token':'main','vendors':[{'vendor_id':20,'token':'nested'}]}}}
+    decoded=transfer.decode(transfer.encrypt(old,'long-test-password'),'long-test-password')
+    assert decoded['sections']['basalam']['vendors'][0]['vendor_id']=='20'
+
+
+def test_legacy_owner_canonicalization_cannot_lose_zero_padded_primary_id(db):
+    db.put_config('basalam',{'vendor_id':'0010','token':'main'})
+    assert shops.owner(db,db.get_config('basalam'))=='10'
+    assert shops.remote_id({'basalam_id':777},{},'10',shops.owner(db,db.get_config('basalam')))==777
