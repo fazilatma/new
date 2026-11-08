@@ -4,10 +4,10 @@
   "source_commit": "9756c320ff377e46ac9f80676575b757f6383a1d",
   "verified_on": "2026-11-08",
   "port_branch": "arena/f3d5d2a0-new",
-  "reference": "Laravel/core + legacy PHP DOM/price, first detail-enrichment slice and first-node category/tags text; selective settings backup/inspect/restore and PHP profiles_cfg/connection bundle import; PHP empty-array/section-slice and legacy detail-selector normalization compatibility; bounded local product overview/drilldown and safe stored-detail browsing",
+  "reference": "Laravel/core + legacy PHP DOM/price, first detail-enrichment slice and first-node category/tags text; selective settings backup/inspect/restore and PHP profiles_cfg/connection bundle import; PHP empty-array/section-slice and legacy detail-selector normalization compatibility; bounded local product overview/drilldown and safe stored-detail browsing; explicit static-page list/detail selector testing using current extraction parsers",
   "scope": "PythonAnywhere-compatible core port; not complete legacy scraper4.php feature parity",
   "source_version": "10.641",
   "source_sha256": "9cacc29b92a302df1e5063c49c38549067c6480eea01be7fa0e78fd2ebce670d",
-  "ui_reference": "Legacy PHP mainTabs, dark slate/blue palette, product results cards and clickable overview/profile breakdown; partial UI parity",
+  "ui_reference": "Legacy PHP mainTabs, dark slate/blue palette, product results cards and clickable overview/profile breakdown; partial UI parity; bounded PHP test_selector/testDetailSel laboratory",
   "core_original_reference_commit": "5aa1012d767a1b9f9a9ca43064c7fc3dc35976d3"
 }

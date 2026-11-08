@@ -165,6 +165,12 @@ def create_app(settings=None):
             raise ValueError('Unknown pagination type')
         return jsonify(ok=True, type=kind, val=val, urls=build_urls(url, kind, val, min(100, max(1, int(request.args.get('pages', 3))))))
 
+    @app.post('/api/selectors/preview')
+    def selector_preview():
+        from .services.selector_preview import preview as run_preview
+        payload, status = run_preview(request.get_json(), settings)
+        return jsonify(payload), status
+
     @app.route('/api/profiles', methods=['GET', 'POST'])
     def profiles():
         if request.method == 'GET':

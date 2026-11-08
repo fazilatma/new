@@ -63,3 +63,9 @@ body.menu-open{overflow:hidden}
 @media(max-width:1050px){.results-toolbar{grid-template-columns:1fr 1fr}}
 @media(max-width:700px){.overview-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.metric-card{padding:13px}.metric-value{font-size:25px}.metric-card small{font-size:8px}.detail-facts{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-gallery{grid-template-columns:repeat(2,minmax(0,1fr))}.product-detail-dialog{max-width:calc(100vw - 16px);max-height:94dvh;padding:16px}.detail-dialog-head h2{font-size:16px}}
 @media(max-width:480px){.results-toolbar{grid-template-columns:1fr}.product-card-actions{align-items:stretch;flex-direction:column}.product-detail-button{width:100%}.product-overview .section-heading{align-items:start;flex-wrap:wrap}.detail-gallery img{height:125px}}
+
+/* Explicit transient selector laboratory; external markup/URLs remain text. */
+.selector-lab{border-color:#496281;background:linear-gradient(135deg,#162940,#142039);margin-top:20px}
+.selector-lab legend{color:#7dd3fc;font-weight:700}.selector-lab>.actions{margin-top:12px}.selector-test-status{white-space:pre-line;overflow-wrap:anywhere;color:#bae6fd;line-height:2}
+.selector-diagnostics{min-width:540px}.selector-diagnostics td{white-space:normal;overflow-wrap:anywhere;max-width:350px}.selector-diagnostics code{display:block;direction:ltr;text-align:left;color:#94a3b8;font-size:10px;white-space:pre-wrap;margin-top:5px}.selector-diagnostics tr[data-state=matched] td:nth-child(3){color:#86efac}.selector-diagnostics tr[data-state=missing] td:nth-child(3),.selector-diagnostics tr[data-state=empty] td:nth-child(3){color:#fcd34d}
+.selector-sample{padding:12px;margin-top:9px;background:#0e1a2d;border:1px solid #304766;border-radius:9px;overflow-wrap:anywhere}.selector-sample p{font-size:11px;margin:5px 0;color:#94a3b8}.selector-sample strong{color:#e2e8f0}#selector-test-result h3{font-size:13px;color:#93c5fd;margin-top:20px}

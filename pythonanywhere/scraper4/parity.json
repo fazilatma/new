@@ -73,6 +73,10 @@
     {
       "feature": "PHP-style clickable local-record overview cards and per-profile counts/progress; read-only metric/profile drilldown into true server-side normalized literal search, allowlisted sorting/filtering, clamped pagination and on-demand sanitized stored gallery/specification/description dialog",
       "reference": "PHP 10.641 start_product_stats, START_PRODUCT_METRICS and loadStartProductOverview/openStartProductOverviewDetail (partial primary-column metrics only; no remote inventory, stock, ready/variation or gallery-aware aggregate counters)"
+    },
+    {
+      "feature": "Explicit no-save selector laboratory: one static list/detail page, unsaved form inputs, document match counts, missing/empty/value diagnostics and bounded actual-parser product samples; CSRF/admin protection, private-address/redirect/TLS guards, stale-form and browser refresh guards",
+      "reference": "PHP 10.641 test_selector (22497) and testDetailSel (96335); bounded batch adaptation, no visual iframe picker, advanced CSS/JS renderer or saved source-proxy support"
     }
   ],
   "pending": [
@@ -93,6 +97,7 @@
     "PHP latest source rechecked unchanged at 9756c32 for 1.7.0. Source category/tags are text only; destination taxonomy IDs remain explicitly configured, not inferred.",
     "Latest PHP rechecked unchanged at 9756c32 for 1.8.0. Selective restore preserves product rows, destination IDs and queue entries. Replace disables omitted profiles instead of deleting them. Hosting tokens require explicit selection; password-encrypted downloads never contain the site encryption/signing authority.",
     "PHP 10.641/9756c32 rechecked for 1.8.1. Regression fixture reproduces empty Woo arrays plus numeric detail-selector flags; browser test drives actual Flask inspect/preview/apply on a temporary DB. No user/prod backup was read or restored. Unsupported/invalid PHP sections are reported and omitted as whole sections; valid ones remain selectable.",
-    "PHP 10.641/9756c32 rechecked unchanged for 1.9.0. Overview aggregates only primary saved-product columns, with an explicit non-live-destination label. Search normalizes Persian/Arabic letters, digits and ZWNJ; SQL values are bound and filters/sorts allowlisted. Read-only routes preserve credentials, products, remote IDs and jobs; no schema/dependency changes. Browser regressions include real Flask temporary-database overview/search/detail integration; no production data used."
+    "PHP 10.641/9756c32 rechecked unchanged for 1.9.0. Overview aggregates only primary saved-product columns, with an explicit non-live-destination label. Search normalizes Persian/Arabic letters, digits and ZWNJ; SQL values are bound and filters/sorts allowlisted. Read-only routes preserve credentials, products, remote IDs and jobs; no schema/dependency changes. Browser regressions include real Flask temporary-database overview/search/detail integration; no production data used.",
+    "PHP 10.641/9756c32 rechecked unchanged for 1.10.0; local source SHA-256 verified. Selector preview uses one direct static-page fetch with existing 8-second HTTP deadline, 12-MiB download cap and 2-MiB UTF-8 parse cap, at most 8 samples and one preview per WSGI process. No schema/dependency/authority changes or saved-data writes. Whole-document match counts are distinct from card extraction; fallback/automatic behavior and the existing list-SKU limitation are explicit. UI tests include real Flask+fixture parsing and verify no persisted profiles/products/jobs."
   ]
 }
