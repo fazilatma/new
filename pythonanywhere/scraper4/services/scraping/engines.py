@@ -153,25 +153,36 @@ def digikala_endpoint(url):
     return 'https://api.digikala.com/'+route+'?'+urlencode(params,doseq=True)
 
 
+def obj(value):return value if isinstance(value,dict) else {}
+def arr(value):return value if isinstance(value,list) else []
+def integer(value,default=0):
+    try:
+        n=float(value)
+        import math
+        return int(n) if math.isfinite(n) and abs(n)<=10**15 else default
+    except (ValueError,TypeError,OverflowError):return default
+
+
 def digikala_rows(body):
     data = body.get('data', body)
+    if not isinstance(data,dict):raise ValueError('ساختار دادهٔ دیجی‌کالا معتبر نیست.')
     rows = data.get('products')
     if rows is None:
-        rows = [data['product']] if isinstance(data.get('product'),dict) else [v for w in data.get('widgets',[]) if isinstance(w,dict) for v in (w.get('data') or {}).get('products',[])]
+        rows = [data['product']] if isinstance(data.get('product'),dict) else [v for w in arr(data.get('widgets')) if isinstance(w,dict) for v in arr(obj(w.get('data')).get('products'))]
     out=[]
-    for row in rows or []:
+    for row in arr(rows):
         if not isinstance(row,dict): continue
-        variant=row.get('default_variant') or {}; prices=variant.get('price') or {}
-        amount=int(prices.get('selling_price') or 0)//10
+        variant=obj(row.get('default_variant')); prices=obj(variant.get('price'))
+        amount=integer(prices.get('selling_price'))//10
         if row.get('status')!='marketable' or amount<=0: continue
-        rid=int(row.get('id') or 0); image=((row.get('images') or {}).get('main') or {}).get('url') or ((row.get('images') or {}).get('main') or {}).get('webp_url') or ''
+        rid=integer(row.get('id')); image=obj(obj(row.get('images')).get('main')).get('url') or obj(obj(row.get('images')).get('main')).get('webp_url') or ''
         if isinstance(image,list): image=image[0] if image else ''
         url=row.get('url') or {}; link=url.get('uri') if isinstance(url,dict) else url
         out.append({'title':normalize_text(row.get('title_fa') or row.get('title_en') or ''), 'price':f'{amount} تومان',
                     'link':link or f'https://www.digikala.com/product/dkp-{rid}/', 'image':image,'sku':f'dkp-{rid}', 'in_stock':True,
-                    'brand':(row.get('brand') or {}).get('title_fa',''),
-                    'shortDesc':str((row.get('review') or {}).get('description') or ''),
-                    'longDesc':str((row.get('expert_reviews') or {}).get('description') or '')})
+                    'brand':obj(row.get('brand')).get('title_fa',''),
+                    'shortDesc':str(obj(row.get('review')).get('description') or ''),
+                    'longDesc':str(obj(row.get('expert_reviews')).get('description') or '')})
     return indexed(out,'https://www.digikala.com'), data.get('pager') or {}
 
 
@@ -204,9 +215,9 @@ def basalam_variants(row):
         if not isinstance(item,dict): continue
         attrs={}
         for key in ('attributes','properties','attribute_values'):
-            for attr in item.get(key) or []:
+            for attr in arr(item.get(key)):
                 if not isinstance(attr,dict): continue
-                label=(attr.get('property') or attr.get('attribute') or {}).get('title') or attr.get('title') or attr.get('name') or ''
+                label=obj(attr.get('property') or attr.get('attribute')).get('title') or attr.get('title') or attr.get('name') or ''
                 value=attr.get('value')
                 if isinstance(value,dict): value=value.get('title') or value.get('value') or ''
                 value=value or attr.get('value_title') or ''
@@ -214,7 +225,7 @@ def basalam_variants(row):
         for key,label in (('color','رنگ'),('size','سایز')):
             value=item.get(key)
             if isinstance(value,dict) and (value.get('title') or value.get('name')): attrs[label]=normalize_text(value.get('title') or value.get('name'))
-        rid=int(item.get('id') or 0);amount=round(float(item.get('primary_price') or item.get('price') or 0)/10);stock=max(0,int(item.get('inventory') or item.get('stock') or 0))
+        rid=integer(item.get('id'));amount=round(integer(item.get('primary_price') or item.get('price'))/10);stock=max(0,integer(item.get('inventory') or item.get('stock')))
         out.append({'id':rid,'variation_id':rid,'title':normalize_text(item.get('title') or item.get('name') or ' / '.join(attrs.values())),
                     'price':amount,'display_price':amount,'stock':stock,'is_in_stock':stock>0,'attributes':attrs,'sku':str(item.get('sku') or '')})
     return out
@@ -222,20 +233,20 @@ def basalam_variants(row):
 
 def basalam_rows(rows):
     out=[]
-    for row in rows:
+    for row in arr(rows):
         if not isinstance(row,dict): continue
         status=row.get('status',0); status=status.get('value') if isinstance(status,dict) else status
-        if int(status or 0)!=2976: continue
-        rid=int(row.get('id') or 0)
+        if integer(status)!=2976: continue
+        rid=integer(row.get('id'))
         if rid<=0 or not (row.get('title') or row.get('name')): continue
         photos=[]
-        for photo in [row.get('photo'),*(row.get('photos') or [])]:
+        for photo in [row.get('photo'),*arr(row.get('photos'))]:
             value=basalam_photo(photo)
             if isinstance(value,str) and value and value not in photos: photos.append(value)
-        amount=round(float(row.get('primary_price') or row.get('price') or 0)/10)
+        amount=round(integer(row.get('primary_price') or row.get('price'))/10)
         out.append({'title':normalize_text(row.get('title') or row.get('name') or ''),'price':f'{amount} تومان' if amount else '',
                     'link':row.get('url') or f'https://basalam.com/p/{rid}','image':photos[0] if photos else '', 'images':photos,
-                    'sku':str(row.get('sku') or ''),'source_id':rid, 'in_stock':int(row.get('inventory') or row.get('stock') or 0)>0,
+                    'sku':str(row.get('sku') or ''),'source_id':rid, 'in_stock':(integer(row.get('inventory',row.get('stock')),None)>0 if integer(row.get('inventory',row.get('stock')),None) is not None else None),
                     'longDesc':str(row.get('description') or ''),'shortDesc':str(row.get('summary') or ''),
                     'category':basalam_category(row.get('category')), 'variations':basalam_variants(row)})
     return indexed(out,'https://basalam.com')
@@ -255,14 +266,15 @@ def extract(url, selectors, engine, settings, *, timeout=25, render_mode='static
     def read(target):
         response=fetch(target)
         if not response.get('ok'): raise ExtractionFailure(f"دسترسی API ناموفق: HTTP {response.get('code',0)}؛ محدودیت شبکه/پلن میزبان را بررسی کنید.",response.get('code',0))
-        body=json.loads(response.get('html',''))
+        try:body=json.loads(response.get('html',''))
+        except (ValueError,TypeError):raise ExtractionFailure('پاسخ API به‌جای JSON معتبر، HTML/متن یا پاسخ ناقص است؛ وضعیت دسترسی مبدأ را بررسی کنید.',response.get('code',0)) from None
         if not isinstance(body,dict): raise ValueError('ساختار پاسخ API معتبر نیست.')
         return body
     result={};rows=None;used=engine;next_url=None;last_page=False
     if engine=='digikala_api':
         endpoint=digikala_endpoint(url);body=read(endpoint);rows,pager=digikala_rows(body)
         requested=max(1,int(parse_qs(urlsplit(url).query).get('page',['1'])[0]))
-        total=int(pager.get('total_pages') or 0)
+        total=integer(obj(pager).get('total_pages'))
         last_page=bool(total and requested>=total) or bool(re.match(r'^/product/',urlsplit(url).path))
         if total and requested>total: rows={}
         result={'ok':True,'code':200,'url':url,'html':''}

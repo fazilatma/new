@@ -4,9 +4,11 @@
   const close = document.querySelector('#settings-menu-close');
   const wide = document.querySelector('#settings-menu-wide');
   if(!dialog || !trigger) return;
-  let returnFocus = null;
+  let returnFocus = null;const mounts=[];
+  function mount(){for(const slot of dialog.querySelectorAll('[data-menu-mount]')){const target=document.getElementById(slot.dataset.menuMount);if(!target||dialog.contains(target))continue;const marker=document.createComment('menu-return:'+target.id);target.before(marker);slot.append(target);mounts.push({target,marker});}}
+  function unmount(){for(const {target,marker} of mounts){marker.replaceWith(target);}mounts.length=0;}
   function cleanup() {
-    trigger.setAttribute('aria-expanded', 'false');
+    unmount();trigger.setAttribute('aria-expanded', 'false');
     document.body.classList.remove('menu-open');
     if(returnFocus && returnFocus.isConnected) returnFocus.focus({preventScroll:true});
     returnFocus = null;
@@ -18,9 +20,9 @@
   }
   trigger.onclick = () => {
     if(dialog.open) { closeMenu(); return; }
-    if(typeof dialog.showModal !== 'function') { location.href = '/#settings'; return; }
+    if(typeof dialog.showModal !== 'function') { dialog.setAttribute('open','');mount();trigger.setAttribute('aria-expanded','true');return; }
     returnFocus = document.activeElement === document.body ? trigger : document.activeElement;
-    dialog.showModal();
+    mount();dialog.showModal();
     trigger.setAttribute('aria-expanded', 'true');
     document.body.classList.add('menu-open');
     close.focus();
@@ -38,29 +40,26 @@
     wide.setAttribute('aria-pressed', String(expanded));
     wide.textContent = expanded ? 'عرض معمولی' : 'تمام‌عرض';
   };
-  const links = [...dialog.querySelectorAll('[data-menu-tab]')];
-  function focusTarget(id) {
-    const target = document.getElementById(id);
-    if(!target) return;
-    target.scrollIntoView({block:'center'});
-    if(!target.matches('button,input,select,a[href],textarea')) target.setAttribute('tabindex','-1');
-    target.focus({preventScroll:true});
+  function openSection(key){
+    if(!dialog.open)trigger.click();
+    const group=Array.from(dialog.querySelectorAll('[data-menu-key]')).find(e=>e.dataset.menuKey===key);
+    if(group){group.open=true;group.scrollIntoView({block:'start'});group.querySelector('summary').focus();}
   }
-  links.forEach(link => link.addEventListener('click', event => {
-    if(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button > 0) return;
-    if(typeof window.activateTab !== 'function' || !document.querySelector(`#pane-${link.dataset.menuTab}`)) return;
-    event.preventDefault();
-    closeMenu(false);
-    window.activateTab(link.dataset.menuTab);
-    const url = new URL(location.href);
-    url.searchParams.set('section', link.dataset.menuTarget);
-    history.replaceState(null, '', url);
-    focusTarget(link.dataset.menuTarget);
-  }));
-  document.addEventListener('DOMContentLoaded', () => {
-    const section = new URLSearchParams(location.search).get('section');
-    if(links.some(link => link.dataset.menuTarget === section && link.dataset.menuTab === location.hash.slice(1))) focusTarget(section);
-  });
+  let browseTicket=0;
+  function browse(metric,profile,name,offset=0){
+    if(!dialog.open)return false;const output=document.querySelector('#menu-product-results');if(!output)return false;
+    openSection('profile-stats');const ticket=++browseTicket;output.textContent='در حال دریافت محصولات…';
+    const params=new URLSearchParams({filter:metric,limit:50,offset,summary:'1'});if(profile)params.set('profile_id',profile);
+    fetch('/api/products?'+params,{credentials:'same-origin',cache:'no-store'}).then(async response=>{const data=await response.json();if(!response.ok)throw Error(data.error||'خطا در دریافت محصولات');if(ticket!==browseTicket)return;output.replaceChildren();
+      const heading=document.createElement('h3');heading.textContent=`${name||'همهٔ پروفایل‌ها'} · ${data.total} محصول`;output.append(heading);
+      for(const product of data.products){const line=document.createElement('p');line.textContent=`#${product.id} · ${product.title} · ${product.price||product.price_num||0}`;output.append(line);}
+      for(const [label,next] of [['قبلی',data.offset-50],['بعدی',data.offset+50]]){const b=document.createElement('button');b.type='button';b.className='secondary';b.textContent=label;b.disabled=next<0||next>=data.total;b.onclick=()=>browse(metric,profile,name,next);output.append(b);}
+      output.scrollIntoView({block:'start'});
+    }).catch(error=>{if(ticket===browseTicket)output.textContent=error.message;});return true;
+  }
+  window.S4Menu={open:openSection,browse};
+  document.querySelectorAll('[data-open-menu]').forEach(button=>button.onclick=()=>openSection(button.dataset.openMenu));
+  document.addEventListener('DOMContentLoaded',()=>{const section=location.pathname==='/settings/backup'?'backup':location.pathname==='/settings/pythonanywhere'?'general':new URLSearchParams(location.search).get('menu');if(section)openSection(section);});
   const check = document.querySelector('#menu-runtime-check');
   check.onclick = async () => {
     const output = document.querySelector('#menu-runtime-result');

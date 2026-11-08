@@ -1,5 +1,5 @@
 <!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="s4-build" content="{{ app_build }}">
   <meta name="s4-version" content="{{ app_version }}">
-  <script defer src="{{ url_for('static', filename='auto-refresh.js', v=app_version) }}"></script><title>ورود | اسکریپر</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=app_version) }}"></head><body>
+  <script defer src="{{ url_for('static', filename='auto-refresh.js', v=app_version) }}"></script><title>ورود | اسکریپر</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=app_version) }}"><script defer src="{{ url_for('static', filename='fonts.js', v=app_version) }}"></script></head><body>
 {% include "_build_refresh.html" %}<main class="login"><p class="eyebrow">SCRAPER / PYTHONANYWHERE · v{{ app_version }}</p><h1>ورود به اسکریپر</h1><p>پنل استخراج و مدیریت محصولات</p><form method="post"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><label>رمز پنل<input type="password" name="password" required autofocus autocomplete="current-password"></label><button>ورود به پنل</button><p role="alert">{{ error }}</p></form></main></body></html>

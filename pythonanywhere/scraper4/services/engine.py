@@ -215,6 +215,9 @@ def _send_step(db, settings, entry, profile, network_timeout=None):
     specs = sanitize_fragment(extra.get('specs', ''), product.get('link') or profile['url'])
     if specs and specs not in description:
         description += '<h4>مشخصات فنی</h4>' + specs
+    from . import profile_options
+    opts=profile_options.active(profile)
+    send_title=profile_options.title(profile,product['title'])
     remote_id = product.get(remote_column)
     shop = None
     if target == 'basalam':
@@ -235,8 +238,8 @@ def _send_step(db, settings, entry, profile, network_timeout=None):
             client = WooClient.from_connection(cfg, verify=True)
             if network_timeout:
                 client.timeout, client.connect_timeout = network_timeout, 3
-            body = {'name': product['title'], 'type': 'simple', 'status': payload.get('status', 'draft'),
-                    'regular_price': str(product['price_num'])}
+            body = {'name': send_title, 'type': 'simple', 'status': payload.get('status', 'draft'),
+                    'regular_price': str(profile_options.adjust(profile_options.price(profile,product['price_num'],'woo'),cfg.get('price_mode','none'),cfg.get('price_val',0),cfg.get('price_round',0)))}
             if product.get('sku'):
                 body['sku'] = product['sku']
             if description:
@@ -253,18 +256,18 @@ def _send_step(db, settings, entry, profile, network_timeout=None):
             attributes = [r for r in (extra.get('specs_rows') if isinstance(extra.get('specs_rows'), list) else []) if isinstance(r, dict) and r.get('k') and r.get('v')][:100]
             if attributes:
                 body['attributes'] = [{'name':str(r['k']), 'visible':True, 'variation':False, 'options':[str(r['v'])]} for r in attributes]
-            if payload.get('category_id'):
-                body['categories'] = [{'id': int(payload['category_id'])}]
+            category=payload.get('category_id') or opts['wooProfileCatId'] or cfg.get('default_category')
+            if category:body['categories']=[{'id':int(category)}]
             result = client.update_product(product['woo_id'], body) if product.get('woo_id') else client.create_product(body)
         else:
             cfg = {**bsl_cfg, **shop}
             from .basalam.shops import adjusted_price
-            amount = adjusted_price(product['price_num'],bsl_cfg,shop)
+            amount = adjusted_price(profile_options.price(profile,product['price_num'],'basalam'),bsl_cfg,shop)
             client = BasalamClient.from_connection(cfg, api_base=settings.basalam_api_base)
             if network_timeout:
                 client.timeout, client.connect_timeout, client.max_attempts = network_timeout, 3, 1
-            body = {'name': product['title'], 'primary_price': amount*10, 'description': text_html(description or short)[:10000] or product['title']}
-            category = payload.get('category_id') or cfg.get('category_id')
+            body = {'name': send_title, 'primary_price': amount*10, 'description': text_html(description or short)[:10000] or product['title']}
+            category = payload.get('category_id') or opts['bslProfileCatId'] or cfg.get('category_id')
             if category:
                 body['category_id'] = int(category)
             result = (client.update_product(remote_id, body, cfg['vendor_id'])
@@ -317,6 +320,10 @@ def run_entry(db, settings, entry, deadline, *, max_steps=None, network_timeout=
                 return
         db.update_entry(entry['id'], status='waiting')
     except Exception as exc:
+        if entry['kind']=='extract':
+            from .extraction_diagnostics import failure
+            code,hint=failure(exc,entry['counters'])
+            entry['counters'].update(error_code=code,error_hint=hint)
         db.update_entry(entry['id'], payload=entry['payload'], counters=entry['counters'])
         if db.get_entry(entry['id'])['status'] == 'running':
             db.finish_entry(entry['id'], 'failed', str(exc))

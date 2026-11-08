@@ -18,7 +18,7 @@
     applyButton.disabled = busy || !preview || preview.active_jobs > 0;
     hint.textContent = busy ? 'در حال بررسی؛ لطفاً منتظر بمانید…' : !inspection ? 'فایل را انتخاب کنید؛ بخش‌ها خودکار بررسی می‌شوند. فایل Python به رمز نیاز دارد.' : !selected(importing).length ? 'حداقل یک بخش موجود و قابل انتقال را انتخاب کنید.' : !preview ? 'برای فعال‌شدن تأیید، پیش‌نمایش معتبر لازم است؛ پیام همین بخش را بررسی کنید.' : preview.active_jobs > 0 ? `${preview.active_jobs} کار فعال است؛ پس از اتمام یا لغو آن‌ها دوباره پیش‌نمایش بگیرید.` : 'پیش‌نمایش آماده است؛ اکنون می‌توانید تأیید و اعمال کنید.';
     exporting.querySelector('[type="submit"]').disabled = busy;
-    doc.querySelectorAll('[data-transfer-select],button[type="reset"]').forEach(button => {button.disabled = busy;});
+    doc.querySelectorAll('[data-transfer-select],#settings-export-form button[type="reset"],#settings-import-form button[type="reset"]').forEach(button => {button.disabled = busy;});
   }
   function invalidate(source = false) {
     generation += 1; preview = null; result.textContent = '';

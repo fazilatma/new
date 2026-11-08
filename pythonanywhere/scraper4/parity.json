@@ -1,13 +1,13 @@
 {
   "source": {
     "branch": "arena/01a0ebf7-new",
-    "commit": "9756c320ff377e46ac9f80676575b757f6383a1d",
-    "version": "10.641",
+    "commit": "67f69a0fb1b6959c093254650d1314fdf754b0e3",
+    "version": "10.644",
     "path": "scraper4.php",
-    "sha256": "9cacc29b92a302df1e5063c49c38549067c6480eea01be7fa0e78fd2ebce670d",
+    "sha256": "21ab150697203dc8cda755ed40c843ac45df0054e204effd912ca9f165d697f8",
     "verified_on": "2026-11-08",
-    "bytes_utf8": 8721662,
-    "lines": 124514
+    "bytes_utf8": 8729506,
+    "lines": 124590
   },
   "inventory": {
     "line_start_function_declarations_in_mixed_source": 2711,
@@ -121,6 +121,22 @@
     {
       "feature": "Manual extraction-to-send queue chain: explicit target consent/pinned Basalam vendor, successful nonempty source only, atomic one-time children, scoped pause, finished-only cleanup; five-page readonly audit with profile/engine/config-bound signed continuation",
       "reference": "manualSyncBox 93842+, comprehensiveTestStart and extract queues; no outbound sends at enqueue/finalize and no message-bot delivery"
+    },
+    {
+      "feature": "Correct profile-only Settings tab: explicit saved title/price/destination adjustments, CSV/JSON custom column, safe confirmed bounded profile-local cleanup and effective manual target category IDs; imported opaque values are review-only until saved",
+      "reference": "PHP 10.644 pane-settings 94066ff, getFinalTitle/getFinalPriceNum/removeNoPrice/removeBelowMinPrice; profile-vs-global destination adjustment ownership is explicit"
+    },
+    {
+      "feature": "In-place PHP-ordered hamburger: real global connection/backup/host/cron/worker/update/renderer forms on all authenticated pages, original queue/stat DOM mounts preserving drafts, in-menu metric drilldowns without tab redirects",
+      "reference": "User correction: main Settings belongs to profiles, global forms belong inside settingsPanel"
+    },
+    {
+      "feature": "Self-hosted licensed Vazirmatn/Sahel regular and bold fonts with strict persisted browser font selection, no runtime CDN dependency",
+      "reference": "PHP app_fonts_registry; two OFL font families shipped with source references/licenses"
+    },
+    {
+      "feature": "Resilient nullable upstream Digikala/Basalam optional-field parsing and explicit invalid-JSON response failures; browser-only read-only safe extraction diagnostic with classified error hints, no raw errors/URLs/settings/credentials",
+      "reference": "Real fixture-reproduced AttributeError/TypeError paths; not proof that private production sources or hosting egress now work"
     }
   ],
   "pending": [
@@ -131,7 +147,8 @@
     "Complete Basalam variation-detail fanout, media uploads/required create payload fields and full multi-shop parallel/fanout workflow",
     "Full SnappShop guest API and anti-block/Emalls/Jina fallback chains, complete Digikala details/variants, raw W3C WebDriver fallback; browser engine routes currently require a compatible trusted remote /render service",
     "Live first-page audit and complete pagination/detail verification for private production profiles requires authenticated browser execution; synthetic fixture tests are not proof of current remote-site reachability",
-    "Complete PHP Start parity: in-page visual picker, optional product copy, complete per-profile periodic/price/filter controls, GitHub private/branch/file browser, true remote inventory/price-discrepancy matrix and inventory chart, uncoded/misc-product operations and message-delivered manual-sync reports"
+    "Complete PHP Start parity: in-page visual picker, optional product copy, complete per-profile periodic/filter controls, GitHub private/branch/file browser, true remote inventory/price-discrepancy matrix and inventory chart, uncoded/misc-product operations and message-delivered manual-sync reports",
+    "Independent extraction pre-global-lock priority from PHP 10.643: Python deliberately keeps safe single-flock queue ownership; shared work may wait for the active segment rather than bypass its lock."
   ],
   "notes": [
     "This ledger is not a claim of full parity.",
@@ -148,6 +165,8 @@
     "PHP 10.641/9756c32 rechecked unchanged for 1.12.0. Official PythonAnywhere AlwaysOnTasks/ScheduledTasks/AsyncInWebApps docs checked: paid Always-on recommended; hourly/daily schedule depends on plan, newer free accounts may lack Tasks. New browser-only authenticated host scheduling uses saved token, fixed installed virtualenv command and owns only this installation; never starts local processes inside WSGI. Worker config defaults disabled, native activation enables it only on API success. Runtime enabled/Task configured/observed live heartbeat are distinct. Existing public cron configuration and credentials/products/remote IDs are preserved. Worker host-specific config/state excluded from portable settings; no dependency/schema/authority change.",
     "PHP 10.641/9756c32 rechecked unchanged for 1.13.0. Imported top-level extractionEngine previously stayed only in legacy metadata and was ignored by the queue; execution now reads both promoted and already-imported values. Credential opt-in remains secure/default false with an explicit consent button and transfer report; no missing original secrets can be reconstructed. Native settings now have eight sections including remote renderer; .env/authority, products/remote IDs and queues remain outside settings restore. Host-local legacy-owner metadata pins prior Basalam IDs across credential imports. New IDs are scoped in product.extra and atomically indexed in existing task_checkpoints for metrics without JSON1, HTML scans or schema changes. Network adapters use existing bounded TLS/URL guards; no bypass of PythonAnywhere outbound restrictions, local browser spawn, dependency/schema/authority changes. Agent did not execute production queues, credentials imports, outbound sends or private live-profile probes.",
     "1.13.1 compatibility follow-up: prior Python encrypted exports and existing installations could retain numeric vendor IDs inside the opaque PHP vendors list. Snapshot and incoming legacy nested-vendor normalization now keep them exportable/importable with credentials intact. Legacy owner uses canonical numeric vendor identity so zero-padded IDs cannot accidentally lose ownership. 415 Python + 82 JavaScript regressions passed; no production private profile audit or credentials restore was performed by the agent.",
-    "1.14.0: latest PHP source rechecked at 9756c32/10.641. Start rebuilt with real profile/source/range/detail/run/audit/metric/breakdown/history actions; explicit limitations in UI/README. Legacy 8-card/10-count API contract retained as collapsed quick-ID view. New 16-card drilldowns share the same classifier as counts; no JSON1 requirement. History describes local scoped mappings ONLY; never substituted for remote inventory. Start GET is read-only, snapshot POST is browser-admin+CSRF and durable/rate-limited/bounded. New source-chain finalization never invokes a sender, creates children atomically only after successful nonempty source and honors pause races. Public GitHub source is a single bounded read and atomic import with no copied remote identity. Five-page diagnostics are signed/capped/sequential and never write products/jobs. No dependencies/schema/db.py/authority changes. Production private profiles and outbound sends were not exercised by the agent. Validation: 466 Python tests and 97 JavaScript tests passed (75 browser/DOM integration + 22 auto-refresh); new Start tests include real Flask/SQLite save/enqueue/filter/snapshot integration, nonempty-only child creation, pause/final-page races, stock classification, settings/identity preservation and public-file fixtures."
+    "1.14.0: latest PHP source rechecked at 9756c32/10.641. Start rebuilt with real profile/source/range/detail/run/audit/metric/breakdown/history actions; explicit limitations in UI/README. Legacy 8-card/10-count API contract retained as collapsed quick-ID view. New 16-card drilldowns share the same classifier as counts; no JSON1 requirement. History describes local scoped mappings ONLY; never substituted for remote inventory. Start GET is read-only, snapshot POST is browser-admin+CSRF and durable/rate-limited/bounded. New source-chain finalization never invokes a sender, creates children atomically only after successful nonempty source and honors pause races. Public GitHub source is a single bounded read and atomic import with no copied remote identity. Five-page diagnostics are signed/capped/sequential and never write products/jobs. No dependencies/schema/db.py/authority changes. Production private profiles and outbound sends were not exercised by the agent. Validation: 466 Python tests and 97 JavaScript tests passed (75 browser/DOM integration + 22 auto-refresh); new Start tests include real Flask/SQLite save/enqueue/filter/snapshot integration, nonempty-only child creation, pause/final-page races, stock classification, settings/identity preservation and public-file fixtures.",
+    "1.15.0: source advanced to PHP 10.642/438d53c and was inspected, including new JSON-queue recovery. Python uses durable SQLite rows and does not auto-resume user-paused or failed work, especially ambiguous sends. Global settings now run within their own menu sections; original nodes are mounted/restored rather than cloned. Profile options save is browser+CSRF and blocked by alive jobs of that profile; no product rewrites or automatic resends. Cleanup has signed stale-sensitive confirmation and 1000-row cap; raw prices/remote IDs survive non-cleanup actions. Woo global destination pricing previously ignored by sender now applies; UI/README require preview review before sending. Font preference is browser-local; OFL assets and licenses ship with code. No dependency/schema/db.py/authority change. Agent did not read private production errors, execute production queues, change cron opt-in, import credentials or send destination products. Full parity and all-account extraction fixes are not claimed.",
+    "Final source recheck advanced to 10.644/67f69a0. Inspected 10.643 independent pre-global-lock PHP extraction and 10.644 next-unfetched-page checkpoint fix: Python already advances _page only after page product persistence and has existing one-page-per-tick continuation regressions. Python retains its single safe flock; it does not claim independent extraction bypass of a busy global queue lock. PHP JSON-queue recovery/prescheduling differs from durable SQLite queue ownership."
   ]
 }

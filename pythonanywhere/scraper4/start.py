@@ -120,6 +120,7 @@ def finish_extraction(db,entry):
             children.append(cursor.lastrowid)
         entry['counters']['send_jobs']=children
         entry['counters']['phase']='complete'
+        entry['counters'].pop('error_code',None);entry['counters'].pop('error_hint',None)
         if entry['payload'].get('pages')==0 and entry['counters'].get('source')!='github':entry['counters']['total']=entry['counters'].get('current',0)
         if entry['payload'].get('_send_after') and not children:entry['counters']['warning']='استخراج خالی است؛ هیچ ارسالی صف نشد.'
         conn.execute("UPDATE queue_entries SET status='done',error='',done_at=?,updated_at=?,heartbeat=?,counters=? WHERE id=?",(now,now,now,json.dumps(entry['counters']),entry['id']))

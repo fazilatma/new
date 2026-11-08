@@ -49,8 +49,9 @@ def create_app(settings=None):
     @app.context_processor
     def build_context():
         from .services.scraping.engines import ENGINES, profile_engine
+        from .services.settings_transfer import SECTIONS, MAX_FILE
         return {'app_version': VERSION, 'app_commit': str(loaded_release.get('commit') or 'local')[:12],
-                'app_build': str(loaded_release.get('commit') or ''), 'settings_menu': SETTINGS_MENU, 'engine_choices': ENGINES, 'profile_engine': profile_engine}
+                'app_build': str(loaded_release.get('commit') or ''), 'settings_menu': SETTINGS_MENU, 'transfer_sections': SECTIONS, 'max_file_bytes': MAX_FILE, 'engine_choices': ENGINES, 'profile_engine': profile_engine}
 
 
     @app.before_request
@@ -236,15 +237,25 @@ def create_app(settings=None):
         if not db.get_profile(profile_id):
             abort(404)
         rows = db.list_products(profile_id, limit=100000)
+        from .services import profile_options
+        export_profile=db.get_profile(profile_id);opts=profile_options.active(export_profile)
+        for row in rows:
+            row['source_title']=row['title'];row['source_price_num']=row['price_num']
+            row['title']=profile_options.title(export_profile,row['title'])
+            row['price_num']=profile_options.price(export_profile,row['price_num'])
+            if 'profileOptions' in export_profile['settings']:row['price']=str(row['price_num'])+' تومان'
+            if opts['useCustomCol']:row['custom_column']={'name':opts['customColName'],'value':opts['customColVal']}
         if request.args.get('format') == 'json':
             return Response(json.dumps(rows, ensure_ascii=False), mimetype='application/json',
                             headers={'Content-Disposition': f'attachment; filename=products-{profile_id}.json'})
         out = io.StringIO()
         writer = csv.writer(out)
         fields = ['title', 'price', 'price_num', 'link', 'image', 'sku', 'woo_id', 'basalam_id']
-        writer.writerow(fields)
+        if opts['useCustomCol']:fields.append('custom_column')
+        headers=[opts['customColName'] if f=='custom_column' else f for f in fields]
+        writer.writerow(["'"+v if v.lstrip().startswith(('=','+','-','@','\t','\r')) else v for v in headers])
         for row in rows:
-            values = [str(row.get(f) or '') for f in fields]
+            values = [opts['customColVal'] if f=='custom_column' else str(row.get(f) or '') for f in fields]
             writer.writerow(["'" + v if v.lstrip().startswith(('=', '+', '-', '@', '\t', '\r')) else v for v in values])
         return Response('\ufeff' + out.getvalue(), mimetype='text/csv; charset=utf-8',
                         headers={'Content-Disposition': f'attachment; filename=products-{profile_id}.csv'})
@@ -310,8 +321,8 @@ def create_app(settings=None):
 
     @app.route('/api/connections/<name>', methods=['GET', 'POST'])
     def connections(name):
-        allowed = {'woocommerce': {'store_url', 'consumer_key', 'consumer_secret'},
-                   'basalam': {'token', 'vendor_id', 'category_id'}, 'render': {'url','token'}}
+        allowed = {'woocommerce': {'store_url', 'consumer_key', 'consumer_secret','price_mode','price_val','price_round'},
+                   'basalam': {'token', 'vendor_id', 'category_id','price_mode','price_val','price_round'}, 'render': {'url','token'}}
         if name not in allowed:
             abort(404)
         if request.method == 'GET':
@@ -324,11 +335,17 @@ def create_app(settings=None):
         cfg = db.get_config(name)
         for key,value in data.items():
             if key not in allowed[name]: continue
-            if key in ('vendor_id','category_id') and type(value) is int: value=str(value);data[key]=value
+            if key in ('vendor_id','category_id','price_val','price_round') and type(value) in (int,float): value=str(value);data[key]=value
             if not isinstance(value,str) or len(value)>4096 or '\r' in value or '\n' in value: raise ValueError('Invalid connection field')
         for key in allowed[name]:
             if key in data and data[key] != '••••':
                 cfg[key] = str(data[key])
+        if name in ('woocommerce','basalam'):
+            from .services.profile_options import validate as validate_pricing
+            raw_round=cfg.get('price_round') or 0
+            try:validate_pricing({'priceMode':cfg.get('price_mode','none'),'priceVal':float(cfg.get('price_val') or 0),'roundPrice':int(raw_round)})
+            except (ValueError,TypeError,OverflowError):raise ValueError('تنظیم قیمت مقصد معتبر نیست.') from None
+            if float(raw_round)!=int(raw_round):raise ValueError('گرد کردن باید عدد صحیح باشد.')
         if cfg.get('store_url'):
             validate_url(cfg['store_url'])
         if name == 'render' and cfg.get('url'):
@@ -350,6 +367,8 @@ def create_app(settings=None):
     register_settings_transfer(app, db, settings)
     from .extraction_tools import register_extraction_tools
     register_extraction_tools(app, db, settings)
+    from .profile_settings import register_profile_settings
+    register_profile_settings(app, db, settings)
     from .start import register_start
     register_start(app, db, settings)
     from .worker import register_worker

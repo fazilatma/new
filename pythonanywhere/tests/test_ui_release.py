@@ -119,5 +119,6 @@ def test_menu_available_on_dedicated_settings_page_not_public_login(app,client):
     page = BeautifulSoup(client.get('/settings/pythonanywhere').text, 'html.parser')
     assert page.select_one('#hamburgerBtn') and page.select_one('#settings-menu')
     assert page.select_one('script[src*="menu.js"]')
-    assert '/?section=cron-settings#settings' in str(page)
+    assert page.select_one('#settings-menu #cron-settings #cron-public-get')
+    assert not page.select('[data-menu-target]')
     assert 'settings-menu' not in app.test_client().get('/login').text

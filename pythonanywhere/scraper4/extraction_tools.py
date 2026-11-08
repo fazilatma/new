@@ -23,6 +23,11 @@ def register_extraction_tools(app,db,settings):
     def browser_only():
         if not session.get('authenticated') or request.environ.get('s4.bearer'): abort(403)
 
+    @bp.get('/api/extraction/diagnostics')
+    def diagnostics():
+        from .services.extraction_diagnostics import report
+        return jsonify(report(db,settings))
+
     @bp.get('/api/extraction/engines')
     def capabilities():
         cfg=engines.for_installation(settings,db)

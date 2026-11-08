@@ -26,7 +26,7 @@
       const rows=document.querySelector('#extraction-jobs');rows.replaceChildren();
       for(const job of data.jobs){
         const c=job.counters,row=document.createElement('tr');
-        for(const value of [`#${job.id} · ${job.profile_name}`,names[job.status]||job.status,number(c.found),c.last_page_products===undefined?'—':number(c.last_page_products),job.error||c.warning||'—'])row.append(text('td',value));
+        for(const value of [`#${job.id} · ${job.profile_name}`,names[job.status]||job.status,number(c.found),c.last_page_products===undefined?'—':number(c.last_page_products),c.error_hint||job.error||c.warning||'—'])row.append(text('td',value));
         if(c.last_http_status) row.lastElementChild.append(text('p',`HTTP ${c.last_http_status} · HTML: ${number(c.last_html_chars)} نویسه`));
         if(c.js_shell)row.lastElementChild.append(text('p','نشانهٔ صفحهٔ JavaScript دیده شده است؛ این تشخیص احتمالی است.'));
         rows.append(row);
@@ -43,6 +43,6 @@
     finally{await refresh();window.dispatchEvent(new Event('s4:extraction-updated'));pending=false;button.disabled=false;window.S4Refresh?.endMutation();}
   };
   window.addEventListener('s4:extraction-enqueued',refresh);
-  setInterval(()=>{if(!document.hidden&&document.querySelector('#pane-start')?.classList.contains('active'))refresh();},15000);
+  setInterval(()=>{if(!document.hidden&&(document.querySelector('#pane-start')?.classList.contains('active')||document.querySelector('#settings-menu')?.open))refresh();},15000);
   refresh();
 })();

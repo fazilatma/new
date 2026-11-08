@@ -1,4 +1,3 @@
 {% extends 'layout.html' %}
 {% block title %}اتصال PythonAnywhere · {{ app_version }}{% endblock %}
-{% block scripts %}<script defer src="{{ url_for('static', filename='platform.js', v=app_version) }}"></script><script defer src="{{ url_for('static', filename='worker-runtime.js', v=app_version) }}"></script>{% endblock %}
-{% block content %}<p><a href="/#settings">← بازگشت به تنظیمات اسکرپر</a></p>{% include '_platform_form.html' %}{% include '_worker_runtime.html' %}<p class="notice">اگر برنامه در حالت نگهداری باشد، می‌توانید اینجا توکن را اصلاح کنید. فعال‌سازی Task در حالت نگهداری متوقف است؛ Task موجود در نوبت بعدی برای بازیابی و Reload تلاش می‌کند.</p>{% endblock %}
+{% block content %}<p class="notice">تنظیم میزبانی، کران و worker داخل منوی همبرگری است. در حالت نگهداری می‌توانید توکن را آنجا اصلاح کنید؛ فعال‌سازی Task تا پایان بازیابی متوقف است.</p><button type="button" data-open-menu="general">تنظیمات میزبانی و کران</button>{% endblock %}
