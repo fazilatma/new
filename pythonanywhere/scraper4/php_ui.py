@@ -20,6 +20,10 @@ def register_php_ui(app,db,settings):
         for key in ('query','fields'):
             if not isinstance(value.get(key),dict) or len(value[key])>100 or any(not isinstance(k,str) or not isinstance(v,str) or len(k)>100 or len(v)>1500000 for k,v in value[key].items()):raise ValueError('فرم رابط معتبر نیست.')
         return value
+    @bp.get('/api/php-ui/start-report')
+    def start_report():
+        if set(request.args)-{'name'}:raise ValueError('فقط نام پروفایل پذیرفته می‌شود.')
+        payload,code=start.named_report(db,settings,request.args.get('name'));return jsonify(payload),code
     @bp.get('/api/php-ui/capabilities')
     def capabilities():return jsonify(operations.contracts())
     @bp.post('/api/php-ui/read')

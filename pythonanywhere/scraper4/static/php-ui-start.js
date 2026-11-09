@@ -6,7 +6,12 @@ const title=document.createElement('h2');title.textContent='اجرای واقع�
 const note=document.createElement('p');note.textContent='شروع، پس از تأیید ذخیرهٔ تنظیمات، یک مرحلهٔ واقعی از همین استخراج را اجرا می‌کند. برای صفحات/جزئیات بعدی worker/کران یا «مرحلهٔ بعد» لازم است. بستن صفحه کار ذخیره‌شده را حذف نمی‌کند؛ این دکمه‌ها هیچ صف ارسالی را اجرا نمی‌کنند.';
 const message=document.createElement('p');message.id='python-start-message';message.setAttribute('role','status');message.setAttribute('aria-live','polite');
 const rows=document.createElement('div');rows.id='python-start-jobs';rows.style.cssText='display:grid;gap:8px;overflow-wrap:anywhere';
-box.append(title,note,message,rows);document.getElementById('directExtractRunCard').after(box);
+box.append(title,note,rows);document.getElementById('directExtractRunCard').after(box);
+// An early save/queue error must be visible beside the clicked Start button,
+// not below all of the original run cards and off the current screen.
+document.getElementById('startBackendBtn').closest('.row').after(message);
+const showJobs=document.createElement('button');showJobs.type='button';showJobs.id='python-start-show-jobs';showJobs.className='btn btn-cyan';showJobs.textContent='نمایش کارها و عیب‌یابی همین پروفایل';message.after(showJobs);
+showJobs.onclick=async()=>{await refresh();box.scrollIntoView?.({block:'start',behavior:'smooth'});};
 let pending=false,statusTicket=0,catalogEnabled=false;
 const originalLoad=window.loadProfileFromServer;
 window.loadProfileFromServer=(key,silent,...rest)=>{if(silent&&isDirty)return;catalogEnabled=false;return originalLoad(key,silent,...rest);};
@@ -19,7 +24,7 @@ async function call(action,fields={}){const fd=new FormData();fd.set('action',ac
 function saved(){if(!currentProfileKey||!profileFormReady)throw Error('ابتدا پروفایل را انتخاب کنید و منتظر تکمیل بارگذاری فرم بمانید.');return currentProfileKey;}
 async function exclusive(work){if(pending)return;say('در حال بررسی/اجرا؛ لطفاً تا دریافت نتیجه صبر کنید…');pending=true;
  const buttons=[...pane.querySelectorAll('#startBtn,#startBackendBtn,#startManualBtn,#startVisBtn,#ghImportBtn,#python-start-jobs button,[onclick="saveProfile()"]')],disabled=buttons.map(b=>b.disabled);buttons.forEach(b=>b.disabled=true);
- try{return await work();}catch(e){say(e.message,true);showToast(e.message,true);}finally{pending=false;buttons.forEach((b,i)=>b.disabled=disabled[i]);await refresh();}}
+ try{return await work();}catch(e){say(e.message,true);showToast(e.message,true);message.scrollIntoView?.({block:'center'});}finally{pending=false;buttons.forEach((b,i)=>b.disabled=disabled[i]);await refresh();}}
 function snapshot(){return collectProfileData(false);}
 async function save(){
  if(currentProfileKey&&!profileFormReady)throw Error('فرم هنوز بارگذاری نشده است؛ برای جلوگیری از ذخیرهٔ سلکتور قدیمی دوباره پروفایل را انتخاب کنید.');
@@ -36,7 +41,7 @@ async function save(){
  await(await fetch('?load_profile='+encodeURIComponent(d.key))).json();say('تنظیمات ذخیره شد؛ محصولات و شناسه‌های مقصد تغییر نکردند.');return d;
 }
 async function prepare(){if(!currentProfileKey||isDirty)await save();return saved();}
-function showStep(d){say((d.job?'کار #'+d.id+' · '+(names[d.job.status]||d.job.status)+' · ':'')+(d.message||'')+(d.throttled?' · '+d.retry_after_seconds+' ثانیه تا اجرای دستی بعدی':''));}
+function showStep(d){say((d.job?(d.reused?'ادامهٔ کار در انتظار #':'کار #')+d.id+' · '+(names[d.job.status]||d.job.status)+' · ':'')+(d.message||'')+(d.throttled?' · '+d.retry_after_seconds+' ثانیه تا اجرای دستی بعدی':''));}
 async function begin(){const profile=await prepare(),d=await call('python_extract_start',{profile,pages:document.getElementById('pages').value});showStep(d);if(currentProfileKey===profile&&!isDirty)loadProfileFromServer(profile,true);refreshExtractQueue();return d;}
 window.saveProfile=()=>exclusive(save);
 window.startAutoExtract=window.startBackendSync=window.backendExtractFor=()=>exclusive(begin);
@@ -62,7 +67,7 @@ window.comprehensiveTestStart=()=>exclusive(()=>pythonOpenPanel('audit-all'));
 window.startVisual=()=>exclusive(begin);
 const oldVisualMode=window.setMode;window.setMode=mode=>{oldVisualMode(mode);if(mode==='visual')say('انتخابگر بصری با iframe مبدأ هنوز متصل نیست؛ سلکتور را در تب سلکتورها وارد و آزمایش کنید. «شروع» از موتور و تنظیمات ذخیره‌شده استفاده می‌کند.');};
 window.reset=()=>{if(pending)return;if(isDirty&&!confirm('پیش‌نویس ذخیره‌نشده کنار گذاشته شود؟ محصولات و کارهای سرور حذف یا متوقف نمی‌شوند.'))return;newBlankProfile();say('فرم تازه آماده است؛ کارها و محصولات ذخیره‌شده تغییر نکردند.');rows.replaceChildren();};
-window.srLoad=window.syncDiagnose=()=>exclusive(async()=>{await refresh();say('گزارش واقعی استخراج‌های همین پروفایل (حداکثر ۱۰۰ کار اخیر). «آزمایش مبدأ» فقط با انتخاب شما شبکه را بررسی می‌کند.');});
+window.srLoad=window.syncDiagnose=()=>exclusive(async()=>{await refresh();say('گزارش واقعی همین پروفایل (تا ۱۰۰ کار؛ کارهای فعال/ناموفق در اولویت‌اند). «آزمایش مبدأ» فقط با انتخاب شما شبکه را بررسی می‌کند.');});
 window.syncPipelineClearDone=()=>exclusive(async()=>{const d=await call('python_queue_clear',{kind:'extract'});say(d.removed+' ردِ استخراج تمام‌شده/لغوشده پاک شد؛ ناموفق‌ها و کارهای فعال حفظ شدند.');refreshExtractQueue();});
 window.stopManualSync=()=>exclusive(async()=>{await call('python_queue_control',{profile:saved(),kind:'extract',control:'pause'});say('استخراج همین پروفایل مکث شد؛ صف‌های ارسال مستقل تغییر نکردند و درخواست درحال پرواز ممکن است تمام شود.');});
 // Do not leave old UI implying this extraction-only control stops a sender.

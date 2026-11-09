@@ -119,7 +119,7 @@ test('original Start buttons save dirty settings, extract the selected profile, 
  await child.waitForFunction(()=>profileFormReady);await child.evaluate(()=>switchMainTab('start'));await f.locator('#startBackendBtn').click();
  await f.locator('#python-start-jobs').getByText('مکث',{exact:true}).waitFor();await f.locator('#python-start-jobs').getByText('مکث',{exact:true}).click();
  await f.locator('#python-start-jobs').getByText(/مکث‌شده/).waitFor();
- assert.ok(dialogs.some(s=>s.includes('اجرای واقعی')));assert.deepEqual(errors,[]);
+ assert.ok(dialogs.some(s=>s.includes('checkpoint')));assert.deepEqual(errors,[]);
 });
 
 test('original Start displays actual safe HTTP403 diagnosis, blocks duplicate/automatic retries and opens explicit source test', {timeout:60000},async t=>{
@@ -129,6 +129,7 @@ test('original Start displays actual safe HTTP403 diagnosis, blocks duplicate/au
  await f.locator('#startBackendBtn').click();await f.locator('#python-start-jobs').getByText(/HTTP 403/).waitFor();
  assert.match(await f.locator('#python-start-message').innerText(),/دسترسی/);assert.ok(!(await f.locator('#python-start-control').innerText()).includes('PRIVATE-FIXTURE'));
  await f.locator('#startBtn').click();await f.locator('#python-start-message').filter({hasText:'ناموفق'}).waitFor();
+ const feedback=await f.locator('#python-start-message').boundingBox();assert.ok(feedback.y>=0&&feedback.y<(await child.evaluate(()=>innerHeight)),'blocked-start error must be visible beside Start, not hidden below the run cards');
  const state=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal(state.jobs.filter(j=>j.profile_id===1&&j.kind==='extract').length,1);
  await f.locator('#python-start-jobs').getByText('آزمایش مبدأ / عیب‌یابی',{exact:true}).click();await page.locator('#audit-results').filter({hasText:'خطا'}).waitFor();
  assert.deepEqual(errors,[]);
@@ -150,4 +151,18 @@ test('original Start public GitHub search/import and no-selector trial are real 
  await f.locator('#ghImportBtn').click();await f.locator('#python-start-jobs').getByText(/پایان‌یافته/).waitFor();
  const state=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.ok(state.products.some(p=>p.title==='CSV fixture'));assert.equal(state.jobs.filter(j=>j.profile_id===1&&j.kind==='extract').length,1);
  assert.ok(state.jobs.filter(j=>j.profile_id!==1).every(j=>j.status==='waiting'));assert.deepEqual(errors,[]);
+});
+
+
+test('Start on an existing waiting profile actually runs that job instead of rejecting it as a duplicate', {timeout:30000},async t=>{
+ const {page,origin}=await setup(t,'waiting');page.on('dialog',d=>d.accept());
+ await page.goto(origin+'/php-ui');const f=page.frameLocator('#php-original-ui');await f.locator('#python-start-control').waitFor();
+ await f.locator('#profileSelect').selectOption('one');const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));
+ await child.waitForFunction(()=>profileFormReady&&currentProfileKey==='one');await page.waitForTimeout(1000);await child.waitForFunction(()=>profileFormReady);await child.evaluate(()=>switchMainTab('start'));
+ assert.equal(await f.locator('#profileName').inputValue(),'مانتو پاتریس');
+ await f.locator('#startBtn').click();
+ await f.locator('#python-start-jobs').getByText(/پایان‌یافته/).waitFor({timeout:4000}).catch(async e=>{t.diagnostic(await f.locator('#python-start-message').innerText());throw e;});
+ const state=await(await page.request.get(origin+'/__test__/extract-state')).json();
+ assert.equal(state.jobs.filter(j=>j.profile_id===1&&j.kind==='extract').length,1);assert.equal(state.jobs.find(j=>j.profile_id===1&&j.kind==='extract').status,'done');assert.equal(state.products.length,2);
+ assert.ok(state.jobs.filter(j=>j.profile_id!==1).every(j=>j.status==='waiting'));
 });

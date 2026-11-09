@@ -229,11 +229,17 @@ def save(db,data):
     return {'ok':True,'key':key,'name':name,'updated_at':stamp(now),'product_count':result['products_count'],'has_selectors':bool(selectors.get('container')),'revision':revision(result),'products_changed':False}
 
 
-def enqueue(db,data):
+def enqueue(db,data,*,reuse_waiting=False):
     fields=data['fields'];p=find(db,fields.get('profile',''));pages=integer(fields.get('pages','10'),maximum=1000);opts=start_page.options(p)
     with db.connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
-        if conn.execute("SELECT id FROM queue_entries WHERE profile_id=? AND kind='extract' AND status IN ('waiting','running','paused','failed')",(p['id'],)).fetchone():raise ValueError('همین پروفایل استخراج فعال، مکث‌شده یا ناموفق دارد؛ ابتدا آن را بررسی و ادامه یا لغو کنید.')
+        active=conn.execute("SELECT id,status FROM queue_entries WHERE profile_id=? AND kind='extract' AND status IN ('waiting','running','paused','failed') ORDER BY id",(p['id'],)).fetchall()
+        if active:
+            if reuse_waiting and len(active)==1 and active[0]['status']=='waiting':
+                return {'ok':True,'id':active[0]['id'],'queued':True,'remote_send':False,'reused':True}
+            names={'waiting':'در انتظار','running':'در حال اجرا','paused':'مکث‌شده','failed':'ناموفق'}
+            first=active[0]
+            raise ValueError('کار استخراج #'+str(first['id'])+' '+names[first['status']]+' است؛ از کنترل صف همین پروفایل، وضعیت را بررسی و صریحاً ادامه یا لغو کنید. کار تکراری ساخته نشد.')
         now=utc_now();payload={'pages':pages,'render':'static','with_detail':opts['with_detail'],'detail_mode':opts['detail_mode'],'_send_after':[]}
         cursor=conn.execute("INSERT INTO queue_entries(kind,profile_id,status,payload,counters,created_at,updated_at,heartbeat) VALUES ('extract',?,'waiting',?,'{}',?,?,?)",(p['id'],json.dumps(payload),now,now,now))
         job=cursor.lastrowid

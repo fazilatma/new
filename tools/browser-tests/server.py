@@ -21,6 +21,9 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
         raise AssertionError('Browser boot must never fetch a source/destination')
     mode=os.environ.get('S4_BROWSER_EXTRACTION_FIXTURE','')
     if mode:
+        if mode=='waiting':
+            db.upsert_profile('one',p['url'],'مانتو پاتریس',selectors=p['selectors'])
+            db.enqueue('extract',p['id'],{'pages':1,'with_detail':False})
         other=db.upsert_profile('other','https://example.com/other','Unrelated fixture')
         db.enqueue('extract',other['id']);db.enqueue('woo_send',other['id'])
         def fixture(url,**kwargs):

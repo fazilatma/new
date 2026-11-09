@@ -121,3 +121,46 @@ def test_no_raw_legacy_error_warning_or_response_in_native_status(native,client,
     r=call(client,auth_headers,'python_extract_step',{'profile':'one','id':str(job)},True)
     assert r.status_code==200 and 'PRIVATE' not in r.text
     assert 'PRIVATE' not in call(client,auth_headers,'python_start_status',{'profile':'one'}).text
+
+
+def test_native_start_reuses_one_waiting_job_preserving_checkpoint_and_legacy_enqueue_guard(native,client,auth_headers):
+    db,p,network=native;job=db.enqueue('extract',p['id'],{'pages':2,'_page':2,'with_detail':False,'_send_after':[]})
+    r=call(client,auth_headers,'python_extract_start',{'profile':'one','pages':'999'},True)
+    assert r.status_code==200 and r.json['reused'] is True and r.json['id']==job and r.json['ran']==1
+    assert db.get_entry(job)['status']=='done' and db.get_entry(job)['payload']['pages']==2
+    assert len(db.list_entries())==1 and 'page=2' in network[0][0]
+    waiting=db.enqueue('extract',p['id'])
+    assert call(client,auth_headers,'python_enqueue',{'profile':'one','pages':'1'},True).status_code==400
+    assert db.get_entry(waiting)['status']=='waiting'
+
+
+@pytest.mark.parametrize('status',['paused','failed','running'])
+def test_main_start_never_implicitly_resumes_or_replaces_blocked_job(native,client,auth_headers,status):
+    db,p,network=native;job=db.enqueue('extract',p['id'],status=status)
+    r=call(client,auth_headers,'python_extract_start',{'profile':'one','pages':'1'},True)
+    assert r.status_code==400 and '#'+str(job) in r.json['error'] and not network
+    assert len(db.list_entries())==1 and db.get_entry(job)['status']==status
+
+
+def test_native_status_filters_before_limit_and_keeps_old_active_job_visible(native,client,auth_headers):
+    db,p,network=native;job=db.enqueue('extract',p['id'],status='failed');db.update_entry(job,counters={'error_code':'source_access_denied','last_http_status':403},error='PRIVATE')
+    for _ in range(105):db.enqueue('extract',p['id'],status='done')
+    other=db.upsert_profile('other','https://example.com/other')
+    for _ in range(105):db.enqueue('woo_send',other['id'])
+    r=call(client,auth_headers,'python_start_status',{'profile':'one'})
+    assert len(r.json['jobs'])==100 and r.json['jobs'][0]['id']==job
+    assert r.json['jobs'][0]['error_code']=='source_access_denied' and 'PRIVATE' not in r.text and not network
+
+
+def test_named_live_report_remains_authenticated_read_only_and_secret_free(native,client,app,auth_headers):
+    db,p,network=native;db.upsert_profile('one',p['url'],'مانتو پاتریس',selectors=p['selectors']);job=db.enqueue('extract',p['id'])
+    db.put_config('woocommerce',{'consumer_secret':'PRIVATE'})
+    with db.connect() as conn:before=list(conn.iterdump())
+    r=client.get('/api/php-ui/start-report',query_string={'name':'مانتو پاتريس'})
+    assert r.status_code==200 and r.json['reason']=='existing_waiting' and r.json['jobs'][0]['id']==job
+    assert r.json['processed'] is False and r.json['source_reachability_tested'] is False and r.json['read_only'] and not network
+    assert 'PRIVATE' not in r.text and 'https://example.com' not in r.text
+    with db.connect() as conn:assert list(conn.iterdump())==before
+    assert app.test_client().get('/api/php-ui/start-report?name=one').status_code in (401,403)
+    assert client.get('/api/php-ui/start-report',query_string={'name':'missing'}).status_code==404
+    assert client.get('/api/php-ui/start-report?name=one&url=https://example.com').status_code==400
