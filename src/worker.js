@@ -14,6 +14,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS booths (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL, description TEXT DEFAULT '',
+    is_independent INTEGER DEFAULT 0, owner_name TEXT DEFAULT '', owner_phone TEXT DEFAULT '', owner_share_pct REAL DEFAULT 0,
     ship_single REAL DEFAULT 0, ship_multi REAL DEFAULT 0, comm_pct REAL DEFAULT 0, created_at TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS suppliers (
@@ -22,6 +23,7 @@ const SCHEMA = [
   )`,
   `CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    is_independent INTEGER DEFAULT 0, owner_share_pct REAL, credit_fee_pct REAL, owner_label TEXT DEFAULT '', owner_payment_mode TEXT DEFAULT 'cash', owner_paid_amount REAL DEFAULT 0,
     order_code TEXT, source TEXT NOT NULL DEFAULT 'basalam', booth_id INTEGER,
     customer_name TEXT DEFAULT '', customer_phone TEXT DEFAULT '', city TEXT DEFAULT '',
     product_name TEXT DEFAULT '', quantity INTEGER DEFAULT 1,
@@ -49,6 +51,17 @@ const SCHEMA = [
 
 /* مهاجرت ستون‌های جدید روی دیتابیس‌های قدیمی (خطای ستون تکراری نادیده گرفته می‌شود) */
 const MIGRATIONS = [
+  ['booths', 'is_independent', 'INTEGER DEFAULT 0'],
+  ['booths', 'owner_name', "TEXT DEFAULT ''"],
+  ['booths', 'owner_phone', "TEXT DEFAULT ''"],
+  ['booths', 'owner_share_pct', 'REAL DEFAULT 0'],
+  ['orders', 'is_independent', 'INTEGER DEFAULT 0'],
+  ['orders', 'owner_share_pct', 'REAL'],
+  ['orders', 'credit_fee_pct', 'REAL'],
+  ['orders', 'owner_label', "TEXT DEFAULT ''"],
+  ['orders', 'owner_payment_mode', "TEXT DEFAULT 'cash'"],
+  ['orders', 'owner_paid_amount', 'REAL DEFAULT 0'],
+
   ['orders', 'supplier_order_status', "TEXT DEFAULT 'not_placed'"],
   ['integrations', 'sync_every_min', 'INTEGER DEFAULT 60'],
   ['booths', 'ship_single', 'REAL DEFAULT 0'],
@@ -58,7 +71,9 @@ const MIGRATIONS = [
   ['orders', 'purchase_type', "TEXT DEFAULT 'cash'"],
   ['orders', 'customer_ptype', "TEXT DEFAULT 'cash'"],
 ];
+const BOOTH_FIELDS = ['name', 'description', 'ship_single', 'ship_multi', 'comm_pct', 'is_independent', 'owner_name', 'owner_phone', 'owner_share_pct'];
 const ORDER_FIELDS = [
+  'is_independent', 'owner_share_pct', 'credit_fee_pct', 'owner_label', 'owner_payment_mode', 'owner_paid_amount',
   'order_code', 'source', 'booth_id', 'customer_name', 'customer_phone', 'city',
   'product_name', 'quantity', 'supplier_id', 'supplier_name', 'supplier_order_status',
   'unit_sale', 'unit_cost', 'discount', 'shipping_cost', 'shipping_rev', 'packaging_cost',
@@ -71,6 +86,7 @@ const INTEG_FIELDS = [
 ];
 const INTEG_ALL = [...INTEG_FIELDS, 'last_sync_at', 'last_status'];
 const NUM_FIELDS = new Set([
+  'is_independent', 'owner_share_pct', 'credit_fee_pct', 'owner_paid_amount',
   'quantity', 'unit_sale', 'unit_cost', 'discount', 'shipping_cost',
   'packaging_cost', 'commission', 'ads_cost', 'other_cost', 'jy', 'jm', 'jd', 'booth_id', 'supplier_id',
   'vendor_id', 'auto_sync', 'sync_every_min', 'shipping_rev', 'ship_single', 'ship_multi', 'comm_pct',
@@ -371,11 +387,37 @@ const SYNC_UPDATE_FIELDS = [
   'customer_name', 'customer_phone', 'city', 'product_name', 'quantity',
   'unit_sale', 'discount', 'shipping_cost', 'shipping_rev', 'commission', 'status', 'payment_status', 'order_date', 'source', 'booth_id',
 ];
+/* Rates are snapshotted on first registration, never recalculated by sync/settings edits. */
+async function ownerSnapshot(store, obj, existing = null) {
+  if (existing) {
+    if (String(obj.booth_id ?? existing.booth_id ?? '') !== String(existing.booth_id ?? '')) {
+      const next = obj.booth_id ? await store.findBy('booths', 'id', obj.booth_id) : null;
+      if (+existing.is_independent || +next?.is_independent) throw new Error('تغییر غرفه سفارش خودفرما مجاز نیست؛ سفارش جدید ثبت کنید');
+    }
+    for (const k of ['is_independent', 'owner_share_pct', 'credit_fee_pct', 'owner_label']) {
+      delete obj[k]; if (existing[k] != null) obj[k] = existing[k];
+    }
+    return;
+  }
+  const booth = obj.booth_id ? await store.findBy('booths', 'id', obj.booth_id) : null;
+  obj.is_independent = +booth?.is_independent ? 1 : 0;
+  delete obj.owner_share_pct; delete obj.credit_fee_pct; delete obj.owner_label;
+  if (!obj.is_independent) return;
+  obj.owner_share_pct = Math.min(100, Math.max(0, num(booth.owner_share_pct)));
+  const fee = await store.getSetting('owner_credit_fee_pct');
+  obj.credit_fee_pct = Math.min(100, Math.max(0, fee == null ? 5 : num(fee, 5)));
+  obj.owner_label = booth.owner_name || booth.name;
+}
 async function upsertExternalOrder(store, order) {
   const ex = await store.findBy('orders', 'order_code', order.order_code);
   if (!ex) {
+    await ownerSnapshot(store, order);
     await store.insert('orders', pick(order, ORDER_FIELDS));
     return true; // جدید
+  }
+  if (String(ex.booth_id || '') !== String(order.booth_id || '')) {
+    const nextBooth = order.booth_id ? await store.findBy('booths', 'id', order.booth_id) : null;
+    if (+ex.is_independent || +nextBooth?.is_independent) throw new Error('سفارش قبلاً به غرفه دیگری متصل شده است؛ اتصال‌ها را بررسی کنید');
   }
   const patch = {};
   for (const f of SYNC_UPDATE_FIELDS) {
@@ -593,6 +635,20 @@ function sanitizeInteg(r) {
   };
 }
 
+async function checkOwnerIntegration(store, obj, previous = null) {
+  if ((obj.type || previous?.type) !== 'basalam') return '';
+  const boothId = obj.booth_id ?? previous?.booth_id;
+  const booth = boothId ? await store.findBy('booths', 'id', boothId) : null;
+  const oldBooth = previous?.booth_id ? await store.findBy('booths', 'id', previous.booth_id) : null;
+  if (previous && (+booth?.is_independent || +oldBooth?.is_independent) && String(boothId) !== String(previous.booth_id)) return 'اتصال خودفرما قابل انتقال به غرفه دیگر نیست';
+  if (!+booth?.is_independent) return '';
+  const vendor = obj.vendor_id ?? previous?.vendor_id;
+  if (!vendor) return 'توکن خودفرما باید ابتدا تست شود و شناسه غرفه مشخص باشد';
+  if (previous?.vendor_id && String(previous.vendor_id) !== String(vendor)) return 'شناسه غرفه توکن با اتصال قبلی مطابقت ندارد';
+  const rows = await store.list('integrations');
+  if (rows.some(x => x.type === 'basalam' && x.vendor_id && ((String(x.vendor_id) === String(vendor) && String(x.booth_id) !== String(boothId)) || (String(x.booth_id) === String(boothId) && String(x.vendor_id) !== String(vendor))))) return 'این توکن/غرفه با اتصال موجود تداخل دارد';
+  return '';
+}
 async function handleIntegrations(req, store, parts) {
   const method = req.method;
   const id = parts[1];
@@ -639,6 +695,8 @@ async function handleIntegrations(req, store, parts) {
     }
     if (b.type === 'woo') b.store_url = normStoreUrl(b.store_url);
     if (!b.name) b.name = b.type === 'basalam' ? (b.vendor_title || 'غرفه باسلام') : (b.store_url || 'فروشگاه اینترنتی');
+    const ownerError = await checkOwnerIntegration(store, b);
+    if (ownerError) return json({ok:false,error:ownerError},400);
     const row = await store.insert('integrations', pick(b, INTEG_FIELDS));
     return json({ ok: true, integration: sanitizeInteg(row) });
   }
@@ -651,6 +709,9 @@ async function handleIntegrations(req, store, parts) {
       if (b[f] === undefined || b[f] === null || b[f] === '') continue;
       patch[f] = b[f];
     }
+    const previous = await store.findBy('integrations', 'id', id);
+    const ownerError = await checkOwnerIntegration(store, patch, previous);
+    if (ownerError) return json({ok:false,error:ownerError},400);
     if (patch.store_url) patch.store_url = normStoreUrl(patch.store_url);
     const row = await store.update('integrations', id, pick(patch, INTEG_FIELDS));
     if (!row) return json({ ok: false, error: 'not found' }, 404);
@@ -821,10 +882,11 @@ async function importData(store, b) {
       await store.clear(t);
       for (const row of b[t].slice(0, 5000)) {
         const c = { ...row };
-        delete c.id;
-        if (t === 'orders') await store.insert(t, pick(c, ORDER_FIELDS));
-        else if (t === 'integrations') await store.insert(t, pick(c, INTEG_ALL));
-        else await store.insert(t, c.name ? { name: String(c.name), description: c.description || '', phone: c.phone || '' } : c);
+        delete c.created_at;
+        if (t === 'orders') await store.insert(t, { ...pick(c, ORDER_FIELDS), ...(row.id ? {id: row.id} : {}) });
+        else if (t === 'integrations') await store.insert(t, { ...pick(c, INTEG_ALL), ...(row.id ? {id: row.id} : {}) });
+        else if (t === 'booths') await store.insert(t, { ...pick(c, BOOTH_FIELDS), ...(row.id ? {id: row.id} : {}) });
+        else await store.insert(t, c.name ? { ...(row.id ? {id: row.id} : {}), name: String(c.name), description: c.description || '', phone: c.phone || '' } : c);
       }
       counts[t] = b[t].length;
     }
@@ -1037,6 +1099,7 @@ async function handleApi(req, store, url) {
     const b = await body();
     const ids = Array.isArray(b.ids) ? [...new Set(b.ids.map(String).filter(Boolean))].slice(0, 500) : [];
     if (!ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    if (resource === 'booths' && (await store.list('orders')).some(o => +o.is_independent && ids.includes(String(o.booth_id)))) return json({error: 'غرفه خودفرما دارای سفارش قابل حذف نیست؛ توکن را حذف کنید'}, 400);
     const deleted = await store.removeMany(resource, ids);
     return json({ ok: true, deleted });
   }
@@ -1055,6 +1118,7 @@ async function handleApi(req, store, url) {
     if (method === 'GET') return json({ ok: true, settings: await store.allSettings() });
     if (method === 'POST' || method === 'PUT') {
       const b = await body();
+      if (b.owner_credit_fee_pct != null && (!Number.isFinite(Number(b.owner_credit_fee_pct)) || Number(b.owner_credit_fee_pct) < 0 || Number(b.owner_credit_fee_pct) > 100)) return json({error: 'کارمزد اعتبار باید بین صفر و صد باشد'}, 400);
       for (const [k, v] of Object.entries(b).slice(0, 50)) {
         await store.setSetting(String(k).slice(0, 100), String(v).slice(0, 5000));
       }
@@ -1065,7 +1129,7 @@ async function handleApi(req, store, url) {
 
   /* منابع CRUD */
   const config = {
-    booths: { fields: ['name', 'description', 'ship_single', 'ship_multi', 'comm_pct'] },
+    booths: { fields: BOOTH_FIELDS },
     suppliers: { fields: ['name', 'phone', 'description'] },
     orders: { fields: ORDER_FIELDS },
   };
@@ -1079,6 +1143,11 @@ async function handleApi(req, store, url) {
     const b = await body();
     if (resource === 'orders') {
       const obj = pick(b, ORDER_FIELDS);
+      const existing = id ? await store.findBy('orders', 'id', id) : null;
+      if (id && !existing) return json({ error: 'سفارش یافت نشد' }, 404);
+      if (obj.owner_payment_mode != null && !['cash', 'credit'].includes(obj.owner_payment_mode)) return json({ error: 'نوع پرداخت نامعتبر' }, 400);
+      if (obj.owner_paid_amount != null && (!Number.isFinite(Number(b.owner_paid_amount)) || obj.owner_paid_amount < 0)) return json({ error: 'مبلغ پرداخت‌شده نامعتبر' }, 400);
+      try { await ownerSnapshot(store, obj, existing); } catch (e) { return json({error: e.message}, 400); }
       if (!obj.order_date) {
         const d = new Date();
         obj.order_date = d.toISOString().slice(0, 10);
@@ -1087,6 +1156,11 @@ async function handleApi(req, store, url) {
         ? await store.insert('orders', obj)
         : await store.update('orders', id, obj);
       return json({ ok: true, order: row });
+    }
+    if (resource === 'booths') {
+      if (b.owner_share_pct != null && (!Number.isFinite(Number(b.owner_share_pct)) || Number(b.owner_share_pct) < 0 || Number(b.owner_share_pct) > 100)) return json({error: 'درصد سهم مجموعه باید بین صفر و صد باشد'}, 400);
+      const previous = id ? await store.findBy('booths', 'id', id) : null;
+      if (previous && b.is_independent != null && !!Number(previous.is_independent) !== !!Number(b.is_independent)) return json({error: 'نوع مالکیت غرفه پس از ایجاد تغییر نمی‌کند'}, 400);
     }
     const name = String(b.name || '').trim();
     if (!name && method === 'POST') return json({ error: 'نام الزامی است' }, 400);
@@ -1097,6 +1171,7 @@ async function handleApi(req, store, url) {
     return json({ ok: true, [resource.slice(0, -1)]: row });
   }
   if (method === 'DELETE' && id) {
+    if (resource === 'booths' && (await store.list('orders')).some(o => +o.is_independent && String(o.booth_id) === String(id))) return json({error: 'غرفه دارای سفارش خودفرما قابل حذف نیست؛ توکن را حذف کنید'}, 400);
     await store.remove(resource, id);
     return json({ ok: true });
   }

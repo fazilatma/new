@@ -3,6 +3,10 @@
 -- اجرا: wrangler d1 execute hesabdar-db --file=schema.sql
 
 CREATE TABLE IF NOT EXISTS booths (
+  is_independent INTEGER DEFAULT 0,
+  owner_name TEXT DEFAULT '',
+  owner_phone TEXT DEFAULT '',
+  owner_share_pct REAL DEFAULT 0,
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   description TEXT DEFAULT '',
@@ -21,6 +25,12 @@ CREATE TABLE IF NOT EXISTS suppliers (
 );
 
 CREATE TABLE IF NOT EXISTS orders (
+  is_independent INTEGER DEFAULT 0,
+  owner_share_pct REAL,
+  credit_fee_pct REAL,
+  owner_label TEXT DEFAULT '',
+  owner_payment_mode TEXT DEFAULT 'cash',
+  owner_paid_amount REAL DEFAULT 0,
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   order_code TEXT,
   source TEXT NOT NULL DEFAULT 'basalam',

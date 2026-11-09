@@ -181,6 +181,7 @@ tailwind.config = {
 
     <!-- داشبورد -->
     <section id="view-dashboard" class="view">
+      <div class="glass card p-3 mb-3"><label class="text-sm"><input type="checkbox" class="include-owners" onchange="setIncludeOwners(this.checked)"> احتساب سهم سود غرفه‌داران خودفرما در تحلیل مجموعه</label><div id="dashboard-owner-split" class="flex flex-wrap gap-3 mt-2 text-xs"></div></div>
       <div class="dashboard-summary">
       <div id="dashboard-range" class="glass card p-4 mb-4 flex flex-wrap items-center gap-2 no-print">
         <span class="font-black text-sm ml-1">📅 بازه زمانی:</span>
@@ -295,6 +296,19 @@ tailwind.config = {
       </div>
     </section>
 
+    <section id="view-owners" class="view">
+      <div class="glass card p-4 mb-4"><div class="flex flex-wrap items-center gap-2 mb-3"><h2 class="font-black">🤝 غرفه‌داران خودفرما</h2><button class="btn btn-primary" onclick="newOwnerOrder()">＋ سفارش خودفرما</button><button class="btn btn-soft" onclick="go('booths')">مدیریت غرفه‌داران و توکن‌ها</button></div>
+        <div class="flex flex-wrap gap-2 items-center"><select id="ow-booth" class="inp !w-auto" onchange="state.ownerPage=1;renderOwners()"></select><input id="ow-q" class="inp !w-44" placeholder="جستجوی سفارش…" oninput="state.ownerPage=1;renderOwners()">
+        <label>از <input id="ow-from" type="date" class="inp !w-auto" onchange="state.ownerPage=1;renderOwners()"></label><label>تا <input id="ow-to" type="date" class="inp !w-auto" onchange="state.ownerPage=1;renderOwners()"></label>
+        <select id="ow-status" class="inp !w-auto" onchange="state.ownerPage=1;renderOwners()"><option value="">همه وضعیت‌ها</option><option value="pending">در انتظار</option><option value="confirmed">تاییدشده</option><option value="shipped">ارسال‌شده</option><option value="delivered">تحویل‌شده</option><option value="returned">مرجوعی</option><option value="cancelled">لغوشده</option></select>
+        <select id="ow-group" class="inp !w-auto" onchange="renderOwners()"><option value="daily">روزانه</option><option value="weekly">هفتگی</option><option value="monthly">ماهانه</option></select></div>
+      </div>
+      <div id="owner-kpis" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4"></div>
+      <div class="glass card p-4 mb-4"><p id="owner-order-count" class="text-xs mb-3"></p><div class="overflow-x-auto"><table id="owner-orders-table" class="tbl"></table></div><div id="owner-pages" class="flex items-center gap-3 mt-3"></div></div>
+      <div class="glass card p-4 mb-4"><h3 class="font-black mb-3">روند درآمد و تقسیم سود</h3><div class="chart-box tall"><canvas id="owner-trend"></canvas></div><div class="overflow-x-auto mt-3"><table id="owner-periods" class="tbl"></table></div></div>
+      <div class="grid lg:grid-cols-2 gap-4"><div class="glass card p-4"><h3 class="font-black mb-3">برترین غرفه‌داران بر اساس تعداد سفارش</h3><div class="chart-box"><canvas id="owner-top-count"></canvas></div></div><div class="glass card p-4"><h3 class="font-black mb-3">برترین غرفه‌داران بر اساس سود مجموعه</h3><div class="chart-box"><canvas id="owner-top-profit"></canvas></div></div></div>
+    </section>
+
     <!-- ثبت/ویرایش سفارش -->
     <section id="view-new" class="view">
       <div class="grid lg:grid-cols-3 gap-4">
@@ -347,6 +361,12 @@ tailwind.config = {
               </div>
             </details>
           </div>
+          <div id="owner-order-fields" class="hidden rounded-xl border border-indigo-300 p-4">
+            <h3 class="font-black mb-2">🤝 تسویه با غرفه‌دار خودفرما</h3>
+            <div class="grid md:grid-cols-2 gap-3"><label>نوع پرداخت به مجموعه<select id="o-owner-mode" class="inp" onchange="liveCalc()"><option value="cash">نقدی</option><option value="credit">اعتباری / اقساطی</option></select></label>
+            <label>جمع واریزی ثبت‌شده (تومان)<input id="o-owner-paid" class="inp num" type="text" inputmode="numeric" value="۰" oninput="fmtInp(this);liveCalc()"></label></div>
+            <div id="owner-order-calculation"></div><p class="text-xs text-slate-500 mt-2">نرخ‌ها هنگام ثبت سفارش ثابت می‌شوند. کارمزد اعتبار به مبلغ نقدی اضافه و از سود غرفه‌دار کسر می‌شود؛ سود مجموعه نیست. زیان با نسبت سهم تقسیم می‌شود؛ سفارش لغوشده تعهد جدید ندارد.</p>
+          </div>
           <div class="border-t border-dashed border-slate-300 dark:border-white/10 pt-3 grid md:grid-cols-2 gap-3">
             <div><label class="text-xs font-bold">تاریخ سفارش</label><div id="pk-date"></div></div>
             <div><label class="text-xs font-bold">وضعیت سفارش</label><select id="o-status" class="inp" onchange="liveCalc()"></select></div>
@@ -371,6 +391,7 @@ tailwind.config = {
 
     <!-- گزارش و تحلیل -->
     <section id="view-reports" class="view">
+      <div class="glass card p-3 mb-3"><label class="text-sm"><input type="checkbox" class="include-owners" onchange="setIncludeOwners(this.checked)"> احتساب سهم سود غرفه‌داران خودفرما در تحلیل مجموعه</label><div id="reports-owner-split" class="flex flex-wrap gap-3 mt-2 text-xs"></div></div>
       <div class="glass card p-4 mb-4 flex flex-wrap gap-2 items-center no-print">
         <select id="r-group" class="inp !w-40" onchange="renderReports()">
           <option value="daily">📅 روزانه</option><option value="weekly" selected>📊 هفتگی</option>
@@ -430,6 +451,12 @@ tailwind.config = {
       </div>
       <div id="booths-bulkbar"></div>
       <div id="booths-grid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+      <div class="glass card p-4 mt-5">
+        <div class="flex flex-wrap gap-3 items-center mb-3"><h2 class="font-black">🤝 غرفه‌داران خودفرما و توکن‌ها</h2><button class="btn btn-primary" onclick="ownerBoothModal()">＋ غرفه‌دار خودفرما</button></div>
+        <div class="flex flex-wrap items-center gap-3 mb-3"><label>کارمزد سراسری اعتبار (%) <input id="owner-fee-setting" type="number" min="0" max="100" step="0.01" class="inp !w-24"></label><button class="btn btn-soft" onclick="saveOwnerFee()">ذخیره نرخ</button><label>بازه سینک <select id="owner-sync-days" class="inp !w-auto"><option value="30">۳۰ روز</option><option value="90">۹۰ روز</option><option value="all">همه سفارش‌ها</option></select></label></div>
+        <p class="text-xs text-slate-500 mb-3">مثال: مبلغ نقدی ۱۰۰٬۰۰۰ با نرخ ۵٪، اعتباری ۱۰۵٬۰۰۰ می‌شود. نرخ و درصد سهم فقط برای سفارش‌های ثبت/واردشده بعد از تغییر اعمال می‌شوند، نه سوابق قبلی.</p>
+        <div id="owner-managers" class="grid lg:grid-cols-2 gap-4"></div>
+      </div>
     </section>
 
     <!-- تامین‌کنندگان -->
@@ -591,7 +618,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.20.0';
+const APP_VER = '1.21.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -757,6 +784,7 @@ const Store = {
 /* ═══════════════ وضعیت + محاسبات مالی ═══════════════ */
 const state = {
   orders: [], booths: [], suppliers: [], integrations: [], settings: {},
+  includeOwners: Local.read('include_owners', false) === true, ownerPage: 1,
   statusSel: new Set(), // فیلتر چندتایی وضعیت (چیپ‌ها + سلکت همگام‌اند)
   range: 'month', customFrom: null, customTo: null, trendGroup: 'weekly', trendRange: '365', trendCh: 'all',
 };
@@ -773,6 +801,10 @@ function applyCostMode() {
 }
 /* محاسبه مالی یک سفارش */
 function calc(o, incReturned = true) {
+  if (o._companyFinancial) {
+    const f = ownerFinance(o, incReturned), revenue = f.companyRevenue, cost = f.companyCost;
+    return {revenue, cost, profit: revenue - cost, margin: revenue > 0 ? (revenue-cost)/revenue*100 : 0};
+  }
   const qty = N(o.quantity) || 1;
   let revenue = N(o.unit_sale) * qty - N(o.discount) + N(o.shipping_rev); // + ارسال دریافتی از مشتری
   const cost = N(o.unit_cost) * qty + N(o.shipping_cost) + N(o.packaging_cost) + N(o.commission) + N(o.ads_cost) + N(o.other_cost);
@@ -978,6 +1010,7 @@ let PK = {};
 const NAV = [
   { id: 'dashboard', t: 'داشبورد', i: '🏠' },
   { id: 'orders', t: 'سفارش‌ها', i: '🧾' },
+  { id: 'owners', t: 'غرفه‌داران', i: '🤝' },
   { id: 'new', t: 'ثبت سفارش', i: '➕' },
   { id: 'reports', t: 'گزارش و تحلیل', i: '📊' },
   { id: 'booths', t: 'غرفه‌ها', i: '🏪' },
@@ -1000,6 +1033,7 @@ function go(v) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (v === 'dashboard') renderDashboard();
   if (v === 'orders') renderOrders();
+  if (v === 'owners') renderOwners();
   if (v === 'reports') renderReports();
   if (v === 'booths') renderBooths();
   if (v === 'suppliers') renderSuppliers();
@@ -1045,6 +1079,7 @@ function mkChart(id, cfg) {
 function refreshChartsTheme() {
   if (currentView === 'dashboard') renderDashboard();
   else if (currentView === 'reports') renderReports();
+  else if (currentView === 'owners') renderOwners();
 }
 
 /* ═══════════════ بارگذاری اولیه ═══════════════ */
@@ -1075,10 +1110,11 @@ async function loadAllInner() {
   applyCostMode();
   fillSelects();
   const t = isoToday(), from = monthStartJ(t);
-  const mp = summarize(state.orders.filter((o) => inRange(o, from, t)));
+  const mp = summarize(companyReportOrders().filter((o) => inRange(o, from, t)));
   const sp = $('#side-profit');
   sp.textContent = fmtMoney(mp.profit);
   sp.className = 'font-black text-lg num ' + (mp.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400');
+  document.querySelectorAll('.include-owners').forEach(el => el.checked = state.includeOwners);
   go(currentView);
 }
 function fillSelects() {
@@ -1086,7 +1122,7 @@ function fillSelects() {
   $('#o-booth').innerHTML = bOpts || '<option value="">— غرفه‌ای ثبت نشده —</option>';
   const bb = $('#bas-booth');
   if (bb) { const cur = bb.value; bb.innerHTML = '<option value="__new__">＋ ساخت خودکار غرفه جدید</option>' + bOpts; if (cur) bb.value = cur; }
-  $('#f-booth').innerHTML = '<option value="">همه غرفه‌ها</option>' + bOpts;
+  $('#f-booth').innerHTML = '<option value="">همه غرفه‌ها</option>' + state.booths.filter(b => !+b.is_independent).map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
   $('#r-booth').innerHTML = '<option value="">همه غرفه‌ها</option>' + bOpts;
   const sOpts = `<option value="">— بدون تامین‌کننده —</option>` + state.suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
   $('#o-sup').innerHTML = sOpts;
@@ -1187,8 +1223,9 @@ function renderDashboard() {
   $('#rng-btns').innerHTML = RANGES.map((r) =>
     `<button onclick="setRange('${r.id}')" class="btn !py-1.5 !text-xs ${state.range === r.id ? 'btn-primary' : 'btn-soft'}">${r.t}</button>`).join('');
   const { from, to } = getRange();
-  const list = state.orders.filter((o) => inRange(o, from, to));
+  const list = companyReportOrders().filter((o) => inRange(o, from, to));
   const s = summarize(list, incR);
+  renderCompanySplit('#dashboard-owner-split', list, incR);
   const pm = s.margin;
   $('#kpis').innerHTML =
     dashboardSummaryRow('💰 فروش کل', fmtMoney(s.revenue), `${fmtN(s.count)} سفارش در بازه`, 'grad-bg', '💵', 'anim-1') +
@@ -1207,7 +1244,7 @@ function renderDashboard() {
     `<button onclick="setTrendRange('${v}')" class="btn !py-1 !px-2 !text-[11px] ${state.trendRange === v ? 'btn-primary' : 'btn-soft'}">${t}</button>`).join('');
   const chOpts = [['all', '🌍 تجمعی'], ['web', '🛒 سایت فروشگاهی'],
     ...state.booths.map((b) => ['booth:' + b.id, '🏪 ' + b.name])];
-  if (state.orders.some((o) => String(o.booth_id || '') === '' && o.source !== 'website')) chOpts.push(['other', '✍️ دستی / سایر']);
+  if (companyReportOrders().some((o) => String(o.booth_id || '') === '' && o.source !== 'website')) chOpts.push(['other', '✍️ دستی / سایر']);
   if (!chOpts.some(([v]) => v === state.trendCh)) state.trendCh = 'all';
   $('#trend-ch').innerHTML = chOpts.map(([v, t]) => `<option value="${v}"${state.trendCh === v ? ' selected' : ''}>${esc(t)}</option>`).join('');
   const chName = (chOpts.find(([v]) => v === state.trendCh) || chOpts[0])[1];
@@ -1217,8 +1254,9 @@ function renderDashboard() {
     : state.trendCh === 'web' ? (o.source === 'website' && String(o.booth_id || '') === '')
     : state.trendCh === 'other' ? (String(o.booth_id || '') === '' && o.source !== 'website')
     : String(o.booth_id) === state.trendCh.slice(6);
-  const tlist = state.orders.filter((o) => (!tcut || (o.order_date || '') >= tcut) && matchCh(o));
+  const tlist = companyReportOrders().filter((o) => (!tcut || (o.order_date || '') >= tcut) && matchCh(o));
   const series = groupStatusSeries(tlist, state.trendGroup, incR);
+  const ownerSeries = new Map(groupStatusSeries(tlist.filter(isOwnerOrder), state.trendGroup, incR).map(x => [x.key, x.tot.profit]));
   const sLab = series.map((r) => r.label);
   const wide = Math.min(Math.max(sLab.length, 1) * 56, 6000) + 'px';
   for (const id of ['ch-cnt-w', 'ch-vol-w', 'ch-pft-w']) { const w = document.getElementById(id); w.style.minWidth = wide; w.parentElement.scrollLeft = 1e9; }
@@ -1247,6 +1285,7 @@ function renderDashboard() {
   const pftPts = series.map((r) => r.tot.profit >= 0 ? '#10b981' : '#f43f5e');
   mkChart('ch-pft', { type: 'line',
     data: { labels: sLab, datasets: [
+      lineDS('سهم مجموعه از خودفرماها', series.map(r => ownerSeries.get(r.key) || 0), '#8b5cf6'),
       lineDS('تجمعی', G('tot', 'profit'), '#10b981', 'rgba(16,185,129,.15)', pftPts),
       lineDS('تکمیل‌شده', G('del', 'profit'), '#14b8a6'),
       lineDS('لغوشده', G('can', 'profit'), '#f43f5e'),
@@ -1262,14 +1301,14 @@ function renderDashboard() {
       plugins: { legend: { position: 'bottom', labels: { font: { family: 'Vazirmatn' } }, rtl: true }, tooltip: { rtl: true, callbacks: { label: (c) => ` ${fmtMoney(c.parsed)}` } } } } });
 
   /* غرفه‌ها */
-  const boothRows = state.booths.map((b) => ({ name: b.name, ...summarize(list.filter((o) => String(o.booth_id) === String(b.id)), incR) })).filter((x) => x.count);
+  const boothRows = state.booths.map((b) => ({ name: b.name + (+b.is_independent ? ' (خودفرما)' : ''), ...summarize(list.filter((o) => String(o.booth_id) === String(b.id)), incR) })).filter((x) => x.count);
   mkChart('ch-booth', { type: 'bar',
     data: { labels: boothRows.map((x) => x.name), datasets: [{ label: 'سود', data: boothRows.map((x) => x.profit),
       backgroundColor: boothRows.map((x) => x.profit >= 0 ? 'rgba(16,185,129,.8)' : 'rgba(244,63,94,.8)'), borderRadius: 8 }] },
     options: chartBase({ indexAxis: 'y', scales: undefined, plugins: { legend: { display: false }, tooltip: { rtl: true, callbacks: { label: (c) => ` سود: ${fmtMoney(c.parsed.x)}` } } } }) });
 
   /* تفکیک سود: سایت و غرفه‌ها (افراز کامل سفارش‌ها، بدون هم‌پوشانی) */
-  const bdRows = state.booths.map((b) => ({ icon: '🏪', name: b.name,
+  const bdRows = state.booths.map((b) => ({ icon: '🏪', name: b.name + (+b.is_independent ? ' (خودفرما)' : ''),
     ...summarize(list.filter((o) => String(o.booth_id) === String(b.id)), incR) })).filter((x) => x.count);
   const _web = summarize(list.filter((o) => o.source === 'website' && String(o.booth_id || '') === ''), incR);
   if (_web.count) bdRows.push({ icon: '🛒', name: 'سایت فروشگاهی', ..._web });
@@ -1319,6 +1358,7 @@ function filteredOrders(opts = {}) {
   const q = ($('#f-q').value || '').trim();
   const src = $('#f-source').value, b = $('#f-booth').value, sp = $('#f-sup').value, pt = $('#f-ptype').value;
   return state.orders.filter((o) => {
+    if (isOwnerOrder(o)) return false;
     if (src && o.source !== src) return false;
     if (b && String(o.booth_id) !== b) return false;
     if (sp && String(o.supplier_id) !== sp) return false;
@@ -1493,6 +1533,188 @@ function startOrderColumnResize(event, id, handle) {
   handle.addEventListener('pointercancel', end); handle.addEventListener('lostpointercapture', end);
 }
 
+function orderTableHTML(list, owner = false) {
+  return `<thead><tr>${owner ? '' : `<th><input type="checkbox" onchange="toggleSelAll('orders', this.checked)" class="w-4 h-4 accent-indigo-600" title="انتخاب همه"></th>`}<th>کد</th><th>غرفه / منبع</th><th>تاریخ</th><th>مشتری</th><th>${owner ? 'سود قابل تقسیم' : 'سود/زیان'}</th><th>کالا × تعداد</th><th>تامین‌کننده</th><th>فروش</th><th>وضعیت</th>${owner ? '<th>هزینه خرید</th><th>سهم مجموعه</th><th>سود مجموعه</th><th>سود خالص غرفه‌دار</th><th>پرداخت</th><th>کارمزد اعتبار</th><th>قابل پرداخت</th><th>واریزی ثبت‌شده</th><th>مانده</th>' : ''}<th>عملیات</th></tr></thead><tbody>` +
+    (list.map((o) => {
+      const f = owner ? ownerFinance(o) : null;
+      const c = calc(o, true), st = STATUS[o.status] || STATUS.pending, pc = c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500';
+      return `<tr class="${orderRowClass(o)} cursor-pointer" onclick="editOrder('${o.id}')">
+        ${owner ? '' : `<td onclick="event.stopPropagation()"><input type="checkbox" ${state.sel.orders.has(String(o.id)) ? 'checked' : ''} onchange="toggleSel('orders','${o.id}',this.checked)" class="w-4 h-4 accent-indigo-600"></td>`}
+        <td class="num font-bold">${esc(o.order_code || '—')}</td>
+        <td class="text-xs">${o.source === 'basalam' ? `<div class="font-bold">${esc(boothName(o.booth_id))}</div><div class="text-[11px] text-slate-400">${SOURCES[o.source] || ''}</div>` : (SOURCES[o.source] || '—')}</td>
+        <td class="num">${fmtJ(o.order_date)}</td>
+        <td><div class="font-bold">${esc(o.customer_name || '—')}</div><div class="text-[11px] text-slate-400 num">${esc(o.customer_phone || '')}</div></td>
+        ${o.status === 'cancelled' ? '<td class="text-center text-slate-300">—</td>' : `<td class="num"><div class="font-black ${pc}">${fmtN(c.profit)}</div><div class="text-[11px] ${pc} opacity-70">${toFa(c.margin.toFixed(1))}٪</div></td>`}
+        <td><div class="font-bold">${esc(o.product_name || '—')}</div><div class="text-[11px] text-slate-400 num">× ${fmtN(o.quantity || 1)}</div></td>
+        <td class="text-xs">${esc(supNameOf(o))}<div class="text-[11px] text-slate-400">${PTYPE[o.purchase_type] || PTYPE.cash}</div></td>
+        <td class="num">${fmtN(c.revenue)}</td>
+        <td><span class="chip ${st.c}">${st.i} ${st.t}</span></td>
+        ${owner ? `<td>${fmtMoney(f.purchase)}${!f.ready ? '<br>⚠️ هزینه ثبت نشده' : ''}</td><td>${fmtN(o.owner_share_pct)}٪</td><td>${fmtMoney(f.companyProfit)}</td><td>${fmtMoney(f.ownerProfit)}</td><td>${o.owner_payment_mode === 'credit' ? 'اعتباری' : 'نقدی'}</td><td>${fmtMoney(f.creditFee)} (${fmtN(o.credit_fee_pct)}٪)</td><td>${fmtMoney(f.payable)}</td><td>${fmtMoney(o.owner_paid_amount)}</td><td>${fmtMoney(f.balance)}</td>` : ''}
+        <td><div class="flex gap-1" onclick="event.stopPropagation()">
+          <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="openInvoice('${o.id}')" title="فاکتور">🧾</button>
+          <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="editOrder('${o.id}')" title="ویرایش">✏️</button>
+          <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delOrder('${o.id}')" title="حذف">🗑</button>
+        </div></td></tr>`;
+    }).join('') || `<tr><td colspan="${owner ? 19 : 11}" class="text-center text-slate-400 py-8">سفارشی یافت نشد 🍃</td></tr>`) + '</tbody>';
+}
+/* Independent booth owners: profit split and credit surcharge are separate ledgers. */
+function isOwnerOrder(o) { return Number(o.is_independent) === 1; }
+function ownerFinance(o, incReturned = true) {
+  const retail = calc({...o, _companyFinancial: false}, incReturned);
+  const purchase = N(o.unit_cost) * (N(o.quantity) || 1);
+  const ready = purchase > 0;
+  const active = o.status !== 'cancelled' && ready;
+  const companyProfit = active ? retail.profit * N(o.owner_share_pct) / 100 : 0;
+  const ownerGrossProfit = active ? retail.profit - companyProfit : 0;
+  const cashDue = active ? purchase + companyProfit : 0;
+  const creditFee = active && o.owner_payment_mode === 'credit' ? Math.round(Math.max(0, cashDue) * N(o.credit_fee_pct) / 100) : 0;
+  const payable = cashDue + creditFee;
+  const ownerProfit = ownerGrossProfit - creditFee; // The booth owner bears the external credit surcharge.
+  return {retail, purchase, ready, companyProfit, ownerGrossProfit, ownerProfit, cashDue, creditFee, payable,
+    balance: payable - N(o.owner_paid_amount), companyRevenue: active ? cashDue : 0, companyCost: active ? purchase : 0};
+}
+function ownerFormFields(o) {
+  const existing = state.orders.find(x => String(x.id) === String(o.id));
+  const booth = state.booths.find(b => String(b.id) === String(o.booth_id));
+  const independent = existing ? isOwnerOrder(existing) : !!Number(booth?.is_independent);
+  return independent ? {
+    is_independent: 1, owner_share_pct: existing?.owner_share_pct ?? N(booth.owner_share_pct),
+    credit_fee_pct: existing?.credit_fee_pct ?? N(state.settings.owner_credit_fee_pct ?? 5),
+    owner_payment_mode: $('#o-owner-mode').value || 'cash', owner_paid_amount: M('o-owner-paid'),
+  } : {is_independent: 0};
+}
+function renderOwnerCalculation(o) {
+  $('#owner-order-fields').classList.toggle('hidden', !isOwnerOrder(o));
+  if (!isOwnerOrder(o)) return;
+  const f = ownerFinance(o);
+  $('#owner-order-calculation').innerHTML = `<div class="text-xs leading-7">
+    سهم مجموعه از سود خالص: <b>${fmtN(o.owner_share_pct)}٪</b> • کارمزد اعتبار این سفارش: <b>${fmtN(o.credit_fee_pct)}٪</b><br>
+    سود مجموعه: <b>${fmtMoney(f.companyProfit)}</b> • سود خالص غرفه‌دار (پس از کارمزد اعتبار): <b>${fmtMoney(f.ownerProfit)}</b><br>
+    مبلغ نقدی (خرید + سهم سود): <b>${fmtMoney(f.cashDue)}</b><br>
+    کارمزد تامین‌کننده اعتبار: <b>${fmtMoney(f.creditFee)}</b> • قابل پرداخت: <b>${fmtMoney(f.payable)}</b><br>
+    مانده تسویه: <b>${fmtMoney(f.balance)}</b> (منفی = بستانکاری غرفه‌دار)
+    ${!f.ready ? '<br><strong class="text-amber-600">تا ثبت هزینه خرید، سود و تسویه خودفرما محاسبه نمی‌شود.</strong>' : ''}
+    </div>`;
+}
+function companyReportOrders() {
+  return state.orders.filter(o => !isOwnerOrder(o) || state.includeOwners)
+    .map(o => isOwnerOrder(o) ? {...o, _companyFinancial: true} : o);
+}
+function setIncludeOwners(on) {
+  state.includeOwners = on;
+  try { localStorage.setItem('hd_include_owners', JSON.stringify(on)); } catch {}
+  document.querySelectorAll('.include-owners').forEach(el => el.checked = on);
+  updateSideProfit();
+  if (currentView === 'reports') renderReports(); else renderDashboard();
+}
+function updateSideProfit() {
+  const s = summarize(companyReportOrders().filter(o => inRange(o, monthStartJ(isoToday()), isoToday())));
+  $('#side-profit').textContent = fmtMoney(s.profit);
+}
+function renderCompanySplit(target, list, incR = true) {
+  const own = summarize(list.filter(o => !isOwnerOrder(o)), incR), owners = summarize(list.filter(isOwnerOrder), incR);
+  $(target).innerHTML = `<span>سود غرفه‌های مجموعه: <b>${fmtMoney(own.profit)}</b></span><span>سهم مجموعه از خودفرماها: <b>${fmtMoney(owners.profit)}</b>${state.includeOwners ? '' : ' (خارج از جمع)'}</span><span class="text-xs text-slate-500">درآمد خودفرما در گزارش مجموعه = بهای خرید + سهم سود؛ کارمزد اعتبار و سود غرفه‌دار، سود مجموعه نیست.</span>`;
+}
+function renderOwnerManagers() {
+  $('#owner-fee-setting').value = state.settings.owner_credit_fee_pct ?? 5;
+  $('#owner-managers').innerHTML = state.booths.filter(b => +b.is_independent).map(b => {
+    const conns = state.integrations.filter(c => String(c.booth_id) === String(b.id) && c.type === 'basalam');
+    return `<div class="glass card p-4"><h3 class="font-black">${esc(b.owner_name || b.name)} • ${esc(b.name)}</h3>
+      <p class="text-xs my-2">${esc(b.owner_phone || '')} • سهم مجموعه از سود: ${fmtN(b.owner_share_pct)}٪</p>
+      <div class="flex flex-wrap gap-2 mb-2"><button class="btn btn-soft" onclick="ownerBoothModal('${b.id}')">ویرایش غرفه‌دار / درصد</button><button class="btn btn-primary" onclick="ownerTokenModal('${b.id}')">＋ توکن</button><button class="btn btn-soft" onclick="go('owners');$('#ow-booth').value='${b.id}';renderOwners()">سفارش‌ها</button></div>
+      ${conns.map(c => `<div class="rounded-xl bg-slate-100 dark:bg-white/5 p-3 mt-2 text-xs"><b>${esc(c.name || c.vendor_title || 'اتصال باسلام')}</b> • ${esc(c.token_hint || 'توکن ذخیره شده')}
+        <div class="flex flex-wrap gap-2 mt-2"><button class="btn btn-soft" onclick="syncOwnerToken('${c.id}',this)">🔄 سینک</button><button class="btn btn-soft" onclick="ownerTokenModal('${b.id}','${c.id}')">تعویض توکن</button><button class="btn btn-danger" onclick="removeOwnerToken('${c.id}')">حذف توکن</button><label>خودکار <input type="checkbox" ${+c.auto_sync ? 'checked' : ''} onchange="toggleAuto('${c.id}',this.checked)"></label></div><p>${esc(c.last_status || '')}</p></div>`).join('') || '<p class="text-xs text-amber-600">هنوز توکنی اضافه نشده است.</p>'}</div>`;
+  }).join('') || emptyBox('هنوز غرفه‌دار خودفرما اضافه نشده است');
+}
+async function saveOwnerFee() {
+  const fee = Number($('#owner-fee-setting').value);
+  if (!Number.isFinite(fee) || fee < 0 || fee > 100) { toast('نرخ باید بین صفر و صد باشد', 'err'); return; }
+  try { await Store.saveSettings({owner_credit_fee_pct:fee}); state.settings.owner_credit_fee_pct = fee; toast('نرخ جدید فقط برای سفارش‌های بعدی اعمال می‌شود'); }
+  catch(e) { toast(e.message,'err'); }
+}
+function ownerBoothModal(id) {
+  const b = state.booths.find(x => String(x.id) === String(id)) || {};
+  openModal({title: id ? 'ویرایش غرفه‌دار خودفرما' : 'افزودن غرفه‌دار خودفرما', body: `<div class="flex flex-col gap-3">
+    <label>نام غرفه<input id="ob-name" class="inp" value="${esc(b.name || '')}"></label>
+    <label>نام غرفه‌دار<input id="ob-owner" class="inp" value="${esc(b.owner_name || '')}"></label>
+    <label>تلفن<input id="ob-phone" class="inp" value="${esc(b.owner_phone || '')}"></label>
+    <label>درصد سهم مجموعه از سود خالص<input id="ob-share" class="inp" type="number" min="0" max="100" step="0.01" value="${N(b.owner_share_pct)}"></label>
+    <p class="text-xs text-slate-500">سهم باقیمانده متعلق به غرفه‌دار است. تغییر درصد فقط روی سفارش‌های جدید اثر دارد. زیان نیز با همین نسبت تقسیم می‌شود. توکن پس از ذخیره از بخش غرفه‌ها اضافه می‌شود.</p></div>`,
+    buttons:[{label:'ذخیره',onClick:async()=>{
+      const name=$('#ob-name').value.trim(), owner_name=$('#ob-owner').value.trim(), pct=Number($('#ob-share').value);
+      if (!name || !owner_name || !Number.isFinite(pct) || pct<0 || pct>100) {toast('نام‌ها و درصد معتبر را وارد کنید','err');return;}
+      try {const saved=await Store.saveBooth({id:b.id,name,owner_name,owner_phone:$('#ob-phone').value.trim(),owner_share_pct:pct,is_independent:1});
+        if(b.id) Object.assign(b,saved); else state.booths.push(saved);
+        closeModal();fillSelects();renderBooths(); if(currentView==='owners') renderOwners();toast('غرفه‌دار ذخیره شد');
+      }catch(e){toast(e.message,'err');}
+    }}]});
+}
+function ownerTokenModal(boothId, id) {
+  const c=state.integrations.find(x=>String(x.id)===String(id));
+  openModal({title:'توکن غرفه‌دار خودفرما',body:`<label>توکن باسلام<input id="owner-token" class="inp" type="password" autocomplete="off" dir="ltr"></label><p class="text-xs mt-2">توکن تست می‌شود و فقط برای همین غرفه ذخیره می‌شود. توکن قبلی نمایش داده نمی‌شود.</p>`,buttons:[{label:'تست و ذخیره',onClick:async()=>{
+    const token=$('#owner-token').value.trim(); if(!token){toast('توکن را وارد کنید','err');return;}
+    try {
+      const test=await Store.testIntegration({type:'basalam',token});
+      if(!test.ok){toast('تست توکن ناموفق: '+(test.error||''),'err');return;}
+      const info=test.info||{};
+      if (!info.vendor_id) {toast('شناسه غرفه از توکن قابل تشخیص نیست','err');return;}
+      if(state.integrations.some(x=>x.type==='basalam' && String(x.vendor_id)===String(info.vendor_id) && String(x.booth_id)!==String(boothId))){toast('این غرفه قبلاً به اتصال دیگری متصل شده است','err');return;}
+      if(state.integrations.some(x=>x.type==='basalam' && String(x.booth_id)===String(boothId) && x.vendor_id && String(x.vendor_id)!==String(info.vendor_id))){toast('توکن مربوط به غرفه دیگری است','err');return;}
+      const saved=await Store.saveIntegration({id:c?.id,type:'basalam',name:boothName(boothId),booth_id:boothId,token,vendor_id:info.vendor_id,vendor_title:info.vendor_title||'',auto_sync:c?.auto_sync||0});
+      if(c)Object.assign(c,saved);else state.integrations.push(saved);
+      closeModal();renderOwnerManagers();toast('توکن ذخیره شد');
+    }catch(e){toast(e.message,'err');}
+  }}]});
+}
+function removeOwnerToken(id) {
+  confirmDlg('حذف توکن','اتصال و سینک خودکار حذف شود؟ سفارش‌ها و سوابق مالی حفظ می‌شوند.',async()=>{
+    await Store.delIntegration(id);state.integrations=state.integrations.filter(c=>String(c.id)!==String(id));renderOwnerManagers();
+  });
+}
+async function syncOwnerToken(id,btn) {
+  btn.disabled=true;btn.textContent='در حال سینک…';
+  try {
+    const r=await Store.syncIntegration(id,$('#owner-sync-days').value);
+    if(!r.ok)throw new Error(r.error||'سینک ناموفق');
+    state.orders=await Store.listOrders();state.integrations=await Store.listIntegrations();renderOwnerManagers();
+    toast(`${fmtN(r.imported)} جدید، ${fmtN(r.updated)} به‌روز${r.errors?.length?'؛ '+r.errors[0]:''}`);
+  }catch(e){toast(e.message,'err');btn.disabled=false;btn.textContent='🔄 سینک';}
+}
+function renderOwners() {
+  const selected=$('#ow-booth').value;
+  $('#ow-booth').innerHTML='<option value="">همه غرفه‌داران</option>'+state.booths.filter(b=>+b.is_independent).map(b=>`<option value="${b.id}">${esc(b.owner_name || b.name)} • ${esc(b.name)}</option>`).join('');
+  $('#ow-booth').value=selected;
+  const from=$('#ow-from').value||'2000-01-01',to=$('#ow-to').value||'2100-01-01',q=$('#ow-q').value.trim().toLowerCase(),status=$('#ow-status').value;
+  const list=state.orders.filter(o=>isOwnerOrder(o)&&(!selected||String(o.booth_id)===selected)&&inRange(o,from,to)&&(!status||o.status===status)&&(!q||[o.order_code,o.customer_name,o.product_name,o.customer_phone].join(' ').toLowerCase().includes(q))).sort((a,b)=>String(b.order_date).localeCompare(String(a.order_date)));
+  const totals={sales:0,companyProfit:0,ownerProfit:0,payable:0,balance:0,creditFee:0,cashDue:0},groups=new Map(),ranking=new Map();
+  let incomplete=0;
+  for(const o of list){
+    const f=ownerFinance(o); totals.balance+=f.balance;
+    if(o.status==='cancelled')continue;
+    if(!f.ready)incomplete++;
+    totals.sales+=f.retail.revenue;for(const k of ['companyProfit','ownerProfit','payable','creditFee','cashDue'])totals[k]+=f[k];
+    const period=periodKey(o.order_date,$('#ow-group').value),g=groups.get(period.key)||{...period,sales:0,companyProfit:0,ownerProfit:0,payable:0};
+    g.sales+=f.retail.revenue;g.companyProfit+=f.companyProfit;g.ownerProfit+=f.ownerProfit;g.payable+=f.payable;groups.set(period.key,g);
+    const r=ranking.get(String(o.booth_id))||{name:boothName(o.booth_id),count:0,profit:0};r.count++;r.profit+=f.companyProfit;ranking.set(String(o.booth_id),r);
+  }
+  $('#owner-kpis').innerHTML=[['فروش مشتریان',totals.sales],['سود مجموعه',totals.companyProfit],['سود غرفه‌داران',totals.ownerProfit],['قابل پرداخت',totals.payable],['مانده تسویه',totals.balance],['کارمزد اعتبار (خارج از سود)',totals.creditFee]].map(([t,v])=>kpiCard(t,fmtMoney(v),'در بازه انتخاب‌شده','grad-sky','🤝','')).join('');
+  $('#owner-order-count').textContent=`${fmtN(list.length)} سفارش • ${fmtN(incomplete)} سفارش بدون هزینه خرید (سود و تسویه محاسبه نشده)`;
+  const pageSize=100,pages=Math.max(1,Math.ceil(list.length/pageSize));state.ownerPage=Math.max(1,Math.min(pages,state.ownerPage||1));
+  $('#owner-orders-table').innerHTML=orderTableHTML(list.slice((state.ownerPage-1)*pageSize,state.ownerPage*pageSize),true);
+  $('#owner-pages').innerHTML=`<button class="btn btn-soft" ${state.ownerPage===1?'disabled':''} onclick="state.ownerPage--;renderOwners()">قبلی</button> ${fmtN(state.ownerPage)} / ${fmtN(pages)} <button class="btn btn-soft" ${state.ownerPage===pages?'disabled':''} onclick="state.ownerPage++;renderOwners()">بعدی</button>`;
+  const series=[...groups.values()].sort((a,b)=>a.key.localeCompare(b.key));
+  mkChart('owner-trend',{type:'line',data:{labels:series.map(x=>x.label),datasets:[['فروش مشتریان','sales','#6366f1'],['سود مجموعه','companyProfit','#10b981'],['سود غرفه‌داران','ownerProfit','#f59e0b']].map(([label,k,color])=>({label,data:series.map(x=>x[k]),borderColor:color,backgroundColor:color}))},options:chartBase()});
+  $('#owner-periods').innerHTML='<thead><tr><th>دوره</th><th>فروش مشتریان</th><th>سود مجموعه</th><th>سود غرفه‌داران</th><th>قابل پرداخت</th></tr></thead><tbody>'+series.map(x=>`<tr><td>${x.label}</td><td>${fmtMoney(x.sales)}</td><td>${fmtMoney(x.companyProfit)}</td><td>${fmtMoney(x.ownerProfit)}</td><td>${fmtMoney(x.payable)}</td></tr>`).join('')+'</tbody>';
+  for(const [id,key,label,color] of [['owner-top-count','count','تعداد سفارش','#6366f1'],['owner-top-profit','profit','سود مجموعه','#10b981']]){
+    const top=[...ranking.values()].sort((a,b)=>b[key]-a[key]).slice(0,10);
+    mkChart(id,{type:'bar',data:{labels:top.map(x=>x.name),datasets:[{label,data:top.map(x=>x[key]),backgroundColor:color}]},options:chartBase()});
+  }
+}
+function newOwnerOrder() {
+  const booths=state.booths.filter(b=>+b.is_independent);if(!booths.length){toast('ابتدا در بخش غرفه‌ها یک غرفه‌دار اضافه کنید','err');return;}
+  resetForm();$('#o-source').value='basalam';$('#o-booth').value=$('#ow-booth').value||booths[0].id;onSourceChange();go('new');
+}
+
 function renderOrders() {
   const list = filteredOrders();
   const s = summarize(list, true);
@@ -1503,26 +1725,7 @@ function renderOrders() {
     kpiCard('💰 فروش', fmtMoney(s.revenue), 'جمع فروش', 'grad-sky', '💵', '') +
     kpiCard('🧾 هزینه', fmtMoney(s.cost), 'جمع هزینه‌ها', 'grad-amber', '🧮', '') +
     kpiCard('✅ سود', fmtMoney(s.profit), `حاشیه ${toFa(s.margin.toFixed(1))}٪`, s.profit >= 0 ? 'grad-green' : 'grad-rose', '📈', '');
-  $('#orders-tbl').innerHTML = `<thead><tr><th><input type="checkbox" onchange="toggleSelAll('orders', this.checked)" class="w-4 h-4 accent-indigo-600" title="انتخاب همه"></th><th>کد</th><th>غرفه / منبع</th><th>تاریخ</th><th>مشتری</th><th>سود/زیان</th><th>کالا × تعداد</th><th>تامین‌کننده</th><th>فروش</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody>` +
-    (list.slice(0, 300).map((o) => {
-      const c = calc(o, true), st = STATUS[o.status] || STATUS.pending, pc = c.profit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500';
-      return `<tr class="${orderRowClass(o)} cursor-pointer" onclick="editOrder('${o.id}')">
-        <td onclick="event.stopPropagation()"><input type="checkbox" ${state.sel.orders.has(String(o.id)) ? 'checked' : ''} onchange="toggleSel('orders','${o.id}',this.checked)" class="w-4 h-4 accent-indigo-600"></td>
-        <td class="num font-bold">${esc(o.order_code || '—')}</td>
-        <td class="text-xs">${o.source === 'basalam' ? `<div class="font-bold">${esc(boothName(o.booth_id))}</div><div class="text-[11px] text-slate-400">${SOURCES[o.source] || ''}</div>` : (SOURCES[o.source] || '—')}</td>
-        <td class="num">${fmtJ(o.order_date)}</td>
-        <td><div class="font-bold">${esc(o.customer_name || '—')}</div><div class="text-[11px] text-slate-400 num">${esc(o.customer_phone || '')}</div></td>
-        ${o.status === 'cancelled' ? '<td class="text-center text-slate-300">—</td>' : `<td class="num"><div class="font-black ${pc}">${fmtN(c.profit)}</div><div class="text-[11px] ${pc} opacity-70">${toFa(c.margin.toFixed(1))}٪</div></td>`}
-        <td><div class="font-bold">${esc(o.product_name || '—')}</div><div class="text-[11px] text-slate-400 num">× ${fmtN(o.quantity || 1)}</div></td>
-        <td class="text-xs">${esc(supNameOf(o))}<div class="text-[11px] text-slate-400">${PTYPE[o.purchase_type] || PTYPE.cash}</div></td>
-        <td class="num">${fmtN(c.revenue)}</td>
-        <td><span class="chip ${st.c}">${st.i} ${st.t}</span></td>
-        <td><div class="flex gap-1" onclick="event.stopPropagation()">
-          <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="openInvoice('${o.id}')" title="فاکتور">🧾</button>
-          <button class="btn btn-soft !px-2 !py-1 !text-xs" onclick="editOrder('${o.id}')" title="ویرایش">✏️</button>
-          <button class="btn btn-danger !px-2 !py-1 !text-xs" onclick="delOrder('${o.id}')" title="حذف">🗑</button>
-        </div></td></tr>`;
-    }).join('') || '<tr><td colspan="11" class="text-center text-slate-400 py-8">سفارشی یافت نشد 🍃</td></tr>') + '</tbody>';
+  $('#orders-tbl').innerHTML = orderTableHTML(list.slice(0, 300));
   applyOrderColumnLayout(list.slice(0, 300));
   renderOrdersBulkBar();
 }
@@ -1531,7 +1734,7 @@ async function delOrder(id) {
   confirmDlg('🗑 حذف سفارش', `سفارش <b>${esc(o?.order_code || '')}</b> حذف شود؟ این عمل قابل بازگشت نیست.`, async () => {
     await Store.delOrder(id);
     state.orders = state.orders.filter((x) => String(x.id) !== String(id));
-    toast('سفارش حذف شد'); renderOrders();
+    toast('سفارش حذف شد'); if (currentView === 'owners') renderOwners(); else renderOrders();
   });
 }
 
@@ -1548,7 +1751,7 @@ function toggleSelAll(kind, on) {
   const s = state.sel[kind];
   s.clear();
   if (on) {
-    const list = kind === 'orders' ? filteredOrders() : state[kind];
+    const list = kind === 'orders' ? filteredOrders() : kind === 'booths' ? state.booths.filter(b => !+b.is_independent) : state[kind];
     for (const x of list) s.add(String(x.id));
   }
   if (kind === 'orders') renderOrders();
@@ -1582,7 +1785,7 @@ function renderCardsBulkBar(kind) {
   w.className = state.sel[kind].size ? 'mb-4' : '';
   const all = document.getElementById('selall-' + kind);
   if (all) {
-    const total = state[kind].length;
+    const total = (kind === 'booths' ? state.booths.filter(b => !+b.is_independent) : state[kind]).length;
     all.checked = state.sel[kind].size > 0 && total > 0 && state.sel[kind].size === total;
   }
 }
@@ -1658,7 +1861,7 @@ function formData() {
   const _tdiv = costMode() === 'total' ? (N($('#o-qty').value) || 1) : 1; // حالت کلی: فیلد مبلغ کل است → ذخیره واحدی
   const supId = $('#o-sup').value;
   const sup = state.suppliers.find((s) => String(s.id) === String(supId));
-  return {
+  const o = {
     id: $('#o-id').value || undefined,
     order_code: $('#o-code').value.trim() || nextOrderCode(),
     source: $('#o-source').value,
@@ -1674,11 +1877,13 @@ function formData() {
     order_date: iso, jdate: `${j.jy}/${j.jm}/${j.jd}`, jy: j.jy, jm: j.jm, jd: j.jd,
     notes: $('#o-notes').value.trim(),
   };
+  return {...o, ...ownerFormFields(o)};
 }
 function liveCalc() {
   try {
     refreshAuto();
     const o = formData(), c = calc(o, true);
+    renderOwnerCalculation(o);
     const row = (t, v, cls = '') => `<div class="flex justify-between ${cls}"><span class="text-slate-500 dark:text-slate-400">${t}</span><span class="font-bold num">${v}</span></div>`;
     $('#calc-panel').innerHTML =
       row('💰 فروش (پس از تخفیف)', fmtMoney(c.revenue)) +
@@ -1697,6 +1902,10 @@ function resetForm() {
   AUTO.comm = AUTO.ship = null; AUTO.commT = AUTO.shipT = false;
   $('#order-form').reset();
   $('#o-id').value = ''; $('#o-qty').value = 1;
+  $('#o-booth').disabled = false; $('#o-source').disabled = false;
+  $('#o-owner-mode').value = 'cash'; setMoney('o-owner-paid', 0);
+  const ownedBooth = state.booths.find(b => !+b.is_independent);
+  $('#o-booth').value = ownedBooth ? ownedBooth.id : '';
   ['o-usale', 'o-ucost', 'o-disc', 'o-ship', 'o-shiprev', 'o-pack', 'o-comm', 'o-ads', 'o-other'].forEach((id) => setMoney(id, 0));
   $('#form-title').textContent = '➕ ثبت سفارش جدید';
   $('#o-code').value = nextOrderCode();
@@ -1708,12 +1917,13 @@ async function submitOrder(e) {
   const o = formData();
   if (!o.customer_name || !o.product_name) { toast('نام مشتری و نام کالا الزامی است', 'err'); return false; }
   if (o.source === 'basalam' && !o.booth_id) { toast('برای سفارش باسلام، غرفه را انتخاب کنید', 'err'); return false; }
-  if (o.id && !o.supplier_id) { toast('در ویرایش، انتخاب تامین‌کننده الزامی است', 'err'); return false; }
-  if (o.id && !(o.unit_cost > 0)) { toast('در ویرایش، وارد کردن هزینه خرید الزامی است', 'err'); return false; }
+  if (o.id && !isOwnerOrder(o) && !o.supplier_id) { toast('در ویرایش، انتخاب تامین‌کننده الزامی است', 'err'); return false; }
+  if ((o.id || isOwnerOrder(o)) && !(o.unit_cost > 0)) { toast('در ویرایش، وارد کردن هزینه خرید الزامی است', 'err'); return false; }
   const saved = await Store.saveOrder(o);
   if (o.id) { const i = state.orders.findIndex((x) => String(x.id) === String(o.id)); if (i > -1) state.orders[i] = { ...state.orders[i], ...saved }; toast('✅ سفارش به‌روزرسانی شد'); }
   else { state.orders.push(saved); toast('✅ سفارش ثبت شد'); }
-  resetForm(); go('orders');
+  const destination = isOwnerOrder(saved) ? 'owners' : 'orders';
+  resetForm(); go(destination);
   return false;
 }
 function editOrder(id) {
@@ -1736,6 +1946,8 @@ function editOrder(id) {
   $('#o-otherlabel').value = o.other_label || '';
   $('#o-status').value = o.status || 'pending'; $('#o-pay').value = o.payment_status || 'pending'; $('#o-ptype').value = o.purchase_type || 'cash'; $('#o-cptype').value = o.customer_ptype || 'cash';
   $('#o-notes').value = o.notes || '';
+  $('#o-owner-mode').value = o.owner_payment_mode || 'cash'; setMoney('o-owner-paid', o.owner_paid_amount);
+  $('#o-booth').disabled = isOwnerOrder(o); $('#o-source').disabled = isOwnerOrder(o);
   PK.date.set(o.order_date || isoToday());
   document.getElementById('det-cost').open = !!((+o.shipping_cost || 0) + (+o.packaging_cost || 0) + (+o.ads_cost || 0) + (+o.other_cost || 0));
   document.getElementById('det-notes').open = !!o.notes;
@@ -1769,8 +1981,9 @@ function quickAdd(kind) {
 function renderReports() {
   const group = $('#r-group').value, src = $('#r-source').value, booth = $('#r-booth').value;
   const limit = +$('#r-range').value;
-  let list = state.orders.filter((o) => (!src || o.source === src) && (!booth || String(o.booth_id) === booth));
+  let list = companyReportOrders().filter((o) => (!src || o.source === src) && (!booth || String(o.booth_id) === booth));
   const s = summarize(list, true);
+  renderCompanySplit('#reports-owner-split', list);
   $('#r-kpis').innerHTML =
     kpiCard('💰 فروش کل', fmtMoney(s.revenue), `${fmtN(s.count)} سفارش`, 'grad-bg', '💵', '') +
     kpiCard('🧾 هزینه کل', fmtMoney(s.cost), 'جمع همه هزینه‌ها', 'grad-amber', '🧮', '') +
@@ -1779,12 +1992,14 @@ function renderReports() {
   let series = groupSeries(list, group, true);
   if (limit > 0) series = series.slice(-limit);
   state._reportSeries = series;
+  const ownerSeries = new Map(groupSeries(list.filter(isOwnerOrder), group, true).map(x => [x.key, x.profit]));
   document.getElementById('ch-pnl-w').style.minWidth = Math.min(Math.max(series.length, 1) * 84, 6000) + 'px';
   document.getElementById('ch-pnl-w').parentElement.scrollLeft = 1e9;
   mkChart('ch-pnl', { type: 'bar',
     data: { labels: series.map((r) => r.label), datasets: [
       { label: 'فروش', data: series.map((r) => r.revenue), backgroundColor: 'rgba(99,102,241,.7)', borderRadius: 6 },
       { label: 'هزینه', data: series.map((r) => r.cost), backgroundColor: 'rgba(245,158,11,.7)', borderRadius: 6 },
+      { label: 'سهم مجموعه از خودفرماها', data: series.map(r => ownerSeries.get(r.key) || 0), backgroundColor: '#8b5cf6' },
       { label: 'سود', data: series.map((r) => r.profit), backgroundColor: series.map((r) => r.profit >= 0 ? 'rgba(16,185,129,.85)' : 'rgba(244,63,94,.85)'), borderRadius: 6 },
     ]}, options: chartBase({ plugins: { legend: { display: false },
     tooltip: { rtl: true, textDirection: 'rtl', padding: 10,
@@ -1857,7 +2072,8 @@ function renderReports() {
 
 /* ═══════════════ غرفه‌ها و تامین‌کنندگان ═══════════════ */
 function renderBooths() {
-  $('#booths-grid').innerHTML = state.booths.map((b) => {
+  renderOwnerManagers();
+  $('#booths-grid').innerHTML = state.booths.filter(b => !+b.is_independent).map((b) => {
     const s = summarize(state.orders.filter((o) => String(o.booth_id) === String(b.id)), true);
     return `<div class="glass card card-hover p-4 anim">
       <div class="flex items-start gap-2">
@@ -2317,6 +2533,7 @@ async function setAutoEvery(id, val) {
 function editInteg(id) {
   const c = state.integrations.find((x) => String(x.id) === String(id));
   if (!c) return;
+  if (c.type === 'basalam' && state.booths.some(b => String(b.id) === String(c.booth_id) && +b.is_independent)) { go('booths'); ownerTokenModal(c.booth_id, c.id); return; }
   if (c.type === 'basalam') {
     basReset();
     $('#bas-id').value = c.id; $('#bas-name').value = c.name || '';

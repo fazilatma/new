@@ -5,7 +5,7 @@ const html = fs.readFileSync('src/frontend.html', 'utf8');
 const nodes = {};
 const el = id => nodes[id.replace(/^#/, '')] ||= { value: '', dataset: {}, style: {}, textContent: '', innerHTML: '' };
 const state = { orders: [], suppliers: [], booths: [{id: 1, comm_pct: 10, ship_single: 200, ship_multi: 300}], settings: {} };
-const ctx = vm.createContext({state, document: {getElementById: el}, $: el,
+const ctx = vm.createContext({state, isOwnerOrder: o => +o.is_independent === 1, ownerFormFields: () => ({}), renderOwnerCalculation() {}, document: {getElementById: el}, $: el,
   PK: {date: {get: () => '2026-09-16', set() {}}}, isoToJ: () => ({jy:1405,jm:6,jd:25}),
   isoToday: () => '2026-09-16', nextOrderCode: () => 'TEST', go() {},
 });
