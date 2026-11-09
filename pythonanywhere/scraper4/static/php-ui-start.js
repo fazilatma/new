@@ -67,7 +67,9 @@ window.comprehensiveTestStart=()=>exclusive(()=>pythonOpenPanel('audit-all'));
 window.startVisual=()=>exclusive(begin);
 const oldVisualMode=window.setMode;window.setMode=mode=>{oldVisualMode(mode);if(mode==='visual')say('انتخابگر بصری با iframe مبدأ هنوز متصل نیست؛ سلکتور را در تب سلکتورها وارد و آزمایش کنید. «شروع» از موتور و تنظیمات ذخیره‌شده استفاده می‌کند.');};
 window.reset=()=>{if(pending)return;if(isDirty&&!confirm('پیش‌نویس ذخیره‌نشده کنار گذاشته شود؟ محصولات و کارهای سرور حذف یا متوقف نمی‌شوند.'))return;newBlankProfile();say('فرم تازه آماده است؛ کارها و محصولات ذخیره‌شده تغییر نکردند.');rows.replaceChildren();};
-window.srLoad=window.syncDiagnose=()=>exclusive(async()=>{await refresh();say('گزارش واقعی همین پروفایل (تا ۱۰۰ کار؛ کارهای فعال/ناموفق در اولویت‌اند). «آزمایش مبدأ» فقط با انتخاب شما شبکه را بررسی می‌کند.');});
+window.srLoad=()=>exclusive(async()=>{await refresh();say('گزارش واقعی همین پروفایل (تا ۱۰۰ کار؛ کارهای فعال/ناموفق در اولویت‌اند). «آزمایش مبدأ» فقط با انتخاب شما شبکه را بررسی می‌کند.');});
+window.syncDiagnose=()=>exclusive(async()=>{const d=await call('sync_diagnose',{profile:saved()});say(d.checks.map(c=>c.msg).concat(d.profiles.map(p=>p.name+': '+p.msg+' · '+p.active_extracts+' کار فعال/ناموفق')).join('\n'));});
+const exportButton=document.createElement('button');exportButton.type='button';exportButton.id='python-start-diagnostic-export';exportButton.className='btn btn-cyan';exportButton.textContent='گزارش امن برای بررسی / دانلود';exportButton.onclick=()=>pythonOpenPanel('diagnostics');showJobs.after(exportButton);
 window.syncPipelineClearDone=()=>exclusive(async()=>{const d=await call('python_queue_clear',{kind:'extract'});say(d.removed+' ردِ استخراج تمام‌شده/لغوشده پاک شد؛ ناموفق‌ها و کارهای فعال حفظ شدند.');refreshExtractQueue();});
 window.stopManualSync=()=>exclusive(async()=>{await call('python_queue_control',{profile:saved(),kind:'extract',control:'pause'});say('استخراج همین پروفایل مکث شد؛ صف‌های ارسال مستقل تغییر نکردند و درخواست درحال پرواز ممکن است تمام شود.');});
 // Do not leave old UI implying this extraction-only control stops a sender.

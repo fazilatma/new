@@ -1,0 +1,8290 @@
+{
+  "source_commit": "aec65b64fbee0db82e06b1c6b7a684c7741b879d",
+  "source_version": "10.646",
+  "source_sha256": "20405af62a26cb5731bc9b0cac3a48e7243072663fdd1d9f155da34c8233613f",
+  "kind": "literal_request_reference_inventory",
+  "is_endpoint_count": false,
+  "full_php_parity": false,
+  "scope": "GET/POST/REQUEST literal references, including fields/comments; dynamic keys and dispatch values need semantic review",
+  "unique_keys": 671,
+  "references": 1690,
+  "entries": [
+    {
+      "key": "_wpnonce",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21070
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "account_id",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75958
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "action",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        21044,
+        21049,
+        21349,
+        22174,
+        22432,
+        22478,
+        27733,
+        27767,
+        27859,
+        28165,
+        28202,
+        28540,
+        28860,
+        32675,
+        32798,
+        34963,
+        34994,
+        35081,
+        35118,
+        36901,
+        36915,
+        36922,
+        43036,
+        43058,
+        43087,
+        46221,
+        46248,
+        46522,
+        46571,
+        46653,
+        46810,
+        46844,
+        46869,
+        46896,
+        46932,
+        46944,
+        47222,
+        48417,
+        48442,
+        48669,
+        48670,
+        51117,
+        51475,
+        52962,
+        61447,
+        75303,
+        75304,
+        75344,
+        75406,
+        75430,
+        75531,
+        75768,
+        75810,
+        75824,
+        75873,
+        75897,
+        75911,
+        75938,
+        75941,
+        76045,
+        76076,
+        76166,
+        76279,
+        77665,
+        77687,
+        77789,
+        77816,
+        77895,
+        77910,
+        77929,
+        77930,
+        78119,
+        78131,
+        78347,
+        82105,
+        82124,
+        82131,
+        82201,
+        90254,
+        90262,
+        90266
+      ],
+      "references": 89,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "admin_note",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74534,
+        74615,
+        74645
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "after",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41499,
+        48535
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "agent_model_check",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42147,
+        52363
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "agent_result",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42274,
+        51917
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "agent_start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42158,
+        51915
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "agent_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42252,
+        51916
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "agent_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42283,
+        51918
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "agent_tools",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42128,
+        51914
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27899
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_candidates",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77704
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_candidates_category",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77840
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_candidates_reply",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77872
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_category",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78075
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_content_auto",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27919,
+        27920,
+        53898
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_content_auto_run",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77910,
+        77930
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_content_auto_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78057
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_daily_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        60993,
+        77634
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_export_providers",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        75684
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_feedback_fix",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48272
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_generate_product_content",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77895
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_model_index",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        75664
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_net",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27901,
+        27902
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_probe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48020
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_providers_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        75480
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_rerank_master_now",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77687
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_stats",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        54941,
+        76376
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_test_all",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77589
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_test_detail",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        75710
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_test_start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77589
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_test_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        76336
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_test_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        76440
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ai_test_unstick",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77535
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "aicontent_items",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78029
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "aicontent_result",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78021
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "aicontent_start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77913,
+        77929
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "aicontent_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78001
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "aicontent_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78049
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "all_profiles",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39637
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "all_shops",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39643
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "all_statuses",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46471
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "all_vendors",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39639,
+        42828
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "allow_downgrade",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21178
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "allow_empty_products",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22346,
+        22349,
+        22396
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "allow_shrink_products",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22400
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "api_key",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75771,
+        75827,
+        75953
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "app_ready",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        35184,
+        49671
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "apply",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39631,
+        48282
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ar_chat",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47473
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ar_log",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47284
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ar_rules",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47211
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ar_run",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47529
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ar_test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47232
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        34988
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_catalog",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        40168
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_category",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81333
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_delete",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41991,
+        41993
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_every_h",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        34989
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_jobs",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41935
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_log",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42022,
+        42024
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_log_clear",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42038,
+        42040
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_resume",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        28019,
+        78377,
+        82237
+      ],
+      "references": 7,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_resume_all_cron",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28071
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_resume_max",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28020
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_run_now",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42050,
+        42052
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_save",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41952
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_select_master",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77670
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_send",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        90256
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_tick",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42119
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "auto_toggle",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42008,
+        42010
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "autoreply",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28078,
+        28079
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "autosave",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22188
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backendExtractWithDetail",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22375
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backend_extract_cli",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36055,
+        36091,
+        36159
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backup_download",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        35008,
+        35009
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backup_export",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        35025
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backup_peek",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        35160,
+        35162
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backup_remote_list",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        35094
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backup_run",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        34994,
+        36108
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backup_sections",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        35060
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "backup_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        34939
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "baleh",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27941
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bare",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        46899
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27875,
+        27876,
+        28118
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam_api_probe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        26802,
+        49443
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam_stream",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        84445
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "base_url",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48059
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bg",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        37032
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bootstrap",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47964
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "branch",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        21154,
+        21335,
+        21539,
+        21602,
+        28528,
+        28544,
+        34979
+      ],
+      "references": 9,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "branches",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21597,
+        21598,
+        21599
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "browser_keep",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        47079
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bslCategoryId",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22356
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bslFallbackCatIds",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22359
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_activate_batch",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80172
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_ai_cat_queue",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42961,
+        60453
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_ai_category",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        84088
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_catalog",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39520
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_cats",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39313,
+        55536
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_change_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80092
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_chat_messages",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47383,
+        54302
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_chat_reply",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47409,
+        54303
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_chat_response_stats",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        49299,
+        73730
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_chat_routes",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        73701
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_chat_routes_save",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        49298,
+        73711
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_chats",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47303,
+        54301
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_chats_list",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        73736
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_clear_temp",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80293
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_client_stream",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        85183
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_delete_product",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80118
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_download_ai_texts",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80037
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_duplicate_worker_cli",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36089,
+        36154
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_fix_ai_cat",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79633
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_fix_ai_cat_batch",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79754
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_fix_cat",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80244
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_master_fix",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79872
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_notify_selected",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39179,
+        49945,
+        73780
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_orders_list",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        73631
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_products",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79394
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_add",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48922,
+        81326,
+        81328
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_cancel",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81663
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_clear_done",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81685
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_delete",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81947
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_detail",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81904
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_get_products",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81706
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_mark_done",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81764
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_pause",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81788
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_recycle",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48976,
+        81822
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_requeue_profile",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48921,
+        81308,
+        81326
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_restart_server",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        82059
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_resume",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81836
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_retry",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48750,
+        81976
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_save_products",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81283
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_set_checkpoint",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48827,
+        81743
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_start_next",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81568
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_start_server",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        82027
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81198
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_queue_update_progress",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81719
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_recycle_outdated_lanes",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        49240,
+        80914
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_rejected_cats",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79594
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_rejection_audit",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46357
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_save_products",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        84138
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_send_feedback",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        59146,
+        62055,
+        80941
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_send_one",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        84179
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_status_overview",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80154
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78868
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bulk_edit",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        38984
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bulk_result",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39078
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bulk_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39069
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "candidates",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77791,
+        77821
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "carrier",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74533,
+        74614,
+        74644
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cat",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        76187,
+        76288,
+        77561,
+        77603
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cat_id",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77828
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cat_name",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        50453,
+        77830,
+        80276
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "category_id",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        78155,
+        79181,
+        80256,
+        81332
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catfix_auto",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27978,
+        27979
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catfix_result",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43019,
+        53468
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catfix_start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42822,
+        53466
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catfix_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42938,
+        53467
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catfix_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43028,
+        53469
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catlearn",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48475
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catlearn_bulk",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39742
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catlearn_words",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28076
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catprompt",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42486,
+        55464
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catprompt_preview",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42515,
+        55466
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "catprompt_save",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42504,
+        55465
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "channel",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        74308,
+        74428
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "chat_id",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        47389,
+        47417,
+        75410
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "check_on_load",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21595,
+        48643
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "chunk_index",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        79079,
+        81289,
+        84141,
+        84161
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "clear",
+      "methods": [
+        "GET",
+        "REQUEST"
+      ],
+      "lines": [
+        39316,
+        39508,
+        42964,
+        42965,
+        47153,
+        48492
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "clear_token",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        34977
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "code_auto_update",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21326,
+        58902
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "code_update",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21349
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "code_update_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21036,
+        21339
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "code_update_sync_state",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21333,
+        60569
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "conc",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        51320,
+        77564,
+        77608
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "concurrency",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77674
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "confirm",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39260
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "consumer_key",
+      "methods": [
+        "REQUEST"
+      ],
+      "lines": [
+        75314
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "consumer_secret",
+      "methods": [
+        "REQUEST"
+      ],
+      "lines": [
+        75315
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "content_sync",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28074
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "continuity_enable",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41527,
+        49480
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "control",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        36294
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cron",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18114
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cron_42web_bridge",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        20926,
+        49617
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cron_last",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        38568
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cron_lock_min",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28068
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cron_run",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36035,
+        36110,
+        36901,
+        36914,
+        36922,
+        55602,
+        57260,
+        59912,
+        59913,
+        59914,
+        59942,
+        61819
+      ],
+      "references": 12,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cron_visual_pulse",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41496
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "crop_bottom_pct",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21686,
+        21694
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "crop_bottom_px",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21686,
+        21695
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "csince",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42265,
+        42412
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "current",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81730,
+        81751
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "cursor",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48347,
+        61924,
+        73650,
+        74315
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "customColName",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22343
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "customColVal",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22344
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "customName",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27736,
+        27770
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "customer_note",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74578
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "daily_auto",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77610
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "data",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        48444
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "dedup_cfg",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42759,
+        51735
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "dedup_result",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42796,
+        51733
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "dedup_start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42651,
+        51731
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "dedup_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42771,
+        51732
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "dedup_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42805,
+        51734
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "defaults",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47215
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "delay",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77563,
+        77606
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "delay_ms",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46950,
+        77675,
+        81336,
+        84194
+      ],
+      "references": 7,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "delete_missing",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        90256
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "deploy_file",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21606
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "dest_list",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        38937
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "destination",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        21962,
+        21980,
+        22006
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "detailExtractMode",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22377
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "detailFields",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27737,
+        27771
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "detailSelectors",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22199,
+        27304
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "detail_budget_sec",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28022
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "detail_mode",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        32696,
+        36100,
+        36189
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "detail_proxy",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        23288,
+        23289
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "detail_stream",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27297
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "detail_test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18115
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "diag",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22665
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "digest",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39179,
+        49945,
+        73792
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "digest_enabled",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28109
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "digest_hour",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28110
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "digest_hours",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28111
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "digest_tz",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28112
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "dir",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41842,
+        41913
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "direct",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        32728,
+        32740,
+        36061,
+        36079,
+        36104,
+        36347,
+        36402,
+        58983
+      ],
+      "references": 11,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "driver",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47908
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "dry",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        39000,
+        39097,
+        39213,
+        47533,
+        48536
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "duplicate_keep",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46900,
+        46952
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "edit_mode",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21685,
+        21690
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "enabled",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        41519,
+        41543,
+        41960,
+        75916,
+        76002,
+        77669,
+        90256
+      ],
+      "references": 12,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "endpoint",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21840
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "engine_benchmark",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47777
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "every",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        41958
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "excluded_bares_json",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46968
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "export",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48480
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extract_page_pause_ms",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28026
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extract_queue_clear_done",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28804
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extract_queue_delete",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28791
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extract_queue_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28658
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extract_recover_stuck",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        29043
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extract_report",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28769
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extract_resume",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28860
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extract_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28816
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "extractionEngine",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22329,
+        22792,
+        27511,
+        47625,
+        58181
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "failed",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81729,
+        81775
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "fallback_cat_ids",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81498
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "fast",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        49697
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "fetch_missing_stream",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27166
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "file",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28204
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "filter",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        73647,
+        73741
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "filter_join",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46823,
+        46964
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "filter_type",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46820,
+        46961
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "filter_value",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46821,
+        46962
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "filters_json",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46822,
+        46963
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "fix_price",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39635
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "font",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        82107
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "force",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        21328,
+        21479,
+        21493,
+        36078,
+        37515,
+        47964,
+        51333,
+        55602,
+        77548,
+        79144,
+        79154,
+        81452,
+        81469
+      ],
+      "references": 14,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "force_all",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        32687,
+        36060,
+        36097,
+        36164
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "force_auto",
+      "methods": [
+        "REQUEST"
+      ],
+      "lines": [
+        77695
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "force_live",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18142
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "force_title",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80263
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "forget",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48485
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "fresh",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        73732
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "from_file",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        78144,
+        84454
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "from_profile",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        79112,
+        79124,
+        79129,
+        81387,
+        81399,
+        81404
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "from_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80183
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "full",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        23328,
+        24242,
+        79058,
+        81241
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "fullMode",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22342
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "fullpage_inspect",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        24297
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "gallery",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22288,
+        23110,
+        27308
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "gallery_suggest",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        23134,
+        23137
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "gallery_test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18115,
+        23103,
+        23106
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "github_product_files",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28525
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "history",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75537
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "hours",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39183
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "id",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22638,
+        41912,
+        41954,
+        41993,
+        42010,
+        42040,
+        42052,
+        78032
+      ],
+      "references": 8,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ids",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        38996,
+        43091,
+        73789
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "iframeHeight",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22345
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "image_b64",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        47426
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "image_mime",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        47429
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "image_name",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        47427
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "image_proxy",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21674,
+        21675
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "img_role",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21698
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "include_code",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        34987
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "include_data",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        34986
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "include_products",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22441
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "input",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77819
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "internal_browser_keep",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36926,
+        61846
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "internal_cron_enabled",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28069
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "internal_cron_feedback",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46289,
+        61860
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "internal_cron_sec",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28070
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "internal_extract_feedback",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        29038,
+        49581
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "internal_matrix_feedback",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46332,
+        61825
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "interval",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        90256
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "interval_hours",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77671
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "items",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27169
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "jina",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22805,
+        22927,
+        22928,
+        22935
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "jina_direct_diag",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        17436
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "jina_network_diag",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        17436
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "json",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48556
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "keep",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        34990
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "keep_reports",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28072
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "key",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22434,
+        22480,
+        39509,
+        41604,
+        41646,
+        41841,
+        41867,
+        54627,
+        62156
+      ],
+      "references": 9,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "key_id",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        53121,
+        75991,
+        76001,
+        76010,
+        76079,
+        76179
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "keys",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27303,
+        50966,
+        75688
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "kind",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        42305,
+        42438,
+        42454,
+        42469,
+        73552,
+        73788
+      ],
+      "references": 9,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "label",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75954
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "lane",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        80952,
+        81571,
+        82202
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "launch",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47963,
+        47978,
+        57837
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "limit",
+      "methods": [
+        "GET",
+        "REQUEST"
+      ],
+      "lines": [
+        39537,
+        39581,
+        42831,
+        47309,
+        47390,
+        48283,
+        73740,
+        77914,
+        77920,
+        77941,
+        78041
+      ],
+      "references": 12,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "lines",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47975
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "listImageEdit",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22294
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "list_budget_sec",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28024
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "list_url",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        42311
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "live",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22766
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "live_feed",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        38912,
+        54108
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "live_fill",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46665,
+        46826,
+        47047
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "load_profile",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22146,
+        22148
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "loaded_updated_at",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22189
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "log",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47974,
+        57868
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "manual_sync",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36076,
+        36344,
+        66684
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "manual_sync_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36246
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "manual_sync_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36234,
+        54292
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "mapping",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28205
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "mark_completed",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74536
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "matrix_build_cli",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36083,
+        36137,
+        58707
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "matrix_execution_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36892,
+        62343
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "matrix_fix_cli",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36086,
+        36149,
+        59309
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "matrix_fix_payload",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36087,
+        36150
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "matrix_payload",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36084,
+        36138
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "matrix_reprice",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22165,
+        48678
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "max",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        47575
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "max_fallbacks",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77673
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "max_parallel",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        41522
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "message",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74689,
+        75533
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "minPrice",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22340
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "misc_action",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21980
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "missing",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        47558
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "mode",
+      "methods": [
+        "GET",
+        "POST",
+        "REQUEST"
+      ],
+      "lines": [
+        39228,
+        39633,
+        41957,
+        42160,
+        42456,
+        42473,
+        42506,
+        42520,
+        42654,
+        42824,
+        51805,
+        75306,
+        84212
+      ],
+      "references": 13,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "model",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        41959,
+        42149,
+        42166,
+        42306,
+        52360,
+        75535,
+        75713
+      ],
+      "references": 11,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "model_id",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75434,
+        75900,
+        76048,
+        76088,
+        76169,
+        76282
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "msg",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        47476,
+        48284,
+        76185,
+        77559,
+        77601,
+        77875
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "msgr_log",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        73541
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "name",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22311,
+        22312,
+        22385,
+        22386,
+        22439,
+        35131,
+        35141
+      ],
+      "references": 7,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "net_fallback",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        48292,
+        75439
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "net_indirect",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22368,
+        75350
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "net_timeout",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48293
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "new_status",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74510
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "new_url",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22440
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "no_crop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21687
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "nonchat",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        51321,
+        77566,
+        77609
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "note",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74577
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_chat_shop",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27994,
+        54429
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_events",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27945
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_health",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        38777,
+        56432
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_remind_after",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28063
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_remind_max",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28064
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_scan_limit",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27995
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_source_text",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27947
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        73549
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_test_send",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        38921,
+        56440
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notif_type",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75408
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notify",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        39001,
+        39099,
+        42557
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "notify_customer",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74535
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "now",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47535
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "only",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        35121,
+        37514,
+        41833,
+        55603
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "only_dup",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46817,
+        46957
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "only_mismatch",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46818,
+        46959
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "only_missing",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46819,
+        46960
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "only_problem",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46816,
+        46956
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "only_untested",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77599
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "op",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        48419
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ops",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        38998
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ops_feedback",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46522
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "order_id",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        74430,
+        74501
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "orders_mgr_api",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        74296,
+        74298
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "origin_trigger",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        32759,
+        32773,
+        32775,
+        36081,
+        36101,
+        36176,
+        36190,
+        36192,
+        36206,
+        36214,
+        66687
+      ],
+      "references": 11,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "own_repo",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        34972
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pagType",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22321,
+        27515,
+        47617,
+        47784
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pagVal",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22324,
+        27516,
+        47618,
+        47785
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pag_probe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47611
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "page",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        38942,
+        46813,
+        74314,
+        79398
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pages",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22315,
+        22808,
+        27508,
+        28592,
+        32693,
+        36099,
+        36188,
+        46365,
+        59694,
+        59695,
+        59698,
+        59810
+      ],
+      "references": 14,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "parallel_destinations",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46664,
+        47046
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "parallel_profile_lanes",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81343,
+        81344
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "parcel_id",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        74487,
+        74600
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "partial_meta_only",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22380,
+        22396
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "path",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21605,
+        28545,
+        34985
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "per_page",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46478,
+        46814,
+        73646,
+        74313,
+        79399
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "per_provider",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        77558,
+        77598,
+        77672
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "percent",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        41521
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "phase",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        32684,
+        36058,
+        36093,
+        36096,
+        36161,
+        57346,
+        57739,
+        57745,
+        57746
+      ],
+      "references": 12,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "photo_fix",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39086
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "photo_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39162
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "php_runtime_apply",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21049,
+        49549
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "php_runtime_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21044,
+        49548
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "picker",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18115
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pid",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        48420
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pin",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77795,
+        77796
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pin_branch",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21574
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pin_only",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21572,
+        21573,
+        48637
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ping_every",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28061
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ping_log",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        54032,
+        73533
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pipeline_key",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        36293
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "pk",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22810,
+        23301,
+        24208,
+        42310,
+        50716,
+        56331
+      ],
+      "references": 7,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "poll_bsl",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78905
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "poll_extract",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        29083
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "poll_woo",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78967
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "popscan",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22734
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "prefer_coded_duplicate",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46923,
+        46958,
+        61944
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "preset_id",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75826
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "priceMode",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22337
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "priceVal",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22338
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "price_mode",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        79115,
+        81390
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "price_val",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        79116,
+        81391
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "probe",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46257
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "probe_page",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46258
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "product",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        84209
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "productSource",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22372
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "product_hash_diff",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39452
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "product_id",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        21981,
+        42827,
+        46366,
+        79644,
+        80097,
+        80125,
+        80255
+      ],
+      "references": 7,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "product_index",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        84210
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "product_timeout_sec",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81338,
+        84182
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "product_url",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21698
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "products",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22200,
+        27734,
+        27768,
+        66844,
+        78147,
+        79078,
+        81288,
+        84140,
+        84160,
+        84466,
+        85197
+      ],
+      "references": 11,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "productsOrder",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22201
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "products_b64",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        60676,
+        60677,
+        60679,
+        66835
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "profile",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        36077,
+        36348,
+        36425,
+        39098,
+        39212,
+        39576,
+        46659
+      ],
+      "references": 9,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "profile_key",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22006,
+        22810,
+        27704,
+        28864,
+        32676,
+        32800,
+        36056,
+        36057,
+        36092,
+        36160,
+        36292,
+        36348,
+        36425,
+        79102,
+        81348,
+        84355
+      ],
+      "references": 20,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "profile_lane",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        49005,
+        81352,
+        81353
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "profile_name",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        79103,
+        81349
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "profile_url",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28562
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "profiles",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21715
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "prompt",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        41956
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "provider",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48330,
+        61902,
+        75712
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "provider_id",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75433,
+        75899,
+        75913,
+        75942,
+        76047,
+        76078,
+        76168,
+        76281
+      ],
+      "references": 8,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "providers_json",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75875
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "proxy_timeout_sec",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28028
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "push_resubscribe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21821
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "push_route_save",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21862
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "push_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21851
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "push_subscribe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21821
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "push_test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21845
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "push_unsubscribe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21836
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "q",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        38943,
+        46815,
+        46955,
+        63013,
+        74311,
+        79431
+      ],
+      "references": 8,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "queue_auto_category",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        84187
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "queue_category_id",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        84186
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "queue_dedup",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28066
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "queue_dedup_stale",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28067
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "queue_id",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        28771,
+        28793,
+        28818,
+        28865,
+        32689,
+        36102,
+        36167,
+        78146,
+        78372,
+        78379,
+        78388,
+        78567,
+        78870,
+        78908,
+        79075,
+        79097,
+        79255,
+        79295,
+        79338,
+        79374,
+        80951,
+        81285,
+        81310,
+        81330,
+        81665,
+        81708,
+        81721,
+        81745,
+        81766,
+        81790,
+        81824,
+        81838,
+        81906,
+        81953,
+        81978,
+        82033,
+        82065,
+        82204,
+        82238,
+        82491,
+        84460,
+        84480,
+        84510,
+        85166
+      ],
+      "references": 51,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "queue_watchdog",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48531
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "queues_overview",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43254
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "quorum",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42826,
+        79919
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "reason",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22168
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "reasoning",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        76051
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "rebuild",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39320,
+        47158
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "recon",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39614
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "recon_auto",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27949,
+        27950,
+        28113,
+        28125
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "recon_auto_log",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43283,
+        62454
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "recon_enqueue",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47550
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "recon_result",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47584
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "recon_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43309
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "refresh",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46829
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "remote_map",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47149
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "render",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28048,
+        28049
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "render_page_probe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47901,
+        57896
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "render_probe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47952
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "repair",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46523,
+        47964,
+        60100,
+        80944
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "replace",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        48448
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "reply_text",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21397
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "repo",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        21510,
+        21538,
+        21596,
+        28527,
+        28543,
+        34978
+      ],
+      "references": 7,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "reset_cooldown",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22655
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "resume",
+      "methods": [
+        "GET",
+        "POST",
+        "REQUEST"
+      ],
+      "lines": [
+        32688,
+        36059,
+        36080,
+        36098,
+        36165,
+        36362,
+        36396,
+        39005,
+        39103,
+        39650,
+        39669,
+        39675,
+        39676,
+        42183,
+        42330,
+        42562,
+        42681,
+        42851,
+        46684,
+        46701,
+        46713,
+        46979,
+        46990,
+        47001,
+        47034,
+        47094,
+        48964,
+        49345,
+        57347,
+        77943,
+        78376,
+        82236,
+        82379
+      ],
+      "references": 43,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retire_bsl_action",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28008,
+        28009
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retire_log",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39533
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retire_log_clear",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39560
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retire_max_count",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28013
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retire_max_pct",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28012
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retire_mode",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27997,
+        27998
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retire_run",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39209
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retire_woo_action",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28004,
+        28005
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "retry_delay_ms",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81337,
+        84195
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "return_full",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22442
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "roundPrice",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22339
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "round_price",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        79117,
+        81392
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "routes",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        73715
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "rp",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21643,
+        21644
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "rp_base",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21653,
+        21654
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "rubika",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27942
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "rules",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        47224
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "run_epoch",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        77611
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "run_test",
+      "methods": [
+        "REQUEST"
+      ],
+      "lines": [
+        77689
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "runtime_health",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        35192
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "s4_comprehensive_test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28589
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "s4_feedback",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18115,
+        22633,
+        22636
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "save_to_profile",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28564
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "scope",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46899,
+        46949
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "scrape_url",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        90256
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "scroll",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47912
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sec_check",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43358
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sections",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        35039,
+        35123
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selagent_prompt",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42436
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selagent_prompt_preview",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42467
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selagent_prompt_save",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42451
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selagent_result",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42421,
+        54690
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selagent_start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42302,
+        54688
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selagent_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42400,
+        54689
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selagent_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42527,
+        54691
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selected_bares_json",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46967
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selected_destinations",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46576,
+        46666,
+        46846,
+        46900,
+        46953,
+        47001
+      ],
+      "references": 11,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selected_shop_vids",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81374
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selector",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22539
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selector_wait_ms",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        23298,
+        24205
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selectors",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22280,
+        27510,
+        47621,
+        47622,
+        47788,
+        47789,
+        47791,
+        47792
+      ],
+      "references": 9,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "selftest",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18110,
+        19220,
+        48554
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "send",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39190
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "send_all_shops",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        50675,
+        81522,
+        81558
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "send_parallel_auto",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81340,
+        81341
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "send_parallel_n",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81339
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "send_pipeline_audit",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80857
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sent",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81726,
+        81772
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "shop",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        47310,
+        47391,
+        47419
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "shop_id",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46364,
+        73639,
+        74312,
+        79402,
+        80123,
+        80248
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "shop_picker_sync",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81375
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "shop_send_mode",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        81529,
+        81530
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "since",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        38914,
+        42259,
+        42407,
+        42779,
+        42946,
+        43221,
+        43330,
+        46847,
+        51927,
+        78009
+      ],
+      "references": 11,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "since_ms",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41500
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "single",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79918
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "skip_keys",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        78152,
+        84490
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "skipped",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81728,
+        81774
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "slice_seconds",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46668,
+        47049
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sort",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46824,
+        46965
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sort_dir",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46825,
+        46966
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "source",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        35126,
+        46363,
+        46661,
+        46951
+      ],
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "source_key",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22434
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "square_corner",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21691
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "square_pct",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21685,
+        21692
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "square_px",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21685,
+        21693
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "src_net",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28030,
+        28031
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "src_probe",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47989
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "stall_after",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28016
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "stall_watchdog",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28015
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47963,
+        47978
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "start_immediately",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        79099,
+        81432
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "start_index",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        78151,
+        78566,
+        82490,
+        84489
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "start_misc_product_action",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21978,
+        60226
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "start_misc_products",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21960,
+        49429
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "start_product_stats",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22063,
+        59655
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "start_profile_destination_equalize",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22004,
+        60157
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "status",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        32801,
+        74310,
+        79415,
+        80098
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "store_chat_api",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        21356,
+        21358
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "store_url",
+      "methods": [
+        "REQUEST"
+      ],
+      "lines": [
+        75313
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "stream",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27501
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sub_action",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74502,
+        74602
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "suffix_notify",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43238
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "suffix_report",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42541
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "suffix_result",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43229
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "suffix_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        43213
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "suggest_detail_selectors",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        23173,
+        23175
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "suggest_selectors",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22983,
+        22985
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "summary",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        49469,
+        81256
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sw",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21737,
+        54061
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync",
+      "methods": [
+        "GET",
+        "REQUEST"
+      ],
+      "lines": [
+        77618,
+        77912,
+        77930
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "syncConfig",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22303
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_diagnose",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        38589,
+        54199
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46810
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_feedback",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46248
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_fix_feedback",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46869
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_fix_row",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46896
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_fix_start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46944
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_fix_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46844
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_fix_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46932
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_start",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46653
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46571
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_matrix_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        46221
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_pipeline_clear_done",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36280,
+        59139
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_pipeline_control",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36290,
+        60007
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_pipeline_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36300,
+        59006
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_report",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39572,
+        55592
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_report_clear",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39594,
+        55593
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        32793
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sync_stream",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        90333
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "system",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        75536
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tail",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47974
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "takeover",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36405,
+        58985
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "target",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        38941,
+        38995,
+        39230,
+        39455,
+        39509,
+        39616,
+        42543,
+        42653,
+        43090,
+        47552,
+        90256
+      ],
+      "references": 11,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "target_key",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22183
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "task",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        42162,
+        77818
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_auto_resume_toggle",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        41540
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_clear",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41865,
+        56747
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_cpu_guard",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        41516
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_extract_concurrency",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        41508,
+        41510,
+        59855,
+        59868
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_list",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41565,
+        56745
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_order",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41839,
+        54595
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_reorder",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41910,
+        48856,
+        56748
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_resume",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41644,
+        53442
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_resume_all",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41831,
+        54596
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41602,
+        56746
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_stop_all",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41557
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tasks_stop_all_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        41551,
+        48624
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "telegram",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27944
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48496
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "test_cat",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77677
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "test_msg",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77676
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "test_selector",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22535,
+        22537
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "test_selectors",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18115
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "test_woo",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        75304
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "text",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        42457,
+        42473,
+        42507,
+        42520,
+        47234,
+        47418,
+        47476,
+        77875
+      ],
+      "references": 9,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "thread_id",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21396
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "timeout",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22807
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "timeout_ms",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47911
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "title",
+      "methods": [
+        "GET",
+        "POST",
+        "REQUEST"
+      ],
+      "lines": [
+        21981,
+        41955,
+        42489,
+        42517,
+        77843,
+        77898,
+        78083,
+        80275,
+        84091
+      ],
+      "references": 10,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "titleSuffix",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22336
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "title_suffix",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        78150,
+        79101,
+        81334,
+        84469
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "titles",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        39744,
+        43067
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "token",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        20991,
+        21145,
+        34975,
+        75346,
+        75409
+      ],
+      "references": 5,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "total",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        79098,
+        81331,
+        81776,
+        84211
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "tracking_code",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        74532,
+        74613,
+        74643
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "type",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        22538
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "unpin_only",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        21572,
+        48637
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "update",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39456
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "updated",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        81727,
+        81773
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "url",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        22177,
+        22434,
+        22481,
+        22787,
+        26803,
+        27507,
+        32678,
+        42304,
+        42440,
+        42470,
+        47613,
+        47780,
+        47904,
+        47991
+      ],
+      "references": 17,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "urlMap",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27305
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "useCustom",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27735,
+        27769
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "useCustomCol",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22341
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "use_learn",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        42829
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vc_branches",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21507
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vc_check",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21475
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vc_deploy_info",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21629
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vc_files",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21535
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vc_settings",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        21568
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vendor_id",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        39640,
+        42830,
+        42963,
+        47578,
+        74488,
+        74601,
+        80248,
+        90268
+      ],
+      "references": 9,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vendor_idx",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        90267
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ver",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        49696,
+        63670,
+        63671
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "via",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        80105,
+        80133
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vid",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        39462
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "visual_proxy",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        24182,
+        24183
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "wait_ms",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        23298,
+        24205
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "wait_until",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        47912
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "web_search",
+      "methods": [
+        "REQUEST"
+      ],
+      "lines": [
+        77903
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "which",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        48537
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "whoami",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        35200,
+        36106
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "winner",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        77820
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "wooCategoryId",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        22364
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_add",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79095
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_cancel",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79249
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_clear_done",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79270
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_delete",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79368
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_detail",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79336
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_save_products",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79073
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_start_next",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79199
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_start_server",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79289
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_queue_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        79026
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_save_products",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        84158
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_stop",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78936
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woo_stream",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        78140
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "woocommerce",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27868
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "worker_extract_job",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36073,
+        36131
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "worker_job_id",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        36074,
+        36133
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "worker_once",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        2794,
+        36069
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "worker_run",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        32666,
+        36067,
+        36069,
+        36122
+      ],
+      "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "worker_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        32659,
+        36071,
+        36117
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "worker_tick",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        18113
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "workflow",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        46974,
+        62029
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    }
+  ]
+}

@@ -7,7 +7,7 @@ import json
 from urllib.parse import quote
 from . import php_ui, extraction_control, extraction_diagnostics, github_products
 
-READS={'python_start_status','python_github_catalog'}
+READS={'python_start_status','python_github_catalog','sync_diagnose'}
 WRITES={'python_extract_start','python_extract_step'}
 
 
@@ -47,6 +47,7 @@ def catalog(fields):
 
 def read(db,settings,data):
     if data['action']=='python_github_catalog':return catalog(data['fields'])
+    if data['action']=='sync_diagnose':return diagnose(db,settings,data['fields'].get('profile'))
     f=data['fields'];p=php_ui.find(db,f['profile']) if f.get('profile') else None
     return {'ok':True,'jobs':jobs(db,settings,p),'read_only':True,'limit':100,'automatic_execution':False}
 
@@ -85,11 +86,29 @@ def named_report(db,settings,name):
     matches=[p for p in db.list_profiles() if normalized(p['name'])==normalized(name)]
     if len(matches)!=1:
         return {'ok':False,'error':'پروفایل پیدا نشد.' if not matches else 'نام پروفایل یکتا نیست؛ پروفایل مشخص را در رابط انتخاب کنید.','reason':'not_found' if not matches else 'ambiguous','read_only':True},404 if not matches else 409
-    p=matches[0];items=jobs(db,settings,p);active=[j for j in items if j['status'] in ('waiting','running','paused','failed')]
+    return profile_report(db,settings,matches[0]),200
+
+
+def profile_report(db,settings,p):
+    items=jobs(db,settings,p);active=[j for j in items if j['status'] in ('waiting','running','paused','failed')]
     if not active:reason='no_active_extract';hint='کار فعال ندارد؛ پس از ذخیرهٔ تغییرات دکمهٔ شروع را بزنید.'
     elif len(active)>1:reason='multiple_active_extracts';hint='چند کار قبلی دارد؛ وضعیت هر کدام را بررسی کنید، کار تکراری اجرا نمی‌شود.'
     else:
         state=active[0]['status'];reason='existing_'+state
         hint={'waiting':'دکمهٔ شروع باید یک مرحله از همین کار در انتظار را اجرا کند، نه کار تکراری.','running':'کار در حال اجراست؛ وضعیت/ضربان worker را بررسی کنید؛ قفل یا کار فعال را خودکار آزاد نمی‌کنیم.','paused':'کار مکث شده است؛ ابتدا «ادامه پس از بررسی» و سپس «مرحلهٔ بعد» را بزنید.','failed':'کار قبلی ناموفق است؛ علت را بررسی و سپس صریحاً ادامه یا لغو کنید.'}[state]
     return {'ok':True,'profile':{'id':p['id'],'name':p['name'],'engine':php_ui.profile_engine(p),'listing_selectors_configured':bool(p['selectors'].get('container') and p['selectors'].get('title'))},
-            'reason':reason,'hint':hint,'jobs':items,'limit':100,'active_jobs_first':True,'read_only':True,'processed':False,'source_reachability_tested':False},200
+            'reason':reason,'hint':hint,'jobs':items,'limit':100,'active_jobs_first':True,'read_only':True,'processed':False,'source_reachability_tested':False}
+
+
+def diagnose(db,settings,key=None):
+    available=[php_ui.find(db,key)] if key else db.list_profiles();profiles=available[:100]
+    renderer=bool(db.get_config('render').get('url') or settings.render.url);items=[]
+    for p in profiles:
+        engine=php_ui.profile_engine(p);opts=php_ui.start_page.options(p)
+        configured=bool(p['selectors'].get('container') and p['selectors'].get('title')) if engine=='selectors' and opts['source']=='direct' else True
+        if opts['source']=='direct' and engine in ('playwright','selenium') and not renderer:configured=False
+        active=[j for j in jobs(db,settings,p) if j['status'] in ('waiting','running','paused','failed')]
+        items.append({'id':p['id'],'name':p['name'],'engine':engine,'ok':configured,'active_extracts':len(active),
+                      'msg':'پیکربندی پایه موجود است؛ دسترسی مبدأ آزمایش نشده است.' if configured else 'سلکتور ظرف/عنوان یا renderer مورد نیاز کامل نیست.'})
+    return {'ok':True,'checks':[{'ok':all(p['ok'] for p in items),'msg':str(len(items))+' پروفایل بررسی شد؛ بررسی پیکربندی ذخیره‌شده است، نه تست زندهٔ سایت.'}],
+            'profiles':items,'limit':100,'truncated':len(available)>100,'renderer_configured':renderer,'read_only':True,'processed':False,'source_reachability_tested':False}

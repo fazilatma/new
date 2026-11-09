@@ -166,3 +166,21 @@ test('Start on an existing waiting profile actually runs that job instead of rej
  assert.equal(state.jobs.filter(j=>j.profile_id===1&&j.kind==='extract').length,1);assert.equal(state.jobs.find(j=>j.profile_id===1&&j.kind==='extract').status,'done');assert.equal(state.products.length,2);
  assert.ok(state.jobs.filter(j=>j.profile_id!==1).every(j=>j.status==='waiting'));
 });
+
+test('human diagnostic link uses normal login, exports reviewed JSON without credentials and opens complete source inventory', {timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'waiting');const context=await page.context().browser().newContext();t.after(()=>context.close());const human=await context.newPage(),errors=[];human.on('pageerror',e=>errors.push(e.message));human.on('dialog',d=>d.accept());
+ await human.goto(origin+'/api/php-ui/start-report?name='+encodeURIComponent('مانتو پاتریس'));assert.equal(new URL(human.url()).pathname,'/login');
+ await human.locator('[name=password]').fill('test');await Promise.all([human.waitForURL(origin+'/php-ui?report=*'),human.locator('form button').click()]);
+ await human.locator('#php-tools[open]').waitFor();await human.locator('#native-diagnostic-download').waitFor();
+ const preview=JSON.parse(await human.locator('#native-diagnostic-preview').inputValue());assert.equal(preview.profile.name,'مانتو پاتریس');assert.equal(preview.snapshot,true);assert.equal(preview.processed,false);assert.equal(preview.source_reachability_tested,false);
+ const before=await(await human.request.get(origin+'/__test__/extract-state')).json();
+ const download=human.waitForEvent('download');await human.locator('#native-diagnostic-download').click();const file=await download;
+ assert.equal(file.suggestedFilename(),'scraper4-diagnostic-1.json');const content=fs.readFileSync(await file.path(),'utf8');assert.deepEqual(JSON.parse(content),preview);
+ assert.ok(!/temporary-browser-fixture|https:\/\/example\.com|csrf|consumer_secret/.test(content));
+ await human.locator('#php-tools-close').click();const child=human.frames().find(f=>f.url().endsWith('/php-ui/frame'));await human.frameLocator('#php-original-ui').locator('html[data-s4-ready="1"]').waitFor();
+ await child.evaluate(()=>toggleSettingsPanel());await human.frameLocator('#php-original-ui').locator('[data-python-panel="endpoint-inventory"]').click();
+ await human.locator('#native-endpoints-status').filter({hasText:'671'}).waitFor();await human.locator('#native-endpoints-search').fill('sync_diagnose');
+ await human.locator('#native-endpoints-body').filter({hasText:'sync_diagnose'}).waitFor();
+ const inventory=await(await human.request.get(origin+'/api/php-ui/endpoint-inventory')).json();assert.equal(inventory.inventory.entries.length,671);assert.equal(inventory.connected.full_php_parity,false);assert.ok(inventory.connected.read_actions.includes('sync_diagnose'));
+ const after=await(await human.request.get(origin+'/__test__/extract-state')).json();assert.deepEqual(after,before);assert.deepEqual(errors,[]);
+});

@@ -70,6 +70,8 @@ for(const [id,key,text]of [['pane-settings','profile','⚙ تنظیمات واق
 for(const [id,key]of [['wcUrl','woocommerce'],['bsTk','basalam'],['vcRepo','version'],['renderUrl','render'],['appFontSel','general'],['tmCards','guardian'],['sxPicker','backup'],['phpRuntimeResult','general'],['stallWatchdog','guardian']]){const body=document.getElementById(id)?.closest('.smenu-body');if(!body)continue;for(const n of body.querySelectorAll('input,select,textarea,button'))if(!['appFontSel','appThemeSel','appFxSel'].includes(n.id))n.disabled=true;add(body,'بازکردن تنظیمات متصل پایتون در همین صفحه',key);}
 add(document.getElementById('settingsPanel')?.querySelector('.settings-panel-body')||document.getElementById('settingsPanel'),'☰ همهٔ تنظیمات اجرایی / بکاپ / کران','general');
 add(document.getElementById('settingsPanel')?.querySelector('.settings-panel-body'),'ℹ اطلاعات رابط و ابزارهای امن پایتون','help');
+add(document.getElementById('settingsPanel')?.querySelector('.settings-panel-body'),'📄 گزارش امن برای بررسی بدون رمز','diagnostics');
+add(document.getElementById('settingsPanel')?.querySelector('.settings-panel-body'),'🔌 فهرست درخواست‌های PHP و وضعیت انتقال','endpoint-inventory');
 window.addEventListener('message',event=>{if(event.source!==window.parent||event.origin!==location.origin||event.data?.type!=='s4-php-refresh-profile')return;if(isDirty){showToast('تنظیمات امن ذخیره شد؛ برای دریافت نسخهٔ تازه ابتدا پیش‌نویس را ذخیره/لغو کنید.',true);return;}loadConn();if(currentProfileKey)loadProfileFromServer(currentProfileKey,true);});
 // The original version checker sees the pinned UI version, not the port's version.
 // Network heartbeats/auto-resume requests are intentionally NOT mapped to cron.

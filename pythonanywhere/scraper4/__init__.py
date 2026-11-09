@@ -99,6 +99,13 @@ def create_app(settings=None):
             if not supplied or not hmac.compare_digest(supplied, session.get('csrf', '')):
                 abort(400, 'CSRF validation failed. Refresh the page.')
         if request.endpoint != 'login' and not session.get('authenticated') and not request.environ.get('s4.bearer'):
+            # Human native-report links go through normal login, never a public
+            # API/credential exception. Preserve only the fixed original UI path.
+            human_report=request.endpoint=='php_ui.start_report' and request.method=='GET' and ('text/html' in request.headers.get('Accept','').lower() and request.accept_mimetypes.best_match(('text/html','application/json'))=='text/html')
+            if request.endpoint=='php_ui.host' or human_report:
+                name=request.args.get('name' if human_report else 'report','')
+                session['after_login_php_ui']=url_for('php_ui.host',**({'report':name} if 0<len(name)<=200 else {}))
+                return redirect(url_for('login'))
             if request.path.startswith('/api/'):
                 return jsonify(ok=False, error='Authentication required'), 401
             return redirect(url_for('login'))
@@ -145,10 +152,13 @@ def create_app(settings=None):
             valid = check_password_hash(stored, password) if stored.startswith(('scrypt:', 'pbkdf2:')) else hmac.compare_digest(password.encode(), stored.encode())
             if valid:
                 failures.pop(key, None)
+                native_return=session.get('after_login_php_ui','')
                 session.clear()
                 session['authenticated'] = True
                 session.permanent = True
                 csrf()
+                if isinstance(native_return,str) and (native_return=='/php-ui' or native_return.startswith('/php-ui?report=')):
+                    return redirect(native_return)
                 return redirect(url_for('dashboard'))
             failures[key].append(now)
             error = 'رمز عبور نادرست است.'
