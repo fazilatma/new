@@ -26,6 +26,15 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
             db.enqueue('extract',p['id'],{'pages':1,'with_detail':False})
         other=db.upsert_profile('other','https://example.com/other','Unrelated fixture')
         db.enqueue('extract',other['id']);db.enqueue('woo_send',other['id'])
+        if mode=='pipeline':
+            target=[{'kind':'woo_send','payload':{'secret':'PIPELINE-PRIVATE'}}]
+            root=db.enqueue('extract',p['id'],{'_send_after':target},status='done')
+            db.update_entry(root,counters={'found':2,'current':1})
+            send=db.enqueue('woo_send',p['id'],{'source_extract_job':root,'secret':'PIPELINE-PRIVATE'},batch_id=f'extract:{root}',status='done')
+            db.update_entry(send,counters={'sent':1,'failed':1,'total':2,'current':2})
+            missing=db.enqueue('extract',p['id'],{'_send_after':target},status='done')
+            db.update_entry(missing,counters={'found':2,'current':1})
+            db.enqueue('woo_send',p['id'],status='waiting') # unrelated, never linked
         def fixture(url,**kwargs):
             if not url.startswith('https://example.com/'):raise AssertionError('Unexpected source')
             if mode=='denied':return {'ok':False,'code':403,'error':'PRIVATE-FIXTURE-TOKEN'}

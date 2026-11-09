@@ -38,6 +38,8 @@ def register_php_ui(app,db,settings):
         report.update(format='scraper4-safe-diagnostic-v1',version=VERSION,generated_at=utc_now(),snapshot=True,
                       contains_credentials=False,scope='selected_profile_local_queue_and_configuration',
                       configuration=start.diagnose(db,settings,profile['key']))
+        from .services.php_ui_pipeline import status as pipeline_status
+        report['pipeline']=pipeline_status(db,{'profile':profile['key']})
         body=json.dumps(report,ensure_ascii=False,indent=2)+'\n'
         return Response(body,mimetype='application/json',headers={'Content-Disposition':f'attachment; filename="scraper4-diagnostic-{pid}.json"'})
     @bp.get('/api/php-ui/endpoint-inventory')

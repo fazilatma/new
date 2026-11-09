@@ -184,3 +184,20 @@ test('human diagnostic link uses normal login, exports reviewed JSON without cre
  const inventory=await(await human.request.get(origin+'/api/php-ui/endpoint-inventory')).json();assert.equal(inventory.inventory.entries.length,671);assert.equal(inventory.connected.full_php_parity,false);assert.ok(inventory.connected.read_actions.includes('sync_diagnose'));
  const after=await(await human.request.get(origin+'/__test__/extract-state')).json();assert.deepEqual(after,before);assert.deepEqual(errors,[]);
 });
+
+test('native extraction-send pipeline shows verified children, product errors and missing queues without running or repairing work', {timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'pipeline'),errors=[],actions=[];page.on('pageerror',e=>errors.push(e.message));
+ page.on('request',r=>{if(r.url().includes('/api/php-ui/')){const b=r.postDataJSON();if(b?.action)actions.push(b.action);}});
+ const before=await(await page.request.get(origin+'/__test__/snapshot')).json();
+ await page.goto(origin+'/php-ui');const f=page.frameLocator('#php-original-ui');await f.locator('html[data-s4-ready="1"]').waitFor();
+ await f.locator('#hdrProfileSelect').selectOption('one');await f.locator('#profileName').filter({visible:true}).waitFor();
+ const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await child.evaluate(()=>switchMainTab('start'));
+ await f.locator('#python-pipeline-refresh').click();await f.locator('#syncPipelineCards').filter({hasText:'زنجیرهٔ ناقص'}).waitFor({timeout:5000});
+ const cards=f.locator('#syncPipelineCards article');assert.equal(await cards.count(),2);
+ assert.match(await f.locator('#syncPipelineCards').innerText(),/پایان با خطای محصول/);
+ for(const card of await cards.all())await card.locator('summary').click();
+ const text=await f.locator('#syncPipelineCards').innerText();assert.match(text,/ووکامرس/);assert.match(text,/خطا: 1/);assert.ok(!text.includes('PIPELINE-PRIVATE'));
+ const reads=actions.filter(a=>a==='sync_pipeline_status').length;await child.evaluate(()=>{syncPipelineRender();syncPipelineRender();});await page.waitForTimeout(4000);
+ assert.equal(actions.filter(a=>a==='sync_pipeline_status').length,reads);assert.ok(!actions.some(a=>['python_extract_start','python_extract_step','python_manual_sync','python_send_enqueue','python_queue_control'].includes(a)));
+ const after=await(await page.request.get(origin+'/__test__/snapshot')).json();assert.deepEqual(after,before);assert.deepEqual(errors,[]);
+});

@@ -88,6 +88,28 @@ async function refresh(){const ticket=++statusTicket,profile=currentProfileKey;i
  }
  if(!d.jobs.length){const p=document.createElement('p');p.textContent='هنوز استخراجی برای این پروفایل در ۱۰۰ کار اخیر نیست.';rows.append(p);}
  }catch(e){if(ticket===statusTicket)say(e.message,true);}}
+// Replace PHP's self-reconciling pipeline polling with a read-only local view.
+// Legacy 3s GETs remain blocked; only this bounded visible-tab POST is allowed.
+let pipelinePending=false,pipelineProfile='',pipelineAt=0,pipelineTicket=0;
+const pipelineHost=document.getElementById('syncPipelineCards');
+window.syncPipelineRender=async(force=false)=>{
+ if(!pipelineHost||document.hidden||!pane.classList.contains('active'))return;
+ const profile=currentProfileKey;if(!profile){pipelineTicket++;pipelineHost.replaceChildren();pipelineProfile='';return;}
+ if(pipelineProfile!==profile)pipelineHost.replaceChildren();
+ if(pipelinePending)return;if(force!==true&&pipelineProfile===profile&&Date.now()-pipelineAt<15000)return;
+ pipelineProfile=profile;pipelineAt=Date.now();pipelinePending=true;const ticket=++pipelineTicket;
+ try{const d=await call('sync_pipeline_status',{profile});if(ticket!==pipelineTicket||profile!==currentProfileKey)return;
+ pipelineHost.replaceChildren();const info=document.createElement('p');info.textContent='زنجیرهٔ محلی استخراج ← ارسال (تا '+d.limit+' استخراج؛ فقط خواندن، بدون اجرای صف یا بازسازی خودکار)'+(d.truncated?' · فهرست محدود شده است.':'');pipelineHost.append(info);
+ for(const run of d.rows){const card=document.createElement('article');card.className='sync-pipe-card';card.dataset.pipelineId=String(run.id);const heading=document.createElement('h3');heading.textContent='#'+run.id+' · '+run.profile_name+' · '+(names[run.status]||({incomplete:'زنجیرهٔ ناقص؛ بررسی لازم است',completed_with_errors:'پایان با خطای محصول'}[run.status])||run.status);card.append(heading);
+ const detail=document.createElement('details'),summary=document.createElement('summary');summary.textContent=run.message+' · صف ارسال '+run.linked_send_jobs+' از '+run.expected_send_jobs;detail.append(summary);
+ for(const entry of run.entries){const line=document.createElement('p');line.textContent='#'+entry.id+' · '+({extract:'استخراج',woo_send:'ووکامرس',bsl_send:'باسلام'}[entry.kind])+' · '+(names[entry.status]||entry.status)+' · '+Object.entries(entry.counts).map(([k,v])=>({current:'مرحله/پردازش',total:'کل',found:'یافت‌شده',sent:'ارسال',updated:'به‌روز',failed:'خطا',skipped:'ردشده'}[k])+': '+v).join(' / ')+(entry.hint?' · '+entry.hint:'');detail.append(line);}
+ if(run.children_truncated){const p=document.createElement('p');p.textContent='جزئیات فرزندان محدود شده است؛ پایان موفق تأیید نمی‌شود.';detail.append(p);}
+ card.append(detail);pipelineHost.append(card);}
+ if(!d.rows.length){const empty=document.createElement('p');empty.textContent='هنوز استخراجی برای این پروفایل ثبت نشده است.';pipelineHost.append(empty);}
+ }catch(e){if(profile===currentProfileKey){pipelineHost.replaceChildren();const p=document.createElement('p');p.textContent='خطای خواندن زنجیره: '+e.message;pipelineHost.append(p);}}
+ finally{pipelinePending=false;}
+};
+const refreshPipeline=document.createElement('button');refreshPipeline.id='python-pipeline-refresh';refreshPipeline.type='button';refreshPipeline.className='btn btn-cyan';refreshPipeline.textContent='تازه‌سازی زنجیرهٔ استخراج تا ارسال';refreshPipeline.onclick=()=>syncPipelineRender(true);pipelineHost?.before(refreshPipeline);
 // Public GitHub catalogue is opt-in. Hydrating a profile never contacts GitHub.
 const ghStatus=text=>{document.getElementById('ghSourceStatus').textContent=text;};
 function repo(){return document.getElementById('ghRepoCustom').style.display!=='none'?document.getElementById('ghRepoCustom').value:document.getElementById('ghRepoSelect').value;}

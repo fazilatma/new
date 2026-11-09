@@ -15,7 +15,7 @@ window.addEventListener('message',event=>{if(event.source!==parent||event.origin
 window.fetch=(input='',options={})=>new Promise((resolve,reject)=>{
  const fields={};if(options.body){if(typeof options.body.entries!=='function'){reject(Error('فقط فرم‌های متن پشتیبانی می‌شوند.'));return;}for(const [k,v] of options.body.entries()){if(typeof v!=='string'){reject(Error('آپلود فایل در این رابط متصل نیست.'));return;}fields[k]=v;}}
  const url=typeof input==='string'?input:input.url,u=new URL(url,location.href),query=Object.fromEntries(u.searchParams),action=fields.action||query.action||Object.keys(query).find(k=>!k.startsWith('_'))||'';
- if(passive.has(action)||(action==='cron_run'&&query.internal_browser_keep==='1')){blocked.set(action,(blocked.get(action)||0)+1);reject(unsupported(action));return;}
+ if((passive.has(action)&&!(action==='sync_pipeline_status'&&fields.action===action))||(action==='cron_run'&&query.internal_browser_keep==='1')){blocked.set(action,(blocked.get(action)||0)+1);reject(unsupported(action));return;}
  const signal=options.signal,abortError=()=>new DOMException('درخواست لغو شد.','AbortError');if(signal?.aborted){reject(abortError());return;}
  const id='php-'+(++sequence),abort=()=>{if(finish(id))reject(abortError());},timer=setTimeout(()=>{if(finish(id))reject(Error('مهلت پاسخ لایهٔ اتصال تمام شد.'));},120000);
  pending.set(id,{resolve,reject,timer,signal,abort,action});signal?.addEventListener('abort',abort,{once:true});

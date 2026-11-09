@@ -1,7 +1,7 @@
 /* Trusted parent: the original PHP client never receives cookie/CSRF authority. */
 (()=>{'use strict';
 const frame=document.getElementById('php-original-ui'),status=document.getElementById('php-ui-status'),revisions=new Map();
-const reads=new Set(['app_ready','load_profile','load_connections','start_product_stats','extract_queue_status','tasks_list','whoami','python_capabilities','woo_queue_status','bsl_queue_status','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','runtime_health','python_start_status','python_github_catalog','sync_diagnose']);
+const reads=new Set(['app_ready','load_profile','load_connections','start_product_stats','extract_queue_status','tasks_list','whoami','python_capabilities','woo_queue_status','bsl_queue_status','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','runtime_health','python_start_status','python_github_catalog','sync_diagnose','sync_pipeline_status']);
 const writes=new Set(['save_profile','python_enqueue','python_send_enqueue','python_manual_sync','python_queue_control','python_queue_clear','python_profile_duplicate','python_profile_delete','python_extract_start','python_extract_step']);let busy=false,selectionTicket=0;
 document.getElementById('php-ui-capabilities').onclick=()=>{const help=document.getElementById('php-ui-help');help.open=!help.open;};
 function action(query,fields){return fields.action||query.action||Object.keys(query).find(k=>k!=='_'&&k!=='_v'&&k!=='_ready')||'';}
