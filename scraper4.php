@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.670';
+const APP_VERSION = '10.671';
 
 
 if (!function_exists('str_starts_with')) {
@@ -50229,6 +50229,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'products'=>\$productRows,'productsOrder'=>array_keys(\$products)")!==false
         &&strpos($selfSrc,"{v:'10." . "670'")!==false
         &&version_compare(APP_VERSION,'10.670','>='));
+    $add('10.671','پایان سند یکتا است و محصولات ذخیره‌شده با ترتیب ناقص هم دیده می‌شوند',
+        substr_count($selfSrc,"</body>\n</html>")===1
+        &&substr_compare(rtrim($selfSrc),'</html>',-7)===0
+        &&strpos($selfSrc,'const storedProductKeys=[];')!==false
+        &&strpos($selfSrc,'storedProductKeys.forEach(k=>{if(!visibleKeys.has(k))')!==false
+        &&strpos($selfSrc,"{v:'10." . "671'")!==false
+        &&version_compare(APP_VERSION,'10.671','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -98472,13 +98479,22 @@ function applyProfile(p, keepTab) {
     if (p.products && Array.isArray(p.products) && p.products.length > 0) {
         resetResultFilter();
         products.clear();
-        order = p.productsOrder || p.products.map(e => e[0]);
+        const storedProductKeys=[];
         p.products.forEach(entry => {
             if (Array.isArray(entry) && entry.length === 2) {
                 if(entry[1]&&typeof entry[1]==='object'&&!entry[1].key)entry[1].key=entry[0];
                 products.set(entry[0], entry[1]);
+                storedProductKeys.push(entry[0]);
             }
         });
+        /* v10.671: productsOrder from an older/partial write must never hide
+           products that are genuinely present in the normal profile payload.
+           Keep its valid order, then append every stored pair exactly once. */
+        const requestedOrder=Array.isArray(p.productsOrder)?p.productsOrder:[];
+        const visibleKeys=new Set();
+        order=[];
+        requestedOrder.forEach(k=>{if(products.has(k)&&!visibleKeys.has(k)){visibleKeys.add(k);order.push(k);}});
+        storedProductKeys.forEach(k=>{if(!visibleKeys.has(k)){visibleKeys.add(k);order.push(k);}});
         refreshViews();
         /* v9.91: در بازیابیِ خودکار، تبِ فعلیِ کاربر حفظ می‌شود.
            v10.31 (۴۴): حالا در هیچ حالتی تب عوض نمی‌شود. پریدن به «نتایج»
@@ -103041,6 +103057,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.671', t:'🧹 پایان پاک صفحه و نمایش قطعی محصولات ذخیره‌شده', items:[
+    'خروجی تکراری پس از اولین </html> حذف شد؛ کد جاوااسکریپت دیگر زیر فوتر به‌صورت متن دیده نمی‌شود.',
+    'بارگذاری عادی پروفایل همهٔ زوج‌های محصول ذخیره‌شده را نمایش می‌دهد؛ ترتیب قدیمی یا ناقص دیگر نمی‌تواند محصولات موجود در payload پروفایل را پنهان کند.',
+    'آزمون متمرکز جدید یکتا بودن پایان سند و مسیر بازیابی محصولات پروفایل را در هر انتشار کنترل می‌کند.'
+  ]},
   {v:'10.670', t:'⚙️ اتصال مستقیم پرفروش‌ها به تنظیمات کامل پروفایل', items:[
     'محصولات پرفروش اکنون با ساختار استاندارد [کلید، محصول] و productsOrder مستقیماً داخل پروفایل «باسلام -پرفروش ها» ذخیره می‌شوند و دادهٔ قدیمی نیز خودکار مهاجرت می‌کند.',
     'تنظیمات موجود پروفایل شامل تعدیل قیمت، گردکردن، پسوند عنوان، دسته باسلام، دسته‌های جایگزین، مقصد و برنامهٔ همگام‌سازی در بروزرسانی‌های جمع‌آور حفظ می‌شوند.',
@@ -125463,23 +125484,6 @@ async function s4RuntimeHealthCheck(force=false){
   const extractBeat=()=>{
     if(window._s4ExtractFeedbackBusy)return;window._s4ExtractFeedbackBusy=true;
     const u=cronReference+'?internal_extract_feedback=1&_pulse='+Date.now();
-    fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4ExtractFeedbackBusy=false;});
-  };
-  const matrixBeat=()=>{
-    if(window._s4MatrixFeedbackBusy)return;window._s4MatrixFeedbackBusy=true;
-    const u=cronReference+'?internal_matrix_feedback=1&_pulse='+Date.now();
-    fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4MatrixFeedbackBusy=false;});
-  };
-  const wake=()=>{localBeat();cronBeat();extractBeat();cronRunBeat();setTimeout(matrixBeat,2500);};
-  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(extractBeat,25000);setInterval(matrixBeat,30000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
-  window.addEventListener('pageshow',wake);window.addEventListener('online',wake);
-  window.addEventListener('focus',wake);
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
-})();
-</script>
-</body>
-</html>
-e+'?internal_extract_feedback=1&_pulse='+Date.now();
     fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4ExtractFeedbackBusy=false;});
   };
   const matrixBeat=()=>{
