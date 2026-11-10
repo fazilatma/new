@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.677';
+const APP_VERSION = '10.678';
 
 
 if (!function_exists('str_starts_with')) {
@@ -50413,6 +50413,37 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function extractProfileUsesBasalamApiDetails')!==false
         &&strpos($selfSrc,"{v:'10." . "677'")!==false
         &&version_compare(APP_VERSION,'10.677','>='));
+    $__queue678=['entries'=>[
+        ['id'=>'old-replaced','status'=>'failed','error'=>'جایگزین همگام دستی','done_at'=>100],
+        ['id'=>'resume-row','status'=>'failed','fail_reason'=>'پس از 3 تلاش ادامه، متوقف شد','resume_exhausted'=>1,'products_file'=>'fixture://resume','current'=>1,'total'=>2],
+        ['id'=>'api-detail-row','status'=>'failed','fail_reason'=>'detail_coverage_incomplete','products_file'=>'fixture://api','current'=>0,'total'=>1],
+        ['id'=>'bad-category','status'=>'failed','fail_reason'=>'HTTP 422 category leaf','products_file'=>'fixture://bad','current'=>0,'total'=>1],
+    ]];
+    $__queueStats678=bslNormalizeRecoverableQueueRows($__queue678,static function(string $file): ?array {
+        if($file==='fixture://resume')return [['title'=>'one'],['title'=>'two']];
+        if($file==='fixture://api')return [['title'=>'api','_basalam_api'=>true]];
+        if($file==='fixture://bad')return [['title'=>'bad']];
+        return null;
+    });
+    $add('10.678','صف باسلام وقفه‌های بازیابی‌پذیر را ادامه می‌دهد و تاریخچهٔ جایگزین‌شده خطا نیست',
+        (int)$__queueStats678['superseded']===1
+        &&(int)$__queueStats678['revived']===2
+        &&(int)$__queueStats678['terminal']===1
+        &&(string)$__queue678['entries'][0]['status']==='done'
+        &&(string)$__queue678['entries'][0]['completion_kind']==='superseded'
+        &&(string)$__queue678['entries'][1]['status']==='waiting'
+        &&(string)$__queue678['entries'][2]['status']==='waiting'
+        &&(string)$__queue678['entries'][3]['status']==='failed'
+        &&(string)$__queue678['entries'][3]['terminal_code']==='product_or_configuration_error'
+        &&bslSendFailureIsRetryable(['error_code'=>429,'error'=>'rate limit'])
+        &&bslSendFailureIsRetryable(['error_code'=>0,'error'=>'curl timeout'])
+        &&bslSendFailureIsRetryable(['error_code'=>502,'error'=>'gateway'])
+        &&bslSendFailureIsRetryable(['error_code'=>422,'error'=>'category must be leaf'])
+        &&!bslSendFailureIsRetryable(['error_code'=>0,'error'=>'stopped'])
+        &&!bslSendFailureIsRetryable(['error_code'=>422,'error'=>'invalid title'])
+        &&strpos($selfSrc,"failed:'نیازمند "."بررسی'")===false
+        &&strpos($selfSrc,"{v:'10." . "678'")!==false
+        &&version_compare(APP_VERSION,'10.678','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -68806,9 +68837,12 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                 if (!is_array($we)) continue;
                 if ((string)($we['profile_key'] ?? '') !== $key) continue;
                 if (in_array((string)($we['status'] ?? ''), ['waiting', 'paused'], true)) {
-                    $we['status'] = 'failed';
-                    $we['error'] = 'جایگزین همگام دستی';
+                    $we['status'] = 'done';
+                    $we['completion_kind'] = 'superseded';
+                    $we['completion_label'] = 'جایگزین‌شده با همگام‌سازی دستی جدید';
+                    $we['superseded_at'] = $now;
                     $we['done_at'] = $now;
+                    unset($we['error'], $we['fail_reason'], $we['resume_exhausted']);
                 }
             }
             unset($we);
@@ -68848,9 +68882,12 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                 if (!is_array($be)) continue;
                 if ((string)($be['profile_key'] ?? '') !== $key) continue;
                 if (in_array((string)($be['status'] ?? ''), ['waiting', 'paused'], true)) {
-                    $be['status'] = 'failed';
-                    $be['error'] = 'جایگزین همگام دستی';
+                    $be['status'] = 'done';
+                    $be['completion_kind'] = 'superseded';
+                    $be['completion_label'] = 'جایگزین‌شده با همگام‌سازی دستی جدید';
+                    $be['superseded_at'] = $now;
                     $be['done_at'] = $now;
+                    unset($be['error'], $be['fail_reason'], $be['resume_exhausted']);
                 }
             }
             unset($be);
@@ -69372,6 +69409,14 @@ function bslErrText(array $r): string {
 }
 
 /** جزئیات استاندارد خطا برای کارت‌ها و مودال شمارندهٔ ارسال باسلام. */
+function bslSendFailureIsRetryable(array $card): bool {
+    $code=(int)($card['error_code']??$card['code']??0);
+    $detail=(string)($card['error_detail']??$card['error']??'');
+    if($code===0)return !preg_match('/(?:^|\b)stopped(?:\b|$)|توقف صریح/u',$detail);
+    if(in_array($code,[429,500,502,503,504],true))return true;
+    return $code===422&&(bslIsVariantUpdateMethodError(['code'=>422,'body'=>['message'=>$detail]])||preg_match('~category|دسته~iu',$detail));
+}
+
 function bslSendErrorInfo(array $r, string $step = '', string $endpoint = ''): array {
     $body = $r['body'] ?? null;
     $raw = '';
@@ -81480,12 +81525,78 @@ function bslKickParallelProfileLanes(?array $queue=null): array {
     }
     return $out;
 }
+/**
+ * Normalize legacy Basalam terminal rows without hiding genuine product or
+ * profile validation failures. Infrastructure interruptions are completion-
+ * bound: when their immutable products file still exists they return to the
+ * durable checkpoint. A manual replacement is successful superseded history,
+ * not a failed send. The optional loader keeps this migration self-testable.
+ */
+function bslNormalizeRecoverableQueueRows(array &$queue, ?callable $loader=null): array {
+    $stats=['superseded'=>0,'revived'=>0,'completed'=>0,'terminal'=>0,'classified'=>0];
+    if(!is_array($queue['entries']??null))return $stats;
+    $loader=$loader??static function(string $file): ?array {
+        if($file===''||!is_file($file))return null;
+        $rows=@json_decode((string)@file_get_contents($file),true);
+        return is_array($rows)?array_values($rows):null;
+    };
+    foreach($queue['entries'] as &$row){
+        if(!is_array($row)||(string)($row['status']??'')!=='failed')continue;
+        $error=trim((string)($row['error']??''));
+        $reason=trim((string)($row['fail_reason']??$error));
+        if($error==='جایگزین همگام دستی'||$reason==='جایگزین همگام دستی'){
+            $row['status']='done';$row['completion_kind']='superseded';
+            $row['completion_label']='جایگزین‌شده با همگام‌سازی دستی جدید';
+            $row['superseded_at']=(int)($row['done_at']??time())?:time();$row['done_at']=$row['superseded_at'];
+            unset($row['error'],$row['fail_reason'],$row['resume_exhausted']);$stats['superseded']++;continue;
+        }
+        /* Explicit stop is the sole interruption which automation must honor. */
+        if(!empty($row['stopped_by_user'])||(string)($row['paused_by']??'')==='user'){
+            if((string)($row['terminal_classified_version']??'')!==APP_VERSION){$row['terminal_code']='explicit_user_stop';$row['terminal_label']='توقف صریح کاربر';$row['terminal_classified_version']=APP_VERSION;$stats['classified']++;}
+            $stats['terminal']++;continue;
+        }
+        $file=trim((string)($row['products_file']??''));
+        if($file===''&&!empty($row['id']))$file=__DIR__.'/bsl_queue_products_'.basename((string)$row['id']).'.json';
+        $products=$loader($file);$valid=is_array($products)&&count($products)>0;
+        $hasApiDetails=false;
+        if($valid){
+            foreach($products as $product){
+                if(!is_array($product))continue;
+                if(!empty($product['_basalam_api'])||!empty($product['_basalam_detail_enriched_at'])
+                    ||(isset($product[1])&&is_array($product[1])&&(!empty($product[1]['_basalam_api'])||!empty($product[1]['_basalam_detail_enriched_at'])))){$hasApiDetails=true;break;}
+            }
+        }
+        $resumeFailure=!empty($row['resume_exhausted'])||preg_match('/(?:تلاش ادامه|resume|dispatch|worker|lock|rate.?limit|network|timeout|429|شبکه|اتصال|محدودیت درخواست)/iu',$reason);
+        $legacyApiDetail=$reason==='detail_coverage_incomplete'&&$hasApiDetails;
+        if(!$valid||(!$resumeFailure&&!$legacyApiDetail)){
+            if(!$valid){$row['terminal_code']='queue_products_unavailable';$row['terminal_label']='فایل محصولات صف در دسترس نیست';}
+            elseif($reason==='detail_coverage_incomplete'){$row['terminal_code']='detail_configuration_invalid';$row['terminal_label']='منبع جزئیات پروفایل معتبر نیست';}
+            else{$row['terminal_code']=$row['terminal_code']??'product_or_configuration_error';$row['terminal_label']=$row['terminal_label']??'خطای نهایی محصول یا پیکربندی';}
+            if((string)($row['terminal_classified_version']??'')!==APP_VERSION){$row['terminal_classified_version']=APP_VERSION;$stats['classified']++;}
+            $stats['terminal']++;continue;
+        }
+        $total=max((int)($row['total']??0),count($products));$current=max(0,(int)($row['current']??0));
+        $row['total']=$total;$row['products_file']=$file;
+        if($total>0&&$current>=$total){
+            $row['status']='done';$row['done_at']=time();$row['completion_kind']='checkpoint_complete';$stats['completed']++;
+        }else{
+            $row['status']='waiting';$row['resume_requested_at']=time();$row['recovered_from_failure']=$reason?:'recoverable_interruption';
+            $row['recovery_count']=(int)($row['recovery_count']??0)+1;$row['recovered_by_version']=APP_VERSION;$stats['revived']++;
+        }
+        unset($row['error'],$row['fail_reason'],$row['resume_exhausted'],$row['terminal_code'],$row['terminal_label'],$row['terminal_classified_version'],$row['done_at']);
+        if((string)$row['status']==='done')$row['done_at']=time();
+    }
+    unset($row);return $stats;
+}
+
 function bslReadQueue(): array {
 clearstatcache(true,BSL_QUEUE_FILE);
 if(!file_exists(BSL_QUEUE_FILE)) return ['entries'=>[]];
 $d=@json_decode(@file_get_contents(BSL_QUEUE_FILE)?:'',true);
 if(!is_array($d)||!isset($d['entries'])||!is_array($d['entries'])) return ['entries'=>[]];
 $fixed=false;
+$__queueRepair=bslNormalizeRecoverableQueueRows($d);
+if((($__queueRepair['superseded']??0)+($__queueRepair['revived']??0)+($__queueRepair['completed']??0)+($__queueRepair['classified']??0))>0)$fixed=true;
 
 /* v10.569: a profile has one active lane owner, while same-lane sibling rows
    (for example one job per selected shop) remain intact. Paused rows retain
@@ -81560,7 +81671,8 @@ function bslWriteQueue(array $queue): void {
                 foreach($queue['entries'] as &$r){
                     if(!is_array($r))continue;$id=(string)($r['id']??'');if($id===''||!isset($latestById[$id]))continue;
                     $latest=$latestById[$id];$oldStatus=(string)($latest['status']??'');$newStatus=(string)($r['status']??'');
-                    if(in_array($oldStatus,['done','failed','cancelled'],true)&&in_array($newStatus,['running','waiting'],true)){$r=$latest;continue;}
+                    $isQueueRepair=!empty($r['recovered_by_version'])&&$oldStatus==='failed'&&$newStatus==='waiting';
+                    if(!$isQueueRepair&&in_array($oldStatus,['done','failed','cancelled'],true)&&in_array($newStatus,['running','waiting'],true)){$r=$latest;continue;}
                     if($oldStatus==='running'&&$newStatus==='waiting')$r['status']='running';
                 }unset($r);
             }
@@ -81922,9 +82034,9 @@ $solution=function(int $code,string $kind,string $detail):array{
     if($code===422&&preg_match('~category|دسته~iu',$detail))return ['key'=>'category_validation','title'=>'دسته‌بندی نامعتبر','solution'=>'دستهٔ برگ و سپس دسته‌های جایگزین امتحان و در فاز ترمیم تکرار می‌شود','auto_repair'=>true];
     if(in_array($code,[401,403],true))return ['key'=>'auth','title'=>'توکن یا دسترسی غرفه','solution'=>'توکن و vendor_id همان غرفه بازبینی شود','auto_repair'=>false];
     if($code===404)return ['key'=>'stale_product_id','title'=>'شناسهٔ محصول قدیمی/ناموجود','solution'=>'نگاشت محلی حذف و محصول در همان غرفه دوباره جست‌وجو شود','auto_repair'=>false];
-    if($code===429)return ['key'=>'rate_limit','title'=>'محدودیت نرخ','solution'=>'ارسال با backoff و همزمانی کمتر ادامه یابد','auto_repair'=>false];
+    if($code===429)return ['key'=>'rate_limit','title'=>'محدودیت نرخ','solution'=>'ارسال با backoff و همزمانی کمتر خودکار تکرار می‌شود','auto_repair'=>true];
     if($kind==='queue')return ['key'=>'queue_replaced','title'=>'ردیف قدیمی با تنظیمات تازه جایگزین شده','solution'=>'خطای API نیست و اقدام لازم ندارد؛ ردیف جدید ادامه می‌دهد','auto_repair'=>false];
-    if($code===0)return ['key'=>'network','title'=>'شبکه/توقف','solution'=>'وضعیت stop، پراکسی و اتصال باسلام بررسی و سپس resume شود','auto_repair'=>false];
+    if($code===0)return ['key'=>'network','title'=>'شبکه/توقف','solution'=>'خطای شبکه با backoff خودکار تکرار می‌شود؛ فقط توقف صریح کاربر مستثنا است','auto_repair'=>true];
     return ['key'=>$kind?:'other','title'=>'خطای دیگر','solution'=>'جزئیات خام و مرحلهٔ ثبت‌شده بررسی شود','auto_repair'=>false];
 };
 foreach($entriesFb as $e){
@@ -84736,18 +84848,17 @@ elseif(!$__skipImageRetry)bslBackendProgress($sent,$updated,$skipped,$fail,$tota
      'phase_total'=>count($imgFailedEntries),'phase_pct'=>(int)floor(($__imgDone??0)*100/max(1,count($imgFailedEntries))),
      'phase_shop_vendor_id'=>$vid]);
 
-/* Parallel lanes may finish a product window after transient Basalam failures,
-   and older code recorded variant-method failures without retrying the batch
-   endpoint. Retry only safe, identifiable cards once at the end. A successful
+/* Any lane/shop mode may finish a product window after transient Basalam
+   failures, and older code recorded variant-method failures without retrying
+   the batch endpoint. Retry only safe, identifiable cards once at the end. A successful
    retry removes the matching durable cards and decrements the same counter the
    UI opens; unresolved cards remain visible with retry_error. */
 $__failedRetryFixed=0;$__failedRetryTried=0;$__retryCandidates=[];
-if($__isParallelShopsRow&&!in_array($bslResumePhase,['failed_retry_done'],true)){
+if(!in_array($bslResumePhase,['failed_retry_done'],true)){
     foreach((array)$bslFailedList as $__rf){
-        if(!is_array($__rf)||(int)($__rf['vendor_id']??0)<=0)continue;
-        $__rc=(int)($__rf['error_code']??0);$__rd=(string)($__rf['error_detail']??$__rf['error']??'');
-        $__safe=in_array($__rc,[429,500,504],true)||($__rc===422&&(bslIsVariantUpdateMethodError(['code'=>422,'body'=>['message'=>$__rd]])||preg_match('~category|دسته~iu',$__rd)));
-        if(!$__safe)continue;
+        if(!is_array($__rf))continue;
+        if((int)($__rf['vendor_id']??0)<=0){$__rf['vendor_id']=$vid;$__rf['shop_name']=$bslDefaultShopName;}
+        if((int)($__rf['vendor_id']??0)<=0||!bslSendFailureIsRetryable($__rf))continue;
         $__sig=(int)$__rf['vendor_id'].'|'.(string)($__rf['key']??'').'|'.bslNormalizeTitle((string)($__rf['title']??''));
         if(!isset($__retryCandidates[$__sig]))$__retryCandidates[$__sig]=$__rf;
         if(count($__retryCandidates)>=200)break;
@@ -84755,6 +84866,7 @@ if($__isParallelShopsRow&&!in_array($bslResumePhase,['failed_retry_done'],true))
 }
 $__retryCandidates=array_values($__retryCandidates);$__retryTotal=count($__retryCandidates);$__allRetryShops=[];
 foreach(bslAllShops($cn)as$__rs){$__rv=(int)($__rs['vendor_id']??0);if($__rv>0)$__allRetryShops[$__rv]=$__rs;}
+if($vid>0&&!isset($__allRetryShops[$vid]))$__allRetryShops[$vid]=['vendor_id'=>$vid,'token'=>$tk,'shop_name'=>$bslDefaultShopName];
 foreach($__retryCandidates as $__ri=>$__rf){
     clearstatcache(true,BSL_STOP_FILE);if(bslStopRequestedForQueue())break;
     $__failedRetryTried++;$__rVid=(int)$__rf['vendor_id'];$__rShop=$__allRetryShops[$__rVid]??null;
@@ -84814,7 +84926,7 @@ foreach($__retryCandidates as $__ri=>$__rf){
          'phase_pct'=>(int)floor(($__ri+1)*100/max(1,$__retryTotal))]);
     usleep(250000);
 }
-if($__isParallelShopsRow&&bslStopRequestedForQueue()){
+if(bslStopRequestedForQueue()){
     bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',['⏹ ترمیم خطاها با درخواست کاربر متوقف شد'],
         ['phase'=>'failed_retry','phase_label'=>'ترمیم خطاهای قابل رفع','phase_current'=>$__failedRetryTried,'phase_total'=>$__retryTotal]);
     taskMarkPartial($bslProgressFile,['running'=>false,'done'=>true,'cancelled'=>true,'stopped'=>true,'partial'=>true,'resumable'=>true],
@@ -84822,7 +84934,7 @@ if($__isParallelShopsRow&&bslStopRequestedForQueue()){
          'skipped'=>(int)$skipped,'failed'=>(int)$fail,'failed_details'=>$bslFailedList]);
     queuePauseRowsAfterStop('bsl',(string)$bslQueueId);exit;
 }
-if($__isParallelShopsRow)bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',
+bslBackendProgress($sent,$updated,$skipped,$fail,$total,$total,'',
     ['🔧 ترمیم خطاها: '.$__failedRetryFixed.' محصول اصلاح شد از '.$__failedRetryTried.' تلاش'],
     ['phase'=>'failed_retry_done','phase_label'=>'ترمیم خطاهای قابل رفع تمام شد','phase_current'=>$__failedRetryTried,
      'phase_total'=>$__retryTotal,'phase_pct'=>100]);
@@ -103260,6 +103372,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.678', t:'🧯 بازیابی دائمی صف‌های باسلام بدون وضعیت مبهم', items:[
+    'ردیف‌های قدیمی که با همگام‌سازی دستی جدید جایگزین شده‌اند اکنون تاریخچهٔ تکمیل‌شده و «جایگزین‌شده» هستند، نه خطای ارسال.',
+    'وقفه‌های worker، قفل، dispatch، شبکه، محدودیت نرخ و resume-exhausted با فایل محصولات سالم از checkpoint ذخیره‌شده دوباره در صف قرار می‌گیرند؛ توقف صریح کاربر همچنان محترم است.',
+    'خطاهای قدیمی detail_coverage_incomplete برای محصولات Core API باسلام خودکار احیا می‌شوند، اما خطاهای واقعی اعتبارسنجی محصول یا پیکربندی بی‌نهایت تکرار نمی‌شوند.',
+    'خطاهای محصولی 429، شبکه، 5xx و دستهٔ برگ 422 در فاز ترمیم با backoff تکرار می‌شوند و شکست یک محصول کل کارت صف را متوقف نمی‌کند.',
+    'برچسب عمومی «نیازمند بررسی» حذف شد؛ خطاهای نهایی اکنون علت مشخص محصول، پیکربندی یا نبود فایل صف را نشان می‌دهند.'
+  ]},
   {v:'10.677', t:'🧾 لین ۲ موتور باسلام بدون سلکتور CSS', items:[
     'پروفایل‌های عادی با موتور Basalam Public API و پروفایل «باسلام -پرفروش ها» برای جزئیات از Core v4 استفاده می‌کنند و دیگر به‌علت خالی‌بودن detailSelectors از لین ۲ رد نمی‌شوند.',
     'پوشش جزئیات این پروفایل‌ها از marker واقعی پاسخ API و غنی‌سازی محصول شمرده می‌شود؛ پروفایل‌های وب عادی همچنان با سلکتورهای ذخیره‌شده اعتبارسنجی می‌شوند.',
@@ -120985,11 +121104,11 @@ function sendQueueVisualCard(e,opt){
     const phaseKey=String(e.phase||''),hasPhase=e.status!=='done'&&phTotal>0&&e.phase_label&&phaseKey!=='send'&&phaseKey!=='done'&&!phaseKey.endsWith('_done');
     const done=e.status==='done',failed=e.status==='failed',shopDisabled=!!e.shop_disabled;
     const pct=shopDisabled?(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0):(done?100:(hasPhase?Math.max(0,Math.min(100,Math.round(Number(e.phase_pct??(phCur*100/phTotal))))):(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0)));
-    const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'نیازمند بررسی'};
+    const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'خطای نهایی ارسال'};
     const colors={waiting:'#fbbf24',running:opt.accent||'#38bdf8',paused:'#fb923c',done:'#4ade80',failed:'#f87171'};
     const processed=shopDisabled?cur:(done?total:(hasPhase?phCur:cur)),remain=Math.max(0,(hasPhase?phTotal:total)-processed);
     const staleRunning=e.status==='running'&&!e._worker_live,visualStatus=shopDisabled?'paused':(staleRunning?'paused':e.status);
-    const status=shopDisabled?'غرفه غیرفعال — ارسال متوقف شد':(staleRunning?'worker متوقف — آمادهٔ ادامه':(labels[e.status]||e.status));
+    const status=shopDisabled?'غرفه غیرفعال — ارسال متوقف شد':(staleRunning?'worker متوقف — آمادهٔ ادامه':(e.completion_kind==='superseded'?'جایگزین‌شده با ارسال جدید':(e.status==='failed'?(e.terminal_label||'خطای نهایی محصول یا پیکربندی'):(labels[e.status]||e.status))));
     const isRetire=!!(e.retire_report||e.kind==='retire'||e.trigger==='retire');
     const profileName=String(e.profile_name||'').trim();
     const profileKey=String(e.profile_key||'').trim();
