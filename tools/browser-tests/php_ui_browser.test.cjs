@@ -215,3 +215,18 @@ for(const route of ['/','/php-ui'])test('shared real report/probe/inventory in '
  await page.locator('#shared-php-contracts').click();await page.locator('#shared-php-status').filter({hasText:'712'}).waitFor();const inventory=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(inventory.inventory.source_version,'10.684');assert.equal(inventory.connected.full_php_parity,false);
  await page.locator('#shared-php-profile').selectOption('');assert.equal(await page.locator('#shared-php-preview').inputValue(),'');assert.equal(await page.locator('#shared-php-download').isVisible(),false);assert.deepEqual(errors,[]);
 });
+
+for(const route of ['/','/php-ui'])test('all-profile synchronization audit and sequential opt-in probes with stop/incomplete export in '+route,{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'pipeline'),errors=[],probes=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());page.on('request',r=>{if(r.url().includes('/api/extraction/probe'))probes.push(r.postDataJSON());});
+ await page.goto(origin+route);if(route==='/php-ui'){const f=page.frameLocator('#php-original-ui');await f.locator('html[data-s4-ready="1"]').waitFor();const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await child.evaluate(()=>syncDiagnose());await page.locator('#shared-php-status').filter({hasText:'پایان بررسی'}).waitFor();}
+ else await page.locator('#start-profile option[value="1"]').waitFor({state:'attached'});
+ const before=await(await page.request.get(origin+'/__test__/extract-state')).json();
+ await page.locator('#shared-php-audit-all').click();await page.locator('#shared-php-status').filter({hasText:'پایان بررسی'}).waitFor();let report=JSON.parse(await page.locator('#shared-php-preview').inputValue());
+ assert.equal(report.profiles.length,2);assert.equal(report.complete,true);assert.equal(report.local_audit_complete,true);assert.equal(report.source_reachability_tested,false);assert.equal(probes.length,0);assert.equal(report.destination_reachability_tested,false);
+ assert.ok(report.profiles.every(p=>p.checks.some(c=>c.stage==='pricing')&&p.checks.some(c=>c.stage==='queues')));
+ let once=true;await page.route('**/api/extraction/probe',async r=>{if(once){once=false;await page.locator('#shared-php-stop-all').click();}await r.continue();});
+ await page.locator('#shared-php-probe-all').click();await page.locator('#shared-php-status').filter({hasText:'گزارش ناقص'}).waitFor();report=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(report.complete,false);assert.equal(report.stopped,true);assert.equal(report.live_probe_count,1);assert.equal(probes.length,1);await page.unroute('**/api/extraction/probe');
+ await page.locator('#shared-php-probe-all').click();await page.locator('#shared-php-status').filter({hasText:'پایان بررسی'}).waitFor();report=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(report.complete,true);assert.equal(report.live_probe_count,2);assert.equal(probes.length,3);assert.ok(report.profiles.every(p=>['passed','empty'].includes(p.live_probe.status)));assert.ok(report.profiles.some(p=>p.live_probe.status==='passed'));
+ const event=page.waitForEvent('download');await page.locator('#shared-php-download').click();const download=await event;assert.equal(download.suggestedFilename(),'scraper4-synchronization-all.json');const content=fs.readFileSync(await download.path(),'utf8');assert.deepEqual(JSON.parse(content),report);assert.ok(!/PIPELINE-PRIVATE|https:\/\/example.com|csrf|consumer_secret/.test(content));
+ assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);assert.deepEqual(errors,[]);
+});

@@ -7,7 +7,7 @@ import json
 from urllib.parse import quote
 from . import php_ui, extraction_control, extraction_diagnostics, github_products
 
-READS={'python_start_status','python_github_catalog','sync_diagnose','sync_pipeline_status'}
+READS={'python_start_status','python_github_catalog','sync_diagnose','sync_pipeline_status','python_sync_audit'}
 WRITES={'python_extract_start','python_extract_step'}
 
 
@@ -47,6 +47,9 @@ def catalog(fields):
 
 def read(db,settings,data):
     if data['action']=='python_github_catalog':return catalog(data['fields'])
+    if data['action']=='python_sync_audit':
+        from .sync_audit import page
+        return page(db,settings,{k:v for k,v in data['fields'].items() if k!='action'})
     if data['action']=='sync_pipeline_status':
         from .php_ui_pipeline import status
         return status(db,{k:v for k,v in data['fields'].items() if k!='action'})

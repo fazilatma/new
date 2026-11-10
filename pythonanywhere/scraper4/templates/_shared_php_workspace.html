@@ -3,6 +3,8 @@
 <p>این کنترل‌ها در هر دو رابط از یک کد و سرویس استفاده می‌کنند. گزارش محلی شبکه را آزمایش نمی‌کند؛ «آزمایش یک صفحه» فقط پس از تأیید شما از میزبان به مبدأ درخواست می‌زند، بدون تغییر محصولات یا صف و بدون ارسال.</p>
 <label>پروفایل<select id="shared-php-profile"><option value="">انتخاب کنید</option>{% for p in profiles %}<option value="{{ p.id }}">{{ p.name or p.key }}</option>{% endfor %}</select></label>
 <div class="actions"><button id="shared-php-report" type="button">گزارش تنظیمات و زنجیره</button><button id="shared-php-probe" type="button">آزمایش زندهٔ یک صفحه</button><button id="shared-php-contracts" type="button">فهرست منبع و قراردادهای متصل</button></div>
+<div class="actions"><button id="shared-php-audit-all" type="button">عیب‌یابی مراحل همهٔ پروفایل‌ها</button><button id="shared-php-probe-all" type="button">آزمایش زندهٔ ترتیبی همهٔ مبدأها</button><button id="shared-php-stop-all" type="button" disabled>توقف پس از درخواست جاری</button></div>
+<p>بررسی گروهی شامل پروفایل‌های غیرفعال هم هست؛ تنظیمات، جزئیات، کیفیت محلی محصول، نمونهٔ قیمت، اتصال مقصد و صف‌ها را بررسی می‌کند. ارسال آزمایشی، موجودی و قیمت زندهٔ مقصد یا پشتیبانی همهٔ فیلدهای PHP را تأیید نمی‌کند. مرورگر را تا پایان باز نگه دارید؛ فایلِ توقف/خطا صریحاً ناقص است.</p>
 <p id="shared-php-status" role="status" aria-live="polite">هیچ درخواستی خودکار اجرا نمی‌شود؛ پروفایل و عملیات را انتخاب کنید.</p>
 <div id="shared-php-pipeline"></div>
 <p>نام پروفایل و وضعیت کارها در فایل هستند؛ قبل از اشتراک، بازبینی کنید. رمز، کوکی، CSRF، URL خصوصی و توکن ادامهٔ تست در فایل قرار نمی‌گیرند. فایل فقط snapshot است و دسترسی زنده ایجاد نمی‌کند.</p>

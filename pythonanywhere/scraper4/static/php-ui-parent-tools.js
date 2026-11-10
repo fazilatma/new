@@ -6,6 +6,7 @@ const keys=new Set(['woocommerce','basalam','backup','general','version','render
 const labels={'shared-workspace':'ابزار مشترک دو رابط: گزارش و آزمایش زنده',diagnostics:'گزارش امن برای بررسی بدون رمز', 'endpoint-inventory':'فهرست درخواست‌های منبع PHP و اتصال‌های واقعی',profile:'تنظیمات و پاک‌سازی پروفایل انتخاب‌شده',selectors:'آزمایش واقعی سلکتورها',results:'تمام نتایج و جزئیات ذخیره‌شده',audit:'تست موتورهای استخراج با endpointهای واقعی'};
 function changeSelection(p){if(!p)return;selected=p;window.dispatchEvent(new CustomEvent('s4:profile-selected',{detail:{id:p.id}}));}
 function open(key){
+ if(key==='sync-audit-all'){open('shared-workspace');document.getElementById('shared-php-audit-all').click();return true;}
  if(key==='help'){if(!about.open){aboutReturnFocus=document.activeElement;about.showModal();document.getElementById('php-ui-about-close').focus();}return true;}
  const metrics={total:'all',priced:'priced',no_price:'no_price',in_stock:'in_stock',out_stock:'out_stock',stock_unknown:'stock_unknown',with_image:'has_image',no_image:'no_image',gallery:'gallery',variations:'variations',linked:'web_link',sku:'sku',description:'description',category:'category',brand:'brand',ready:'ready'};
  if(typeof key==='string'&&key.startsWith('metric:')&&Object.hasOwn(metrics,key.slice(7))){open('results');window.S4Browse(metrics[key.slice(7)],'');return true;}
