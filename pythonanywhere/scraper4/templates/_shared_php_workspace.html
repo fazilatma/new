@@ -1,0 +1,11 @@
+<section id="shared-php-workspace" class="start-card" aria-labelledby="shared-php-title">
+<h2 id="shared-php-title">ابزار مشترک دو رابط — گزارش و آزمایش واقعی</h2>
+<p>این کنترل‌ها در هر دو رابط از یک کد و سرویس استفاده می‌کنند. گزارش محلی شبکه را آزمایش نمی‌کند؛ «آزمایش یک صفحه» فقط پس از تأیید شما از میزبان به مبدأ درخواست می‌زند، بدون تغییر محصولات یا صف و بدون ارسال.</p>
+<label>پروفایل<select id="shared-php-profile"><option value="">انتخاب کنید</option>{% for p in profiles %}<option value="{{ p.id }}">{{ p.name or p.key }}</option>{% endfor %}</select></label>
+<div class="actions"><button id="shared-php-report" type="button">گزارش تنظیمات و زنجیره</button><button id="shared-php-probe" type="button">آزمایش زندهٔ یک صفحه</button><button id="shared-php-contracts" type="button">فهرست منبع و قراردادهای متصل</button></div>
+<p id="shared-php-status" role="status" aria-live="polite">هیچ درخواستی خودکار اجرا نمی‌شود؛ پروفایل و عملیات را انتخاب کنید.</p>
+<div id="shared-php-pipeline"></div>
+<p>نام پروفایل و وضعیت کارها در فایل هستند؛ قبل از اشتراک، بازبینی کنید. رمز، کوکی، CSRF، URL خصوصی و توکن ادامهٔ تست در فایل قرار نمی‌گیرند. فایل فقط snapshot است و دسترسی زنده ایجاد نمی‌کند.</p>
+<textarea id="shared-php-preview" rows="12" readonly aria-label="پیش‌نمایش گزارش مشترک"></textarea>
+<p><a id="shared-php-download" hidden>دانلود همان گزارش بازبینی‌شده</a></p>
+</section>

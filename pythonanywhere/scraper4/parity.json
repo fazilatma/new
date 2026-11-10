@@ -1,13 +1,13 @@
 {
   "source": {
     "branch": "arena/01a0ebf7-new",
-    "commit": "aec65b64fbee0db82e06b1c6b7a684c7741b879d",
-    "version": "10.646",
+    "commit": "a7e4f29cc7544cf8115120912a3489a908fd1b76",
+    "version": "10.684",
     "path": "scraper4.php",
-    "sha256": "20405af62a26cb5731bc9b0cac3a48e7243072663fdd1d9f155da34c8233613f",
+    "sha256": "45c472e5f6238469238bb94d57818b6cd04d3735dd6cc386bd37931fdeb7000c",
     "verified_on": "2026-11-08",
-    "bytes_utf8": 8736736,
-    "lines": 124667
+    "bytes_utf8": 8978653,
+    "lines": 126145
   },
   "inventory": {
     "line_start_function_declarations_in_mixed_source": 2711,
@@ -185,6 +185,10 @@
     {
       "feature": "Native sync_pipeline_status read-only extraction -> send cards and safe diagnostic export inclusion; exact root batch/profile/source_extract_job provenance plus destination multiset, bounded active-first roots and child results. Missing/duplicate/wrong destinations incomplete, empty extraction send skipped, completed product errors explicit. Visible Start 15s throttle, no raw secrets, percentages or fake pricing phase.",
       "reference": "PHP10.646/aec65b6 sync_pipeline_status at line36300, original cards at100628; Python deliberately does NOT reconcile or resume work during reads. Exact vendored client unchanged; runtime adapter only."
+    },
+    {
+      "feature": "Re-vendored exact full PHP10.684 client (reviewed41 PHP slots, both new PHP/WordPress authority nonces rendered as empty strings, never authorization). Shared trusted workspace/controller in both original /php-ui and initial /: local sanitized diagnostics, verified extraction-send pipeline, complete literal-request inventory+actual contracts, explicit one-page live source probe with reviewed JSON snapshot download.",
+      "reference": "Latest a7e4f29 on arena/01a0ebf7-new; source shell copied byte-for-byte by vendor tool, backend remains bounded Python services. No PHP execution, public auth bypass, secrets or continuation signatures exported. New Basalam best-seller/explorer/bulk Excel/lane fanout still NOT ported."
     }
   ],
   "pending": [
@@ -224,6 +228,7 @@
     "1.18.0: source PHP10.646/aec65b6 rechecked unchanged. User scope recorded: future feature work only original interface. Root alternative dashboard not extended or replaced. Explicit save awaits acknowledgement and guards changed forms; delayed hydration cannot overwrite edited drafts. Native step selects only exact waiting extract; other profiles/senders untouched. No schema/dependency/deployment-authority changes, production credential reads, source extraction, queue execution or destination sends by the agent. Remaining visual/periodic/matrix/misc/complete-copy functionality is not claimed. Browser tests use local deterministic source responses, not proof of live private-site reachability. Final validation:579 Python +99 DOM +22 refresh +6 real Chromium scenarios =706 passing tests. Native negative HTTP403 is expected and safely displayed; boot still0 JS/HTTP errors, with the pre-existing upstream stale-version warning retained. Full original-client DOM harness now evaluates the production Start adapter rather than omitting it. Native-dialog close focus no longer steals a newer keyboard focus target.",
     "1.18.1: upstream PHP10.646/aec65b6 rechecked unchanged. Public production health verified1.18.0, but diagnostics endpoint requires authentication unavailable to this agent; no claim to have inspected or run the private Mantoo Patris production profile. Public-source web fetch followed .ir to .com; this is not proof of host-side network reachability or saved selector compatibility. Fixed reproduced existing-waiting queue dead-end; no auth bypass, signing-authority change, schema change, cron opt-in or production job execution. Real browser named profile is a temporary synthetic fixture, not exported production data. Validation:585 Python +99 DOM +22 refresh +7 real Chromium scenarios =713 passing tests. The new named synthetic-profile waiting-start regression fails before the patch and passes after it; runtime product persistence and untouched unrelated jobs are verified. All original client bytes remain unchanged.",
     "1.18.2: upstream PHP10.646/aec65b6 unchanged; pinned literal-request inventory 671 keys/1690 references, includes fields/comments and is NOT endpoint implementation count. Real sync_diagnose local-config/queue slice plus browser-only reviewed JSON snapshot sharing, no credential/public authorization exception. Normal HTML login-return only; machine JSON APIs retain401, bearer forbidden. No agent private production session or actual Patris source probe. Final validation:598 Python +99 DOM +22 refresh +8 Chromium =727 passed. JS/shell/compile/inventory reproduction and git diff checks passed. Original vendored bytes unchanged.",
-    "1.18.3: latest PHP10.646/aec65b6 unchanged. Bounded pipeline-status parity slice; no production private profile inspection/source probe/queue execution, no auth/signing/schema/dependency changes. Full PHP parity remains false. Final validation:619 Python +99 DOM +22 refresh +9 real Chromium =749 passed. Regressions include old terminal extraction with active child priority, malformed provenance, destination mismatch/duplicates, truncation, no-source/network/mutation and completed-with-product-errors. JS/shell/compile/diff/inventory checks passed."
+    "1.18.3: latest PHP10.646/aec65b6 unchanged. Bounded pipeline-status parity slice; no production private profile inspection/source probe/queue execution, no auth/signing/schema/dependency changes. Full PHP parity remains false. Final validation:619 Python +99 DOM +22 refresh +9 real Chromium =749 passed. Regressions include old terminal extraction with active child priority, malformed provenance, destination mismatch/duplicates, truncation, no-source/network/mutation and completed-with-product-errors. JS/shell/compile/diff/inventory checks passed.",
+    "1.19.0: user superseded original-only scope: every prompt first check latest upstream and support both UIs through shared tested services. Latest source advanced10.646->10.684/a7e4f29.41 output slots reviewed, no WordPress/explorer signing authority imported. Source inventory now712 literal keys/1768 references, NOT endpoint implementation counts. Legacy lexical inventory above remains tied to old reference_commit. No private production profile/source inspection. Final validation:620 Python +99 DOM +22 refresh +11 real Chromium =752 passed. Both UIs exercise shared report/live probe/download/inventory; actual fixture-source probes, unchanged products/queues and no automatic source access. Full new original client boot has0 JS/HTTP errors in browser, preserved stale upstream version warning. JS/shell/compile/diff and inventory reproduction passed."
   ]
 }

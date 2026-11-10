@@ -38,7 +38,7 @@ function setup(t){
  return {w,d:w.document,seed,request,flush,errors};
 }
 
-test('both full original scripts boot against their original markup; tabs and hamburger use original functions',t=>{
+test('all full original scripts boot against their original markup; tabs and hamburger use original functions',t=>{
  const {w,d,errors}=setup(t);assert.equal(w._jsOk,true);w.switchMainTab('settings');assert.ok(d.querySelector('#pane-settings').classList.contains('active'));
  w.toggleSettingsPanel();assert.ok(d.querySelector('#settingsPanel').classList.contains('open'));w.toggleSettingsPanel();assert.ok(!d.querySelector('#settingsPanel').classList.contains('open'));
  w.renderProfileDropdown();assert.ok(d.querySelector('#hdrProfileSelect option[value="one"]'));assert.deepEqual(errors,[]);

@@ -17,11 +17,11 @@ def form(**kwargs):
 def test_original_ui_is_pinned_entire_client_not_a_redesign():
     raw=(php_ui.ROOT/'upstream/php-ui.html').read_bytes();m=php_ui.manifest()
     assert len(raw)==m['client_bytes'] and hashlib.sha256(raw).hexdigest()==m['client_sha256']
-    assert m['source_commit']=='aec65b64fbee0db82e06b1c6b7a684c7741b879d'
+    assert m['source_commit']=='a7e4f29cc7544cf8115120912a3489a908fd1b76'
     assert raw.startswith(b'<!DOCTYPE html>') and raw.rstrip().endswith(b'</html>')
-    assert len(re.findall(rb'<\?(?:php|=).*?\?>',raw,re.S))==m['php_slot_count']==39
+    assert len(re.findall(rb'<\?(?:php|=).*?\?>',raw,re.S))==m['php_slot_count']==41
     assert b'function collectProfileData(' in raw and b'function backendExtractFor(' in raw
-    assert raw.count(b'<script>')==2
+    assert raw.count(b'<script>')==3
 
 
 def test_native_host_is_auth_only_opaque_sandbox_with_strict_parent_csp(client,app):

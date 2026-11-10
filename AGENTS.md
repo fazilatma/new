@@ -41,10 +41,14 @@ weaken TLS/signature checks. Private artifacts live only in `.deployment/`.
 
 
 ## Active user interface scope
-From this request onward, feature work is only on the original `/php-ui` interface,
-especially working Start buttons and actual extraction/diagnostics. Do not add
-features to the alternative dashboard. Shared engine/security bug fixes needed
-by the original client remain in scope; keep the existing default intact.
+Latest user instruction supersedes the previous original-only restriction.
+For every prompt FIRST check the latest `arena/01a0ebf7-new` source. Preserve the
+exact original shell/functions snapshot in `/php-ui` through reviewed vendoring;
+port real backend behavior in bounded tested slices, never fake full parity.
+Add the same supported capabilities to the initial Python dashboard `/` using
+shared services/controllers. Keep both interfaces operational and tested. This
+does not authorize copying PHP credentials/nonces, running PHP, weakening the
+sandbox, automatic failed retries, or changing deployment authority.
 
 ## Ongoing PHP parity work (standing user request)
 For EVERY subsequent user prompt, complete the next bounded, tested PHP parity

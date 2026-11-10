@@ -22,11 +22,12 @@ def main():
     if not client.rstrip().endswith(b'</html>'):parser.error('Unexpected document end')
     version=re.search(rb"const APP_VERSION = '([^']+)';",raw)
     if not version:parser.error('Missing PHP source version')
+    source_date=re.search(rb"const APP_VERSION_DATE = '([^']+)';",raw)
     target=Path(__file__).resolve().parents[1]/'pythonanywhere/scraper4/upstream'
     manifest=json.loads((target/'manifest.json').read_text())
     slots=[m.group().decode() for m in re.finditer(rb'<\?(?:php|=).*?\?>',client,re.S)]
     if slots!=manifest['php_slots']:parser.error('PHP output slots changed: review renderer before updating snapshot')
-    manifest.update(source_commit=args.commit,source_version=version[1].decode(),source_sha256=hashlib.sha256(raw).hexdigest(),client_sha256=hashlib.sha256(client).hexdigest(),client_bytes=len(client))
+    manifest.update(source_version_date=source_date[1].decode() if source_date else '',php_slot_count=len(slots),source_commit=args.commit,source_version=version[1].decode(),source_sha256=hashlib.sha256(raw).hexdigest(),client_sha256=hashlib.sha256(client).hexdigest(),client_bytes=len(client))
     (target/'php-ui.html').write_bytes(client)
     (target/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
     print(f'Vendored {len(client)} exact original client bytes / PHP {manifest["source_version"]}')

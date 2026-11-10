@@ -52,7 +52,7 @@ def test_inventory_is_pinned_lexical_not_a_fake_endpoint_implementation(client):
     r=client.get('/api/php-ui/endpoint-inventory');assert r.status_code==200
     d=r.json;i=d['inventory'];assert d['read_only'] and d['source_inventory_is_not_implementation']
     assert i['source_sha256']==php_ui.manifest()['source_sha256'] and i['source_commit']==php_ui.manifest()['source_commit']
-    assert i['unique_keys']==len(i['entries'])==671 and i['references']==sum(e['references'] for e in i['entries'])==1690
+    assert i['unique_keys']==len(i['entries'])==712 and i['references']==sum(e['references'] for e in i['entries'])==1768
     assert i['is_endpoint_count'] is False and i['full_php_parity'] is False and not d['connected']['full_php_parity']
     assert 'sync_diagnose' in d['connected']['read_actions']
     assert all(e['review_status']=='requires_semantic_handler_review' for e in i['entries'])
@@ -85,3 +85,14 @@ def test_diagnose_renderer_requirements_respect_product_source(app):
     db.put_config('render',{'url':'https://private-render.example/?token=PRIVATE','token':'PRIVATE'})
     result=diagnose(db,app.extensions['s4_settings'],'browser');assert result['profiles'][0]['ok']
     assert 'PRIVATE' not in json.dumps(result)
+
+
+def test_both_interfaces_mount_one_shared_trusted_controller_and_no_php_nonce_authority(client):
+    for path in ('/','/php-ui'):
+        text=client.get(path).text
+        assert text.count('id="shared-php-workspace"')==1
+        assert 'shared-php-workspace.js' in text
+        assert 'id="shared-php-probe"' in text and 'id="shared-php-download"' in text
+    text=client.get('/php-ui/frame').text
+    assert 'const TPE_WP_NONCE="";' in text and 'let TPE_BROWSER_NONCE="";' in text
+    assert 'wp_create_nonce(' not in text and 's4ThirdPartyExplorerBrowserNonce()' not in text

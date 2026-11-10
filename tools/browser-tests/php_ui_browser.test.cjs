@@ -179,9 +179,9 @@ test('human diagnostic link uses normal login, exports reviewed JSON without cre
  assert.ok(!/temporary-browser-fixture|https:\/\/example\.com|csrf|consumer_secret/.test(content));
  await human.locator('#php-tools-close').click();const child=human.frames().find(f=>f.url().endsWith('/php-ui/frame'));await human.frameLocator('#php-original-ui').locator('html[data-s4-ready="1"]').waitFor();
  await child.evaluate(()=>toggleSettingsPanel());await human.frameLocator('#php-original-ui').locator('[data-python-panel="endpoint-inventory"]').click();
- await human.locator('#native-endpoints-status').filter({hasText:'671'}).waitFor();await human.locator('#native-endpoints-search').fill('sync_diagnose');
+ await human.locator('#native-endpoints-status').filter({hasText:'712'}).waitFor();await human.locator('#native-endpoints-search').fill('sync_diagnose');
  await human.locator('#native-endpoints-body').filter({hasText:'sync_diagnose'}).waitFor();
- const inventory=await(await human.request.get(origin+'/api/php-ui/endpoint-inventory')).json();assert.equal(inventory.inventory.entries.length,671);assert.equal(inventory.connected.full_php_parity,false);assert.ok(inventory.connected.read_actions.includes('sync_diagnose'));
+ const inventory=await(await human.request.get(origin+'/api/php-ui/endpoint-inventory')).json();assert.equal(inventory.inventory.entries.length,712);assert.equal(inventory.connected.full_php_parity,false);assert.ok(inventory.connected.read_actions.includes('sync_diagnose'));
  const after=await(await human.request.get(origin+'/__test__/extract-state')).json();assert.deepEqual(after,before);assert.deepEqual(errors,[]);
 });
 
@@ -200,4 +200,18 @@ test('native extraction-send pipeline shows verified children, product errors an
  const reads=actions.filter(a=>a==='sync_pipeline_status').length;await child.evaluate(()=>{syncPipelineRender();syncPipelineRender();});await page.waitForTimeout(4000);
  assert.equal(actions.filter(a=>a==='sync_pipeline_status').length,reads);assert.ok(!actions.some(a=>['python_extract_start','python_extract_step','python_manual_sync','python_send_enqueue','python_queue_control'].includes(a)));
  const after=await(await page.request.get(origin+'/__test__/snapshot')).json();assert.deepEqual(after,before);assert.deepEqual(errors,[]);
+});
+
+for(const route of ['/','/php-ui'])test('shared real report/probe/inventory in '+route+' uses the same services, opt-in network, reviewed export and unchanged products/queues',{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'pipeline'),errors=[],probes=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().includes('/api/extraction/probe'))probes.push(r.postDataJSON());});page.on('dialog',d=>d.accept());
+ await page.goto(origin+route);if(route==='/php-ui'){const f=page.frameLocator('#php-original-ui');await f.locator('html[data-s4-ready="1"]').waitFor();const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await child.evaluate(()=>toggleSettingsPanel());await f.locator('[data-python-panel="shared-workspace"]').click();}
+ else await page.locator('#start-profile option[value="1"]').waitFor({state:'attached'});
+ const before=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal(probes.length,0);
+ await page.locator('#shared-php-profile').selectOption('1');await page.locator('#shared-php-report').click();await page.locator('#shared-php-download').waitFor();let report=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(report.pipeline.reconciliation_performed,false);assert.equal(report.source_reachability_tested,false);assert.equal(probes.length,0);
+ await page.locator('#shared-php-probe').click();await page.locator('#shared-php-status').filter({hasText:'آخرین آزمایش صریح'}).waitFor();
+ report=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(probes.length,1);assert.deepEqual(probes[0],{profile_id:1});assert.equal(report.live_probe.status,'passed');assert.equal(report.live_probe.count,1);assert.equal(report.live_probe.products_changed,false);assert.ok(!('next' in report.live_probe));
+ const event=page.waitForEvent('download');await page.locator('#shared-php-download').click();const download=await event;assert.equal(download.suggestedFilename(),'scraper4-diagnostic-1.json');const content=fs.readFileSync(await download.path(),'utf8');assert.deepEqual(JSON.parse(content),report);assert.ok(!/PIPELINE-PRIVATE|temporary-browser-fixture|https:\/\/example.com|csrf/.test(content));
+ const after=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.deepEqual(after,before);
+ await page.locator('#shared-php-contracts').click();await page.locator('#shared-php-status').filter({hasText:'712'}).waitFor();const inventory=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(inventory.inventory.source_version,'10.684');assert.equal(inventory.connected.full_php_parity,false);
+ await page.locator('#shared-php-profile').selectOption('');assert.equal(await page.locator('#shared-php-preview').inputValue(),'');assert.equal(await page.locator('#shared-php-download').isVisible(),false);assert.deepEqual(errors,[]);
 });

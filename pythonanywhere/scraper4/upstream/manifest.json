@@ -1,10 +1,10 @@
 {
   "source_branch": "arena/01a0ebf7-new",
-  "source_commit": "aec65b64fbee0db82e06b1c6b7a684c7741b879d",
-  "source_version": "10.646",
-  "source_sha256": "20405af62a26cb5731bc9b0cac3a48e7243072663fdd1d9f155da34c8233613f",
-  "client_sha256": "9ba2d9fb7f6fade94f441284fca3d8b0d0bbb3b9eb27565b036e3340c646b0f5",
-  "client_bytes": 2995175,
+  "source_commit": "a7e4f29cc7544cf8115120912a3489a908fd1b76",
+  "source_version": "10.684",
+  "source_sha256": "45c472e5f6238469238bb94d57818b6cd04d3735dd6cc386bd37931fdeb7000c",
+  "client_sha256": "83b5137e793030fece86cd693ea5a7e8e26bce5e7a1758de97b9eef4d0d37f09",
+  "client_bytes": 3079591,
   "boundary": "first line-start <!DOCTYPE html> through EOF",
   "php_slots": [
     "<?= app_font_boot() ?>",
@@ -13,6 +13,8 @@
     "<?php /* v10.78 (92): اسکریپتِ نجوا — از تنظیمات، پیش از تگِ پایانیِ head */ $__nvSc = trim((string)(loadConnections()['najva_script'] ?? '')); if ($__nvSc !== '') echo $__nvSc . \"\\n\"; ?>",
     "<?= (int)cronVisualPulseRead()['latest_id'] ?>",
     "<?=APP_VERSION?>",
+    "<?php echo json_encode(function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''); ?>",
+    "<?php echo json_encode(s4ThirdPartyExplorerBrowserNonce()); ?>",
     "<?=APP_VERSION?>",
     "<?= (int)RETIRE_LOG_KEEP ?>",
     "<?php foreach (app_fonts_registry() as $fk => $fv): ?>",
@@ -47,6 +49,7 @@
     "<?=APP_VERSION_DATE?>",
     "<?= (int)DEDUP_DEL_MAX ?>"
   ],
-  "php_slot_count": 39,
-  "policy": "Immutable original client fragment, including both original inline scripts, styles, markup, IDs and handlers. Render only known PHP output slots; add adapter before/after, never execute PHP. No external notification snippet or proprietary fonts."
+  "php_slot_count": 41,
+  "policy": "Immutable original client fragment, including both original inline scripts, styles, markup, IDs and handlers. Render only known PHP output slots; add adapter before/after, never execute PHP. No external notification snippet or proprietary fonts.",
+  "source_version_date": "1405/07/07"
 }

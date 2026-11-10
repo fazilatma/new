@@ -1,21 +1,32 @@
 {
-  "source_commit": "aec65b64fbee0db82e06b1c6b7a684c7741b879d",
-  "source_version": "10.646",
-  "source_sha256": "20405af62a26cb5731bc9b0cac3a48e7243072663fdd1d9f155da34c8233613f",
+  "source_commit": "a7e4f29cc7544cf8115120912a3489a908fd1b76",
+  "source_version": "10.684",
+  "source_sha256": "45c472e5f6238469238bb94d57818b6cd04d3735dd6cc386bd37931fdeb7000c",
   "kind": "literal_request_reference_inventory",
   "is_endpoint_count": false,
   "full_php_parity": false,
   "scope": "GET/POST/REQUEST literal references, including fields/comments; dynamic keys and dispatch values need semantic review",
-  "unique_keys": 671,
-  "references": 1690,
+  "unique_keys": 712,
+  "references": 1768,
   "entries": [
+    {
+      "key": "_release",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        69153
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
     {
       "key": "_wpnonce",
       "methods": [
         "POST"
       ],
       "lines": [
-        21070
+        21099
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -26,7 +37,7 @@
         "POST"
       ],
       "lines": [
-        75958
+        77005
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -38,87 +49,87 @@
         "POST"
       ],
       "lines": [
-        21044,
-        21049,
-        21349,
-        22174,
-        22432,
-        22478,
-        27733,
-        27767,
-        27859,
-        28165,
-        28202,
-        28540,
-        28860,
-        32675,
-        32798,
-        34963,
-        34994,
-        35081,
-        35118,
-        36901,
-        36915,
-        36922,
-        43036,
-        43058,
-        43087,
-        46221,
-        46248,
-        46522,
-        46571,
-        46653,
-        46810,
-        46844,
-        46869,
-        46896,
-        46932,
-        46944,
-        47222,
-        48417,
-        48442,
-        48669,
-        48670,
-        51117,
-        51475,
-        52962,
-        61447,
-        75303,
-        75304,
-        75344,
-        75406,
-        75430,
-        75531,
-        75768,
-        75810,
-        75824,
-        75873,
-        75897,
-        75911,
-        75938,
-        75941,
-        76045,
-        76076,
-        76166,
-        76279,
-        77665,
-        77687,
-        77789,
-        77816,
-        77895,
-        77910,
-        77929,
-        77930,
-        78119,
-        78131,
-        78347,
-        82105,
-        82124,
-        82131,
-        82201,
-        90254,
-        90262,
-        90266
+        21073,
+        21078,
+        21378,
+        22204,
+        22462,
+        22508,
+        28332,
+        28366,
+        28458,
+        28764,
+        28801,
+        29139,
+        29459,
+        33274,
+        33397,
+        35590,
+        35621,
+        35708,
+        35745,
+        37528,
+        37547,
+        37554,
+        43673,
+        43695,
+        43724,
+        46858,
+        46885,
+        47159,
+        47208,
+        47290,
+        47447,
+        47481,
+        47506,
+        47533,
+        47569,
+        47581,
+        47859,
+        49054,
+        49079,
+        49306,
+        49307,
+        52111,
+        52469,
+        53956,
+        62441,
+        76350,
+        76351,
+        76391,
+        76453,
+        76477,
+        76578,
+        76815,
+        76857,
+        76871,
+        76920,
+        76944,
+        76958,
+        76985,
+        76988,
+        77092,
+        77123,
+        77213,
+        77326,
+        78712,
+        78734,
+        78836,
+        78863,
+        78942,
+        78957,
+        78976,
+        78977,
+        79166,
+        79178,
+        79394,
+        83216,
+        83235,
+        83242,
+        83312,
+        91399,
+        91407,
+        91411
       ],
       "references": 89,
       "review_status": "requires_semantic_handler_review"
@@ -129,9 +140,9 @@
         "POST"
       ],
       "lines": [
-        74534,
-        74615,
-        74645
+        75581,
+        75662,
+        75692
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -142,8 +153,8 @@
         "GET"
       ],
       "lines": [
-        41499,
-        48535
+        42136,
+        49172
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -154,8 +165,8 @@
         "GET"
       ],
       "lines": [
-        42147,
-        52363
+        42784,
+        53357
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -166,8 +177,8 @@
         "GET"
       ],
       "lines": [
-        42274,
-        51917
+        42911,
+        52911
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -178,8 +189,8 @@
         "GET"
       ],
       "lines": [
-        42158,
-        51915
+        42795,
+        52909
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -190,8 +201,8 @@
         "GET"
       ],
       "lines": [
-        42252,
-        51916
+        42889,
+        52910
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -202,8 +213,8 @@
         "GET"
       ],
       "lines": [
-        42283,
-        51918
+        42920,
+        52912
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -214,8 +225,8 @@
         "GET"
       ],
       "lines": [
-        42128,
-        51914
+        42765,
+        52908
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -226,7 +237,7 @@
         "POST"
       ],
       "lines": [
-        27899
+        28498
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -237,7 +248,7 @@
         "GET"
       ],
       "lines": [
-        77704
+        78751
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -248,7 +259,7 @@
         "GET"
       ],
       "lines": [
-        77840
+        78887
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -259,7 +270,7 @@
         "GET"
       ],
       "lines": [
-        77872
+        78919
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -270,7 +281,7 @@
         "GET"
       ],
       "lines": [
-        78075
+        79122
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -281,9 +292,9 @@
         "POST"
       ],
       "lines": [
-        27919,
-        27920,
-        53898
+        28518,
+        28519,
+        54892
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -294,8 +305,8 @@
         "GET"
       ],
       "lines": [
-        77910,
-        77930
+        78957,
+        78977
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -306,7 +317,7 @@
         "GET"
       ],
       "lines": [
-        78057
+        79104
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -317,8 +328,8 @@
         "GET"
       ],
       "lines": [
-        60993,
-        77634
+        61987,
+        78681
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -329,7 +340,7 @@
         "GET"
       ],
       "lines": [
-        75684
+        76731
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -340,7 +351,7 @@
         "GET"
       ],
       "lines": [
-        48272
+        48909
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -351,7 +362,7 @@
         "GET"
       ],
       "lines": [
-        77895
+        78942
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -362,7 +373,7 @@
         "GET"
       ],
       "lines": [
-        75664
+        76711
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -373,8 +384,8 @@
         "POST"
       ],
       "lines": [
-        27901,
-        27902
+        28500,
+        28501
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -385,7 +396,7 @@
         "GET"
       ],
       "lines": [
-        48020
+        48657
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -396,7 +407,7 @@
         "GET"
       ],
       "lines": [
-        75480
+        76527
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -407,7 +418,7 @@
         "GET"
       ],
       "lines": [
-        77687
+        78734
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -418,8 +429,8 @@
         "GET"
       ],
       "lines": [
-        54941,
-        76376
+        55935,
+        77423
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -430,7 +441,7 @@
         "GET"
       ],
       "lines": [
-        77589
+        78636
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -441,7 +452,7 @@
         "GET"
       ],
       "lines": [
-        75710
+        76757
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -452,7 +463,7 @@
         "GET"
       ],
       "lines": [
-        77589
+        78636
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -463,7 +474,7 @@
         "GET"
       ],
       "lines": [
-        76336
+        77383
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -474,7 +485,7 @@
         "GET"
       ],
       "lines": [
-        76440
+        77487
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -485,7 +496,7 @@
         "GET"
       ],
       "lines": [
-        77535
+        78582
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -496,7 +507,7 @@
         "GET"
       ],
       "lines": [
-        78029
+        79076
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -507,7 +518,7 @@
         "GET"
       ],
       "lines": [
-        78021
+        79068
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -518,8 +529,8 @@
         "GET"
       ],
       "lines": [
-        77913,
-        77929
+        78960,
+        78976
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -530,7 +541,7 @@
         "GET"
       ],
       "lines": [
-        78001
+        79048
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -541,7 +552,7 @@
         "GET"
       ],
       "lines": [
-        78049
+        79096
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -552,7 +563,7 @@
         "GET"
       ],
       "lines": [
-        39637
+        40274
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -560,12 +571,15 @@
     {
       "key": "all_shops",
       "methods": [
-        "GET"
+        "GET",
+        "POST"
       ],
       "lines": [
-        39643
+        28329,
+        40280,
+        50490
       ],
-      "references": 1,
+      "references": 3,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -574,7 +588,7 @@
         "GET"
       ],
       "lines": [
-        46471
+        47108
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -585,8 +599,8 @@
         "GET"
       ],
       "lines": [
-        39639,
-        42828
+        40276,
+        43465
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -597,7 +611,7 @@
         "POST"
       ],
       "lines": [
-        21178
+        21207
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -608,9 +622,9 @@
         "POST"
       ],
       "lines": [
-        22346,
-        22349,
-        22396
+        22376,
+        22379,
+        22426
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -621,7 +635,7 @@
         "POST"
       ],
       "lines": [
-        22400
+        22430
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -632,9 +646,9 @@
         "POST"
       ],
       "lines": [
-        75771,
-        75827,
-        75953
+        76818,
+        76874,
+        77000
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -645,8 +659,8 @@
         "GET"
       ],
       "lines": [
-        35184,
-        49671
+        35811,
+        50665
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -657,8 +671,8 @@
         "GET"
       ],
       "lines": [
-        39631,
-        48282
+        40268,
+        48919
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -669,7 +683,7 @@
         "GET"
       ],
       "lines": [
-        47473
+        48110
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -680,7 +694,7 @@
         "GET"
       ],
       "lines": [
-        47284
+        47921
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -691,7 +705,7 @@
         "GET"
       ],
       "lines": [
-        47211
+        47848
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -702,7 +716,7 @@
         "GET"
       ],
       "lines": [
-        47529
+        48166
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -713,7 +727,7 @@
         "GET"
       ],
       "lines": [
-        47232
+        47869
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -724,7 +738,7 @@
         "POST"
       ],
       "lines": [
-        34988
+        35615
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -735,7 +749,7 @@
         "GET"
       ],
       "lines": [
-        40168
+        40805
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -746,7 +760,7 @@
         "POST"
       ],
       "lines": [
-        81333
+        82452
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -757,8 +771,8 @@
         "GET"
       ],
       "lines": [
-        41991,
-        41993
+        42628,
+        42630
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -769,7 +783,7 @@
         "POST"
       ],
       "lines": [
-        34989
+        35616
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -780,7 +794,7 @@
         "GET"
       ],
       "lines": [
-        41935
+        42572
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -791,8 +805,8 @@
         "GET"
       ],
       "lines": [
-        42022,
-        42024
+        42659,
+        42661
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -803,8 +817,8 @@
         "GET"
       ],
       "lines": [
-        42038,
-        42040
+        42675,
+        42677
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -816,9 +830,9 @@
         "POST"
       ],
       "lines": [
-        28019,
-        78377,
-        82237
+        28618,
+        79424,
+        83348
       ],
       "references": 7,
       "review_status": "requires_semantic_handler_review"
@@ -829,7 +843,7 @@
         "POST"
       ],
       "lines": [
-        28071
+        28670
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -840,7 +854,7 @@
         "POST"
       ],
       "lines": [
-        28020
+        28619
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -851,8 +865,8 @@
         "GET"
       ],
       "lines": [
-        42050,
-        42052
+        42687,
+        42689
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -863,7 +877,7 @@
         "GET"
       ],
       "lines": [
-        41952
+        42589
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -874,7 +888,7 @@
         "POST"
       ],
       "lines": [
-        77670
+        78717
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -885,7 +899,7 @@
         "POST"
       ],
       "lines": [
-        90256
+        91401
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -896,7 +910,7 @@
         "GET"
       ],
       "lines": [
-        42119
+        42756
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -907,8 +921,8 @@
         "GET"
       ],
       "lines": [
-        42008,
-        42010
+        42645,
+        42647
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -919,8 +933,8 @@
         "POST"
       ],
       "lines": [
-        28078,
-        28079
+        28677,
+        28678
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -931,7 +945,7 @@
         "POST"
       ],
       "lines": [
-        22188
+        22218
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -942,7 +956,7 @@
         "POST"
       ],
       "lines": [
-        22375
+        22405
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -953,9 +967,9 @@
         "GET"
       ],
       "lines": [
-        36055,
-        36091,
-        36159
+        36682,
+        36718,
+        36786
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -966,8 +980,8 @@
         "GET"
       ],
       "lines": [
-        35008,
-        35009
+        35635,
+        35636
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -978,7 +992,7 @@
         "GET"
       ],
       "lines": [
-        35025
+        35652
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -989,8 +1003,8 @@
         "GET"
       ],
       "lines": [
-        35160,
-        35162
+        35787,
+        35789
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1001,7 +1015,7 @@
         "GET"
       ],
       "lines": [
-        35094
+        35721
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1012,8 +1026,8 @@
         "GET"
       ],
       "lines": [
-        34994,
-        36108
+        35621,
+        36735
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1024,7 +1038,7 @@
         "GET"
       ],
       "lines": [
-        35060
+        35687
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1035,7 +1049,7 @@
         "GET"
       ],
       "lines": [
-        34939
+        35566
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1046,7 +1060,7 @@
         "POST"
       ],
       "lines": [
-        27941
+        28540
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1057,7 +1071,7 @@
         "POST"
       ],
       "lines": [
-        46899
+        47536
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1068,9 +1082,9 @@
         "POST"
       ],
       "lines": [
-        27875,
-        27876,
-        28118
+        28474,
+        28475,
+        28717
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -1081,10 +1095,78 @@
         "GET"
       ],
       "lines": [
-        26802,
-        49443
+        26842,
+        50080
       ],
       "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam_best_sellers_apply_filter",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27332
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam_best_sellers_run",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27331,
+        27333
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam_best_sellers_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27328
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam_excel_export",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28329
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam_excel_reconcile",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28330
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "basalam_excel_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        28328
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -1093,7 +1175,7 @@
         "GET"
       ],
       "lines": [
-        84445
+        85590
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1104,7 +1186,18 @@
         "GET"
       ],
       "lines": [
-        48059
+        48696
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "batch_size",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28329
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1116,7 +1209,7 @@
         "POST"
       ],
       "lines": [
-        37032
+        37669
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1127,7 +1220,7 @@
         "GET"
       ],
       "lines": [
-        47964
+        48601
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1139,13 +1232,13 @@
         "POST"
       ],
       "lines": [
-        21154,
-        21335,
-        21539,
-        21602,
-        28528,
-        28544,
-        34979
+        21183,
+        21364,
+        21568,
+        21631,
+        29127,
+        29143,
+        35606
       ],
       "references": 9,
       "review_status": "requires_semantic_handler_review"
@@ -1156,9 +1249,9 @@
         "POST"
       ],
       "lines": [
-        21597,
-        21598,
-        21599
+        21626,
+        21627,
+        21628
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -1170,7 +1263,7 @@
         "POST"
       ],
       "lines": [
-        47079
+        47716
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1181,7 +1274,7 @@
         "POST"
       ],
       "lines": [
-        22356
+        22386
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1192,7 +1285,7 @@
         "POST"
       ],
       "lines": [
-        22359
+        22389
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1203,7 +1296,7 @@
         "GET"
       ],
       "lines": [
-        80172
+        81219
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1214,8 +1307,8 @@
         "GET"
       ],
       "lines": [
-        42961,
-        60453
+        43598,
+        61447
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1226,9 +1319,21 @@
         "GET"
       ],
       "lines": [
-        84088
+        85233
       ],
       "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "bsl_all_shop_coverage_repair",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        50561,
+        69151
+      ],
+      "references": 2,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -1237,7 +1342,7 @@
         "GET"
       ],
       "lines": [
-        39520
+        40157
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1248,8 +1353,8 @@
         "GET"
       ],
       "lines": [
-        39313,
-        55536
+        39950,
+        56530
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1260,7 +1365,7 @@
         "GET"
       ],
       "lines": [
-        80092
+        81139
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1271,8 +1376,8 @@
         "GET"
       ],
       "lines": [
-        47383,
-        54302
+        48020,
+        55296
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1283,8 +1388,8 @@
         "GET"
       ],
       "lines": [
-        47409,
-        54303
+        48046,
+        55297
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1295,8 +1400,8 @@
         "GET"
       ],
       "lines": [
-        49299,
-        73730
+        49936,
+        74777
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1307,7 +1412,7 @@
         "GET"
       ],
       "lines": [
-        73701
+        74748
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1318,8 +1423,8 @@
         "GET"
       ],
       "lines": [
-        49298,
-        73711
+        49935,
+        74758
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1330,8 +1435,8 @@
         "GET"
       ],
       "lines": [
-        47303,
-        54301
+        47940,
+        55295
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1342,7 +1447,7 @@
         "GET"
       ],
       "lines": [
-        73736
+        74783
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1353,7 +1458,7 @@
         "GET"
       ],
       "lines": [
-        80293
+        81340
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1364,7 +1469,7 @@
         "GET"
       ],
       "lines": [
-        85183
+        86328
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1375,7 +1480,7 @@
         "GET"
       ],
       "lines": [
-        80118
+        81165
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1386,7 +1491,7 @@
         "GET"
       ],
       "lines": [
-        80037
+        81084
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1397,8 +1502,8 @@
         "GET"
       ],
       "lines": [
-        36089,
-        36154
+        36716,
+        36781
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1409,7 +1514,7 @@
         "GET"
       ],
       "lines": [
-        79633
+        80680
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1420,7 +1525,7 @@
         "GET"
       ],
       "lines": [
-        79754
+        80801
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1431,7 +1536,7 @@
         "GET"
       ],
       "lines": [
-        80244
+        81291
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1442,7 +1547,7 @@
         "GET"
       ],
       "lines": [
-        79872
+        80919
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1453,9 +1558,9 @@
         "GET"
       ],
       "lines": [
-        39179,
-        49945,
-        73780
+        39816,
+        50939,
+        74827
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -1466,7 +1571,7 @@
         "GET"
       ],
       "lines": [
-        73631
+        74678
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1477,7 +1582,7 @@
         "GET"
       ],
       "lines": [
-        79394
+        80441
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1488,9 +1593,9 @@
         "GET"
       ],
       "lines": [
-        48922,
-        81326,
-        81328
+        49559,
+        82445,
+        82447
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -1501,7 +1606,7 @@
         "GET"
       ],
       "lines": [
-        81663
+        82774
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1512,7 +1617,7 @@
         "GET"
       ],
       "lines": [
-        81685
+        82796
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1523,7 +1628,7 @@
         "GET"
       ],
       "lines": [
-        81947
+        83058
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1534,7 +1639,7 @@
         "GET"
       ],
       "lines": [
-        81904
+        83015
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1545,7 +1650,7 @@
         "GET"
       ],
       "lines": [
-        81706
+        82817
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1556,7 +1661,7 @@
         "GET"
       ],
       "lines": [
-        81764
+        82875
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1567,7 +1672,7 @@
         "GET"
       ],
       "lines": [
-        81788
+        82899
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1578,8 +1683,8 @@
         "GET"
       ],
       "lines": [
-        48976,
-        81822
+        49613,
+        82933
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1590,9 +1695,9 @@
         "GET"
       ],
       "lines": [
-        48921,
-        81308,
-        81326
+        49558,
+        82427,
+        82445
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -1603,7 +1708,7 @@
         "GET"
       ],
       "lines": [
-        82059
+        83170
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1614,7 +1719,7 @@
         "GET"
       ],
       "lines": [
-        81836
+        82947
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1625,8 +1730,8 @@
         "GET"
       ],
       "lines": [
-        48750,
-        81976
+        49387,
+        83087
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1637,7 +1742,7 @@
         "GET"
       ],
       "lines": [
-        81283
+        82402
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1648,8 +1753,8 @@
         "GET"
       ],
       "lines": [
-        48827,
-        81743
+        49464,
+        82854
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1660,7 +1765,7 @@
         "GET"
       ],
       "lines": [
-        81568
+        82678
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1671,7 +1776,7 @@
         "GET"
       ],
       "lines": [
-        82027
+        83138
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1682,7 +1787,7 @@
         "GET"
       ],
       "lines": [
-        81198
+        82317
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1693,7 +1798,7 @@
         "GET"
       ],
       "lines": [
-        81719
+        82830
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1704,8 +1809,8 @@
         "GET"
       ],
       "lines": [
-        49240,
-        80914
+        49877,
+        82028
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1716,7 +1821,7 @@
         "GET"
       ],
       "lines": [
-        79594
+        80641
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1727,7 +1832,7 @@
         "GET"
       ],
       "lines": [
-        46357
+        46994
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1738,7 +1843,7 @@
         "GET"
       ],
       "lines": [
-        84138
+        85283
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1749,9 +1854,9 @@
         "GET"
       ],
       "lines": [
-        59146,
-        62055,
-        80941
+        60140,
+        63049,
+        82055
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -1762,7 +1867,7 @@
         "GET"
       ],
       "lines": [
-        84179
+        85324
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1773,7 +1878,7 @@
         "GET"
       ],
       "lines": [
-        80154
+        81201
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1784,7 +1889,7 @@
         "GET"
       ],
       "lines": [
-        78868
+        79915
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1795,7 +1900,7 @@
         "GET"
       ],
       "lines": [
-        38984
+        39621
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1806,7 +1911,7 @@
         "GET"
       ],
       "lines": [
-        39078
+        39715
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1817,7 +1922,7 @@
         "GET"
       ],
       "lines": [
-        39069
+        39706
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1828,8 +1933,8 @@
         "POST"
       ],
       "lines": [
-        77791,
-        77821
+        78838,
+        78868
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1840,9 +1945,9 @@
         "POST"
       ],
       "lines": [
-        74533,
-        74614,
-        74644
+        75580,
+        75661,
+        75691
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -1854,10 +1959,10 @@
         "POST"
       ],
       "lines": [
-        76187,
-        76288,
-        77561,
-        77603
+        77234,
+        77335,
+        78608,
+        78650
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -1868,7 +1973,7 @@
         "POST"
       ],
       "lines": [
-        77828
+        78875
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1880,11 +1985,24 @@
         "POST"
       ],
       "lines": [
-        50453,
-        77830,
-        80276
+        51447,
+        78877,
+        81323
       ],
       "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "category",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27328,
+        27332
+      ],
+      "references": 2,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -1894,12 +2012,23 @@
         "POST"
       ],
       "lines": [
-        78155,
-        79181,
-        80256,
-        81332
+        79202,
+        80228,
+        81303,
+        82451
       ],
       "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "category_ids",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27342
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -1908,8 +2037,8 @@
         "POST"
       ],
       "lines": [
-        27978,
-        27979
+        28577,
+        28578
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1920,8 +2049,8 @@
         "GET"
       ],
       "lines": [
-        43019,
-        53468
+        43656,
+        54462
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1932,8 +2061,8 @@
         "GET"
       ],
       "lines": [
-        42822,
-        53466
+        43459,
+        54460
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1944,8 +2073,8 @@
         "GET"
       ],
       "lines": [
-        42938,
-        53467
+        43575,
+        54461
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1956,8 +2085,8 @@
         "GET"
       ],
       "lines": [
-        43028,
-        53469
+        43665,
+        54463
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -1968,7 +2097,7 @@
         "GET"
       ],
       "lines": [
-        48475
+        49112
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1979,7 +2108,7 @@
         "GET"
       ],
       "lines": [
-        39742
+        40379
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -1990,7 +2119,7 @@
         "POST"
       ],
       "lines": [
-        28076
+        28675
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2001,8 +2130,8 @@
         "GET"
       ],
       "lines": [
-        42486,
-        55464
+        43123,
+        56458
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2013,8 +2142,8 @@
         "GET"
       ],
       "lines": [
-        42515,
-        55466
+        43152,
+        56460
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2025,8 +2154,8 @@
         "GET"
       ],
       "lines": [
-        42504,
-        55465
+        43141,
+        56459
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2037,8 +2166,8 @@
         "GET"
       ],
       "lines": [
-        74308,
-        74428
+        75355,
+        75475
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2050,9 +2179,9 @@
         "POST"
       ],
       "lines": [
-        47389,
-        47417,
-        75410
+        48026,
+        48054,
+        76457
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -2063,8 +2192,8 @@
         "POST"
       ],
       "lines": [
-        21595,
-        48643
+        21624,
+        49280
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -2075,10 +2204,10 @@
         "POST"
       ],
       "lines": [
-        79079,
-        81289,
-        84141,
-        84161
+        80126,
+        82408,
+        85286,
+        85306
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -2090,12 +2219,12 @@
         "REQUEST"
       ],
       "lines": [
-        39316,
-        39508,
-        42964,
-        42965,
-        47153,
-        48492
+        39953,
+        40145,
+        43601,
+        43602,
+        47790,
+        49129
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -2106,7 +2235,7 @@
         "POST"
       ],
       "lines": [
-        34977
+        35604
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2117,8 +2246,8 @@
         "GET"
       ],
       "lines": [
-        21326,
-        58902
+        21355,
+        59896
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2129,7 +2258,7 @@
         "GET"
       ],
       "lines": [
-        21349
+        21378
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2140,8 +2269,8 @@
         "GET"
       ],
       "lines": [
-        21036,
-        21339
+        21065,
+        21368
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2152,8 +2281,8 @@
         "GET"
       ],
       "lines": [
-        21333,
-        60569
+        21362,
+        61563
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2164,9 +2293,9 @@
         "GET"
       ],
       "lines": [
-        51320,
-        77564,
-        77608
+        52314,
+        78611,
+        78655
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -2177,7 +2306,7 @@
         "POST"
       ],
       "lines": [
-        77674
+        78721
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2188,7 +2317,7 @@
         "GET"
       ],
       "lines": [
-        39260
+        39897
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2199,7 +2328,7 @@
         "REQUEST"
       ],
       "lines": [
-        75314
+        76361
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2210,7 +2339,7 @@
         "REQUEST"
       ],
       "lines": [
-        75315
+        76362
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2221,7 +2350,7 @@
         "POST"
       ],
       "lines": [
-        28074
+        28673
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -2232,8 +2361,8 @@
         "GET"
       ],
       "lines": [
-        41527,
-        49480
+        42164,
+        50117
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2245,7 +2374,7 @@
         "POST"
       ],
       "lines": [
-        36294
+        36921
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2256,7 +2385,7 @@
         "GET"
       ],
       "lines": [
-        18114
+        18143
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2267,8 +2396,8 @@
         "GET"
       ],
       "lines": [
-        20926,
-        49617
+        20955,
+        50254
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2279,7 +2408,7 @@
         "GET"
       ],
       "lines": [
-        38568
+        39205
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2290,7 +2419,7 @@
         "POST"
       ],
       "lines": [
-        28068
+        28667
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2301,20 +2430,21 @@
         "GET"
       ],
       "lines": [
-        36035,
-        36110,
-        36901,
-        36914,
-        36922,
-        55602,
-        57260,
-        59912,
-        59913,
-        59914,
-        59942,
-        61819
+        36662,
+        36737,
+        37528,
+        37546,
+        37554,
+        50415,
+        56596,
+        58254,
+        60906,
+        60907,
+        60908,
+        60936,
+        62813
       ],
-      "references": 12,
+      "references": 13,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -2323,7 +2453,7 @@
         "GET"
       ],
       "lines": [
-        41496
+        42133
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2334,8 +2464,8 @@
         "GET"
       ],
       "lines": [
-        21686,
-        21694
+        21715,
+        21723
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2346,8 +2476,8 @@
         "GET"
       ],
       "lines": [
-        21686,
-        21695
+        21715,
+        21724
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2358,8 +2488,8 @@
         "GET"
       ],
       "lines": [
-        42265,
-        42412
+        42902,
+        43049
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2370,8 +2500,8 @@
         "GET"
       ],
       "lines": [
-        81730,
-        81751
+        82841,
+        82862
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2382,10 +2512,10 @@
         "GET"
       ],
       "lines": [
-        48347,
-        61924,
-        73650,
-        74315
+        48984,
+        62918,
+        74697,
+        75362
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -2396,7 +2526,7 @@
         "POST"
       ],
       "lines": [
-        22343
+        22373
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2407,7 +2537,7 @@
         "POST"
       ],
       "lines": [
-        22344
+        22374
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2418,8 +2548,8 @@
         "POST"
       ],
       "lines": [
-        27736,
-        27770
+        28335,
+        28369
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2430,7 +2560,7 @@
         "POST"
       ],
       "lines": [
-        74578
+        75625
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2441,7 +2571,7 @@
         "GET"
       ],
       "lines": [
-        77610
+        78657
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2452,7 +2582,7 @@
         "POST"
       ],
       "lines": [
-        48444
+        49081
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2463,8 +2593,8 @@
         "GET"
       ],
       "lines": [
-        42759,
-        51735
+        43396,
+        52729
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2475,8 +2605,8 @@
         "GET"
       ],
       "lines": [
-        42796,
-        51733
+        43433,
+        52727
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2487,8 +2617,8 @@
         "GET"
       ],
       "lines": [
-        42651,
-        51731
+        43288,
+        52725
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2499,8 +2629,8 @@
         "GET"
       ],
       "lines": [
-        42771,
-        51732
+        43408,
+        52726
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2511,8 +2641,8 @@
         "GET"
       ],
       "lines": [
-        42805,
-        51734
+        43442,
+        52728
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2523,7 +2653,7 @@
         "GET"
       ],
       "lines": [
-        47215
+        47852
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2534,8 +2664,8 @@
         "GET"
       ],
       "lines": [
-        77563,
-        77606
+        78610,
+        78653
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2547,10 +2677,10 @@
         "POST"
       ],
       "lines": [
-        46950,
-        77675,
-        81336,
-        84194
+        47587,
+        78722,
+        82455,
+        85339
       ],
       "references": 7,
       "review_status": "requires_semantic_handler_review"
@@ -2561,7 +2691,7 @@
         "POST"
       ],
       "lines": [
-        90256
+        91401
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2572,7 +2702,7 @@
         "POST"
       ],
       "lines": [
-        21606
+        21635
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2583,7 +2713,7 @@
         "GET"
       ],
       "lines": [
-        38937
+        39574
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2595,9 +2725,9 @@
         "POST"
       ],
       "lines": [
-        21962,
-        21980,
-        22006
+        21991,
+        22009,
+        22035
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -2608,7 +2738,7 @@
         "POST"
       ],
       "lines": [
-        22377
+        22407
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2619,8 +2749,8 @@
         "POST"
       ],
       "lines": [
-        27737,
-        27771
+        28336,
+        28370
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2632,8 +2762,8 @@
         "POST"
       ],
       "lines": [
-        22199,
-        27304
+        22229,
+        27849
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -2644,7 +2774,7 @@
         "POST"
       ],
       "lines": [
-        28022
+        28621
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2656,9 +2786,9 @@
         "POST"
       ],
       "lines": [
-        32696,
-        36100,
-        36189
+        33295,
+        36727,
+        36816
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -2669,8 +2799,8 @@
         "GET"
       ],
       "lines": [
-        23288,
-        23289
+        23318,
+        23319
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2681,7 +2811,7 @@
         "GET"
       ],
       "lines": [
-        27297
+        27842
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2692,7 +2822,7 @@
         "GET"
       ],
       "lines": [
-        18115
+        18144
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2703,7 +2833,7 @@
         "GET"
       ],
       "lines": [
-        22665
+        22695
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2714,9 +2844,9 @@
         "GET"
       ],
       "lines": [
-        39179,
-        49945,
-        73792
+        39816,
+        50939,
+        74839
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -2727,7 +2857,7 @@
         "POST"
       ],
       "lines": [
-        28109
+        28708
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -2738,7 +2868,7 @@
         "POST"
       ],
       "lines": [
-        28110
+        28709
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2749,7 +2879,7 @@
         "POST"
       ],
       "lines": [
-        28111
+        28710
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2760,7 +2890,7 @@
         "POST"
       ],
       "lines": [
-        28112
+        28711
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2768,13 +2898,16 @@
     {
       "key": "dir",
       "methods": [
-        "GET"
+        "GET",
+        "POST"
       ],
       "lines": [
-        41842,
-        41913
+        27328,
+        27332,
+        42479,
+        42550
       ],
-      "references": 2,
+      "references": 4,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -2784,14 +2917,14 @@
         "POST"
       ],
       "lines": [
-        32728,
-        32740,
-        36061,
-        36079,
-        36104,
-        36347,
-        36402,
-        58983
+        33327,
+        33339,
+        36688,
+        36706,
+        36731,
+        36974,
+        37029,
+        59977
       ],
       "references": 11,
       "review_status": "requires_semantic_handler_review"
@@ -2802,7 +2935,7 @@
         "GET"
       ],
       "lines": [
-        47908
+        48545
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2814,11 +2947,11 @@
         "POST"
       ],
       "lines": [
-        39000,
-        39097,
-        39213,
-        47533,
-        48536
+        39637,
+        39734,
+        39850,
+        48170,
+        49173
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -2830,8 +2963,8 @@
         "POST"
       ],
       "lines": [
-        46900,
-        46952
+        47537,
+        47589
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -2842,8 +2975,8 @@
         "GET"
       ],
       "lines": [
-        21685,
-        21690
+        21714,
+        21719
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2855,13 +2988,13 @@
         "POST"
       ],
       "lines": [
-        41519,
-        41543,
-        41960,
-        75916,
-        76002,
-        77669,
-        90256
+        42156,
+        42180,
+        42597,
+        76963,
+        77049,
+        78716,
+        91401
       ],
       "references": 12,
       "review_status": "requires_semantic_handler_review"
@@ -2872,7 +3005,7 @@
         "GET"
       ],
       "lines": [
-        21840
+        21869
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2883,7 +3016,7 @@
         "GET"
       ],
       "lines": [
-        47777
+        48414
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2894,9 +3027,22 @@
         "POST"
       ],
       "lines": [
-        41958
+        42595
       ],
       "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "exact",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27328,
+        27332
+      ],
+      "references": 2,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -2906,9 +3052,31 @@
         "POST"
       ],
       "lines": [
-        46968
+        47605
       ],
       "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "explorer_action",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27347
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "explorer_nonce",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        26869
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -2917,7 +3085,7 @@
         "GET"
       ],
       "lines": [
-        48480
+        49117
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2928,7 +3096,7 @@
         "POST"
       ],
       "lines": [
-        28026
+        28625
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2939,7 +3107,7 @@
         "GET"
       ],
       "lines": [
-        28804
+        29403
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2950,7 +3118,7 @@
         "GET"
       ],
       "lines": [
-        28791
+        29390
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2961,7 +3129,7 @@
         "GET"
       ],
       "lines": [
-        28658
+        29257
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2973,7 +3141,7 @@
         "POST"
       ],
       "lines": [
-        29043
+        29642
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -2984,7 +3152,7 @@
         "GET"
       ],
       "lines": [
-        28769
+        29368
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -2995,7 +3163,7 @@
         "GET"
       ],
       "lines": [
-        28860
+        29459
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3006,7 +3174,7 @@
         "GET"
       ],
       "lines": [
-        28816
+        29415
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3018,11 +3186,11 @@
         "POST"
       ],
       "lines": [
-        22329,
-        22792,
-        27511,
-        47625,
-        58181
+        22359,
+        22822,
+        28056,
+        48262,
+        59175
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -3033,8 +3201,8 @@
         "GET"
       ],
       "lines": [
-        81729,
-        81775
+        82840,
+        82886
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3045,7 +3213,7 @@
         "POST"
       ],
       "lines": [
-        81498
+        82612
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3056,7 +3224,7 @@
         "GET"
       ],
       "lines": [
-        49697
+        50691
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3067,7 +3235,7 @@
         "GET"
       ],
       "lines": [
-        27166
+        27711
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3078,7 +3246,7 @@
         "POST"
       ],
       "lines": [
-        28204
+        28803
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3089,8 +3257,8 @@
         "GET"
       ],
       "lines": [
-        73647,
-        73741
+        74694,
+        74788
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3102,8 +3270,8 @@
         "POST"
       ],
       "lines": [
-        46823,
-        46964
+        47460,
+        47601
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -3115,8 +3283,8 @@
         "POST"
       ],
       "lines": [
-        46820,
-        46961
+        47457,
+        47598
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -3128,10 +3296,21 @@
         "POST"
       ],
       "lines": [
-        46821,
-        46962
+        47458,
+        47599
       ],
       "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "filters",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28329
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -3141,8 +3320,8 @@
         "POST"
       ],
       "lines": [
-        46822,
-        46963
+        47459,
+        47600
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -3153,7 +3332,7 @@
         "GET"
       ],
       "lines": [
-        39635
+        40272
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3165,7 +3344,7 @@
         "POST"
       ],
       "lines": [
-        82107
+        83218
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3177,19 +3356,19 @@
         "POST"
       ],
       "lines": [
-        21328,
-        21479,
-        21493,
-        36078,
-        37515,
-        47964,
-        51333,
-        55602,
-        77548,
-        79144,
-        79154,
-        81452,
-        81469
+        21357,
+        21508,
+        21522,
+        36705,
+        38152,
+        48601,
+        52327,
+        56596,
+        78595,
+        80191,
+        80201,
+        82566,
+        82583
       ],
       "references": 14,
       "review_status": "requires_semantic_handler_review"
@@ -3201,10 +3380,10 @@
         "POST"
       ],
       "lines": [
-        32687,
-        36060,
-        36097,
-        36164
+        33286,
+        36687,
+        36724,
+        36791
       ],
       "references": 5,
       "review_status": "requires_semantic_handler_review"
@@ -3215,7 +3394,7 @@
         "REQUEST"
       ],
       "lines": [
-        77695
+        78742
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3226,7 +3405,7 @@
         "GET"
       ],
       "lines": [
-        18142
+        18171
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3237,7 +3416,7 @@
         "GET"
       ],
       "lines": [
-        80263
+        81310
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3248,7 +3427,7 @@
         "GET"
       ],
       "lines": [
-        48485
+        49122
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3259,7 +3438,7 @@
         "GET"
       ],
       "lines": [
-        73732
+        74779
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3270,8 +3449,8 @@
         "POST"
       ],
       "lines": [
-        78144,
-        84454
+        79191,
+        85599
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3282,12 +3461,12 @@
         "POST"
       ],
       "lines": [
-        79112,
-        79124,
-        79129,
-        81387,
-        81399,
-        81404
+        80159,
+        80171,
+        80176,
+        82501,
+        82513,
+        82518
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -3298,7 +3477,7 @@
         "GET"
       ],
       "lines": [
-        80183
+        81230
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3309,10 +3488,10 @@
         "GET"
       ],
       "lines": [
-        23328,
-        24242,
-        79058,
-        81241
+        23358,
+        24272,
+        80105,
+        82360
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -3323,7 +3502,7 @@
         "POST"
       ],
       "lines": [
-        22342
+        22372
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3334,7 +3513,7 @@
         "GET"
       ],
       "lines": [
-        24297
+        24327
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3346,9 +3525,9 @@
         "POST"
       ],
       "lines": [
-        22288,
-        23110,
-        27308
+        22318,
+        23140,
+        27853
       ],
       "references": 5,
       "review_status": "requires_semantic_handler_review"
@@ -3359,8 +3538,8 @@
         "GET"
       ],
       "lines": [
-        23134,
-        23137
+        23164,
+        23167
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3371,9 +3550,9 @@
         "GET"
       ],
       "lines": [
-        18115,
-        23103,
-        23106
+        18144,
+        23133,
+        23136
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -3384,7 +3563,7 @@
         "GET"
       ],
       "lines": [
-        28525
+        29124
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3395,7 +3574,7 @@
         "POST"
       ],
       "lines": [
-        75537
+        76584
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3406,7 +3585,7 @@
         "GET"
       ],
       "lines": [
-        39183
+        39820
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3418,14 +3597,14 @@
         "POST"
       ],
       "lines": [
-        22638,
-        41912,
-        41954,
-        41993,
-        42010,
-        42040,
-        42052,
-        78032
+        22668,
+        42549,
+        42591,
+        42630,
+        42647,
+        42677,
+        42689,
+        79079
       ],
       "references": 8,
       "review_status": "requires_semantic_handler_review"
@@ -3437,9 +3616,9 @@
         "POST"
       ],
       "lines": [
-        38996,
-        43091,
-        73789
+        39633,
+        43728,
+        74836
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -3450,7 +3629,7 @@
         "POST"
       ],
       "lines": [
-        22345
+        22375
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3461,7 +3640,7 @@
         "POST"
       ],
       "lines": [
-        47426
+        48063
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3472,7 +3651,7 @@
         "POST"
       ],
       "lines": [
-        47429
+        48066
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3483,7 +3662,7 @@
         "POST"
       ],
       "lines": [
-        47427
+        48064
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3494,8 +3673,8 @@
         "GET"
       ],
       "lines": [
-        21674,
-        21675
+        21703,
+        21704
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3506,7 +3685,7 @@
         "GET"
       ],
       "lines": [
-        21698
+        21727
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3517,7 +3696,7 @@
         "POST"
       ],
       "lines": [
-        34987
+        35614
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3528,7 +3707,18 @@
         "POST"
       ],
       "lines": [
-        34986
+        35613
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "include_mapped",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        28329
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3539,7 +3729,7 @@
         "POST"
       ],
       "lines": [
-        22441
+        22471
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3550,7 +3740,7 @@
         "POST"
       ],
       "lines": [
-        77819
+        78866
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3561,8 +3751,8 @@
         "GET"
       ],
       "lines": [
-        36926,
-        61846
+        37558,
+        62840
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3573,7 +3763,7 @@
         "POST"
       ],
       "lines": [
-        28069
+        28668
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -3584,8 +3774,8 @@
         "GET"
       ],
       "lines": [
-        46289,
-        61860
+        46926,
+        62854
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3596,7 +3786,7 @@
         "POST"
       ],
       "lines": [
-        28070
+        28669
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3607,8 +3797,8 @@
         "GET"
       ],
       "lines": [
-        29038,
-        49581
+        29637,
+        50218
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3619,8 +3809,8 @@
         "GET"
       ],
       "lines": [
-        46332,
-        61825
+        46969,
+        62819
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3631,7 +3821,7 @@
         "POST"
       ],
       "lines": [
-        90256
+        91401
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3642,9 +3832,20 @@
         "POST"
       ],
       "lines": [
-        77671
+        78718
       ],
       "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "interval_sec",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27344
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -3653,7 +3854,7 @@
         "POST"
       ],
       "lines": [
-        27169
+        27714
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3664,10 +3865,10 @@
         "GET"
       ],
       "lines": [
-        22805,
-        22927,
-        22928,
-        22935
+        22835,
+        22957,
+        22958,
+        22965
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -3678,7 +3879,7 @@
         "GET"
       ],
       "lines": [
-        17436
+        17465
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3689,7 +3890,7 @@
         "GET"
       ],
       "lines": [
-        17436
+        17465
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3700,7 +3901,7 @@
         "GET"
       ],
       "lines": [
-        48556
+        49193
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3711,7 +3912,7 @@
         "POST"
       ],
       "lines": [
-        34990
+        35617
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3722,7 +3923,7 @@
         "POST"
       ],
       "lines": [
-        28072
+        28671
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3734,15 +3935,15 @@
         "POST"
       ],
       "lines": [
-        22434,
-        22480,
-        39509,
-        41604,
-        41646,
-        41841,
-        41867,
-        54627,
-        62156
+        22464,
+        22510,
+        40146,
+        42241,
+        42283,
+        42478,
+        42504,
+        55621,
+        63150
       ],
       "references": 9,
       "review_status": "requires_semantic_handler_review"
@@ -3753,12 +3954,12 @@
         "POST"
       ],
       "lines": [
-        53121,
-        75991,
-        76001,
-        76010,
-        76079,
-        76179
+        54115,
+        77038,
+        77048,
+        77057,
+        77126,
+        77226
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -3769,11 +3970,22 @@
         "GET"
       ],
       "lines": [
-        27303,
-        50966,
-        75688
+        27848,
+        51960,
+        76735
       ],
       "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "keywords",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27343
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -3783,12 +3995,12 @@
         "POST"
       ],
       "lines": [
-        42305,
-        42438,
-        42454,
-        42469,
-        73552,
-        73788
+        42942,
+        43075,
+        43091,
+        43106,
+        74599,
+        74835
       ],
       "references": 9,
       "review_status": "requires_semantic_handler_review"
@@ -3799,7 +4011,7 @@
         "POST"
       ],
       "lines": [
-        75954
+        77001
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3811,9 +4023,9 @@
         "POST"
       ],
       "lines": [
-        80952,
-        81571,
-        82202
+        82066,
+        82681,
+        83313
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -3824,9 +4036,9 @@
         "GET"
       ],
       "lines": [
-        47963,
-        47978,
-        57837
+        48600,
+        48615,
+        58831
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -3838,17 +4050,17 @@
         "REQUEST"
       ],
       "lines": [
-        39537,
-        39581,
-        42831,
-        47309,
-        47390,
-        48283,
-        73740,
-        77914,
-        77920,
-        77941,
-        78041
+        40174,
+        40218,
+        43468,
+        47946,
+        48027,
+        48920,
+        74787,
+        78961,
+        78967,
+        78988,
+        79088
       ],
       "references": 12,
       "review_status": "requires_semantic_handler_review"
@@ -3859,7 +4071,7 @@
         "GET"
       ],
       "lines": [
-        47975
+        48612
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3870,7 +4082,7 @@
         "POST"
       ],
       "lines": [
-        22294
+        22324
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3881,7 +4093,7 @@
         "POST"
       ],
       "lines": [
-        28024
+        28623
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3893,7 +4105,7 @@
         "POST"
       ],
       "lines": [
-        42311
+        42948
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3904,7 +4116,7 @@
         "GET"
       ],
       "lines": [
-        22766
+        22796
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3915,8 +4127,8 @@
         "GET"
       ],
       "lines": [
-        38912,
-        54108
+        39549,
+        55102
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3928,9 +4140,9 @@
         "POST"
       ],
       "lines": [
-        46665,
-        46826,
-        47047
+        47302,
+        47463,
+        47684
       ],
       "references": 5,
       "review_status": "requires_semantic_handler_review"
@@ -3941,8 +4153,8 @@
         "GET"
       ],
       "lines": [
-        22146,
-        22148
+        22175,
+        22177
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3953,7 +4165,7 @@
         "POST"
       ],
       "lines": [
-        22189
+        22219
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -3964,8 +4176,8 @@
         "GET"
       ],
       "lines": [
-        47974,
-        57868
+        48611,
+        58862
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -3976,9 +4188,9 @@
         "GET"
       ],
       "lines": [
-        36076,
-        36344,
-        66684
+        36703,
+        36971,
+        67678
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -3989,7 +4201,7 @@
         "GET"
       ],
       "lines": [
-        36246
+        36873
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4000,8 +4212,8 @@
         "GET"
       ],
       "lines": [
-        36234,
-        54292
+        36861,
+        55286
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4012,7 +4224,7 @@
         "POST"
       ],
       "lines": [
-        28205
+        28804
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4023,7 +4235,7 @@
         "POST"
       ],
       "lines": [
-        74536
+        75583
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4034,9 +4246,9 @@
         "GET"
       ],
       "lines": [
-        36083,
-        36137,
-        58707
+        36710,
+        36764,
+        59701
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -4047,8 +4259,8 @@
         "GET"
       ],
       "lines": [
-        36892,
-        62343
+        37519,
+        63337
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4059,9 +4271,9 @@
         "GET"
       ],
       "lines": [
-        36086,
-        36149,
-        59309
+        36713,
+        36776,
+        60303
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -4072,8 +4284,8 @@
         "GET"
       ],
       "lines": [
-        36087,
-        36150
+        36714,
+        36777
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4084,8 +4296,8 @@
         "GET"
       ],
       "lines": [
-        36084,
-        36138
+        36711,
+        36765
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4096,8 +4308,8 @@
         "GET"
       ],
       "lines": [
-        22165,
-        48678
+        22195,
+        49315
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4109,7 +4321,7 @@
         "POST"
       ],
       "lines": [
-        47575
+        48212
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4120,7 +4332,7 @@
         "POST"
       ],
       "lines": [
-        77673
+        78720
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4131,7 +4343,42 @@
         "POST"
       ],
       "lines": [
-        41522
+        42159
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "max_products",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27328,
+        27332
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "menu_key",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27330
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "menu_label",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27330
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4142,8 +4389,8 @@
         "POST"
       ],
       "lines": [
-        74689,
-        75533
+        75736,
+        76580
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4154,9 +4401,34 @@
         "POST"
       ],
       "lines": [
-        22340
+        22370
       ],
       "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "min_products",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27344
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "min_sales",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27328,
+        27332,
+        27344
+      ],
+      "references": 3,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -4165,7 +4437,7 @@
         "POST"
       ],
       "lines": [
-        21980
+        22009
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4177,7 +4449,7 @@
         "POST"
       ],
       "lines": [
-        47558
+        48195
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4190,21 +4462,22 @@
         "REQUEST"
       ],
       "lines": [
-        39228,
-        39633,
-        41957,
-        42160,
-        42456,
-        42473,
-        42506,
-        42520,
-        42654,
-        42824,
-        51805,
-        75306,
-        84212
+        27340,
+        39865,
+        40270,
+        42594,
+        42797,
+        43093,
+        43110,
+        43143,
+        43157,
+        43291,
+        43461,
+        52799,
+        76353,
+        85357
       ],
-      "references": 13,
+      "references": 14,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -4214,13 +4487,13 @@
         "POST"
       ],
       "lines": [
-        41959,
-        42149,
-        42166,
-        42306,
-        52360,
-        75535,
-        75713
+        42596,
+        42786,
+        42803,
+        42943,
+        53354,
+        76582,
+        76760
       ],
       "references": 11,
       "review_status": "requires_semantic_handler_review"
@@ -4231,12 +4504,12 @@
         "POST"
       ],
       "lines": [
-        75434,
-        75900,
-        76048,
-        76088,
-        76169,
-        76282
+        76481,
+        76947,
+        77095,
+        77135,
+        77216,
+        77329
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -4248,12 +4521,12 @@
         "POST"
       ],
       "lines": [
-        47476,
-        48284,
-        76185,
-        77559,
-        77601,
-        77875
+        48113,
+        48921,
+        77232,
+        78606,
+        78648,
+        78922
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -4264,7 +4537,7 @@
         "GET"
       ],
       "lines": [
-        73541
+        74588
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4275,13 +4548,13 @@
         "POST"
       ],
       "lines": [
-        22311,
-        22312,
-        22385,
-        22386,
-        22439,
-        35131,
-        35141
+        22341,
+        22342,
+        22415,
+        22416,
+        22469,
+        35758,
+        35768
       ],
       "references": 7,
       "review_status": "requires_semantic_handler_review"
@@ -4293,8 +4566,8 @@
         "POST"
       ],
       "lines": [
-        48292,
-        75439
+        48929,
+        76486
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -4305,8 +4578,8 @@
         "POST"
       ],
       "lines": [
-        22368,
-        75350
+        22398,
+        76397
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4317,7 +4590,7 @@
         "GET"
       ],
       "lines": [
-        48293
+        48930
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4328,7 +4601,7 @@
         "POST"
       ],
       "lines": [
-        74510
+        75557
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4339,7 +4612,7 @@
         "POST"
       ],
       "lines": [
-        22440
+        22470
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4350,7 +4623,7 @@
         "GET"
       ],
       "lines": [
-        21687
+        21716
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4361,9 +4634,9 @@
         "GET"
       ],
       "lines": [
-        51321,
-        77566,
-        77609
+        52315,
+        78613,
+        78656
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4374,7 +4647,7 @@
         "POST"
       ],
       "lines": [
-        74577
+        75624
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4385,8 +4658,8 @@
         "POST"
       ],
       "lines": [
-        27994,
-        54429
+        28593,
+        55423
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4397,7 +4670,7 @@
         "POST"
       ],
       "lines": [
-        27945
+        28544
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4408,8 +4681,8 @@
         "GET"
       ],
       "lines": [
-        38777,
-        56432
+        39414,
+        57426
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4420,7 +4693,7 @@
         "POST"
       ],
       "lines": [
-        28063
+        28662
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4431,7 +4704,7 @@
         "POST"
       ],
       "lines": [
-        28064
+        28663
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4442,7 +4715,7 @@
         "POST"
       ],
       "lines": [
-        27995
+        28594
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4453,7 +4726,7 @@
         "POST"
       ],
       "lines": [
-        27947
+        28546
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4464,7 +4737,7 @@
         "GET"
       ],
       "lines": [
-        73549
+        74596
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4475,8 +4748,8 @@
         "GET"
       ],
       "lines": [
-        38921,
-        56440
+        39558,
+        57434
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4487,7 +4760,7 @@
         "POST"
       ],
       "lines": [
-        75408
+        76455
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4499,9 +4772,9 @@
         "POST"
       ],
       "lines": [
-        39001,
-        39099,
-        42557
+        39638,
+        39736,
+        43194
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -4512,7 +4785,7 @@
         "POST"
       ],
       "lines": [
-        74535
+        75582
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4523,7 +4796,7 @@
         "GET"
       ],
       "lines": [
-        47535
+        48172
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4535,10 +4808,10 @@
         "POST"
       ],
       "lines": [
-        35121,
-        37514,
-        41833,
-        55603
+        35748,
+        38151,
+        42470,
+        56597
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4550,8 +4823,8 @@
         "POST"
       ],
       "lines": [
-        46817,
-        46957
+        47454,
+        47594
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4563,8 +4836,8 @@
         "POST"
       ],
       "lines": [
-        46818,
-        46959
+        47455,
+        47596
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4576,8 +4849,8 @@
         "POST"
       ],
       "lines": [
-        46819,
-        46960
+        47456,
+        47597
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4589,8 +4862,8 @@
         "POST"
       ],
       "lines": [
-        46816,
-        46956
+        47453,
+        47593
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4601,7 +4874,7 @@
         "GET"
       ],
       "lines": [
-        77599
+        78646
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4612,7 +4885,7 @@
         "POST"
       ],
       "lines": [
-        48419
+        49056
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4623,7 +4896,7 @@
         "POST"
       ],
       "lines": [
-        38998
+        39635
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4634,7 +4907,7 @@
         "GET"
       ],
       "lines": [
-        46522
+        47159
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4646,8 +4919,8 @@
         "POST"
       ],
       "lines": [
-        74430,
-        74501
+        75477,
+        75548
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4659,8 +4932,8 @@
         "POST"
       ],
       "lines": [
-        74296,
-        74298
+        75343,
+        75345
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4671,17 +4944,17 @@
         "GET"
       ],
       "lines": [
-        32759,
-        32773,
-        32775,
-        36081,
-        36101,
-        36176,
-        36190,
-        36192,
-        36206,
-        36214,
-        66687
+        33358,
+        33372,
+        33374,
+        36708,
+        36728,
+        36803,
+        36817,
+        36819,
+        36833,
+        36841,
+        67681
       ],
       "references": 11,
       "review_status": "requires_semantic_handler_review"
@@ -4692,7 +4965,7 @@
         "POST"
       ],
       "lines": [
-        34972
+        35599
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4704,10 +4977,10 @@
         "POST"
       ],
       "lines": [
-        22321,
-        27515,
-        47617,
-        47784
+        22351,
+        28060,
+        48254,
+        48421
       ],
       "references": 5,
       "review_status": "requires_semantic_handler_review"
@@ -4719,10 +4992,10 @@
         "POST"
       ],
       "lines": [
-        22324,
-        27516,
-        47618,
-        47785
+        22354,
+        28061,
+        48255,
+        48422
       ],
       "references": 5,
       "review_status": "requires_semantic_handler_review"
@@ -4733,7 +5006,7 @@
         "GET"
       ],
       "lines": [
-        47611
+        48248
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4745,12 +5018,24 @@
         "POST"
       ],
       "lines": [
-        38942,
-        46813,
-        74314,
-        79398
+        27328,
+        39579,
+        47450,
+        75361,
+        80445
       ],
-      "references": 5,
+      "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "page_size",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27328
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -4760,18 +5045,18 @@
         "POST"
       ],
       "lines": [
-        22315,
-        22808,
-        27508,
-        28592,
-        32693,
-        36099,
-        36188,
-        46365,
-        59694,
-        59695,
-        59698,
-        59810
+        22345,
+        22838,
+        28053,
+        29191,
+        33292,
+        36726,
+        36815,
+        47002,
+        60688,
+        60689,
+        60692,
+        60804
       ],
       "references": 14,
       "review_status": "requires_semantic_handler_review"
@@ -4783,8 +5068,8 @@
         "POST"
       ],
       "lines": [
-        46664,
-        47046
+        47301,
+        47683
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4795,8 +5080,8 @@
         "POST"
       ],
       "lines": [
-        81343,
-        81344
+        82462,
+        82463
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4808,8 +5093,8 @@
         "POST"
       ],
       "lines": [
-        74487,
-        74600
+        75534,
+        75647
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4820,8 +5105,8 @@
         "POST"
       ],
       "lines": [
-        22380,
-        22396
+        22410,
+        22426
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4832,9 +5117,9 @@
         "POST"
       ],
       "lines": [
-        21605,
-        28545,
-        34985
+        21634,
+        29144,
+        35612
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4846,11 +5131,11 @@
         "POST"
       ],
       "lines": [
-        46478,
-        46814,
-        73646,
-        74313,
-        79399
+        47115,
+        47451,
+        74693,
+        75360,
+        80446
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -4862,9 +5147,9 @@
         "POST"
       ],
       "lines": [
-        77558,
-        77598,
-        77672
+        78605,
+        78645,
+        78719
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -4875,7 +5160,7 @@
         "POST"
       ],
       "lines": [
-        41521
+        42158
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4887,15 +5172,15 @@
         "POST"
       ],
       "lines": [
-        32684,
-        36058,
-        36093,
-        36096,
-        36161,
-        57346,
-        57739,
-        57745,
-        57746
+        33283,
+        36685,
+        36720,
+        36723,
+        36788,
+        58340,
+        58733,
+        58739,
+        58740
       ],
       "references": 12,
       "review_status": "requires_semantic_handler_review"
@@ -4906,7 +5191,7 @@
         "GET"
       ],
       "lines": [
-        39086
+        39723
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4917,7 +5202,7 @@
         "GET"
       ],
       "lines": [
-        39162
+        39799
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4928,8 +5213,8 @@
         "POST"
       ],
       "lines": [
-        21049,
-        49549
+        21078,
+        50186
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4940,8 +5225,8 @@
         "GET"
       ],
       "lines": [
-        21044,
-        49548
+        21073,
+        50185
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4952,7 +5237,7 @@
         "GET"
       ],
       "lines": [
-        18115
+        18144
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4963,7 +5248,7 @@
         "POST"
       ],
       "lines": [
-        48420
+        49057
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4974,8 +5259,8 @@
         "POST"
       ],
       "lines": [
-        77795,
-        77796
+        78842,
+        78843
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -4986,7 +5271,7 @@
         "POST"
       ],
       "lines": [
-        21574
+        21603
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -4997,9 +5282,9 @@
         "POST"
       ],
       "lines": [
-        21572,
-        21573,
-        48637
+        21601,
+        21602,
+        49274
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -5010,7 +5295,7 @@
         "POST"
       ],
       "lines": [
-        28061
+        28660
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5021,8 +5306,8 @@
         "GET"
       ],
       "lines": [
-        54032,
-        73533
+        55026,
+        74580
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5034,7 +5319,7 @@
         "POST"
       ],
       "lines": [
-        36293
+        36920
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5046,12 +5331,12 @@
         "POST"
       ],
       "lines": [
-        22810,
-        23301,
-        24208,
-        42310,
-        50716,
-        56331
+        22840,
+        23331,
+        24238,
+        42947,
+        51710,
+        57325
       ],
       "references": 7,
       "review_status": "requires_semantic_handler_review"
@@ -5062,7 +5347,7 @@
         "GET"
       ],
       "lines": [
-        78905
+        79952
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5073,7 +5358,7 @@
         "GET"
       ],
       "lines": [
-        29083
+        29682
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5084,7 +5369,7 @@
         "GET"
       ],
       "lines": [
-        78967
+        80014
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5095,7 +5380,7 @@
         "GET"
       ],
       "lines": [
-        22734
+        22764
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5107,9 +5392,9 @@
         "POST"
       ],
       "lines": [
-        46923,
-        46958,
-        61944
+        47560,
+        47595,
+        62938
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -5120,7 +5405,7 @@
         "POST"
       ],
       "lines": [
-        75826
+        76873
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5131,7 +5416,7 @@
         "POST"
       ],
       "lines": [
-        22337
+        22367
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5142,7 +5427,7 @@
         "POST"
       ],
       "lines": [
-        22338
+        22368
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5153,10 +5438,22 @@
         "POST"
       ],
       "lines": [
-        79115,
-        81390
+        80162,
+        82504
       ],
       "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "price_percent",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27339,
+        27345
+      ],
+      "references": 3,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -5165,8 +5462,8 @@
         "POST"
       ],
       "lines": [
-        79116,
-        81391
+        80163,
+        82505
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5178,7 +5475,7 @@
         "POST"
       ],
       "lines": [
-        46257
+        46894
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5190,7 +5487,7 @@
         "POST"
       ],
       "lines": [
-        46258
+        46895
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5201,7 +5498,7 @@
         "POST"
       ],
       "lines": [
-        84209
+        85354
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5212,7 +5509,7 @@
         "POST"
       ],
       "lines": [
-        22372
+        22402
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5223,7 +5520,7 @@
         "GET"
       ],
       "lines": [
-        39452
+        40089
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5235,13 +5532,13 @@
         "POST"
       ],
       "lines": [
-        21981,
-        42827,
-        46366,
-        79644,
-        80097,
-        80125,
-        80255
+        22010,
+        43464,
+        47003,
+        80691,
+        81144,
+        81172,
+        81302
       ],
       "references": 7,
       "review_status": "requires_semantic_handler_review"
@@ -5252,7 +5549,7 @@
         "POST"
       ],
       "lines": [
-        84210
+        85355
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5263,8 +5560,8 @@
         "POST"
       ],
       "lines": [
-        81338,
-        84182
+        82457,
+        85327
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5275,7 +5572,7 @@
         "GET"
       ],
       "lines": [
-        21698
+        21727
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5286,17 +5583,17 @@
         "POST"
       ],
       "lines": [
-        22200,
-        27734,
-        27768,
-        66844,
-        78147,
-        79078,
-        81288,
-        84140,
-        84160,
-        84466,
-        85197
+        22230,
+        28333,
+        28367,
+        67838,
+        79194,
+        80125,
+        82407,
+        85285,
+        85305,
+        85611,
+        86342
       ],
       "references": 11,
       "review_status": "requires_semantic_handler_review"
@@ -5307,7 +5604,7 @@
         "POST"
       ],
       "lines": [
-        22201
+        22231
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5318,10 +5615,10 @@
         "POST"
       ],
       "lines": [
-        60676,
-        60677,
-        60679,
-        66835
+        61670,
+        61671,
+        61673,
+        67829
       ],
       "references": 5,
       "review_status": "requires_semantic_handler_review"
@@ -5333,15 +5630,16 @@
         "POST"
       ],
       "lines": [
-        36077,
-        36348,
-        36425,
-        39098,
-        39212,
-        39576,
-        46659
+        28329,
+        36704,
+        36975,
+        37052,
+        39735,
+        39849,
+        40213,
+        47296
       ],
-      "references": 9,
+      "references": 10,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -5351,22 +5649,22 @@
         "POST"
       ],
       "lines": [
-        22006,
-        22810,
-        27704,
-        28864,
-        32676,
-        32800,
-        36056,
-        36057,
-        36092,
-        36160,
-        36292,
-        36348,
-        36425,
-        79102,
-        81348,
-        84355
+        22035,
+        22840,
+        28249,
+        29463,
+        33275,
+        33399,
+        36683,
+        36684,
+        36719,
+        36787,
+        36919,
+        36975,
+        37052,
+        80149,
+        82467,
+        85500
       ],
       "references": 20,
       "review_status": "requires_semantic_handler_review"
@@ -5377,9 +5675,9 @@
         "POST"
       ],
       "lines": [
-        49005,
-        81352,
-        81353
+        49642,
+        82471,
+        82472
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -5390,8 +5688,8 @@
         "POST"
       ],
       "lines": [
-        79103,
-        81349
+        80150,
+        82468
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5402,7 +5700,7 @@
         "POST"
       ],
       "lines": [
-        28562
+        29161
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5413,7 +5711,7 @@
         "GET"
       ],
       "lines": [
-        21715
+        21744
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5424,7 +5722,7 @@
         "POST"
       ],
       "lines": [
-        41956
+        42593
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5435,9 +5733,9 @@
         "GET"
       ],
       "lines": [
-        48330,
-        61902,
-        75712
+        48967,
+        62896,
+        76759
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -5448,14 +5746,14 @@
         "POST"
       ],
       "lines": [
-        75433,
-        75899,
-        75913,
-        75942,
-        76047,
-        76078,
-        76168,
-        76281
+        76480,
+        76946,
+        76960,
+        76989,
+        77094,
+        77125,
+        77215,
+        77328
       ],
       "references": 8,
       "review_status": "requires_semantic_handler_review"
@@ -5466,7 +5764,7 @@
         "POST"
       ],
       "lines": [
-        75875
+        76922
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5477,7 +5775,7 @@
         "POST"
       ],
       "lines": [
-        28028
+        28627
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5488,7 +5786,7 @@
         "GET"
       ],
       "lines": [
-        21821
+        21850
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5499,7 +5797,7 @@
         "GET"
       ],
       "lines": [
-        21862
+        21891
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5510,7 +5808,7 @@
         "GET"
       ],
       "lines": [
-        21851
+        21880
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5521,7 +5819,7 @@
         "GET"
       ],
       "lines": [
-        21821
+        21850
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5532,7 +5830,7 @@
         "GET"
       ],
       "lines": [
-        21845
+        21874
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5543,7 +5841,7 @@
         "GET"
       ],
       "lines": [
-        21836
+        21865
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5555,14 +5853,16 @@
         "POST"
       ],
       "lines": [
-        38943,
-        46815,
-        46955,
-        63013,
-        74311,
-        79431
+        27328,
+        27332,
+        39580,
+        47452,
+        47592,
+        64007,
+        75358,
+        80478
       ],
-      "references": 8,
+      "references": 10,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -5571,7 +5871,7 @@
         "POST"
       ],
       "lines": [
-        84187
+        85332
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5582,7 +5882,7 @@
         "POST"
       ],
       "lines": [
-        84186
+        85331
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5593,7 +5893,7 @@
         "POST"
       ],
       "lines": [
-        28066
+        28665
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -5604,7 +5904,7 @@
         "POST"
       ],
       "lines": [
-        28067
+        28666
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5616,50 +5916,50 @@
         "POST"
       ],
       "lines": [
-        28771,
-        28793,
-        28818,
-        28865,
-        32689,
-        36102,
-        36167,
-        78146,
-        78372,
-        78379,
-        78388,
-        78567,
-        78870,
-        78908,
-        79075,
-        79097,
-        79255,
-        79295,
-        79338,
-        79374,
-        80951,
-        81285,
-        81310,
-        81330,
-        81665,
-        81708,
-        81721,
-        81745,
-        81766,
-        81790,
-        81824,
-        81838,
-        81906,
-        81953,
-        81978,
-        82033,
+        29370,
+        29392,
+        29417,
+        29464,
+        33288,
+        36729,
+        36794,
+        79193,
+        79419,
+        79426,
+        79435,
+        79614,
+        79917,
+        79955,
+        80122,
+        80144,
+        80302,
+        80342,
+        80385,
+        80421,
         82065,
-        82204,
-        82238,
-        82491,
-        84460,
-        84480,
-        84510,
-        85166
+        82404,
+        82429,
+        82449,
+        82776,
+        82819,
+        82832,
+        82856,
+        82877,
+        82901,
+        82935,
+        82949,
+        83017,
+        83064,
+        83089,
+        83144,
+        83176,
+        83315,
+        83349,
+        83602,
+        85605,
+        85625,
+        85655,
+        86311
       ],
       "references": 51,
       "review_status": "requires_semantic_handler_review"
@@ -5670,7 +5970,7 @@
         "GET"
       ],
       "lines": [
-        48531
+        49168
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5681,7 +5981,7 @@
         "GET"
       ],
       "lines": [
-        43254
+        43891
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5692,10 +5992,21 @@
         "GET"
       ],
       "lines": [
-        42826,
-        79919
+        43463,
+        80966
       ],
       "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "ranking",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27341
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -5704,7 +6015,7 @@
         "GET"
       ],
       "lines": [
-        22168
+        22198
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5715,7 +6026,7 @@
         "POST"
       ],
       "lines": [
-        76051
+        77098
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5726,8 +6037,8 @@
         "GET"
       ],
       "lines": [
-        39320,
-        47158
+        39957,
+        47795
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5738,7 +6049,7 @@
         "GET"
       ],
       "lines": [
-        39614
+        40251
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5749,10 +6060,10 @@
         "POST"
       ],
       "lines": [
-        27949,
-        27950,
-        28113,
-        28125
+        28548,
+        28549,
+        28712,
+        28724
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -5763,8 +6074,8 @@
         "GET"
       ],
       "lines": [
-        43283,
-        62454
+        43920,
+        63448
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5775,7 +6086,7 @@
         "GET"
       ],
       "lines": [
-        47550
+        48187
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5786,7 +6097,7 @@
         "GET"
       ],
       "lines": [
-        47584
+        48221
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5797,7 +6108,7 @@
         "GET"
       ],
       "lines": [
-        43309
+        43946
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5809,7 +6120,7 @@
         "POST"
       ],
       "lines": [
-        46829
+        47466
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5820,7 +6131,7 @@
         "GET"
       ],
       "lines": [
-        47149
+        47786
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5831,8 +6142,8 @@
         "POST"
       ],
       "lines": [
-        28048,
-        28049
+        28647,
+        28648
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5843,8 +6154,8 @@
         "GET"
       ],
       "lines": [
-        47901,
-        57896
+        48538,
+        58890
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5855,7 +6166,7 @@
         "GET"
       ],
       "lines": [
-        47952
+        48589
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5867,10 +6178,10 @@
         "POST"
       ],
       "lines": [
-        46523,
-        47964,
-        60100,
-        80944
+        47160,
+        48601,
+        61094,
+        82058
       ],
       "references": 5,
       "review_status": "requires_semantic_handler_review"
@@ -5881,7 +6192,7 @@
         "POST"
       ],
       "lines": [
-        48448
+        49085
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5892,7 +6203,7 @@
         "POST"
       ],
       "lines": [
-        21397
+        21426
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5904,12 +6215,12 @@
         "POST"
       ],
       "lines": [
-        21510,
-        21538,
-        21596,
-        28527,
-        28543,
-        34978
+        21539,
+        21567,
+        21625,
+        29126,
+        29142,
+        35605
       ],
       "references": 7,
       "review_status": "requires_semantic_handler_review"
@@ -5920,7 +6231,7 @@
         "GET"
       ],
       "lines": [
-        22655
+        22685
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5933,39 +6244,39 @@
         "REQUEST"
       ],
       "lines": [
-        32688,
-        36059,
-        36080,
-        36098,
-        36165,
-        36362,
-        36396,
-        39005,
-        39103,
-        39650,
-        39669,
-        39675,
-        39676,
-        42183,
-        42330,
-        42562,
-        42681,
-        42851,
-        46684,
-        46701,
-        46713,
-        46979,
-        46990,
-        47001,
-        47034,
-        47094,
-        48964,
-        49345,
-        57347,
-        77943,
-        78376,
-        82236,
-        82379
+        33287,
+        36686,
+        36707,
+        36725,
+        36792,
+        36989,
+        37023,
+        39642,
+        39740,
+        40287,
+        40306,
+        40312,
+        40313,
+        42820,
+        42967,
+        43199,
+        43318,
+        43488,
+        47321,
+        47338,
+        47350,
+        47616,
+        47627,
+        47638,
+        47671,
+        47731,
+        49601,
+        49982,
+        58341,
+        78990,
+        79423,
+        83347,
+        83490
       ],
       "references": 43,
       "review_status": "requires_semantic_handler_review"
@@ -5976,8 +6287,8 @@
         "POST"
       ],
       "lines": [
-        28008,
-        28009
+        28607,
+        28608
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -5988,7 +6299,7 @@
         "GET"
       ],
       "lines": [
-        39533
+        40170
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -5999,7 +6310,7 @@
         "GET"
       ],
       "lines": [
-        39560
+        40197
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6010,7 +6321,7 @@
         "POST"
       ],
       "lines": [
-        28013
+        28612
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6021,7 +6332,7 @@
         "POST"
       ],
       "lines": [
-        28012
+        28611
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6032,8 +6343,8 @@
         "POST"
       ],
       "lines": [
-        27997,
-        27998
+        28596,
+        28597
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6044,7 +6355,7 @@
         "GET"
       ],
       "lines": [
-        39209
+        39846
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6055,8 +6366,8 @@
         "POST"
       ],
       "lines": [
-        28004,
-        28005
+        28603,
+        28604
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6067,8 +6378,8 @@
         "POST"
       ],
       "lines": [
-        81337,
-        84195
+        82456,
+        85340
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -6079,7 +6390,7 @@
         "POST"
       ],
       "lines": [
-        22442
+        22472
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6090,7 +6401,7 @@
         "POST"
       ],
       "lines": [
-        22339
+        22369
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6101,8 +6412,8 @@
         "POST"
       ],
       "lines": [
-        79117,
-        81392
+        80164,
+        82506
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6113,7 +6424,7 @@
         "POST"
       ],
       "lines": [
-        73715
+        74762
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6124,8 +6435,8 @@
         "GET"
       ],
       "lines": [
-        21643,
-        21644
+        21672,
+        21673
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6136,8 +6447,8 @@
         "GET"
       ],
       "lines": [
-        21653,
-        21654
+        21682,
+        21683
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6148,7 +6459,7 @@
         "POST"
       ],
       "lines": [
-        27942
+        28541
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6159,7 +6470,7 @@
         "POST"
       ],
       "lines": [
-        47224
+        47861
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6170,7 +6481,7 @@
         "GET"
       ],
       "lines": [
-        77611
+        78658
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6181,7 +6492,7 @@
         "REQUEST"
       ],
       "lines": [
-        77689
+        78736
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6192,7 +6503,7 @@
         "GET"
       ],
       "lines": [
-        35192
+        35819
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6203,7 +6514,7 @@
         "GET"
       ],
       "lines": [
-        28589
+        29188
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6214,11 +6525,24 @@
         "GET"
       ],
       "lines": [
-        18115,
-        22633,
-        22636
+        18144,
+        22663,
+        22666
       ],
       "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "sales_metric",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27328,
+        27332
+      ],
+      "references": 2,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -6227,7 +6551,7 @@
         "POST"
       ],
       "lines": [
-        28564
+        29163
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6239,10 +6563,11 @@
         "POST"
       ],
       "lines": [
-        46899,
-        46949
+        28329,
+        47536,
+        47586
       ],
-      "references": 3,
+      "references": 4,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -6251,7 +6576,7 @@
         "POST"
       ],
       "lines": [
-        90256
+        91401
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6262,7 +6587,7 @@
         "GET"
       ],
       "lines": [
-        47912
+        48549
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6273,7 +6598,7 @@
         "GET"
       ],
       "lines": [
-        43358
+        43995
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6285,8 +6610,8 @@
         "POST"
       ],
       "lines": [
-        35039,
-        35123
+        35666,
+        35750
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -6297,7 +6622,7 @@
         "GET"
       ],
       "lines": [
-        42436
+        43073
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6308,7 +6633,7 @@
         "GET"
       ],
       "lines": [
-        42467
+        43104
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6319,7 +6644,7 @@
         "GET"
       ],
       "lines": [
-        42451
+        43088
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6330,8 +6655,8 @@
         "GET"
       ],
       "lines": [
-        42421,
-        54690
+        43058,
+        55684
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6342,8 +6667,8 @@
         "GET"
       ],
       "lines": [
-        42302,
-        54688
+        42939,
+        55682
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6354,8 +6679,8 @@
         "GET"
       ],
       "lines": [
-        42400,
-        54689
+        43037,
+        55683
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6366,8 +6691,8 @@
         "GET"
       ],
       "lines": [
-        42527,
-        54691
+        43164,
+        55685
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6379,7 +6704,7 @@
         "POST"
       ],
       "lines": [
-        46967
+        47604
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6391,12 +6716,12 @@
         "POST"
       ],
       "lines": [
-        46576,
-        46666,
-        46846,
-        46900,
-        46953,
-        47001
+        47213,
+        47303,
+        47483,
+        47537,
+        47590,
+        47638
       ],
       "references": 11,
       "review_status": "requires_semantic_handler_review"
@@ -6407,7 +6732,7 @@
         "POST"
       ],
       "lines": [
-        81374
+        82493
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6418,7 +6743,7 @@
         "GET"
       ],
       "lines": [
-        22539
+        22569
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6429,8 +6754,8 @@
         "GET"
       ],
       "lines": [
-        23298,
-        24205
+        23328,
+        24235
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6442,14 +6767,14 @@
         "POST"
       ],
       "lines": [
-        22280,
-        27510,
-        47621,
-        47622,
-        47788,
-        47789,
-        47791,
-        47792
+        22310,
+        28055,
+        48258,
+        48259,
+        48425,
+        48426,
+        48428,
+        48429
       ],
       "references": 9,
       "review_status": "requires_semantic_handler_review"
@@ -6460,9 +6785,9 @@
         "GET"
       ],
       "lines": [
-        18110,
-        19220,
-        48554
+        18139,
+        19249,
+        49191
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -6473,7 +6798,7 @@
         "GET"
       ],
       "lines": [
-        39190
+        39827
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6484,9 +6809,9 @@
         "POST"
       ],
       "lines": [
-        50675,
-        81522,
-        81558
+        51669,
+        82632,
+        82668
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -6497,8 +6822,8 @@
         "POST"
       ],
       "lines": [
-        81340,
-        81341
+        82459,
+        82460
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6509,7 +6834,7 @@
         "POST"
       ],
       "lines": [
-        81339
+        82458
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6520,7 +6845,7 @@
         "GET"
       ],
       "lines": [
-        80857
+        81971
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6531,10 +6856,32 @@
         "GET"
       ],
       "lines": [
-        81726,
-        81772
+        82837,
+        82883
       ],
       "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "settings_menu_click",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27330
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "settings_menu_clicks",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27329
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -6544,9 +6891,9 @@
         "POST"
       ],
       "lines": [
-        47310,
-        47391,
-        47419
+        47947,
+        48028,
+        48056
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -6557,14 +6904,25 @@
         "GET"
       ],
       "lines": [
-        46364,
-        73639,
-        74312,
-        79402,
-        80123,
-        80248
+        47001,
+        74686,
+        75359,
+        80449,
+        81170,
+        81295
       ],
       "references": 6,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "shop_links",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27339
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -6573,7 +6931,7 @@
         "POST"
       ],
       "lines": [
-        81375
+        82494
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6584,8 +6942,8 @@
         "POST"
       ],
       "lines": [
-        81529,
-        81530
+        82639,
+        82640
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6597,16 +6955,16 @@
         "POST"
       ],
       "lines": [
-        38914,
-        42259,
-        42407,
-        42779,
-        42946,
-        43221,
-        43330,
-        46847,
-        51927,
-        78009
+        39551,
+        42896,
+        43044,
+        43416,
+        43583,
+        43858,
+        43967,
+        47484,
+        52921,
+        79056
       ],
       "references": 11,
       "review_status": "requires_semantic_handler_review"
@@ -6617,7 +6975,7 @@
         "GET"
       ],
       "lines": [
-        41500
+        42137
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6628,7 +6986,7 @@
         "GET"
       ],
       "lines": [
-        79918
+        80965
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6639,8 +6997,8 @@
         "POST"
       ],
       "lines": [
-        78152,
-        84490
+        79199,
+        85635
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6651,8 +7009,8 @@
         "GET"
       ],
       "lines": [
-        81728,
-        81774
+        82839,
+        82885
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6664,8 +7022,8 @@
         "POST"
       ],
       "lines": [
-        46668,
-        47049
+        47305,
+        47686
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -6677,10 +7035,12 @@
         "POST"
       ],
       "lines": [
-        46824,
-        46965
+        27328,
+        27332,
+        47461,
+        47602
       ],
-      "references": 4,
+      "references": 6,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -6690,8 +7050,8 @@
         "POST"
       ],
       "lines": [
-        46825,
-        46966
+        47462,
+        47603
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -6703,10 +7063,10 @@
         "POST"
       ],
       "lines": [
-        35126,
-        46363,
-        46661,
-        46951
+        35753,
+        47000,
+        47298,
+        47588
       ],
       "references": 6,
       "review_status": "requires_semantic_handler_review"
@@ -6717,7 +7077,7 @@
         "POST"
       ],
       "lines": [
-        22434
+        22464
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6728,7 +7088,7 @@
         "GET"
       ],
       "lines": [
-        21691
+        21720
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6739,8 +7099,8 @@
         "GET"
       ],
       "lines": [
-        21685,
-        21692
+        21714,
+        21721
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6751,8 +7111,8 @@
         "GET"
       ],
       "lines": [
-        21685,
-        21693
+        21714,
+        21722
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6763,8 +7123,8 @@
         "POST"
       ],
       "lines": [
-        28030,
-        28031
+        28629,
+        28630
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6775,7 +7135,7 @@
         "GET"
       ],
       "lines": [
-        47989
+        48626
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6786,7 +7146,7 @@
         "POST"
       ],
       "lines": [
-        28016
+        28615
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6797,7 +7157,7 @@
         "POST"
       ],
       "lines": [
-        28015
+        28614
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -6808,8 +7168,8 @@
         "GET"
       ],
       "lines": [
-        47963,
-        47978
+        48600,
+        48615
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6820,8 +7180,8 @@
         "POST"
       ],
       "lines": [
-        79099,
-        81432
+        80146,
+        82546
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6832,10 +7192,10 @@
         "POST"
       ],
       "lines": [
-        78151,
-        78566,
-        82490,
-        84489
+        79198,
+        79613,
+        83601,
+        85634
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -6846,8 +7206,8 @@
         "POST"
       ],
       "lines": [
-        21978,
-        60226
+        22007,
+        61220
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6858,8 +7218,8 @@
         "GET"
       ],
       "lines": [
-        21960,
-        49429
+        21989,
+        50066
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6870,8 +7230,8 @@
         "GET"
       ],
       "lines": [
-        22063,
-        59655
+        22092,
+        60649
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6882,8 +7242,8 @@
         "POST"
       ],
       "lines": [
-        22004,
-        60157
+        22033,
+        61151
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6895,12 +7255,25 @@
         "POST"
       ],
       "lines": [
-        32801,
-        74310,
-        79415,
-        80098
+        33400,
+        75357,
+        80462,
+        81145
       ],
       "references": 4,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "stock",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27328,
+        27332
+      ],
+      "references": 2,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -6910,8 +7283,8 @@
         "POST"
       ],
       "lines": [
-        21356,
-        21358
+        21385,
+        21387
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -6922,7 +7295,7 @@
         "REQUEST"
       ],
       "lines": [
-        75313
+        76360
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6933,7 +7306,7 @@
         "GET"
       ],
       "lines": [
-        27501
+        28046
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6944,8 +7317,8 @@
         "POST"
       ],
       "lines": [
-        74502,
-        74602
+        75549,
+        75649
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -6956,9 +7329,21 @@
         "GET"
       ],
       "lines": [
-        43238
+        43875
       ],
       "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "suffix_pattern",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27339,
+        27345
+      ],
+      "references": 3,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -6967,7 +7352,7 @@
         "GET"
       ],
       "lines": [
-        42541
+        43178
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6978,7 +7363,7 @@
         "GET"
       ],
       "lines": [
-        43229
+        43866
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -6989,7 +7374,7 @@
         "GET"
       ],
       "lines": [
-        43213
+        43850
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7000,8 +7385,8 @@
         "GET"
       ],
       "lines": [
-        23173,
-        23175
+        23203,
+        23205
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7012,8 +7397,8 @@
         "GET"
       ],
       "lines": [
-        22983,
-        22985
+        23013,
+        23015
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7024,8 +7409,8 @@
         "GET"
       ],
       "lines": [
-        49469,
-        81256
+        50106,
+        82375
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7036,8 +7421,8 @@
         "GET"
       ],
       "lines": [
-        21737,
-        54061
+        21766,
+        55055
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7049,9 +7434,9 @@
         "REQUEST"
       ],
       "lines": [
-        77618,
-        77912,
-        77930
+        78665,
+        78959,
+        78977
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -7062,7 +7447,7 @@
         "POST"
       ],
       "lines": [
-        22303
+        22333
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7073,8 +7458,8 @@
         "GET"
       ],
       "lines": [
-        38589,
-        54199
+        39226,
+        55193
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7085,7 +7470,7 @@
         "GET"
       ],
       "lines": [
-        46810
+        47447
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7096,7 +7481,7 @@
         "GET"
       ],
       "lines": [
-        46248
+        46885
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7107,7 +7492,7 @@
         "GET"
       ],
       "lines": [
-        46869
+        47506
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7118,7 +7503,7 @@
         "GET"
       ],
       "lines": [
-        46896
+        47533
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7129,7 +7514,7 @@
         "GET"
       ],
       "lines": [
-        46944
+        47581
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7140,7 +7525,7 @@
         "GET"
       ],
       "lines": [
-        46844
+        47481
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7151,7 +7536,7 @@
         "GET"
       ],
       "lines": [
-        46932
+        47569
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7162,7 +7547,7 @@
         "GET"
       ],
       "lines": [
-        46653
+        47290
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7173,7 +7558,7 @@
         "GET"
       ],
       "lines": [
-        46571
+        47208
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7184,7 +7569,7 @@
         "GET"
       ],
       "lines": [
-        46221
+        46858
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7195,8 +7580,8 @@
         "GET"
       ],
       "lines": [
-        36280,
-        59139
+        36907,
+        60133
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7207,8 +7592,8 @@
         "GET"
       ],
       "lines": [
-        36290,
-        60007
+        36917,
+        61001
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7219,8 +7604,8 @@
         "GET"
       ],
       "lines": [
-        36300,
-        59006
+        36927,
+        60000
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7231,8 +7616,8 @@
         "GET"
       ],
       "lines": [
-        39572,
-        55592
+        40209,
+        56586
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7243,8 +7628,8 @@
         "GET"
       ],
       "lines": [
-        39594,
-        55593
+        40231,
+        56587
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7255,7 +7640,7 @@
         "GET"
       ],
       "lines": [
-        32793
+        33392
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7266,7 +7651,7 @@
         "GET"
       ],
       "lines": [
-        90333
+        91478
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7277,7 +7662,7 @@
         "POST"
       ],
       "lines": [
-        75536
+        76583
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7288,7 +7673,7 @@
         "GET"
       ],
       "lines": [
-        47974
+        48611
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7299,8 +7684,8 @@
         "GET"
       ],
       "lines": [
-        36405,
-        58985
+        37032,
+        59979
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7312,17 +7697,17 @@
         "POST"
       ],
       "lines": [
-        38941,
-        38995,
-        39230,
-        39455,
-        39509,
-        39616,
-        42543,
-        42653,
-        43090,
-        47552,
-        90256
+        39578,
+        39632,
+        39867,
+        40092,
+        40146,
+        40253,
+        43180,
+        43290,
+        43727,
+        48189,
+        91401
       ],
       "references": 11,
       "review_status": "requires_semantic_handler_review"
@@ -7333,7 +7718,7 @@
         "POST"
       ],
       "lines": [
-        22183
+        22213
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7345,8 +7730,8 @@
         "POST"
       ],
       "lines": [
-        42162,
-        77818
+        42799,
+        78865
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -7358,7 +7743,7 @@
         "POST"
       ],
       "lines": [
-        41540
+        42177
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7369,8 +7754,8 @@
         "GET"
       ],
       "lines": [
-        41865,
-        56747
+        42502,
+        57741
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7381,7 +7766,7 @@
         "POST"
       ],
       "lines": [
-        41516
+        42153
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7392,10 +7777,10 @@
         "POST"
       ],
       "lines": [
-        41508,
-        41510,
-        59855,
-        59868
+        42145,
+        42147,
+        60849,
+        60862
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -7406,8 +7791,8 @@
         "GET"
       ],
       "lines": [
-        41565,
-        56745
+        42202,
+        57739
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7418,8 +7803,8 @@
         "GET"
       ],
       "lines": [
-        41839,
-        54595
+        42476,
+        55589
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7430,9 +7815,9 @@
         "GET"
       ],
       "lines": [
-        41910,
-        48856,
-        56748
+        42547,
+        49493,
+        57742
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -7443,8 +7828,8 @@
         "GET"
       ],
       "lines": [
-        41644,
-        53442
+        42281,
+        54436
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7455,8 +7840,8 @@
         "GET"
       ],
       "lines": [
-        41831,
-        54596
+        42468,
+        55590
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7467,8 +7852,8 @@
         "GET"
       ],
       "lines": [
-        41602,
-        56746
+        42239,
+        57740
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7479,7 +7864,7 @@
         "GET"
       ],
       "lines": [
-        41557
+        42194
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7490,8 +7875,8 @@
         "GET"
       ],
       "lines": [
-        41551,
-        48624
+        42188,
+        49261
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7502,7 +7887,7 @@
         "POST"
       ],
       "lines": [
-        27944
+        28543
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7513,7 +7898,7 @@
         "GET"
       ],
       "lines": [
-        48496
+        49133
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7524,7 +7909,7 @@
         "POST"
       ],
       "lines": [
-        77677
+        78724
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -7535,7 +7920,7 @@
         "POST"
       ],
       "lines": [
-        77676
+        78723
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -7546,8 +7931,8 @@
         "GET"
       ],
       "lines": [
-        22535,
-        22537
+        22565,
+        22567
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7558,7 +7943,7 @@
         "GET"
       ],
       "lines": [
-        18115
+        18144
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7569,7 +7954,7 @@
         "GET"
       ],
       "lines": [
-        75304
+        76351
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7581,16 +7966,100 @@
         "POST"
       ],
       "lines": [
-        42457,
-        42473,
-        42507,
-        42520,
-        47234,
-        47418,
-        47476,
-        77875
+        43094,
+        43110,
+        43144,
+        43157,
+        47871,
+        48055,
+        48113,
+        78922
       ],
       "references": 9,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "third_party_explorer_action",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27334
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "third_party_explorer_import",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27334,
+        27339,
+        50598
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "third_party_explorer_run",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27331,
+        27334,
+        27336
+      ],
+      "references": 3,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "third_party_explorer_sales_test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27326
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "third_party_explorer_save",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27334,
+        27340
+      ],
+      "references": 2,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "third_party_explorer_status",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27327
+      ],
+      "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "third_party_explorer_test",
+      "methods": [
+        "GET"
+      ],
+      "lines": [
+        27325,
+        50301
+      ],
+      "references": 2,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -7599,7 +8068,7 @@
         "POST"
       ],
       "lines": [
-        21396
+        21425
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7610,7 +8079,7 @@
         "GET"
       ],
       "lines": [
-        22807
+        22837
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7621,7 +8090,7 @@
         "GET"
       ],
       "lines": [
-        47911
+        48548
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7634,15 +8103,15 @@
         "REQUEST"
       ],
       "lines": [
-        21981,
-        41955,
-        42489,
-        42517,
-        77843,
-        77898,
-        78083,
-        80275,
-        84091
+        22010,
+        42592,
+        43126,
+        43154,
+        78890,
+        78945,
+        79130,
+        81322,
+        85236
       ],
       "references": 10,
       "review_status": "requires_semantic_handler_review"
@@ -7653,7 +8122,7 @@
         "POST"
       ],
       "lines": [
-        22336
+        22366
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7664,10 +8133,10 @@
         "POST"
       ],
       "lines": [
-        78150,
-        79101,
-        81334,
-        84469
+        79197,
+        80148,
+        82453,
+        85614
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -7679,8 +8148,8 @@
         "POST"
       ],
       "lines": [
-        39744,
-        43067
+        40381,
+        43704
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -7691,11 +8160,11 @@
         "POST"
       ],
       "lines": [
-        20991,
-        21145,
-        34975,
-        75346,
-        75409
+        21020,
+        21174,
+        35602,
+        76393,
+        76456
       ],
       "references": 5,
       "review_status": "requires_semantic_handler_review"
@@ -7707,10 +8176,10 @@
         "POST"
       ],
       "lines": [
-        79098,
-        81331,
-        81776,
-        84211
+        80145,
+        82450,
+        82887,
+        85356
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -7721,9 +8190,9 @@
         "POST"
       ],
       "lines": [
-        74532,
-        74613,
-        74643
+        75579,
+        75660,
+        75690
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -7734,7 +8203,7 @@
         "GET"
       ],
       "lines": [
-        22538
+        22568
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7745,8 +8214,8 @@
         "POST"
       ],
       "lines": [
-        21572,
-        48637
+        21601,
+        49274
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7757,7 +8226,7 @@
         "GET"
       ],
       "lines": [
-        39456
+        40093
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7768,8 +8237,8 @@
         "GET"
       ],
       "lines": [
-        81727,
-        81773
+        82838,
+        82884
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7781,20 +8250,20 @@
         "POST"
       ],
       "lines": [
-        22177,
-        22434,
-        22481,
-        22787,
-        26803,
-        27507,
-        32678,
-        42304,
-        42440,
-        42470,
-        47613,
-        47780,
-        47904,
-        47991
+        22207,
+        22464,
+        22511,
+        22817,
+        26843,
+        28052,
+        33277,
+        42941,
+        43077,
+        43107,
+        48250,
+        48417,
+        48541,
+        48628
       ],
       "references": 17,
       "review_status": "requires_semantic_handler_review"
@@ -7805,7 +8274,7 @@
         "POST"
       ],
       "lines": [
-        27305
+        27850
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7816,8 +8285,8 @@
         "POST"
       ],
       "lines": [
-        27735,
-        27769
+        28334,
+        28368
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7828,7 +8297,7 @@
         "POST"
       ],
       "lines": [
-        22341
+        22371
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7839,7 +8308,7 @@
         "GET"
       ],
       "lines": [
-        42829
+        43466
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7850,7 +8319,7 @@
         "GET"
       ],
       "lines": [
-        21507
+        21536
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7861,7 +8330,7 @@
         "GET"
       ],
       "lines": [
-        21475
+        21504
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7872,7 +8341,7 @@
         "GET"
       ],
       "lines": [
-        21629
+        21658
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7883,7 +8352,7 @@
         "GET"
       ],
       "lines": [
-        21535
+        21564
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7894,9 +8363,22 @@
         "GET"
       ],
       "lines": [
-        21568
+        21597
       ],
       "references": 1,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vendor",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "lines": [
+        27328,
+        27332
+      ],
+      "references": 2,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -7906,16 +8388,30 @@
         "POST"
       ],
       "lines": [
-        39640,
-        42830,
-        42963,
-        47578,
-        74488,
-        74601,
-        80248,
-        90268
+        27347,
+        28329,
+        28330,
+        40277,
+        43467,
+        43600,
+        48215,
+        75535,
+        75648,
+        81295,
+        91413
       ],
-      "references": 9,
+      "references": 12,
+      "review_status": "requires_semantic_handler_review"
+    },
+    {
+      "key": "vendor_ids",
+      "methods": [
+        "POST"
+      ],
+      "lines": [
+        27348
+      ],
+      "references": 1,
       "review_status": "requires_semantic_handler_review"
     },
     {
@@ -7924,7 +8420,7 @@
         "POST"
       ],
       "lines": [
-        90267
+        91412
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7935,9 +8431,9 @@
         "GET"
       ],
       "lines": [
-        49696,
-        63670,
-        63671
+        50690,
+        64664,
+        64665
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -7948,8 +8444,8 @@
         "GET"
       ],
       "lines": [
-        80105,
-        80133
+        81152,
+        81180
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7960,7 +8456,7 @@
         "GET"
       ],
       "lines": [
-        39462
+        40099
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -7971,8 +8467,8 @@
         "GET"
       ],
       "lines": [
-        24182,
-        24183
+        24212,
+        24213
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7983,8 +8479,8 @@
         "GET"
       ],
       "lines": [
-        23298,
-        24205
+        23328,
+        24235
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -7995,7 +8491,7 @@
         "GET"
       ],
       "lines": [
-        47912
+        48549
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8006,7 +8502,7 @@
         "REQUEST"
       ],
       "lines": [
-        77903
+        78950
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -8017,7 +8513,7 @@
         "GET"
       ],
       "lines": [
-        48537
+        49174
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8028,8 +8524,8 @@
         "GET"
       ],
       "lines": [
-        35200,
-        36106
+        35827,
+        36733
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -8040,7 +8536,7 @@
         "POST"
       ],
       "lines": [
-        77820
+        78867
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8051,7 +8547,7 @@
         "POST"
       ],
       "lines": [
-        22364
+        22394
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8062,7 +8558,7 @@
         "GET"
       ],
       "lines": [
-        79095
+        80142
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8073,7 +8569,7 @@
         "GET"
       ],
       "lines": [
-        79249
+        80296
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8084,7 +8580,7 @@
         "GET"
       ],
       "lines": [
-        79270
+        80317
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8095,7 +8591,7 @@
         "GET"
       ],
       "lines": [
-        79368
+        80415
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8106,7 +8602,7 @@
         "GET"
       ],
       "lines": [
-        79336
+        80383
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8117,7 +8613,7 @@
         "GET"
       ],
       "lines": [
-        79073
+        80120
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8128,7 +8624,7 @@
         "GET"
       ],
       "lines": [
-        79199
+        80246
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8139,7 +8635,7 @@
         "GET"
       ],
       "lines": [
-        79289
+        80336
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8150,7 +8646,7 @@
         "GET"
       ],
       "lines": [
-        79026
+        80073
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8161,7 +8657,7 @@
         "GET"
       ],
       "lines": [
-        84158
+        85303
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8172,7 +8668,7 @@
         "GET"
       ],
       "lines": [
-        78936
+        79983
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8183,7 +8679,7 @@
         "GET"
       ],
       "lines": [
-        78140
+        79187
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8194,7 +8690,7 @@
         "POST"
       ],
       "lines": [
-        27868
+        28467
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -8205,8 +8701,8 @@
         "GET"
       ],
       "lines": [
-        36073,
-        36131
+        36700,
+        36758
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -8217,8 +8713,8 @@
         "GET"
       ],
       "lines": [
-        36074,
-        36133
+        36701,
+        36760
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -8230,7 +8726,7 @@
       ],
       "lines": [
         2794,
-        36069
+        36696
       ],
       "references": 2,
       "review_status": "requires_semantic_handler_review"
@@ -8241,10 +8737,10 @@
         "GET"
       ],
       "lines": [
-        32666,
-        36067,
-        36069,
-        36122
+        33265,
+        36694,
+        36696,
+        36749
       ],
       "references": 4,
       "review_status": "requires_semantic_handler_review"
@@ -8255,9 +8751,9 @@
         "GET"
       ],
       "lines": [
-        32659,
-        36071,
-        36117
+        33258,
+        36698,
+        36744
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"
@@ -8268,7 +8764,7 @@
         "GET"
       ],
       "lines": [
-        18113
+        18142
       ],
       "references": 1,
       "review_status": "requires_semantic_handler_review"
@@ -8280,8 +8776,8 @@
         "POST"
       ],
       "lines": [
-        46974,
-        62029
+        47611,
+        63023
       ],
       "references": 3,
       "review_status": "requires_semantic_handler_review"

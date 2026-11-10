@@ -928,6 +928,123 @@ html[data-skin="gloss"] .progress-bar{
 </div>
 </div>
 
+<!-- v10.665: persistent marketplace best-seller collection -->
+<div class="smenu" id="basalamBestSellersSmenu">
+<div class="smenu-hdr" style="background:linear-gradient(90deg,#b45309,#0f172a)" onclick="toggleSmenu(this);bbsLoad()"><h3>🏆 پرفروش‌ترین محصولات باسلام</h3><span class="cst on" id="bbsBadge">فعال</span><span class="arrow">▼</span></div>
+<div class="smenu-body">
+<div style="font-size:10.5px;color:#cbd5e1;line-height:1.9">همهٔ محصولات کشف‌شده در کاتالوگ مستقل و کامل نگهداری می‌شوند. فیلتر، امتیازدهی و مرتب‌سازی روی کل کاتالوگ انجام می‌شود و فقط بهترین تعداد تعیین‌شده در پروفایل <b>باسلام -پرفروش ها</b> نمایش و ذخیره می‌شود؛ بنابراین صفحه‌بندی در انتخاب برندگان دخالت ندارد.</div>
+<div class="tpe-actions"><button type="button" class="btn btn-cyan" onclick="bbsRun()">↻ اجرای گام بعدی</button><button type="button" class="btn btn-gray" onclick="bbsLoad()">تازه‌سازی وضعیت</button></div>
+<div class="tpe-stats" id="bbsStats"><span class="tpe-stat">در انتظار بارگذاری…</span></div>
+<div id="bbsMsg" class="tpe-note"></div>
+<div class="tpe-grid" id="bbsFilters" style="margin:8px 0">
+<div class="tpe-box"><label>جست‌وجوی عنوان، شناسه، غرفه یا دسته</label><input id="bbsQuery" placeholder="عبارت جست‌وجو…" oninput="bbsFiltersChanged()"></div>
+<div class="tpe-box"><label>دسته</label><input id="bbsCategory" placeholder="مثلاً عسل" oninput="bbsFiltersChanged()"></div>
+<div class="tpe-box"><label>غرفه</label><input id="bbsVendor" placeholder="نام یا شناسه غرفه" oninput="bbsFiltersChanged()"></div>
+<div class="tpe-box"><label>وضعیت فروش دقیق</label><select id="bbsExact" onchange="bbsFiltersChanged(true)"><option value="all">همه</option><option value="verified">تأییدشده</option><option value="pending">در انتظار تأیید</option></select></div>
+<div class="tpe-box"><label>مبنای حداقل فروش</label><select id="bbsSalesMetric" onchange="bbsFiltersChanged(true)"><option value="exact_sales">فروش دقیق</option><option value="indexed_sales">فروش فهرست / جست‌وجو</option><option value="weekly_sales">فروش هفتگی</option></select><small style="display:block;color:#64748b;margin-top:4px;line-height:1.6">فروش فهرست عددی است که خود باسلام در پاسخ فهرست/جست‌وجو، پیش از بررسی دقیق هر محصول، برمی‌گرداند.</small></div>
+<div class="tpe-box"><label>حداقل فروش بر مبنای انتخاب‌شده</label><input id="bbsMinSales" type="number" min="0" value="0" oninput="bbsFiltersChanged()"></div>
+<div class="tpe-box"><label>حداکثر محصولات پروفایل</label><input id="bbsMaxProducts" type="number" min="1" step="1" value="10000" oninput="bbsFiltersChanged()"><small style="display:block;color:#64748b;margin-top:4px">پیش‌فرض ۱۰٬۰۰۰؛ می‌توانید ۱۰۰٬۰۰۰، ۲۰۰٬۰۰۰ یا بیشتر وارد کنید.</small></div>
+<div class="tpe-box"><label>موجودی</label><select id="bbsStock" onchange="bbsFiltersChanged(true)"><option value="all">همهٔ فعال‌ها</option><option value="in_stock">موجود</option><option value="low_stock">موجودی ۱ تا ۱۰</option></select></div>
+<div class="tpe-box"><label>مرتب‌سازی</label><select id="bbsSort" onchange="bbsFiltersChanged(true)"><option value="exact_sales">فروش دقیق</option><option value="indexed_sales">فروش فهرست</option><option value="weekly_sales">فروش هفته</option><option value="sales_score">امتیاز مبنای فروش انتخابی</option><option value="exact_score">امتیاز فروش دقیق</option><option value="indexed_score">امتیاز فروش فهرست</option><option value="weekly_score">امتیاز فروش هفتگی</option><option value="price">قیمت</option><option value="stock">موجودی</option><option value="title">عنوان</option><option value="vendor">غرفه</option><option value="category">دسته</option></select></div>
+<div class="tpe-box"><label>جهت</label><select id="bbsDir" onchange="bbsFiltersChanged(true)"><option value="desc">نزولی</option><option value="asc">صعودی</option></select></div>
+</div>
+<div class="tpe-actions"><button type="button" class="btn btn-gray" onclick="bbsResetFilters()">پاک‌کردن فیلترها</button><label class="tpe-stat" style="color:#bbf7d0"><input id="bbsExcelAllShops" type="checkbox" checked> همهٔ غرفه‌های انتخاب‌شده</label><button type="button" class="btn btn-green" onclick="bslExcelExport('best_sellers_filtered')">⬇ Excel باسلام از نتیجهٔ فیلترشده</button><span class="tpe-stat" id="bbsFilteredCount">۰ نتیجه</span><span class="tpe-stat">هر تغییر فیلتر مستقیماً محصولات پروفایل را بروزرسانی می‌کند</span></div>
+<div class="tpe-table-wrap" style="max-height:58vh;overflow:auto"><table class="tpe-table" id="bbsTable"><thead><tr><th>رتبه</th><th>تصویر</th><th class="tpe-sortable" onclick="bbsSetSort('title')">محصول</th><th class="tpe-sortable" onclick="bbsSetSort('exact_sales')">فروش دقیق</th><th class="tpe-sortable" onclick="bbsSetSort('indexed_sales')">فروش فهرست</th><th class="tpe-sortable" onclick="bbsSetSort('weekly_sales')">فروش هفته</th><th class="tpe-sortable" onclick="bbsSetSort('sales_score')">امتیاز</th><th class="tpe-sortable" onclick="bbsSetSort('price')">قیمت</th><th class="tpe-sortable" onclick="bbsSetSort('stock')">موجودی</th><th class="tpe-sortable" onclick="bbsSetSort('vendor')">غرفه</th><th class="tpe-sortable" onclick="bbsSetSort('category')">دسته</th></tr></thead><tbody id="bbsRows"><tr><td colspan="11">برای نمایش جدول، این بخش را باز کنید.</td></tr></tbody></table></div>
+<div class="tpe-actions" style="justify-content:center"><button type="button" class="btn btn-gray" id="bbsPrev" onclick="bbsPageMove(-1)">صفحهٔ قبل</button><span class="tpe-stat" id="bbsPageLabel">صفحه ۱ از ۱</span><button type="button" class="btn btn-gray" id="bbsNext" onclick="bbsPageMove(1)">صفحهٔ بعد</button></div>
+</div></div>
+
+<!-- v10.647: review-first third-party Basalam discovery -->
+<div class="smenu" id="thirdPartyExplorerSmenu">
+<div class="smenu-hdr" style="background:linear-gradient(90deg,#7c3aed,#0f172a)" onclick="toggleSmenu(this);tpeLoad()"><h3>🧭 Third-Party Shop Explorer</h3><span class="cst off" id="tpeBadge">متوقف</span><span class="arrow">▼</span></div>
+<div class="smenu-body">
+<style>
+.tpe-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:7px}.tpe-box{background:#0b1220;border:1px solid #263449;border-radius:9px;padding:8px}.tpe-box label{display:block;color:#94a3b8;font-size:10px;margin-bottom:4px}.tpe-box input,.tpe-box select,.tpe-box textarea{width:100%;box-sizing:border-box;background:#111827;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px;font-size:11px}.tpe-stats{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.tpe-stat{background:#111827;border:1px solid #334155;border-radius:999px;padding:3px 8px;font-size:10px;color:#cbd5e1}.tpe-table-wrap{overflow:visible;border:1px solid #263449;border-radius:8px}.tpe-table{width:100%;border-collapse:separate;border-spacing:0;font-size:10px;white-space:nowrap}.tpe-table th{position:sticky;top:0;background:#172033;color:#c4b5fd;padding:7px;z-index:30;box-shadow:0 2px 0 #4c1d95}.tpe-table th.tpe-sortable{cursor:pointer;user-select:none}.tpe-table th.tpe-sortable:hover{background:#27334d;color:#fff}.tpe-sort-mark{display:inline-block;min-width:10px;color:#a78bfa}.tpe-progress{height:7px;background:#111827;border:1px solid #334155;border-radius:99px;overflow:hidden;margin:5px 0}.tpe-progress>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#7c3aed,#22d3ee);transition:width .35s}.tpe-live{color:#67e8f9;font-size:10px;min-height:18px}.tpe-table td{padding:6px;border-top:1px solid #1e293b;color:#dbeafe;text-align:center}.tpe-table td:nth-child(3){text-align:right;white-space:normal;min-width:160px}.tpe-table td:nth-child(6){white-space:normal;min-width:130px;text-align:right}.tpe-note{font-size:10px;color:#94a3b8;line-height:1.8;margin:7px 0}.tpe-actions{display:flex;gap:5px;flex-wrap:wrap;margin:8px 0}
+</style>
+<div class="tpe-note">کشف مرحله‌ای غرفه‌های عمومی باسلام با توقف/ادامه، کنترل نرخ درخواست و صف بررسی. فروش، در صورت نبود آمار قطعی عمومی، با برچسب «تخمینی» نمایش داده می‌شود. هیچ پروفایلی پیش از تأیید شما ساخته نمی‌شود.</div>
+<div class="tpe-grid">
+<div class="tpe-box"><label>حالت کشف</label><select id="tpeMode"><option value="public">تمام بازار عمومی</option><option value="categories">دسته‌های منتخب</option><option value="categories_keywords">دسته‌ها + کلیدواژه‌ها</option></select></div>
+<div class="tpe-box"><label>فرمول رتبه‌بندی</label><select id="tpeRanking"><option value="balanced">متعادل</option><option value="efficiency">بازده فروش</option><option value="absolute">فروش مطلق</option></select></div>
+<div class="tpe-box"><label>شناسه دسته‌ها (با کاما)</label><input id="tpeCats" placeholder="123, 456"></div>
+<div class="tpe-box"><label>کلیدواژه‌ها (با کاما)</label><input id="tpeWords" placeholder="پوشاک, هدیه"></div>
+<div class="tpe-box"><label>حداقل محصولات</label><input id="tpeMinProducts" type="number" min="0" value="1"></div>
+<div class="tpe-box"><label>حداقل فروش تخمینی</label><input id="tpeMinSales" type="number" min="0" value="0"></div>
+<div class="tpe-box"><label>فاصله درخواست (ثانیه)</label><input id="tpeInterval" type="number" min="1" value="1"><small>حداقل ۱ ثانیه؛ در خطای 429 مکث تصاعدی خودکار اعمال می‌شود.</small></div>
+<div class="tpe-box"><label>افزایش قیمت پروفایل (%)</label><input id="tpePrice" type="number" value="20"></div>
+<div class="tpe-box"><label>الگوی پسوند یکتا</label><input id="tpeSuffix" value="(کد:{n})"></div>
+</div>
+<div class="tpe-actions"><button class="btn btn-green" onclick="tpeSave(true)">💾 ذخیره تنظیمات</button><button class="btn btn-cyan" onclick="tpeRun()">↻ اجرای یک گام فوری</button><button class="btn btn-cyan" onclick="tpeProbe()">🧪 آزمایش کشف</button><button class="btn btn-gray" onclick="tpeLoad(true)">تازه‌سازی</button><button class="btn btn-green" id="tpeBulkBtn" onclick="tpeBulkApprove()">➕ افزودن انتخاب‌شده‌ها به غرفه‌ها</button><span id="tpeSelectedCount" class="tpe-stat">۰ انتخاب</span></div>
+<details open class="tpe-box" style="margin:10px 0;border-color:#7c3aed">
+<summary style="cursor:pointer;color:#ddd6fe;font-weight:700;font-size:11px">📥 افزودن دسته‌جمعی غرفه‌ها از فهرست لینک</summary>
+<div class="tpe-note">لینک‌های عمومی غرفه‌های باسلام را هر کدام در یک خط پیست کنید یا فایل TXT / CSV / TSV بدهید. حداکثر ۲۰۰ غرفه، بدون تکرار، فوراً شناسایی و با همان درصد تعدیل قیمت، الگوی پسوند کددار و ارسال به همهٔ مقصدها آماده می‌شوند. قبل از ساخت پروفایل می‌توانید جدول را بررسی و انتخاب کنید.</div>
+<textarea id="tpeImportText" rows="6" dir="ltr" style="resize:vertical;line-height:1.7" placeholder="https://basalam.com/shop-identifier&#10;https://basalam.com/another-shop"></textarea>
+<div class="tpe-actions"><input id="tpeImportFile" type="file" accept=".txt,.csv,.tsv,text/plain,text/csv" style="max-width:300px;color:#cbd5e1;font-size:10px"><button type="button" class="btn btn-cyan" id="tpeImportResolveBtn" onclick="tpeImportResolve()">⚡ تبدیل فوری به جدول غرفه‌ها</button><button type="button" class="btn btn-gray" onclick="tpeImportClear()">پاک‌کردن</button><span class="tpe-stat" id="tpeImportSummary">هنوز فهرستی تبدیل نشده است</span></div>
+<div id="tpeImportMsg" class="tpe-note"></div>
+<div class="tpe-table-wrap" style="max-height:48vh;overflow:auto"><table class="tpe-table"><thead><tr><th><input type="checkbox" id="tpeImportSelectAll" onchange="tpeImportToggleAll(this.checked)"></th><th>ردیف</th><th>عنوان پروفایل پیشنهادی / غرفه</th><th>شناسه</th><th>فروش عمومی / سفارش</th><th>محصول</th><th>کد و پسوند</th><th>تعدیل قیمت</th><th>وضعیت</th></tr></thead><tbody id="tpeImportRows"><tr><td colspan="9">لینک‌ها را وارد و به جدول تبدیل کنید.</td></tr></tbody></table></div>
+<div class="tpe-actions"><button type="button" class="btn btn-green" id="tpeImportCreateBtn" onclick="tpeImportCreateProfiles()" disabled>➕ ایجاد و افزودن پروفایل‌های انتخاب‌شده</button><span class="tpe-stat" id="tpeImportSelectedCount">۰ انتخاب</span></div>
+</details>
+<div class="tpe-stats" id="tpeStats"></div><div class="tpe-progress" title="پیشرفت بررسی فروش"><i id="tpeProgressBar"></i></div><div id="tpeLive" class="tpe-live">در انتظار وضعیت زنده…</div><div id="tpeMsg" class="tpe-note"></div>
+<details style="margin:6px 0"><summary style="font-size:10px;color:#a78bfa;cursor:pointer">تاریخچهٔ ممیزی تأیید/رد</summary><div id="tpeAudit" class="tpe-note">هنوز رویدادی ثبت نشده است.</div></details>
+<div class="tpe-table-wrap"><table class="tpe-table"><thead><tr><th><input type="checkbox" id="tpeSelectAll" onchange="tpeToggleAll(this.checked)" title="انتخاب همهٔ قابل افزودن‌ها"></th><th class="tpe-sortable" onclick="tpeSortTable(1,'rank')">رتبه <span class="tpe-sort-mark" data-col="1"></span></th><th class="tpe-sortable" onclick="tpeSortTable(2,'text')">عنوان پروفایل پیشنهادی <span class="tpe-sort-mark" data-col="2"></span></th><th class="tpe-sortable" onclick="tpeSortTable(3,'number')">فروش عمومی / سفارش <span class="tpe-sort-mark" data-col="3"></span></th><th class="tpe-sortable" onclick="tpeSortTable(4,'number')">محصول <span class="tpe-sort-mark" data-col="4"></span></th><th class="tpe-sortable" onclick="tpeSortTable(5,'text')">دسته‌های مشاهده‌شده <span class="tpe-sort-mark" data-col="5"></span></th><th class="tpe-sortable" onclick="tpeSortTable(6,'number')">سن (روز) <span class="tpe-sort-mark" data-col="6"></span></th><th class="tpe-sortable" onclick="tpeSortTable(7,'number')">امتیاز <span class="tpe-sort-mark" data-col="7"></span></th><th class="tpe-sortable" onclick="tpeSortTable(8,'text')">وضعیت <span class="tpe-sort-mark" data-col="8"></span></th><th>عملیات</th></tr></thead><tbody id="tpeRows"><tr><td colspan="10">برای بارگذاری، بخش را باز کنید.</td></tr></tbody></table></div>
+</div></div>
+<script>
+const TPE_WP_NONCE=<?php echo json_encode(function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''); ?>;
+let TPE_BROWSER_NONCE=<?php echo json_encode(s4ThirdPartyExplorerBrowserNonce()); ?>;
+let tpeBusy=false,tpeShowingProbe=false,tpeLiveStatus=null,tpeSort={col:1,type:'rank',dir:1};
+function tpeEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function tpeForm(extra){const f=new FormData();if(TPE_WP_NONCE)f.append('_wpnonce',TPE_WP_NONCE);if(TPE_BROWSER_NONCE)f.append('explorer_nonce',TPE_BROWSER_NONCE);Object.entries(extra||{}).forEach(([k,v])=>f.append(k,v));return f;}
+async function tpeReq(extra,post=false){const r=await fetch(post?'':'?third_party_explorer_status=1&_t='+Date.now(),post?{method:'POST',body:tpeForm(extra)}:{});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d;}
+let tpeImportData=[],tpeImportHydrated=false;
+function tpeImportStatusLabel(row){if(!row.ok)return'خطا: '+(row.error||'شناسایی نشد');if(row.state==='duplicate')return'پروفایل از قبل موجود است';if(row.state==='own_shop')return'غرفهٔ خودمان';if(row.state==='approved')return'پروفایل ساخته شد';return'آمادهٔ ایجاد';}
+function tpeImportRender(){const body=document.getElementById('tpeImportRows');if(!body)return;body.innerHTML=tpeImportData.length?tpeImportData.map((v,i)=>`<tr><td>${v.selectable?`<input type="checkbox" class="tpeImportPick" value="${Number(v.vendor_id)||0}" checked onchange="tpeImportSelectionChanged()">`:'—'}</td><td>${i+1}</td><td>${v.ok?`<b>${tpeEsc(v.proposed_profile_name||v.title||'—')}</b><br><a href="${tpeEsc(v.url||'#')}" target="_blank" rel="noopener noreferrer" style="color:#7dd3fc">${tpeEsc(v.title||v.identifier||'غرفه')}</a>`:`<span style="color:#fca5a5">${tpeEsc(v.input||v.url||'—')}</span>`}</td><td>${v.ok?'#'+Number(v.vendor_id).toLocaleString():'—'}</td><td>${v.ok?`${Number(v.sales_estimate||0).toLocaleString()} <small>(${tpeEsc(v.sales_metric_label||'در انتظار بررسی')})</small>`:'—'}</td><td>${v.ok?Number(v.product_count||0).toLocaleString():'—'}</td><td>${v.ok?`${Number(v.assigned_code||0).toLocaleString()} · ${tpeEsc(v.assigned_suffix||'—')}`:'—'}</td><td>${v.ok?`${Number(v.price_percent||0).toLocaleString()}٪`:'—'}</td><td>${tpeEsc(tpeImportStatusLabel(v))}</td></tr>`).join(''):'<tr><td colspan="9">لینک‌ها را وارد و به جدول تبدیل کنید.</td></tr>';tpeImportSelectionChanged();}
+function tpeImportSelectionChanged(){const picks=[...document.querySelectorAll('.tpeImportPick')],selected=picks.filter(x=>x.checked).length,all=document.getElementById('tpeImportSelectAll'),btn=document.getElementById('tpeImportCreateBtn'),count=document.getElementById('tpeImportSelectedCount');if(all){all.checked=picks.length>0&&selected===picks.length;all.indeterminate=selected>0&&selected<picks.length;}if(btn)btn.disabled=selected===0;if(count)count.textContent=selected.toLocaleString('fa-IR')+' انتخاب';}
+function tpeImportToggleAll(checked){document.querySelectorAll('.tpeImportPick').forEach(x=>x.checked=checked);tpeImportSelectionChanged();}
+function tpeImportClear(){tpeImportData=[];tpeImportHydrated=true;const text=document.getElementById('tpeImportText'),file=document.getElementById('tpeImportFile'),msg=document.getElementById('tpeImportMsg'),sum=document.getElementById('tpeImportSummary');if(text)text.value='';if(file)file.value='';if(msg)msg.textContent='';if(sum)sum.textContent='هنوز فهرستی تبدیل نشده است';tpeImportRender();}
+async function tpeImportResolve(){const btn=document.getElementById('tpeImportResolveBtn'),msg=document.getElementById('tpeImportMsg'),file=document.getElementById('tpeImportFile')?.files?.[0],text=document.getElementById('tpeImportText')?.value||'';if(!text.trim()&&!file){msg.textContent='لینک‌ها را پیست کنید یا یک فایل انتخاب کنید.';return;}tpeImportHydrated=true;btn.disabled=true;msg.textContent='در حال شناسایی همزمان غرفه‌ها و رزرو کدهای یکتا…';try{const form=tpeForm({third_party_explorer_import:1,shop_links:text,price_percent:document.getElementById('tpePrice').value,suffix_pattern:document.getElementById('tpeSuffix').value});if(file)form.append('shop_list_file',file,file.name);const r=await fetch('',{method:'POST',body:form}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));tpeImportData=d.rows||[];tpeImportRender();document.getElementById('tpeImportSummary').textContent=`${Number(d.resolved||0).toLocaleString()} شناسایی · ${Number(d.failed||0).toLocaleString()} خطا`;msg.textContent=`جدول آماده شد. تعدیل ${Number(d.config?.price_percent||0).toLocaleString()}٪ و الگوی «${d.config?.suffix_pattern||''}» هنگام ساخت پروفایل اعمال می‌شود.`;}catch(e){msg.textContent='خطا در تبدیل فهرست: '+e.message;}finally{btn.disabled=false;}}
+async function tpeImportCreateProfiles(){const ids=[...document.querySelectorAll('.tpeImportPick:checked')].map(x=>Number(x.value)).filter(Boolean).slice(0,200),btn=document.getElementById('tpeImportCreateBtn'),msg=document.getElementById('tpeImportMsg');if(!ids.length)return;btn.disabled=true;msg.textContent='در حال ایجاد پروفایل‌ها با تنظیمات مشترک…';try{const d=await tpeReq({third_party_explorer_action:1,explorer_action:'approve_bulk',vendor_ids:JSON.stringify(ids)},true),done=new Map((d.results||[]).map(x=>[Number(x.vendor_id),x]));tpeImportData=tpeImportData.map(row=>{const result=done.get(Number(row.vendor_id));return result?.ok?{...row,selectable:false,state:result.duplicate?'duplicate':'approved',profile_key:result.profile_key||row.profile_key}:row;});tpeImportRender();msg.textContent=`${Number(d.created||0).toLocaleString()} پروفایل ساخته شد؛ ${Number(d.duplicates||0).toLocaleString()} مورد از قبل وجود داشت.`;await tpeLoad(true);}catch(e){msg.textContent='خطا در ایجاد پروفایل‌ها: '+e.message;}finally{tpeImportSelectionChanged();}}
+let bbsCurrentPage=1,bbsTotalPages=1,bbsFilterTimer=null,bbsFiltersHydrated=false;
+function bslExcelMsg(text,bad=false){const e=document.getElementById('bslExcelStatus');if(e){e.textContent=text;e.style.color=bad?'#fca5a5':'#86efac';}const b=document.getElementById('bbsMsg');if(b&&String(text).includes('Excel'))b.textContent=text;}
+async function bslExcelExport(scope='profile'){
+  const profile=scope==='best_sellers_filtered'?'https://basalam.com/s/products?sort=sales&s4_profile=best-sellers':(currentProfileKey||currentProfileUrl||(($('url')||{}).value||''));if(!profile){bslExcelMsg('ابتدا یک پروفایل را انتخاب کنید.',true);return;}
+  const vendor=parseInt((document.getElementById('bslExcelVendor')||{}).value)||0,batch=Math.max(50,Math.min(2000,parseInt((document.getElementById('bslExcelBatch')||{}).value)||500));const include=!!((document.getElementById('bslExcelIncludeMapped')||{}).checked),allBox=document.getElementById(scope==='best_sellers_filtered'?'bbsExcelAllShops':'bslExcelAllShops'),allShops=!!(allBox&&allBox.checked);bslExcelMsg(allShops?'در حال ساخت بستهٔ جداگانه برای همهٔ غرفه‌های انتخاب‌شده…':'در حال ساخت Excel باسلام…');
+  try{const f=tpeForm({basalam_excel_export:1,profile,scope,vendor_id:vendor,batch_size:batch,include_mapped:include?1:0,all_shops:allShops?1:0,filters:JSON.stringify(scope==='best_sellers_filtered'?bbsFilterValues():{})});const r=await fetch('',{method:'POST',body:f});if(!r.ok){let m='HTTP '+r.status;try{const d=await r.json();m=d.error||m;}catch(e){}throw new Error(m);}const blob=await r.blob(),cd=r.headers.get('content-disposition')||'',m=cd.match(/filename="?([^";]+)"?/i),name=m?m[1]:'basalam-products.xlsx',a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),3000);bslExcelMsg(`${allShops?'بستهٔ همهٔ غرفه‌ها':'Excel'} آماده شد: ${r.headers.get('X-S4-Product-Count')||'—'} ردیف. هر پوشه را فقط در پنل همان غرفه بارگذاری کنید و نتیجهٔ هر غرفه را با شناسهٔ همان غرفه برگردانید.`);bslExcelLoadStatus();}catch(e){bslExcelMsg('خطای Excel باسلام: '+e.message,true);}
+}
+async function bslExcelReconcile(){const input=document.getElementById('bslExcelResultFile'),file=input?.files?.[0];if(!file){bslExcelMsg('فایل نتیجهٔ CSV/Excel پنل باسلام را انتخاب کنید.',true);return;}const vendor=parseInt((document.getElementById('bslExcelVendor')||{}).value)||0;bslExcelMsg('در حال تطبیق شناسه‌های واقعی باسلام…');try{const f=tpeForm({basalam_excel_reconcile:1,vendor_id:vendor});f.append('result_file',file,file.name);const r=await fetch('',{method:'POST',body:f}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));bslExcelMsg(`${Number(d.recorded||0).toLocaleString()} شناسه در دفترچهٔ غرفه #${Number(d.vendor_id||vendor).toLocaleString()} ثبت شد${d.unmatched_count?'؛ '+Number(d.unmatched_count).toLocaleString()+' ردیف تطبیق نشد':''}.`);bslExcelLoadStatus();}catch(e){bslExcelMsg('خطای ثبت نتیجه: '+e.message,true);}}
+async function bslExcelLoadStatus(){try{const r=await fetch('?basalam_excel_status=1&_t='+Date.now(),{cache:'no-store'}),d=await r.json(),rows=d.exports||[];if(!rows.length){bslExcelMsg('هنوز خروجی Excel ثبت نشده است.');return;}const x=rows[0];bslExcelMsg(`آخرین Excel${x.shop_name?' · '+x.shop_name+' (#'+x.vendor_id+')':''}: ${Number(x.count||0).toLocaleString()} محصول · ${Number(x.imported||0).toLocaleString()} ثبت‌شده · ${Number(x.pending||0).toLocaleString()} در انتظار نتیجه · ${Number(x.batches||1).toLocaleString()} فایل`);}catch(e){bslExcelMsg('خطا در خواندن وضعیت Excel',true);}}
+function bbsVal(id,fallback=''){const e=document.getElementById(id);return e?e.value:fallback;}
+function bbsQueryParams(page){const p=new URLSearchParams({basalam_best_sellers_status:'1',page:String(page),page_size:'50',q:bbsVal('bbsQuery'),category:bbsVal('bbsCategory'),vendor:bbsVal('bbsVendor'),exact:bbsVal('bbsExact','all'),sales_metric:bbsVal('bbsSalesMetric','exact_sales'),min_sales:bbsVal('bbsMinSales','0'),max_products:bbsVal('bbsMaxProducts','10000'),stock:bbsVal('bbsStock','all'),sort:bbsVal('bbsSort','exact_sales'),dir:bbsVal('bbsDir','desc'),_t:String(Date.now())});return p.toString();}
+function bbsFilterValues(){return{q:bbsVal('bbsQuery'),category:bbsVal('bbsCategory'),vendor:bbsVal('bbsVendor'),exact:bbsVal('bbsExact','all'),sales_metric:bbsVal('bbsSalesMetric','exact_sales'),min_sales:bbsVal('bbsMinSales','0'),max_products:bbsVal('bbsMaxProducts','10000'),stock:bbsVal('bbsStock','all'),sort:bbsVal('bbsSort','exact_sales'),dir:bbsVal('bbsDir','desc')};}
+async function bbsApplyFilters(){const msg=document.getElementById('bbsMsg');if(msg)msg.textContent='در حال اعمال نتیجهٔ فیلترشده به محصولات پروفایل…';try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_apply_filter:1,...bbsFilterValues()})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));await bbsLoad(1);if(msg)msg.textContent=`${Number(d.active_count||0).toLocaleString()} محصول برترِ سراسری مستقیماً در پروفایل «باسلام -پرفروش ها» ذخیره شد.`;}catch(e){if(msg)msg.textContent='خطا در اعمال فیلتر به پروفایل: '+e.message;}}
+function bbsFiltersChanged(immediate=false){clearTimeout(bbsFilterTimer);bbsCurrentPage=1;bbsFilterTimer=setTimeout(()=>bbsApplyFilters(),immediate?0:500);}
+function bbsResetFilters(){[['bbsQuery',''],['bbsCategory',''],['bbsVendor',''],['bbsExact','all'],['bbsSalesMetric','exact_sales'],['bbsMinSales','0'],['bbsMaxProducts','10000'],['bbsStock','all'],['bbsSort','exact_sales'],['bbsDir','desc']].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.value=v;});bbsFiltersChanged(true);}
+function bbsSetSort(field){const sort=document.getElementById('bbsSort'),dir=document.getElementById('bbsDir');if(!sort||!dir)return;if(sort.value===field)dir.value=dir.value==='desc'?'asc':'desc';else{sort.value=field;dir.value=field==='title'||field==='vendor'||field==='category'?'asc':'desc';}bbsFiltersChanged(true);}
+async function bbsLoad(page=bbsCurrentPage){const msg=document.getElementById('bbsMsg');try{page=Math.max(1,Number(page)||1);const r=await fetch('?'+bbsQueryParams(page),{cache:'no-store'}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));if(!bbsFiltersHydrated){const af=d.table?.applied_filter||{};[['bbsQuery',af.q??''],['bbsCategory',af.category??''],['bbsVendor',af.vendor??''],['bbsExact',af.exact??'all'],['bbsSalesMetric',af.sales_metric??'exact_sales'],['bbsMinSales',af.min_sales??0],['bbsMaxProducts',af.max_products??10000],['bbsStock',af.stock??'all'],['bbsSort',af.sort??'exact_sales'],['bbsDir',af.dir??'desc']].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.value=v;});bbsFiltersHydrated=true;return bbsLoad(1);}document.getElementById('bbsBadge').textContent=d.enabled?'فعال':'متوقف';document.getElementById('bbsStats').innerHTML=`<span class="tpe-stat">فعال در پروفایل: ${Number(d.saved_count||0).toLocaleString()}</span><span class="tpe-stat">کل کاتالوگ: ${Number(d.catalog_count||0).toLocaleString()}</span><span class="tpe-stat">کشف‌شده: ${Number(d.products_discovered||0).toLocaleString()}</span><span class="tpe-stat">جزئیات کامل: ${Number(d.products_enriched||0).toLocaleString()}</span><span class="tpe-stat">صف جزئیات: ${Number(d.detail_pending||0).toLocaleString()}</span><span class="tpe-stat">فروش دقیق: ${Number(d.products_verified||0).toLocaleString()}</span><span class="tpe-stat">صف تأیید: ${Number(d.verify_pending||0).toLocaleString()}</span><span class="tpe-stat">صفحات: ${Number(d.pages_scanned||0).toLocaleString()}</span><span class="tpe-stat">نقطه ادامه: ${Number(d.offset||0).toLocaleString()}</span><span class="tpe-stat">سقف گزارش بیرونی: ${Number(d.reported_total||0).toLocaleString()}</span><span class="tpe-stat">پسوند: ${tpeEsc(d.profile_settings?.title_suffix||'ندارد')}</span><span class="tpe-stat">تعدیل: ${tpeEsc(d.profile_settings?.price_mode||'none')} ${Number(d.profile_settings?.price_value||0).toLocaleString()}</span>`;const t=d.table||{},rows=t.rows||[];bbsCurrentPage=Number(t.page||1);bbsTotalPages=Number(t.pages||1);document.getElementById('bbsRows').innerHTML=rows.length?rows.map((p,i)=>{const rank=(bbsCurrentPage-1)*Number(t.page_size||50)+i+1,exact=p.sales_count_exact;return `<tr><td>${rank.toLocaleString()}</td><td>${p.image?`<img src="${tpeEsc(p.image)}" loading="lazy" style="width:42px;height:42px;object-fit:cover;border-radius:6px">`:'—'}</td><td><a href="${tpeEsc(p.link||'#')}" target="_blank" rel="noopener" style="color:#7dd3fc">${tpeEsc(p.title||'—')}</a></td><td>${exact===null||exact===undefined?'در انتظار':Number(exact).toLocaleString()}</td><td>${Number(p.sales_count_indexed||0).toLocaleString()}</td><td>${Number(p.sales_count_week||0).toLocaleString()}</td><td title="امتیاز لگاریتمی مبنای ${tpeEsc(p.active_sales_metric||'')}">${p.active_sales_score===null||p.active_sales_score===undefined?'در انتظار':Number(p.active_sales_score).toLocaleString(undefined,{maximumFractionDigits:2})}</td><td>${tpeEsc(p.price||'—')}</td><td>${Number(p.stock||0).toLocaleString()}</td><td>${tpeEsc(p.vendor_name||p.vendor_id||'—')}</td><td>${tpeEsc(p.category||p.category_id||'—')}</td></tr>`;}).join(''):'<tr><td colspan="11">هنوز محصولی ذخیره نشده است.</td></tr>';document.getElementById('bbsPageLabel').textContent=`صفحه ${bbsCurrentPage.toLocaleString()} از ${bbsTotalPages.toLocaleString()}`;document.getElementById('bbsFilteredCount').textContent=`${Number(t.total||0).toLocaleString()} محصول برتر از ${Number(t.all_total||0).toLocaleString()} محصول کاتالوگ`;document.getElementById('bbsPrev').disabled=bbsCurrentPage<=1;document.getElementById('bbsNext').disabled=bbsCurrentPage>=bbsTotalPages;msg.textContent=(d.last_error?'آخرین خطا: '+d.last_error:'آخرین کار: '+(d.last_action||'—'))+' • پروفایل: '+d.profile_title;}catch(e){msg.textContent='خطا: '+e.message;}}
+function bbsPageMove(delta){bbsLoad(Math.max(1,Math.min(bbsTotalPages,bbsCurrentPage+delta)));}
+async function bbsRun(){const msg=document.getElementById('bbsMsg');msg.textContent='در حال اجرای یک گام محدود…';try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_run:1})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));await bbsLoad();}catch(e){msg.textContent='خطا: '+e.message;}}
+let s4MenuClickCounts={};
+function s4MenuKey(menu,index){const hdr=menu.querySelector(':scope > .smenu-hdr'),label=(hdr?.querySelector('h3')?.textContent||hdr?.textContent||'menu').trim().replace(/\s+/g,' ');if(!menu.dataset.s4MenuKey)menu.dataset.s4MenuKey=menu.id||('menu-'+index+'-'+label.slice(0,80));if(!menu.dataset.s4OriginalOrder)menu.dataset.s4OriginalOrder=String(index);return{key:menu.dataset.s4MenuKey,label};}
+function s4ApplyMenuClickOrder(){const root=document.querySelector('#settingsPanel > .settings-panel-body');if(!root)return;const menus=[...root.querySelectorAll(':scope > .smenu')];menus.forEach((m,i)=>s4MenuKey(m,i));menus.sort((a,b)=>Number(s4MenuClickCounts[b.dataset.s4MenuKey]?.count||0)-Number(s4MenuClickCounts[a.dataset.s4MenuKey]?.count||0)||Number(a.dataset.s4OriginalOrder)-Number(b.dataset.s4OriginalOrder));menus.forEach(m=>root.appendChild(m));}
+async function s4LoadMenuClickOrder(){try{const r=await fetch('?settings_menu_clicks=1&_t='+Date.now(),{cache:'no-store'}),d=await r.json();if(d.ok){s4MenuClickCounts=d.items||{};s4ApplyMenuClickOrder();}}catch(e){}}
+async function s4SmenuRecordClick(hdr){const menu=hdr?.closest('.smenu'),root=document.querySelector('#settingsPanel > .settings-panel-body');if(!menu||menu.parentElement!==root)return;const menus=[...root.querySelectorAll(':scope > .smenu')],info=s4MenuKey(menu,menus.indexOf(menu));try{const r=await fetch('',{method:'POST',body:tpeForm({settings_menu_click:1,menu_key:info.key,menu_label:info.label})}),d=await r.json();if(d.ok&&d.count)s4MenuClickCounts[info.key]={count:Number(d.count),label:info.label};}catch(e){}}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',s4LoadMenuClickOrder,{once:true});else s4LoadMenuClickOrder();
+function tpeSet(id,v){const e=document.getElementById(id);if(e)e.value=v??'';}
+function tpeNum(v){const s=String(v??'').replace(/[۰-۹]/g,c=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(c)).replace(/[٠-٩]/g,c=>'٠١٢٣٤٥٦٧٨٩'.indexOf(c));const n=Number(s.replace(/[^0-9.\-]/g,''));return Number.isFinite(n)?n:0;}
+function tpeApplySort(){const body=document.getElementById('tpeRows');if(!body)return;const rows=[...body.querySelectorAll('tr[data-rank]')];if(!rows.length)return;const{col,type,dir}=tpeSort;rows.sort((a,b)=>{let av,bv;if(type==='rank'){av=Number(a.dataset.rank);bv=Number(b.dataset.rank);}else{av=(a.cells[col]?.innerText||'').trim();bv=(b.cells[col]?.innerText||'').trim();if(type==='number'){av=tpeNum(av);bv=tpeNum(bv);}else{const c=av.localeCompare(bv,'fa');return c*dir;}}return(av-bv)*dir;});rows.forEach((r,i)=>{body.appendChild(r);if(r.cells[1])r.cells[1].textContent=String(i+1);});document.querySelectorAll('.tpe-sort-mark').forEach(m=>m.textContent=Number(m.dataset.col)===col?(dir>0?'▲':'▼'):'');}
+function tpeSortTable(col,type){if(tpeSort.col===col)tpeSort.dir*=-1;else tpeSort={col,type,dir:type==='number'?-1:1};tpeApplySort();}
+function tpeRenderLiveClock(){const d=tpeLiveStatus,e=document.getElementById('tpeLive');if(!d||!e)return;const now=Math.floor(Date.now()/1000),last=Number(d.last_run_at||0),next=Number(d.next_run_at||0),le=d.last_sales_enrichment||{};const ago=last?Math.max(0,now-last):null,remain=next?Math.max(0,next-now):null;e.textContent=`زنده • آخرین اجرا: ${ago===null?'—':ago+' ثانیه پیش'} • اجرای بعدی: ${remain===null?'—':remain+' ثانیه'}${le.vendor_id?' • آخرین فروش #'+le.vendor_id+': '+Number(le.value||0).toLocaleString():''}`;}
+async function tpeLoad(force=false){if(tpeBusy)return;const replacingProbe=tpeShowingProbe,selectedBefore=new Set(tpeSelected());tpeShowingProbe=false;if(force||replacingProbe){const tb=document.getElementById('tpeRows');if(tb)tb.innerHTML='<tr><td colspan="10">در حال بارگذاری رتبه‌بندی زنده…</td></tr>';}tpeBusy=true;try{const d=await tpeReq();tpeLiveStatus=d;tpeRenderLiveClock();if(d.explorer_nonce)TPE_BROWSER_NONCE=d.explorer_nonce;if(!tpeImportHydrated&&Array.isArray(d.bulk_import_rows)&&d.bulk_import_rows.length){tpeImportHydrated=true;tpeImportData=d.bulk_import_rows;tpeImportRender();const ok=tpeImportData.filter(x=>x.ok).length,failed=tpeImportData.length-ok;document.getElementById('tpeImportSummary').textContent=`${ok.toLocaleString()} شناسایی · ${failed.toLocaleString()} خطا`;}const c=d.config||{};tpeSet('tpeMode',c.mode);tpeSet('tpeRanking',c.ranking);tpeSet('tpeCats',(c.category_ids||[]).join(', '));tpeSet('tpeWords',(c.keywords||[]).join(', '));tpeSet('tpeMinProducts',c.min_products);tpeSet('tpeMinSales',c.min_sales);tpeSet('tpeInterval',c.interval_sec);tpeSet('tpePrice',c.price_percent);tpeSet('tpeSuffix',c.suffix_pattern);const b=document.getElementById('tpeBadge');b.textContent=c.enabled?'در حال اجرا':'متوقف';b.className='cst '+(c.enabled?'on':'off');document.getElementById('tpeStats').innerHTML=`<span class="tpe-stat">در انتظار: ${d.counts?.pending||0}</span><span class="tpe-stat">تأیید: ${d.counts?.approved||0}</span><span class="tpe-stat">رد: ${d.counts?.rejected||0}</span><span class="tpe-stat">غرفه‌های خودمان: ${d.counts?.own_shops||0}</span><span class="tpe-stat">صفحات: ${d.pages_scanned||0}</span><span class="tpe-stat">محصولات: ${d.products_scanned||0}</span><span class="tpe-stat">دارای فروش دقیق: ${d.counts?.public_sales||0}</span><span class="tpe-stat">دارای سفارش دقیق: ${d.counts?.public_orders||0}</span><span class="tpe-stat">بررسی فروش: ${d.counts?.sales_checked||0}/${d.vendors_total||0}</span><span class="tpe-stat">فروش مثبت: ${d.counts?.positive_sales||0}</span><span class="tpe-stat">در انتظار فروش: ${d.counts?.awaiting_sales||0}</span><span class="tpe-stat">نمایش زنده: ${d.visible_ranked||0}</span>`;const progress=d.vendors_total?Math.min(100,Math.round(100*(d.counts?.sales_checked||0)/d.vendors_total)):0;const pb=document.getElementById('tpeProgressBar');if(pb){pb.style.width=progress+'%';pb.parentElement.title=`پیشرفت بررسی فروش: ${progress}%`;};const rows=d.candidates||[];document.getElementById('tpeRows').innerHTML=rows.length?rows.map((v,i)=>`<tr data-rank="${i}"><td>${v.selectable!==false&&v.state==='pending'?`<input type="checkbox" class="tpePick" value="${Number(v.vendor_id)||0}" onchange="tpeSelectionChanged()">`:'—'}</td><td>${i+1}</td><td><b>${tpeEsc(v.proposed_profile_name||('باسلام-'+(v.title||v.vendor_id)+' '+(v.assigned_suffix||'')))}</b><br><a href="${tpeEsc(v.url||'https://basalam.com/s/vendors')}" target="_blank" rel="noopener noreferrer" style="color:#7dd3fc">${tpeEsc(v.title||('Vendor '+v.vendor_id))}</a> <small>#${v.vendor_id}</small></td><td>${Number(v.sales_estimate||0).toLocaleString()} <small>(${tpeEsc(v.sales_metric_label||(v.sales_is_estimate===false?'عدد عمومی دقیق':'تخمینی'))})</small></td><td>${Number(v.product_count||0).toLocaleString()}</td><td>${(v.categories||[]).length?(v.categories||[]).map(c=>tpeEsc(c.title||c)).join('<br>'):'—'}</td><td>${v.age_days??'—'}</td><td>${Number(v.active_score||0).toFixed(2)}</td><td>${v.is_own_shop?'غرفهٔ خودمان':tpeEsc(v.state)}</td><td>${v.selectable!==false&&v.state==='pending'?`<button class="btn btn-green" onclick="tpeAction('approve',${v.vendor_id})">تأیید</button> <button class="btn btn-red" onclick="tpeAction('reject',${v.vendor_id})">رد</button>`:'—'}</td></tr>`).join(''):'<tr><td colspan="10">هنوز گزینه‌ای مطابق فیلترها کشف نشده است.</td></tr>';document.querySelectorAll('.tpePick').forEach(e=>e.checked=selectedBefore.has(Number(e.value)));tpeApplySort();const all=document.getElementById('tpeSelectAll');if(all)all.checked=false;tpeSelectionChanged();document.getElementById('tpeMsg').textContent=d.last_error?('آخرین خطا: '+d.last_error):('آخرین اجرا: '+(d.last_run_at?new Date(d.last_run_at*1000).toLocaleString('fa-IR'):'—'));const audit=d.audit||[];document.getElementById('tpeAudit').innerHTML=audit.length?audit.slice().reverse().map(a=>`${new Date((a.at||0)*1000).toLocaleString('fa-IR')} — ${tpeEsc(a.action)} — #${a.vendor_id}${a.profile_key?' — '+tpeEsc(a.profile_key):''}`).join('<br>'):'هنوز رویدادی ثبت نشده است.';}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}finally{tpeBusy=false;}}
+async function tpeSave(enabled){try{await tpeReq({third_party_explorer_save:1,enabled:enabled?1:0,mode:document.getElementById('tpeMode').value,ranking:document.getElementById('tpeRanking').value,category_ids:document.getElementById('tpeCats').value,keywords:document.getElementById('tpeWords').value,min_products:document.getElementById('tpeMinProducts').value,min_sales:document.getElementById('tpeMinSales').value,interval_sec:document.getElementById('tpeInterval').value,price_percent:document.getElementById('tpePrice').value,suffix_pattern:document.getElementById('tpeSuffix').value},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
+async function tpeRun(){try{document.getElementById('tpeMsg').textContent='در حال دریافت یک صفحه…';await tpeReq({third_party_explorer_run:1},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
+async function tpeProbe(){if(tpeBusy)return;tpeBusy=true;tpeShowingProbe=true;try{document.getElementById('tpeMsg').textContent='در حال آزمایش مستقیم کاتالوگ عمومی باسلام…';const r=await fetch('?third_party_explorer_test=1&_t='+Date.now());const d=await r.json();if(!d.ok)throw new Error(d.error||('HTTP '+(d.http_code||0)));const rows=d.samples||[];document.getElementById('tpeMsg').textContent=`آزمایش موفق: ${d.row_count||0} محصول و ${d.vendor_count||0} غرفهٔ نمونه دریافت شد.`;document.getElementById('tpeRows').innerHTML=rows.length?rows.map((v,i)=>`<tr data-rank="${i}"><td>—</td><td>${i+1}</td><td><b>${tpeEsc(v.proposed_profile_name)}</b><br><a href="${tpeEsc(v.url||'https://basalam.com/s/vendors')}" target="_blank" rel="noopener noreferrer" style="color:#7dd3fc">${tpeEsc(v.title)}</a> <small>#${v.vendor_id}</small></td><td>${Number(v.sales_estimate||0).toLocaleString()} <small>(${tpeEsc(v.sales_metric_label||(v.sales_is_estimate===false?'عدد عمومی دقیق':'تخمینی'))})</small></td><td>${Number(v.product_count||0).toLocaleString()}</td><td>${(v.categories||[]).length?(v.categories||[]).map(c=>tpeEsc(c.title||c)).join('<br>'):'—'}</td><td>${v.age_days??'—'}</td><td>${Number(v.active_score||0).toFixed(2)}</td><td>نمونهٔ تست</td><td>—</td></tr>`).join(''):'<tr><td colspan="10">API پاسخ داد، اما غرفه‌ای در ردیف‌های این صفحه شناسایی نشد.</td></tr>';tpeApplySort();}catch(e){document.getElementById('tpeMsg').textContent='آزمایش ناموفق: '+e.message;}finally{tpeBusy=false;}}
+function tpeSelected(){return[...document.querySelectorAll('.tpePick:checked')].map(e=>Number(e.value)).filter(Boolean).slice(0,200);}
+function tpeSelectionChanged(){const picks=[...document.querySelectorAll('.tpePick')],selected=picks.filter(e=>e.checked).length,all=document.getElementById('tpeSelectAll'),count=document.getElementById('tpeSelectedCount'),btn=document.getElementById('tpeBulkBtn');if(all){all.checked=picks.length>0&&selected===picks.length;all.indeterminate=selected>0&&selected<picks.length;}if(count)count.textContent=selected.toLocaleString('fa-IR')+' انتخاب';if(btn)btn.disabled=selected===0;}
+function tpeToggleAll(checked){document.querySelectorAll('.tpePick').forEach(e=>e.checked=checked);tpeSelectionChanged();}
+/* Status polling is local/read-only: it makes new candidates and score changes visible without adding Basalam API pressure. */
+setInterval(()=>{const menu=document.getElementById('thirdPartyExplorerSmenu'),body=menu?.querySelector('.smenu-body');if(document.visibilityState==='visible'&&body?.classList.contains('open'))tpeLoad(false);},5000);
+setInterval(tpeRenderLiveClock,1000);
+async function tpeBulkApprove(){const ids=tpeSelected();if(!ids.length)return;const btn=document.getElementById('tpeBulkBtn');if(btn)btn.disabled=true;try{document.getElementById('tpeMsg').textContent='در حال ساخت پروفایل‌های انتخاب‌شده…';const d=await tpeReq({third_party_explorer_action:1,explorer_action:'approve_bulk',vendor_ids:JSON.stringify(ids)},true);await tpeLoad(true);document.getElementById('tpeMsg').textContent=`${d.created||0} پروفایل ساخته شد؛ ${d.duplicates||0} مورد از قبل موجود بود.`;}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}finally{tpeSelectionChanged();}}
+async function tpeAction(action,id){try{await tpeReq({third_party_explorer_action:1,explorer_action:action,vendor_id:id},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
+</script>
+
 <!-- v10.470: زیرمنوی جامع «مدیریت سفارشات» (باسلام چندغرفه + ووکامرس) -->
 <div class="smenu" id="omSmenuRoot">
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#1d4ed8,#0f172a)" onclick="toggleSmenu(this);omEnsureLoaded()"><h3>📦 مدیریت سفارشات</h3><span class="cst off" id="omHdrBadge">باسلام + ووکامرس</span><span class="arrow">▼</span></div>
@@ -4509,6 +4626,22 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             <button class="btn btn-purple" onclick="dlExcel()" style="flex:1">📊 Excel</button>
             <button class="btn btn-red" onclick="clearResults()" style="flex:1">🗑️ پاک کردن نتایج</button>
         </div>
+        <div id="bslExcelBridge" style="margin:8px 0;padding:9px;background:#0f172a;border:1px solid #166534;border-radius:9px">
+            <div style="font-size:11px;color:#bbf7d0;line-height:1.8"><b>📦 درون‌ریزی سریع پنل باسلام</b> — در حالت همهٔ غرفه‌ها، یک ZIP با پوشه و Excel مستقل برای هر غرفهٔ فعال/انتخاب‌شده و قیمت‌گذاری اختصاصی همان غرفه ساخته می‌شود. ساخت فایل به معنی بارگذاری موفق در پنل نیست؛ هر نتیجه را با شناسهٔ همان غرفه برگردانید.</div>
+            <div class="row" style="margin-top:7px;align-items:center">
+                <input id="bslExcelVendor" type="number" min="0" placeholder="شناسه غرفه" style="max-width:130px">
+                <input id="bslExcelBatch" type="number" min="50" max="2000" value="500" title="تعداد ردیف هر فایل" style="max-width:100px">
+                <label style="font-size:10px;color:#bbf7d0"><input id="bslExcelAllShops" type="checkbox" checked> همهٔ غرفه‌های فعال/انتخاب‌شده</label>
+                <label style="font-size:10px;color:#94a3b8"><input id="bslExcelIncludeMapped" type="checkbox"> شامل محصولات قبلاً نگاشت‌شده</label>
+                <button class="btn btn-green" type="button" onclick="bslExcelExport('profile')">⬇ Excel باسلام برای این پروفایل</button>
+            </div>
+            <div class="row" style="margin-top:7px;align-items:center">
+                <input id="bslExcelResultFile" type="file" accept=".csv,.xls,.xlsx,.xml" style="flex:2">
+                <button class="btn btn-blue" type="button" onclick="bslExcelReconcile()">↥ ثبت نتیجه و شناسه‌های باسلام</button>
+                <button class="btn btn-gray" type="button" onclick="bslExcelLoadStatus()">وضعیت</button>
+            </div>
+            <div id="bslExcelStatus" style="font-size:10px;color:#94a3b8;line-height:1.7"></div>
+        </div>
         <div id="resultFilterBar" style="display:none;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px">
             <span style="font-size:11px;color:#94a3b8">نمایش:</span>
             <button class="rf-btn on" data-f="all" onclick="setResultFilter('all')">همه (<span id="rfAllN">۰</span>)</button>
@@ -5383,6 +5516,7 @@ function toggleSettingsPanel(){
         if(hfb)hfb.classList.add('active');
       }
     }catch(e){}
+    if(typeof s4ApplyMenuClickOrder==='function')s4ApplyMenuClickOrder();
     syncSmenuStickyOffsets();
   }
   document.body.classList.toggle('spanel-full', p.classList.contains('full') && p.classList.contains('open'));
@@ -5478,6 +5612,7 @@ function initBslCategorySettingsCollapse(){
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initBslCategorySettingsCollapse,{once:true});else initBslCategorySettingsCollapse();
 
 function toggleSmenu(hdr){
+  if(typeof s4SmenuRecordClick==='function')s4SmenuRecordClick(hdr);
   const isOpen=hdr.classList.contains('open');
   hdr.classList.toggle('open');
   const body=hdr.nextElementSibling;
@@ -7416,13 +7551,22 @@ function applyProfile(p, keepTab) {
     if (p.products && Array.isArray(p.products) && p.products.length > 0) {
         resetResultFilter();
         products.clear();
-        order = p.productsOrder || p.products.map(e => e[0]);
+        const storedProductKeys=[];
         p.products.forEach(entry => {
             if (Array.isArray(entry) && entry.length === 2) {
                 if(entry[1]&&typeof entry[1]==='object'&&!entry[1].key)entry[1].key=entry[0];
                 products.set(entry[0], entry[1]);
+                storedProductKeys.push(entry[0]);
             }
         });
+        /* v10.671: productsOrder from an older/partial write must never hide
+           products that are genuinely present in the normal profile payload.
+           Keep its valid order, then append every stored pair exactly once. */
+        const requestedOrder=Array.isArray(p.productsOrder)?p.productsOrder:[];
+        const visibleKeys=new Set();
+        order=[];
+        requestedOrder.forEach(k=>{if(products.has(k)&&!visibleKeys.has(k)){visibleKeys.add(k);order.push(k);}});
+        storedProductKeys.forEach(k=>{if(!visibleKeys.has(k)){visibleKeys.add(k);order.push(k);}});
         refreshViews();
         /* v9.91: در بازیابیِ خودکار، تبِ فعلیِ کاربر حفظ می‌شود.
            v10.31 (۴۴): حالا در هیچ حالتی تب عوض نمی‌شود. پریدن به «نتایج»
@@ -11985,6 +12129,197 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.684', t:'🏪 پوشش واقعی همهٔ غرفه‌ها در لین ۱', items:[
+    'مسیر دوره‌ای لین ۱ دیگر نبودن send_shop_ids را به ارسال تک‌غرفه‌ای پیش‌فرض تبدیل نمی‌کند؛ null اکنون در همهٔ مسیرها صریحاً به معنی همهٔ غرفه‌های معتبر و دارای توکن است.',
+    'درخواست مستقیم مرورگر انتخاب «همه» را همراه shop_picker_sync به سرور می‌فرستد و سرور مقدار null را نیز پایدار می‌کند؛ یک انتخاب ذخیره‌شدهٔ قدیمی دیگر درخواست صریح همهٔ غرفه‌ها را محدود نمی‌کند.',
+    'صف‌های waiting یا checkpointهای بدون worker که توسط نسخه‌های قبلی فقط برای غرفهٔ پیش‌فرض ساخته شده‌اند، پیش از شروع لین ۱ به پوشش موازی یا سری همهٔ غرفه‌های انتخابی ارتقا می‌یابند.',
+    'ردیف نیمه‌انجام‌شده برای جلوگیری از تکرار در غرفهٔ پیش‌فرض به‌صورت سری ادامه می‌یابد و برای غرفه‌های جاافتاده ردیف‌های کامل از ابتدای snapshot ساخته می‌شود.'
+  ]},
+  {v:'10.683', t:'📥 افزودن دسته‌جمعی غرفه‌های شخص ثالث از لینک', items:[
+    'در زیرمنوی غرفه‌های شخص ثالث، لینک‌های باسلام با پیست مستقیم یا آپلود فایل TXT، CSV و TSV تا سقف ۲۰۰ ورودی دریافت، تکرارزدایی و همزمان شناسایی می‌شوند.',
+    'نتیجه فوراً در جدول بازبینی مستقل با عنوان پروفایل پیشنهادی، شناسه غرفه، کد رزروشده، پسوند، ضریب تعدیل و وضعیت تکراری/غرفه خودی نمایش داده می‌شود.',
+    'انتخاب همه یا بخشی از جدول و دکمهٔ ایجاد پروفایل از همان مسیر امن و ضدتکرار اکتشاف استفاده می‌کند؛ تنظیم تعدیل قیمت، الگوی پسوند کددار و ارسال به همه مقصدها نیز یکسان باقی می‌ماند.',
+    'ورودی‌های نامعتبر یا حل‌نشده بدون ساخت پروفایل با خطای ردیفی باقی می‌مانند و کدهای یکتا پیش از تأیید به‌طور پایدار رزرو می‌شوند.'
+  ]},
+  {v:'10.682', t:'🏆 رتبه‌بندی سراسری و سقف قابل تنظیم پرفروش‌های باسلام', items:[
+    'حداقل فروش اکنون با انتخاب صریح فروش دقیق، فروش فهرست/جست‌وجو یا فروش هفتگی اعمال می‌شود؛ فروش فهرست همان عدد اولیهٔ پاسخ جست‌وجوی باسلام پیش از تأیید دقیق محصول است.',
+    'حداکثر محصولات پروفایل با پیش‌فرض ۱۰٬۰۰۰ قابل تنظیم است و محدودیت فقط پس از فیلتر، امتیازدهی و مرتب‌سازی کل کاتالوگ اعمال می‌شود؛ بنابراین صدها هزار محصول و صفحه‌بندی، top-N سراسری را خراب نمی‌کنند.',
+    'امتیازهای لگاریتمی هر سه مبنای فروش و امتیاز مبنای انتخابی به مرتب‌سازی و جدول افزوده شد؛ کاتالوگ کامل کشف/ارزیابی مستقل و بدون برش باقی می‌ماند.',
+    'جدول، پروفایل مدیریت‌شده، شمارش فعال و خروجی Excel فیلترشده همگی از همان نتیجهٔ سراسری top-N استفاده می‌کنند.'
+  ]},
+  {v:'10.681', t:'🌳 آزمون ترتیبی همهٔ فرزندان دستهٔ ردشده', items:[
+    'اگر باسلام اعلام کند دستهٔ انتخابی دارای فرزند است، همهٔ دسته‌های برگ زیر همان والد با ترتیب پایدار درخت امتحان می‌شوند و با نخستین موفقیت متوقف می‌گردند.',
+    'این fallback از شاخهٔ والد خارج نمی‌شود؛ 429، خطای شبکه، خطای غیر‌دسته‌بندی، نام تکراری و توقف کاربر نیز زنجیره را ایمن متوقف می‌کنند.',
+    'دستهٔ والدِ شناخته‌شده پیش از نخستین درخواست به زنجیرهٔ کامل برگ‌های خودش تبدیل می‌شود تا درخواست 422 غیرضروری ساخته نشود.'
+  ]},
+  {v:'10.680', t:'🏪 پوشش واقعی همهٔ غرفه‌ها و جلوگیری از خطای دستهٔ سراسری', items:[
+    'علت اصلی کمبود پوشش رفع شد: تنظیم قدیمیِ بدون send_shop_ids دیگر فقط غرفهٔ پیش‌فرض را صف نمی‌کند و طبق قرارداد رابط، همهٔ غرفه‌های پیکربندی‌شده را هدف می‌گیرد.',
+    'اگر درخت دسته‌بندی باسلام موقتاً قابل دریافت نباشد، ردیف بدون ساختن هزاران خطای 422 در waiting می‌ماند و cron بعدی ادامه می‌دهد؛ دستهٔ والد دیگر کورکورانه ارسال نمی‌شود.',
+    'صف‌های ساخته‌شده از پروفایل اکنون لین و هویت پروفایل را داخل payload ثبت می‌کنند؛ لین ۱ فقط دادهٔ فهرست را نگه می‌دارد و هر payload جابه‌جا/آلوده پیش از ارسال از پروفایل درست بازسازی می‌شود.',
+    'عملیات ترمیم پوشش، محصولات ذخیره‌شدهٔ همهٔ پروفایل‌ها را بدون محدودیت تعداد و به‌صورت موازی برای تمام غرفه‌های انتخاب‌شده دوباره صف می‌کند؛ پروفایل فعال لین ۲ تکراری نمی‌شود.'
+  ]},
+  {v:'10.679', t:'🏷 تشخیص دقیق تاریخچهٔ صف باسلام', items:[
+    'گزارش خطا دیگر همهٔ ردیف‌های failed قدیمی را «جایگزین‌شده» نمی‌نامد؛ checkpoint منقضی، فایل جزئیات پاک‌شده و خطای نهایی داده هرکدام عنوان صریح خود را دارند.',
+    'ردیف‌های واقعاً جایگزین‌شده همچنان فقط تاریخچهٔ تکمیل‌شده‌اند و از خطاهای محصول و صف جدا می‌مانند.'
+  ]},
+  {v:'10.678', t:'🧯 بازیابی دائمی صف‌های باسلام بدون وضعیت مبهم', items:[
+    'ردیف‌های قدیمی که با همگام‌سازی دستی جدید جایگزین شده‌اند اکنون تاریخچهٔ تکمیل‌شده و «جایگزین‌شده» هستند، نه خطای ارسال.',
+    'وقفه‌های worker، قفل، dispatch، شبکه، محدودیت نرخ و resume-exhausted با فایل محصولات سالم از checkpoint ذخیره‌شده دوباره در صف قرار می‌گیرند؛ توقف صریح کاربر همچنان محترم است.',
+    'خطاهای قدیمی detail_coverage_incomplete برای محصولات Core API باسلام خودکار احیا می‌شوند، اما خطاهای واقعی اعتبارسنجی محصول یا پیکربندی بی‌نهایت تکرار نمی‌شوند.',
+    'خطاهای محصولی 429، شبکه، 5xx و دستهٔ برگ 422 در فاز ترمیم با backoff تکرار می‌شوند و شکست یک محصول کل کارت صف را متوقف نمی‌کند.',
+    'برچسب عمومی «نیازمند بررسی» حذف شد؛ خطاهای نهایی اکنون علت مشخص محصول، پیکربندی یا نبود فایل صف را نشان می‌دهند.'
+  ]},
+  {v:'10.677', t:'🧾 لین ۲ موتور باسلام بدون سلکتور CSS', items:[
+    'پروفایل‌های عادی با موتور Basalam Public API و پروفایل «باسلام -پرفروش ها» برای جزئیات از Core v4 استفاده می‌کنند و دیگر به‌علت خالی‌بودن detailSelectors از لین ۲ رد نمی‌شوند.',
+    'پوشش جزئیات این پروفایل‌ها از marker واقعی پاسخ API و غنی‌سازی محصول شمرده می‌شود؛ پروفایل‌های وب عادی همچنان با سلکتورهای ذخیره‌شده اعتبارسنجی می‌شوند.',
+    'اعتبارسنجی زمان ثبت صف، اجرای worker و snapshot زندهٔ پرفروش‌ها همگی از یک تشخیص provider مشترک استفاده می‌کنند.'
+  ]},
+  {v:'10.676', t:'🔓 ادامهٔ پرفروش‌ها هنگام اشغال قفل پروفایل', items:[
+    'جمع‌آوری، فروش دقیق و جزئیات در کاتالوگ مستقل پرفروش‌ها ادامه پیدا می‌کند و دیگر به‌خاطر استخراج طولانی پروفایل دیگری با profiles_busy روی یک عدد ثابت نمی‌ماند.',
+    'پروفایل عادی «باسلام -پرفروش ها» و سازندهٔ صف ارسال، کاتالوگ زنده را فوراً می‌خوانند؛ نوشتن فیزیکی profiles فقط تا آزادشدن قفل عقب می‌افتد و سپس خودکار همگام می‌شود.',
+    'شمارندهٔ محصولات فعال از کاتالوگ فیلترشدهٔ واقعی محاسبه می‌شود، نه snapshot قدیمی داخل profiles.'
+  ]},
+  {v:'10.675', t:'🏪 بستهٔ Excel همزمان برای همهٔ غرفه‌های باسلام', items:[
+    'یک کلیک برای همهٔ غرفه‌های فعال/انتخاب‌شده، ZIP واحدی با پوشه و workbook مستقل هر vendor می‌سازد و قیمت، گردکردن، دسته و پیش‌فرض‌های همان غرفه را روی ردیف‌های خودش اعمال می‌کند.',
+    'manifest و وضعیت انتظار هر غرفه مستقل و با vendor_id ذخیره می‌شود؛ نتیجه فقط در دفترچهٔ همان vendor تطبیق داده می‌شود و جدیدترین ردیفِ در انتظار بر خروجی‌های قدیمی اولویت دارد.',
+    'رابط صریحاً ساخت بسته را از بارگذاری موفق پنل جدا می‌کند؛ فایل نتیجهٔ هر پنل باید با شناسهٔ همان غرفه بازگردانده شود.'
+  ]},
+  {v:'10.674', t:'📦 پل Excel درون‌ریزی سریع باسلام', items:[
+    'از هر پروفایل یا نتیجهٔ فیلترشدهٔ پرفروش‌ها فایل XLSX آمادهٔ پنل باسلام ساخته می‌شود؛ تعدیل قیمت، گردکردن، پسوند عنوان، دسته، موجودی، وزن، توضیحات، تصویر، گالری و تنوع‌ها فقط هنگام خروجی اعمال می‌شوند.',
+    'محصولات دارای شناسهٔ قبلی به‌طور پیش‌فرض از خروجی حذف می‌شوند، فایل‌های بزرگ در بسته‌های قابل تنظیم شکسته و در ZIP تحویل می‌شوند و هر خروجی با وضعیت «در انتظار نتیجه» ثبت می‌شود، نه ارسال‌شده.',
+    'فایل نتیجهٔ CSV/XLS/XLSX پنل با کد کالا یا عنوان تطبیق داده می‌شود و فقط شناسه‌های واقعی برگشتی در remote-map همان غرفه ثبت می‌شوند تا ارسال‌های بعدی محصول تکراری نسازند.'
+  ]},
+  {v:'10.673', t:'💾 checkpoint مستقل جزئیات پرفروش‌ها', items:[
+    'نتیجهٔ هر غنی‌سازی و صف ادامهٔ جزئیات بلافاصله ذخیره می‌شود؛ شلوغ بودن profiles در مرحلهٔ فروش دقیق یا ادامهٔ کران دیگر باعث تکرار همان محصول یا عقب‌رفتن شمارنده نمی‌شود.'
+  ]},
+  {v:'10.672', t:'🧩 جزئیات کامل و اعمال مستقیم فیلتر پرفروش‌ها', items:[
+    'جمع‌آور در هر checkpoint یک محصول را از Core v4 باسلام غنی می‌کند و توضیح کوتاه و کامل، گالری، تنوع‌ها، مشخصات، برچسب، برند، وزن و موجودی را به‌صورت resumable داخل همان پروفایل ذخیره می‌کند.',
+    'عنوان و قیمت خامِ کشف‌شده هنگام غنی‌سازی دست‌نخورده می‌مانند تا پسوند، تعدیل و گردکردن فقط در مسیر عادی ارسال اعمال شوند.',
+    'هر تغییر فیلتر و مرتب‌سازی زیرمنوی پرفروش‌ها مستقیماً مجموعه و ترتیب محصولات فعال پروفایل «باسلام -پرفروش ها» را بروزرسانی می‌کند؛ کاتالوگ کامل جداگانه حفظ می‌شود تا پاک‌کردن فیلتر همهٔ محصولات را بازگرداند.'
+  ]},
+  {v:'10.671', t:'🧹 پایان پاک صفحه و نمایش قطعی محصولات ذخیره‌شده', items:[
+    'خروجی تکراری پس از اولین </html> حذف شد؛ کد جاوااسکریپت دیگر زیر فوتر به‌صورت متن دیده نمی‌شود.',
+    'بارگذاری عادی پروفایل همهٔ زوج‌های محصول ذخیره‌شده را نمایش می‌دهد؛ ترتیب قدیمی یا ناقص دیگر نمی‌تواند محصولات موجود در payload پروفایل را پنهان کند.',
+    'آزمون متمرکز جدید یکتا بودن پایان سند و مسیر بازیابی محصولات پروفایل را در هر انتشار کنترل می‌کند.'
+  ]},
+  {v:'10.670', t:'⚙️ اتصال مستقیم پرفروش‌ها به تنظیمات کامل پروفایل', items:[
+    'محصولات پرفروش اکنون با ساختار استاندارد [کلید، محصول] و productsOrder مستقیماً داخل پروفایل «باسلام -پرفروش ها» ذخیره می‌شوند و دادهٔ قدیمی نیز خودکار مهاجرت می‌کند.',
+    'تنظیمات موجود پروفایل شامل تعدیل قیمت، گردکردن، پسوند عنوان، دسته باسلام، دسته‌های جایگزین، مقصد و برنامهٔ همگام‌سازی در بروزرسانی‌های جمع‌آور حفظ می‌شوند.',
+    'صف ارسال از همان prepareForSend عمومی استفاده می‌کند؛ بنابراین پسوند و قیمت تعدیل‌شده هنگام ارسال اعمال می‌شود و تغییر بعدی تنظیمات موجب تعدیل دوبارهٔ قیمت خام نمی‌شود.'
+  ]},
+  {v:'10.669', t:'🔎 فیلتر و مرتب‌سازی کامل محصولات پرفروش', items:[
+    'جست‌وجوی همزمان در عنوان، شناسه محصول، غرفه و دسته به‌همراه فیلتر مستقل دسته، غرفه، وضعیت فروش دقیق، حداقل فروش و موجودی اضافه شد.',
+    'مرتب‌سازی صعودی یا نزولی براساس فروش دقیق، فروش فهرست، فروش هفتگی، قیمت، موجودی، عنوان، غرفه و دسته روی کل پروفایل انجام می‌شود؛ نه فقط صفحهٔ فعلی.',
+    'سرستون‌های قابل مرتب‌سازی، پاک‌کردن همهٔ فیلترها، شمار نتیجهٔ فیلترشده و صفحه‌بندی سازگار با نتیجه‌ها اضافه شد.'
+  ]},
+  {v:'10.668', t:'🚀 رشد همزمان فهرست پرفروش‌ها و فروش دقیق', items:[
+    'جمع‌آور دیگر برای رفتن از ۲۰ محصول به صفحهٔ بعد منتظر تمام‌شدن بررسی فروش دقیق همان ۲۰ محصول نمی‌ماند.',
+    'هر checkpoint حداکثر یک فروش دقیق را بررسی و همزمان یک صفحهٔ جدید ۲۰تایی از جست‌وجوی عمومی کل بازار باسلام کشف می‌کند؛ صف‌ها با شناسهٔ محصول ادغام و تکراری‌ها حذف می‌شوند.',
+    'اگر ذخیرهٔ پروفایل موقتاً قفل باشد، فروش دقیقی که دریافت شده داخل checkpoint نگه داشته می‌شود تا بدون درخواست تکراری به باسلام دوباره ذخیره شود.'
+  ]},
+  {v:'10.667', t:'📊 جدول پرفروش‌ها و منوی مرتب‌شونده براساس استفاده', items:[
+    'بخش پرفروش‌های باسلام اکنون جدول واقعی محصولات را با تصویر، رتبه، فروش دقیق و فهرست‌شده، فروش هفتگی، قیمت، موجودی، غرفه و دسته نمایش می‌دهد.',
+    'جدول از state محلی پروفایل خوانده می‌شود، در هر صفحه ۵۰ محصول نشان می‌دهد و دکمه‌های صفحهٔ قبل و بعد دارد؛ تازه‌سازی جدول هیچ درخواست مستقیمی به باسلام نمی‌فرستد.',
+    'کلیک منوهای فرعی همبرگری به‌صورت اتمیک در سرور شمرده می‌شود و منوها در بازشدن بعدی براساس بیشترین تعداد کلیک مرتب می‌شوند.'
+  ]},
+  {v:'10.666', t:'🔄 پیشروی مستقل جمع‌آور پرفروش‌ها', items:[
+    'هر ورود cron پیش از قفل سراسری و عملیات‌های طولانی، دقیقاً یک checkpoint محدودِ جمع‌آور پرفروش‌ها را با قفل مستقل اجرا می‌کند.',
+    'صف پرفروش‌ها دیگر پشت کران طولانی ارسال، ماتریس یا مغایرت‌گیری متوقف نمی‌ماند؛ فاصلهٔ یک‌ثانیه‌ای، backoff 429 و قفل تک‌اجرا همچنان رعایت می‌شوند.'
+  ]},
+  {v:'10.665', t:'🏆 پروفایل پایدار پرفروش‌های باسلام و فاصلهٔ یک‌ثانیه‌ای', items:[
+    'بخش مستقل پرفروش‌ترین محصولات، صفحه‌های مرتب‌شده بر اساس فروش را با checkpoint پایدار می‌خواند و همهٔ محصولات را بدون سقف تعداد برنامه در پروفایل «باسلام -پرفروش ها» ادغام می‌کند.',
+    'هر محصول به‌صورت نوبتی با number-of-sales-per-product تأیید می‌شود؛ قفل تک‌اجرا، ذخیرهٔ اتمیک، ادامه از همان نقطه، تفکیک دسته‌ای پس از سقف بیرونی جست‌وجو و backoff تصاعدی 429 فعال است.',
+    'حداقل فاصلهٔ Explorer از انتخاب محافظه‌کارانه و مستندنشدهٔ ۱۲۰ ثانیه به ۱ ثانیه کاهش یافت؛ تنظیم‌های سفارشی حفظ می‌شوند و فقط مقدار پیش‌فرض قدیمی مهاجرت می‌کند.'
+  ]},
+  {v:'10.664', t:'⚡ داشبورد کاملاً زنده و جدول مرتب‌شونده', items:[
+    'شمارنده‌های کل، بررسی‌شده، فروش مثبت، در انتظار فروش، صفحات، محصولات و تعداد نمایشی هر پنج ثانیه از state سرور تازه می‌شوند و نوار پیشرفت نیز همزمان حرکت می‌کند.',
+    'زمان آخرین اجرا، زمان باقی‌مانده تا اجرای بعدی و آخرین فروش غنی‌سازی‌شده هر ثانیه به‌صورت زنده نمایش داده می‌شود.',
+    'سرستون‌های رتبه، عنوان، فروش، محصول، دسته، سن، امتیاز و وضعیت قابل کلیک و مرتب‌سازی دوطرفه‌اند؛ انتخاب کاربر هنگام بروزرسانی زنده حفظ و header جدول به بالای ناحیهٔ دید چسبان شده است.'
+  ]},
+  {v:'10.663', t:'📡 جدول زندهٔ بدون فروش صفر', items:[
+    'ردیف‌های فروش صفر در state برای غنی‌سازی حفظ می‌شوند اما تا دریافت فروش مثبت وارد جدول رتبه‌بندی و بررسی نمی‌شوند.',
+    'تازه‌سازی، نمونه‌های موقت آزمایش را فوراً با جدول پایدار سرور جایگزین می‌کند و جدول دیگر بین دادهٔ تست و کاندید واقعی مبهم نمی‌ماند.',
+    'هنگام باز بودن Explorer، وضعیت هر ۱۰ ثانیه بدون درخواست اضافی به API باسلام خوانده می‌شود تا غرفه‌های جدید، فروش‌های تازه و تغییر رتبه زنده نمایش داده شوند.'
+  ]},
+  {v:'10.662', t:'🧪 فروش دقیق در جدول آزمایش Explorer', items:[
+    'جدول موقت دکمهٔ آزمایش دیگر sales_count صفرِ ردیف catalogue را معیار قرار نمی‌دهد و برای هر یک از حداکثر هشت غرفهٔ نمونه، آمار عمومی storefront را می‌خواند.',
+    'برای gallery-chaveh با vendor_id 1041892 پاسخ زنده ۵۲۸ است؛ بنابراین مقدار صفحهٔ غرفه یعنی 500+ اکنون در جدول به‌صورت عدد دقیق ۵۲۸ دیده می‌شود.',
+    'نمونه‌ها همچنان cache شصت‌ثانیه‌ای، سقف هشت غرفه و timeout محدود دارند تا فشار API کنترل شود.'
+  ]},
+  {v:'10.661', t:'🔗 لینک صحیح غرفه و محافظ غرفه‌های خودمان', items:[
+    'لینک عنوان هر ردیف اکنون از identifier عمومی استفاده می‌کند؛ برای نمونه /nooshdaroo99 جایگزین مسیر نامعتبر /vendor/119301 شده است.',
+    'شناسهٔ غرفهٔ پیش‌فرض و همهٔ غرفه‌های اضافی ذخیره‌شده در بخش باسلام با Explorer تطبیق داده می‌شود و checkbox و دکمهٔ افزودن آن‌ها غیرفعال است.',
+    'همان محدودیت در endpoint سرور نیز اعمال می‌شود تا غرفهٔ خودمان با درخواست دست‌ساز یا انتخاب گروهی به پروفایل تبدیل نشود.'
+  ]},
+  {v:'10.660', t:'🔄 جایگزینی فوری اعداد سفارشِ cache‌شده با فروش دقیق', items:[
+    'ردیف‌هایی که پیش از v10.659 با order_count یا تخمین ذخیره شده‌اند دیگر برای دریافت فروش دقیق منتظر پایان cache بیست‌وچهارساعته نمی‌مانند.',
+    'غنی‌سازی محدود همچنان در هر تیک فقط یک غرفه را اصلاح می‌کند، اما ابتدا ردیف‌های فاقد public_vendor_sales_count و سپس مقادیر بزرگ‌تر جدول را به‌روزرسانی می‌کند.',
+    'غرفهٔ نوشدارو99 در تولید فوراً بازخوانی شد و اکنون ۱۶٬۵۲۶ فروش دقیق را به‌جای ۳٬۱۲۰ سفارش نشان می‌دهد.'
+  ]},
+  {v:'10.659', t:'🎯 فروش دقیق مطابق عدد صفحهٔ غرفه', items:[
+    'عدد «فروش» صفحهٔ غرفه از web gateway عمومی باسلام و resource رسمی number-of-sales-per-vendor خوانده می‌شود؛ این عدد مجموع تعداد اقلام ارسال‌شده است.',
+    'برای نمونهٔ نوشدارو99، API مقدار ۱۶۵۲۶ را می‌دهد که رابط باسلام به‌شکل 16.5k+ نمایش می‌دهد؛ order_count برابر ۳۱۲۰ معیار جداگانهٔ تعداد سفارش‌هاست.',
+    'فروش دقیق، سفارش دقیق و برآوردهای fallback اکنون منبع و برچسب جدا دارند و رتبه‌بندی ابتدا از فروش دقیق غرفه استفاده می‌کند.'
+  ]},
+  {v:'10.658', t:'✅ نمونهٔ فروش عمومی مطابق محدودیت واقعی باسلام', items:[
+    'آزمایش مستقیم API ثابت کرد فیلتر vendor_ids عمومی کار می‌کند، اما sort بر پایهٔ sales_count و review_count صریحاً رد می‌شود و per_page نیز حداکثر ۲۰ است.',
+    'Explorer اکنون ۲۰ محصول فعال و قدیمی غرفه را با قرارداد پذیرفته‌شده می‌گیرد؛ این نمونهٔ پایدار شانس مشاهدهٔ سابقهٔ نظر/فروش را بدون فشار صفحه‌بندی بالا می‌برد.',
+    'sales_count مثبت نمونه همچنان حداقل فروش و در صورت پنهان‌بودن آن، جمع review_count حداقل محافظه‌کارانه است؛ هر دو منبع دقیقاً برچسب‌گذاری می‌شوند.'
+  ]},
+  {v:'10.657', t:'🛠️ اصلاح قرارداد فهرست محصولات هر غرفه', items:[
+    'آزمایش زنده نشان داد endpoint غرفه پاسخ ۲۰۰ می‌دهد اما فیلتر vendor_ids در فهرست عمومی با ۴۲۲ رد می‌شود.',
+    'fallback فروش اکنون از endpoint رسمی و اختصاصی /v1/vendors/{id}/products با پارامتر statuses استفاده می‌کند تا محصولات همان غرفه واقعاً دریافت شوند.',
+    'probe ناموفق ۴۲۲ cache نمی‌شود تا اصلاح مسیر بلافاصله و بدون انتظار دوباره آزمایش شود.'
+  ]},
+  {v:'10.656', t:'🔎 تشخیص زندهٔ مسیر فروش غرفه', items:[
+    'وضعیت Explorer اکنون نتیجهٔ آخرین غنی‌سازی را همراه با HTTP code غرفه و محصولات، تعداد محصولات نمونه و منبع عدد برمی‌گرداند.',
+    'شمار غرفه‌ها به تفکیک منبع فروش نیز گزارش می‌شود تا موفقیت برآوردهای حداقلی خارج از ۵۰ ردیف اول پنهان نماند.',
+    'یک probe محدود به غرفه‌های از قبل کشف‌شده و دارای فاصلهٔ زمانی، بررسی واقعی مسیر فروش را بدون ساخت پروفایل یا دورزدن فشار API ممکن می‌کند.'
+  ]},
+  {v:'10.655', t:'📈 برآورد چندمرحله‌ای فروش به‌جای صفر غیرکاربردی', items:[
+    'اگر order_count عمومی غرفه ارائه نشود، Explorer تا ۱۰۰ محصول عمومی پرفروش همان غرفه را با sort فروش می‌خواند و جمع sales_count را به‌عنوان حداقل فروش مشاهده‌شده ثبت می‌کند.',
+    'اگر باسلام sales_count را نیز صفر پنهان کند، جمع review_count محصولات به‌عنوان حداقل محافظه‌کارانهٔ فروش استفاده می‌شود؛ هیچ نرخ تبدیل ساختگی از بازدید به فروش اعمال نمی‌شود.',
+    'منبع عدد، تعداد محصولات نمونه‌برداری‌شده و برچسب «حداقل/تخمینی/سفارش عمومی» ذخیره می‌شود و هر غرفه حداکثر روزی یک بار غنی‌سازی می‌شود.'
+  ]},
+  {v:'10.654', t:'📨 درخواست نمایش کامل آمار عمومی باسلام', items:[
+    'Core API به‌طور پیش‌فرض vendor را minimal برمی‌گرداند و order_count حذف می‌شود؛ درخواست‌های اختصاصی Explorer اکنون هدر رسمی Prefer: return=representation می‌فرستند.',
+    'مسیر کاتالوگ و غنی‌سازی تک‌غرفه هر دو از JSON client محدود و مخصوص Explorer استفاده می‌کنند؛ در نبود curl مسیر شبکهٔ قبلی fallback می‌شود و 429 بدون دورزدن backoff گزارش می‌گردد.',
+    'تست کشف نشان می‌دهد پاسخ کامل دریافت شده یا fallback بوده است تا صفرهای واقعی از صفرهای ناشی از پاسخ minimal تفکیک شوند.'
+  ]},
+  {v:'10.653', t:'🧾 دریافت تعداد سفارش عمومی غرفه به‌جای فروش صفر', items:[
+    'پاسخ عمومی رسمی باسلام در شیء vendor فیلد order_count دارد؛ Explorer اکنون این عدد غرفه‌ای را مقدم بر sales_count محصول می‌داند و آن را با برچسب «سفارش عمومی» نمایش می‌دهد، نه تخمین فروش محصول.',
+    'غرفه‌های قدیمی نیز هر تیک به‌صورت محدود، روزانه و یک‌به‌یک از مسیر عمومی openapi.basalam.com/v1/vendors غنی‌سازی می‌شوند تا فشار API کنترل شود و صفرهای ذخیره‌شده تدریجاً اصلاح شوند.',
+    'منبع و زمان بررسی فروش، تعداد غرفه‌های دارای آمار عمومی و تفاوت عدد عمومی با تخمین در state و رابط ثبت می‌شود؛ 429 همچنان backoff مشترک را فعال می‌کند.'
+  ]},
+  {v:'10.652', t:'📊 رتبه‌بندی معنادار پیش از آشکارشدن فروش', items:[
+    'امتیاز متعادل علاوه بر فروش تخمینی و بازده، گستردگی کاتالوگ و سن عمومی غرفه را نیز وزن می‌دهد؛ بنابراین غرفه‌های با فروش مشاهده‌شدهٔ صفر دیگر همگی امتیاز صفر و ترتیب نامشخص ندارند.',
+    'امتیازهای ذخیره‌شدهٔ قدیمی هنگام خواندن جدول زیر قفل Explorer یک‌بار بازسازی می‌شوند و ۵۰ ردیف واقعاً به‌ترتیب امتیاز تازه نمایش داده می‌شوند.'
+  ]},
+  {v:'10.651', t:'🏪 کشف دائمی و افزودن گروهی ۵۰ غرفهٔ برتر', items:[
+    'کاوشگر دیگر حالت توقف ندارد: تنظیم قدیمیِ خاموش خودکار مهاجرت می‌شود و cron همیشه با checkpoint، فاصلهٔ درخواست و backoff به کشف سرور‌ساید ادامه می‌دهد.',
+    'جدول دقیقاً ۵۰ نتیجهٔ برتر را بر اساس فرمول امتیاز انتخابی نشان می‌دهد؛ هر ردیف تیک، انتخاب همه، شمارندهٔ انتخاب و دکمهٔ افزودن انتخاب‌شده‌ها دارد.',
+    'افزودن تا ۵۰ غرفه با یک قفل و یک نوشتن اتمیک فایل پروفایل انجام می‌شود؛ تکراری‌ها دوباره ساخته نمی‌شوند.',
+    'دسته‌های مشاهده‌شده از category محصولات عمومی هر غرفه استخراج، تجمیع و در ستون مستقل نمایش داده می‌شوند.'
+  ]},
+  {v:'10.650', t:'🧪 آزمایش زنده و مقاوم‌سازی کشف غرفه‌های عمومی', items:[
+    'دکمهٔ «آزمایش کشف» یک صفحهٔ واقعی از کاتالوگ عمومی باسلام می‌خواند و تا هشت غرفهٔ نمونه را بدون ساخت پروفایل در همان جدول نمایش می‌دهد؛ نتیجه برای کاهش فشار API حداقل ۶۰ ثانیه cache می‌شود.',
+    'خواندن پاسخ API اکنون شکل‌های data، products، data.products، result.data و چند محل next_cursor را پشتیبانی می‌کند و vendor_info نیز مانند vendor شناخته می‌شود.',
+    'خروجی تشخیصی شامل کد HTTP، تعداد ردیف/غرفه و کلیدهای واقعی پاسخ است تا شکست‌های آینده قابل تشخیص باشند.'
+  ]},
+  {v:'10.649', t:'🏷 کدگذاری خودکار و عنوان نهایی غرفه‌های کشف‌شده', items:[
+    'Explorer آخرین شماره را از titleSuffix و نام همهٔ پروفایل‌های ذخیره‌شده، با ارقام فارسی/عربی/لاتین و شکل‌های تاریخی فاصله‌دار، شناسایی می‌کند و کدهای بعدی را بدون تداخل رزرو می‌کند.',
+    'پیش از تأیید، عنوان پیشنهادی «باسلام-نام غرفه (کد:ایکس)» در جدول نمایش داده می‌شود؛ پس از تأیید، نام پروفایل و پسوند محصولات دقیقاً با همان کد ساخته می‌شوند.',
+    'کد رزروشده با تغییر رتبه‌بندی، توقف/ادامه و رفرش ثابت می‌ماند؛ لینک مستقیم غرفه و ثبت نام/کد در تاریخچهٔ ممیزی نیز افزوده شد.'
+  ]},
+  {v:'10.648', t:'🔐 حذف نیاز به ورود دستی توکن در Shop Explorer', items:[
+    'فیلد توکن مدیر حذف شد؛ صفحه nonce کوتاه‌عمر امضاشده را خودکار دریافت و همراه عملیات شروع، توقف، اجرا، تأیید و رد ارسال می‌کند.',
+    'راز اختصاصی Explorer فقط روی سرور ساخته و نگهداری می‌شود و هرگز در HTML یا درخواست مرورگر افشا نمی‌شود؛ nonce مدیر وردپرس نیز همچنان پشتیبانی می‌شود.'
+  ]},
+  {v:'10.647', t:'🧭 کاوشگر غرفه‌های شخص ثالث باسلام با صف بررسی', items:[
+    'کشف مرحله‌ای از دادهٔ عمومی باسلام در سه حالت بازار کامل، دسته‌های منتخب و دسته‌ها همراه کلیدواژه، با checkpoint مستقل، فاصلهٔ درخواست، backoff خطای 429، توقف و ادامه.',
+    'رتبه‌بندی انتخابی متعادل، بازده فروش یا فروش مطلق با فیلتر حداقل محصول/فروش؛ ارقام فروش غیرقطعی صریحاً تخمینی نمایش داده می‌شوند.',
+    'تأیید دستی یک پروفایل عادی استخراج/ارسال با افزایش قیمت پیش‌فرض ۲۰٪، مقصدهای پیکربندی‌شده و پسوند کد افزایشی یکتا می‌سازد؛ رد، جلوگیری از تکرار و تاریخچهٔ ممیزی نیز حفظ می‌شوند.'
+  ]},
   {v:'10.646', t:'🧹 عبور نگهبان از ردیف پروفایل حذف‌شده', items:[
     'اگر checkpoint به پروفایلی اشاره کند که دیگر وجود ندارد، Continue بی‌معناست؛ ردیف با دلیل روشن failed و غیرقابل‌ادامه می‌شود.',
     'ردیف یتیم دیگر هر cron را به خود اختصاص نمی‌دهد و تیک بعدی به کار معتبر بعدی می‌رسد.',
@@ -28944,10 +29279,8 @@ function queueBslSend(ps,catId){
         const _sv=bslGetSelectedVids();
         fd2.append('send_all_shops',_sv===null||_sv.length>1?'1':'0');
         fd2.append('shop_send_mode',typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial');
-        if(_sv!==null){
-            fd2.append('selected_shop_vids',JSON.stringify(_sv));
-            fd2.append('shop_picker_sync','1');
-        }
+        fd2.append('selected_shop_vids',JSON.stringify(_sv));
+        fd2.append('shop_picker_sync','1');
         return fd2;
     }
     function uploadChunksAndAddBsl(){
@@ -29559,11 +29892,11 @@ function sendQueueVisualCard(e,opt){
     const phaseKey=String(e.phase||''),hasPhase=e.status!=='done'&&phTotal>0&&e.phase_label&&phaseKey!=='send'&&phaseKey!=='done'&&!phaseKey.endsWith('_done');
     const done=e.status==='done',failed=e.status==='failed',shopDisabled=!!e.shop_disabled;
     const pct=shopDisabled?(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0):(done?100:(hasPhase?Math.max(0,Math.min(100,Math.round(Number(e.phase_pct??(phCur*100/phTotal))))):(total>0?Math.max(0,Math.min(100,Math.round(cur*100/total))):0)));
-    const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'نیازمند بررسی'};
+    const labels={waiting:'در انتظار شروع',running:'در حال پردازش',paused:'موقتاً متوقف',done:'تکمیل شده',failed:'خطای نهایی ارسال'};
     const colors={waiting:'#fbbf24',running:opt.accent||'#38bdf8',paused:'#fb923c',done:'#4ade80',failed:'#f87171'};
     const processed=shopDisabled?cur:(done?total:(hasPhase?phCur:cur)),remain=Math.max(0,(hasPhase?phTotal:total)-processed);
     const staleRunning=e.status==='running'&&!e._worker_live,visualStatus=shopDisabled?'paused':(staleRunning?'paused':e.status);
-    const status=shopDisabled?'غرفه غیرفعال — ارسال متوقف شد':(staleRunning?'worker متوقف — آمادهٔ ادامه':(labels[e.status]||e.status));
+    const status=shopDisabled?'غرفه غیرفعال — ارسال متوقف شد':(staleRunning?'worker متوقف — آمادهٔ ادامه':(e.completion_kind==='superseded'?'جایگزین‌شده با ارسال جدید':(e.status==='failed'?(e.terminal_label||'خطای نهایی محصول یا پیکربندی'):(labels[e.status]||e.status))));
     const isRetire=!!(e.retire_report||e.kind==='retire'||e.trigger==='retire');
     const profileName=String(e.profile_name||'').trim();
     const profileKey=String(e.profile_key||'').trim();

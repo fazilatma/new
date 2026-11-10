@@ -3,7 +3,7 @@
 const about=document.getElementById('php-ui-about');let aboutReturnFocus=null;
 const dialog=document.getElementById('php-tools'),frame=document.getElementById('php-original-ui');let selected=null,refreshTicket=0;
 const keys=new Set(['woocommerce','basalam','backup','general','version','render','guardian','profile-stats']);
-const labels={diagnostics:'گزارش امن برای بررسی بدون رمز', 'endpoint-inventory':'فهرست درخواست‌های منبع PHP و اتصال‌های واقعی',profile:'تنظیمات و پاک‌سازی پروفایل انتخاب‌شده',selectors:'آزمایش واقعی سلکتورها',results:'تمام نتایج و جزئیات ذخیره‌شده',audit:'تست موتورهای استخراج با endpointهای واقعی'};
+const labels={'shared-workspace':'ابزار مشترک دو رابط: گزارش و آزمایش زنده',diagnostics:'گزارش امن برای بررسی بدون رمز', 'endpoint-inventory':'فهرست درخواست‌های منبع PHP و اتصال‌های واقعی',profile:'تنظیمات و پاک‌سازی پروفایل انتخاب‌شده',selectors:'آزمایش واقعی سلکتورها',results:'تمام نتایج و جزئیات ذخیره‌شده',audit:'تست موتورهای استخراج با endpointهای واقعی'};
 function changeSelection(p){if(!p)return;selected=p;window.dispatchEvent(new CustomEvent('s4:profile-selected',{detail:{id:p.id}}));}
 function open(key){
  if(key==='help'){if(!about.open){aboutReturnFocus=document.activeElement;about.showModal();document.getElementById('php-ui-about-close').focus();}return true;}

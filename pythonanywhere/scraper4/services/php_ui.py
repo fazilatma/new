@@ -61,6 +61,9 @@ def render(db):
     replacements={
       '<?= app_font_boot() ?>':'<script src="/static/php-ui-frame.js"></script><style>@font-face{font-family:Vazirmatn;src:url(/static/fonts/Vazirmatn-Regular.woff2)}@font-face{font-family:Vazirmatn;font-weight:700;src:url(/static/fonts/Vazirmatn-Bold.woff2)}@font-face{font-family:Sahel;src:url(/static/fonts/Sahel.woff2)}@font-face{font-family:Sahel;font-weight:700;src:url(/static/fonts/Sahel-Bold.woff2)}</style>',
       '<?= app_theme_boot() ?>':'','<?= app_fx_boot() ?>':'',
+      # PHP/WordPress authority must not cross into this opaque Python client.
+      "<?php echo json_encode(function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''); ?>":'""',
+      '<?php echo json_encode(s4ThirdPartyExplorerBrowserNonce()); ?>':'""',
       "<?= (int)cronVisualPulseRead()['latest_id'] ?>":'0','<?=APP_VERSION?>':meta['source_version'],
       '<?= (int)RETIRE_LOG_KEEP ?>':'300','<?=h(DEFAULT_URL)?>':'https://example.com/shop/',
       "<?= selagentPromptEditorHtml('list') ?>":'<p>ویرایش پرامپت ایجنت هنوز به پایتون متصل نیست.</p>',
@@ -69,7 +72,7 @@ def render(db):
       '<?=json_encode(s4GithubDefaultRepo(), JSON_UNESCAPED_UNICODE)?>':js('fazilatma/new'),
       '<?=json_encode(s4GithubDefaultBranch(), JSON_UNESCAPED_UNICODE)?>':js('main'),
       "<?=s4DiskCodeMeta()['sha']?>":meta['source_sha256'],
-      '<?= VAPID_PUBLIC_KEY_B64URL ?>':'','<?=APP_VERSION_DATE?>':'1405/08/14','<?= (int)DEDUP_DEL_MAX ?>':'2000',
+      '<?= VAPID_PUBLIC_KEY_B64URL ?>':'','<?=APP_VERSION_DATE?>':meta.get('source_version_date',''),'<?= (int)DEDUP_DEL_MAX ?>':'2000',
     }
     def slot(match):
         token=match.group()
