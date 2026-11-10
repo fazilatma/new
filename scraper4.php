@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.664';
+const APP_VERSION = '10.665';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26836,13 +26836,17 @@ function s4RequireAuthenticatedMutation():void{
 function s4ThirdPartyExplorerFile():string{return __DIR__.'/.third-party-shop-explorer.json';}
 function s4ThirdPartyExplorerDefaults():array{return[
     'config'=>['enabled'=>true,'mode'=>'public','ranking'=>'balanced','category_ids'=>[],'keywords'=>[],
-        'interval_sec'=>120,'min_products'=>1,'min_sales'=>0,'max_candidates'=>2000,'price_percent'=>20,
+        'interval_sec'=>1,'min_products'=>1,'min_sales'=>0,'max_candidates'=>2000,'price_percent'=>20,
         'suffix_pattern'=>'(کد:{n})','suffix_start'=>1,'auto_all_destinations'=>true],
     'cursor'=>['seed'=>0,'by_seed'=>[]],'vendors'=>[],'audit'=>[],'last_run_at'=>0,'next_run_at'=>0,
     'backoff_until'=>0,'pages_scanned'=>0,'products_scanned'=>0,'last_error'=>''];}
 function s4ThirdPartyExplorerLoad():array{
     $d=json_decode((string)@file_get_contents(s4ThirdPartyExplorerFile()),true);if(!is_array($d))$d=[];
     $def=s4ThirdPartyExplorerDefaults();$d=array_replace($def,$d);$d['config']=array_replace($def['config'],is_array($d['config']??null)?$d['config']:[]);
+    /* 120 seconds was our undocumented conservative default, not a Basalam rule.
+       Migrate only that exact legacy default; preserve every custom interval. */
+    if(empty($d['interval_floor_v10665_migrated'])&&(int)($d['config']['interval_sec']??120)===120){$d['config']['interval_sec']=1;$d['next_run_at']=0;}
+    $d['interval_floor_v10665_migrated']=true;$d['config']['interval_sec']=max(1,min(86400,(int)$d['config']['interval_sec']));
     if(trim((string)($d['config']['suffix_pattern']??''))==='(کد: {n})')$d['config']['suffix_pattern']='(کد:{n})';
     /* v10.651: discovery is a permanent server-side service; legacy stopped
        state is migrated on every load and can no longer disable cron crawling. */
@@ -26914,6 +26918,78 @@ function s4ThirdPartyExplorerPublicOrders(array $vendor):?int{
 function s4ThirdPartyExplorerPublicSales(array $body):?int{
     foreach([$body['result']??null,$body['data']['result']??null,$body['sales_count']??null]as$value)if(is_numeric($value))return max(0,(int)$value);return null;
 }
+
+/* v10.665: persistent, unbounded Basalam marketplace best-seller collector.
+   Discovery uses Basalam's sales-sorted public search. Exact shipped-item sales
+   are then verified one product at a time, keeping API load bounded and making
+   every checkpoint resumable. The application never truncates the profile. */
+function s4BasalamBestSellersFile():string{return __DIR__.'/.basalam-bestsellers.json';}
+function s4BasalamBestSellersProfileUrl():string{return 'https://basalam.com/s/products?sort=sales&s4_profile=best-sellers';}
+function s4BasalamBestSellersProfileKey():string{return profileKey(s4BasalamBestSellersProfileUrl());}
+function s4BasalamBestSellersDefaults():array{return[
+    'enabled'=>true,'interval_sec'=>1,'page_size'=>20,'offset'=>0,'reported_total'=>0,
+    'partition'=>['category_id'=>0,'keyword'=>''],'partition_categories'=>[],'partition_index'=>-1,'verify_queue'=>[],'known_ids'=>[],
+    'pages_scanned'=>0,'products_discovered'=>0,'products_verified'=>0,'saved_count'=>0,
+    'last_run_at'=>0,'next_run_at'=>0,'backoff_until'=>0,'backoff_attempts'=>0,'last_error'=>'','last_action'=>'waiting'];}
+function s4BasalamBestSellersLoad():array{
+    $d=json_decode((string)@file_get_contents(s4BasalamBestSellersFile()),true);if(!is_array($d))$d=[];$d=array_replace(s4BasalamBestSellersDefaults(),$d);
+    foreach(['verify_queue','known_ids','partition_categories']as$k)if(!is_array($d[$k]??null))$d[$k]=[];
+    $d['page_size']=max(1,min(50,(int)$d['page_size']));$d['interval_sec']=max(1,min(86400,(int)$d['interval_sec']));return$d;
+}
+function s4BasalamBestSellersSave(array $d):bool{
+    $tmp=s4BasalamBestSellersFile().'.tmp.'.getmypid();$j=json_encode($d,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    if(!is_string($j)||@file_put_contents($tmp,$j,LOCK_EX)===false){@unlink($tmp);return false;}if(@rename($tmp,s4BasalamBestSellersFile()))return true;@unlink($tmp);return false;
+}
+function s4BasalamBestSellersBackoff(array &$d,int $now):void{$attempt=max(1,min(7,(int)($d['backoff_attempts']??0)+1));$d['backoff_attempts']=$attempt;$d['backoff_until']=$now+min(3600,60*(2**($attempt-1)));}
+function s4BasalamBestSellerImage(array $row):string{
+    $photo=is_array($row['photo']??null)?$row['photo']:(is_array($row['image']??null)?$row['image']:[]);
+    foreach(['MEDIUM','medium','LARGE','large','url','src']as$k)if(is_string($photo[$k]??null)&&$photo[$k]!=='')return$photo[$k];
+    foreach(['photo','image_url','image']as$k)if(is_string($row[$k]??null)&&$row[$k]!=='')return$row[$k];return'';
+}
+function s4BasalamBestSellerProduct(array $row,?int $exactSales=null):array{
+    $id=max(0,(int)($row['id']??$row['product_id']??0));$price=$row['price']??$row['primary_price']??0;if(is_array($price))$price=$price['price']??$price['amount']??0;$price=max(0,(int)$price);
+    /* Search prices are rials; the rest of scraper4 stores/display prices in tomans. */
+    if($price>=10)$price=(int)round($price/10);$stockRaw=$row['stock']??$row['inventory']??null;$available=array_key_exists('IsAvailable',$row)?(bool)$row['IsAvailable']:($stockRaw===null?true:(int)$stockRaw>0);$stock=$stockRaw===null?($available?1:0):max(0,(int)$stockRaw);$cat=is_array($row['category']??null)?$row['category']:[];$vendor=is_array($row['vendor']??null)?$row['vendor']:[];
+    $indexed=max(0,(int)($row['sales_count']??0));$sales=$exactSales===null?$indexed:max(0,$exactSales);
+    return['title'=>trim((string)($row['name']??$row['title']??('محصول '.$id))),'price'=>$price>0?number_format($price).' تومان':'','price_num'=>$price,
+        'link'=>'https://basalam.com/p/'.$id,'image'=>s4BasalamBestSellerImage($row),'source'=>'basalam_best_sellers','source_id'=>$id,'basalam_product_id'=>$id,
+        'vendor_id'=>(int)($vendor['id']??$row['vendorId']??$row['vendor_id']??0),'vendor_name'=>(string)($vendor['name']??$vendor['title']??$row['vendorName']??$row['vendor_name']??''),
+        'category_id'=>(int)($cat['id']??$row['categoryId']??$row['category_id']??0),'category'=>(string)($cat['title']??$cat['name']??$row['categoryTitle']??$row['category_title']??''),
+        'stock'=>$stock,'inventory'=>$stock,'in_stock'=>$available,'sales_count'=>$sales,'sales_count_indexed'=>$indexed,
+        'sales_count_exact'=>$exactSales,'sales_verified_at'=>$exactSales===null?0:time(),'sales_count_week'=>max(0,(int)($row['sales_count_week']??0))];
+}
+function s4BasalamBestSellersMergeProducts(array $incoming):array{
+    if(!$incoming)return['ok'=>true,'saved_count'=>0];$lf=@fopen(PROFILES_FILE.'.extract.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>false,'error'=>'profiles_busy'];}
+    try{$profiles=loadProfiles();$pk=s4BasalamBestSellersProfileKey();$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];$products=is_array($profile['products']??null)?$profile['products']:[];
+        foreach($incoming as$p){if(!is_array($p)||(int)($p['basalam_product_id']??0)<=0)continue;$k=productKey($p);$old=is_array($products[$k]??null)?$products[$k]:[];if(array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']===null&&isset($old['sales_count_exact'])){unset($p['sales_count_exact'],$p['sales_verified_at']);$p['sales_count']=(int)$old['sales_count_exact'];}$products[$k]=array_replace($old,$p);}
+        uasort($products,function($a,$b){$as=(int)($a['sales_count_exact']??$a['sales_count']??0);$bs=(int)($b['sales_count_exact']??$b['sales_count']??0);if($as!==$bs)return$bs<=>$as;return(int)($b['sales_count_indexed']??0)<=>(int)($a['sales_count_indexed']??0);});
+        $profile=array_replace($profile,['name'=>'باسلام -پرفروش ها','title'=>'باسلام -پرفروش ها','url'=>s4BasalamBestSellersProfileUrl(),'source'=>'basalam_best_sellers','products'=>$products,'lastUpdate'=>date('Y-m-d H:i:s'),'autoUpdate'=>false,'best_sellers_managed'=>true]);
+        $profiles[$pk]=$profile;$ok=saveProfiles($profiles);return['ok'=>$ok,'saved_count'=>count($products),'profile_key'=>$pk];
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+function s4BasalamBestSellersTick(string $source='cron',bool $force=false):array{
+    $lf=@fopen(__DIR__.'/.basalam-bestsellers.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>true,'skipped'=>'busy'];}
+    try{$d=s4BasalamBestSellersLoad();$now=time();if(empty($d['enabled'])&&!$force)return['ok'=>true,'skipped'=>'disabled'];if($now<(int)$d['backoff_until'])return['ok'=>true,'skipped'=>'backoff','retry_at'=>(int)$d['backoff_until']];if(!$force&&$now<(int)$d['next_run_at'])return['ok'=>true,'skipped'=>'interval','retry_at'=>(int)$d['next_run_at']];
+        $d['last_run_at']=$now;$d['next_run_at']=$now+max(1,min(86400,(int)$d['interval_sec']));$queue=array_values((array)$d['verify_queue']);
+        if($queue){$row=array_shift($queue);$id=(int)($row['id']??$row['product_id']??0);$r=s4ThirdPartyExplorerFetchJson('https://services.basalam.com/web/v1/order-processing/orders-calculate-stats?product_id='.$id.'&resource_count=number-of-sales-per-product',8);
+            if(empty($r['ok'])){$d['last_error']=(string)($r['error']??'Exact product sales request failed');$attempt=(int)($row['_verify_attempts']??0)+1;$row['_verify_attempts']=$attempt;if((int)($r['code']??0)===429){s4BasalamBestSellersBackoff($d,$now);array_unshift($queue,$row);}elseif($attempt<3)array_unshift($queue,$row);else$d['last_action']='skipped exact-sales product '.$id.' after 3 failures';$d['verify_queue']=$queue;s4BasalamBestSellersSave($d);return['ok'=>false,'code'=>(int)($r['code']??0),'error'=>$d['last_error']];}
+            $exact=s4ThirdPartyExplorerPublicSales((array)($r['body']??[]));if($exact===null){$attempt=(int)($row['_verify_attempts']??0)+1;$row['_verify_attempts']=$attempt;if($attempt<3)array_unshift($queue,$row);else$d['last_action']='skipped incomplete exact-sales product '.$id;$d['verify_queue']=$queue;$d['last_error']='Exact sales response was incomplete';s4BasalamBestSellersSave($d);return['ok'=>false,'error'=>$d['last_error']];}
+            $d['backoff_attempts']=0;$d['backoff_until']=0;$merge=s4BasalamBestSellersMergeProducts([s4BasalamBestSellerProduct($row,$exact)]);if(empty($merge['ok'])){array_unshift($queue,$row);$d['verify_queue']=$queue;$d['last_error']=(string)($merge['error']??'Profile save failed');s4BasalamBestSellersSave($d);return['ok'=>false,'error'=>$d['last_error']];}
+            $d['verify_queue']=$queue;$d['products_verified']=(int)$d['products_verified']+1;$d['saved_count']=(int)$merge['saved_count'];$d['last_action']='verified product '.$id;$d['last_error']='';s4BasalamBestSellersSave($d);return['ok'=>true,'source'=>$source,'action'=>'verified','product_id'=>$id,'exact_sales'=>$exact,'remaining'=>count($queue),'saved_count'=>$d['saved_count']];}
+        $size=max(1,min(50,(int)$d['page_size']));$offset=max(0,(int)$d['offset']);$url='https://services.basalam.com/web/v1/search/product/search?sort=sales&from='.$offset.'&size='.$size;$cat=(int)($d['partition']['category_id']??0);$q=trim((string)($d['partition']['keyword']??''));if($cat>0)$url.='&filters.categories='.$cat;if($q!=='')$url.='&q='.rawurlencode($q);
+        $r=s4ThirdPartyExplorerFetchJson($url,12);if(empty($r['ok'])){$d['last_error']=(string)($r['error']??'Best-seller discovery failed');if((int)($r['code']??0)===429)s4BasalamBestSellersBackoff($d,$now);s4BasalamBestSellersSave($d);return['ok'=>false,'code'=>(int)($r['code']??0),'error'=>$d['last_error']];}
+        $d['backoff_attempts']=0;$d['backoff_until']=0;$body=(array)($r['body']??[]);$rows=s4ThirdPartyExplorerRows($body);$fresh=[];$mapped=[];foreach($rows as$row){if(!is_array($row))continue;$id=(int)($row['id']??$row['product_id']??0);if($id<=0)continue;if(array_key_exists('IsAvailable',$row)&&$row['IsAvailable']===false)continue;$rawStock=$row['stock']??$row['inventory']??null;if(is_array($rawStock))$rawStock=$rawStock['quantity']??$rawStock['value']??null;if($rawStock!==null&&(int)$rawStock<=0)continue;$rawStatus=$row['status']??$row['status_id']??2976;if(is_array($rawStatus))$rawStatus=$rawStatus['id']??2976;$status=(int)$rawStatus;if($status>0&&!in_array($status,[2976,1],true))continue;$fresh[]=$row;$mapped[]=s4BasalamBestSellerProduct($row,null);$d['known_ids'][(string)$id]=$now;$rowCat=(int)($row['categoryId']??$row['category_id']??($row['category']['id']??0));if($rowCat>0&&!in_array($rowCat,$d['partition_categories'],true))$d['partition_categories'][]=$rowCat;}
+        $merge=s4BasalamBestSellersMergeProducts($mapped);if(empty($merge['ok'])){$d['last_error']=(string)($merge['error']??'Profile save failed');s4BasalamBestSellersSave($d);return['ok'=>false,'error'=>$d['last_error']];}
+        $total=(int)($body['meta']['count']??$body['count']??0);$d['reported_total']=max(0,$total);$d['verify_queue']=$fresh;$d['pages_scanned']=(int)$d['pages_scanned']+1;$d['products_discovered']=(int)$d['products_discovered']+count($fresh);$d['saved_count']=(int)$merge['saved_count'];$d['offset']=$rows?($offset+count($rows)):0;if(!$rows||($total>0&&$d['offset']>=$total)){
+            $d['offset']=0;$cats=array_values(array_unique(array_map('intval',(array)$d['partition_categories'])));$nextIndex=(int)($d['partition_index']??-1)+1;
+            if(isset($cats[$nextIndex])){$d['partition_index']=$nextIndex;$d['partition']['category_id']=$cats[$nextIndex];}
+            else{$d['partition_index']=-1;$d['partition']['category_id']=0;}
+        }
+        /* known_ids is only a compact checkpoint/dedup index; it is not a limit. */
+        $d['last_action']='discovered '.count($fresh).' products at offset '.$offset;$d['last_error']='';s4BasalamBestSellersSave($d);return['ok'=>true,'source'=>$source,'action'=>'discovered','rows'=>count($fresh),'offset'=>$d['offset'],'reported_total'=>$total,'saved_count'=>$d['saved_count']];
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+function s4BasalamBestSellersStatus():array{$d=s4BasalamBestSellersLoad();$d['verify_pending']=count((array)$d['verify_queue']);unset($d['known_ids'],$d['verify_queue']);$d['ok']=true;$d['profile_title']='باسلام -پرفروش ها';$d['profile_key']=s4BasalamBestSellersProfileKey();$d['version']=APP_VERSION;return$d;}
 function s4ThirdPartyExplorerCategoryFromRow(array $row):array{
     $cat=is_array($row['category']??null)?$row['category']:[];$id=(int)($cat['id']??$row['category_id']??0);$title=function_exists('basalamApiCategoryPath')?basalamApiCategoryPath($cat):'';
     if($title==='')$title=trim((string)($cat['title']??$cat['name']??$row['category_title']??''));return['id'=>$id,'title'=>$title];
@@ -26960,7 +27036,7 @@ function s4ThirdPartyExplorerTick(string $source='cron',bool $force=false):array
         if($now<(int)($d['backoff_until']??0))return['ok'=>true,'skipped'=>'backoff','retry_at'=>(int)$d['backoff_until']];
         if($now<(int)($d['next_run_at']??0))return['ok'=>true,'skipped'=>'interval','retry_at'=>(int)$d['next_run_at']];
         $seeds=s4ThirdPartyExplorerSeeds($cfg);$si=max(0,(int)($d['cursor']['seed']??0))%count($seeds);$seed=$seeds[$si];$cursor=max(0,(int)($d['cursor']['by_seed'][$seed['key']]??0));
-        $url=s4ThirdPartyExplorerUrl($seed,$cursor);$r=s4ThirdPartyExplorerFetchJson($url,10);$d['last_run_at']=$now;$d['next_run_at']=$now+max(30,min(86400,(int)($cfg['interval_sec']??120)));
+        $url=s4ThirdPartyExplorerUrl($seed,$cursor);$r=s4ThirdPartyExplorerFetchJson($url,10);$d['last_run_at']=$now;$d['next_run_at']=$now+max(1,min(86400,(int)($cfg['interval_sec']??1)));
         if(empty($r['ok'])){
             $code=(int)($r['code']??0);$d['last_error']=(string)($r['error']??'Basalam discovery failed');if($code===429)$d['backoff_until']=$now+300;
             s4ThirdPartyExplorerSave($d);return['ok'=>false,'code'=>$code,'error'=>$d['last_error'],'backoff_until'=>(int)$d['backoff_until']];
@@ -27085,7 +27161,9 @@ function s4ThirdPartyExplorerSalesDiagnostic(int $vendorId):array{
 if(isset($_GET['third_party_explorer_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerProbe(false),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_sales_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerSalesDiagnostic((int)$_GET['third_party_explorer_sales_test']),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerStatus(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
-if(isset($_GET['third_party_explorer_run'])){http_response_code(405);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'POST required']);exit;}
+if(isset($_GET['basalam_best_sellers_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4BasalamBestSellersStatus(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_GET['third_party_explorer_run'])||isset($_GET['basalam_best_sellers_run'])){http_response_code(405);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'POST required']);exit;}
+if(isset($_POST['basalam_best_sellers_run'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();echo json_encode(s4BasalamBestSellersTick('manual',true),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
 if(isset($_POST['third_party_explorer_save'])||isset($_POST['third_party_explorer_action'])||isset($_POST['third_party_explorer_run'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();
     if(isset($_POST['third_party_explorer_run'])){echo json_encode(s4ThirdPartyExplorerTick('manual',true),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
@@ -27095,7 +27173,7 @@ if(isset($_POST['third_party_explorer_save'])||isset($_POST['third_party_explore
         $ranking=(string)($_POST['ranking']??'balanced');$cfg['ranking']=in_array($ranking,['balanced','efficiency','absolute'],true)?$ranking:'balanced';
         $cfg['category_ids']=array_values(array_unique(array_filter(array_map('intval',preg_split('~[\\s,،]+~',(string)($_POST['category_ids']??''))),fn($v)=>$v>0)));
         $cfg['keywords']=array_values(array_unique(array_filter(array_map('trim',preg_split('~[\\r\\n,،]+~',(string)($_POST['keywords']??''))))));
-        $cfg['interval_sec']=max(30,min(86400,(int)($_POST['interval_sec']??120)));$cfg['min_products']=max(0,(int)($_POST['min_products']??1));$cfg['min_sales']=max(0,(int)($_POST['min_sales']??0));
+        $cfg['interval_sec']=max(1,min(86400,(int)($_POST['interval_sec']??1)));$cfg['min_products']=max(0,(int)($_POST['min_products']??1));$cfg['min_sales']=max(0,(int)($_POST['min_sales']??0));
         $cfg['price_percent']=max(-99,min(10000,(float)($_POST['price_percent']??20)));$cfg['suffix_pattern']=trim((string)($_POST['suffix_pattern']??'(کد:{n})'))?:'(کد:{n})';$cfg['auto_all_destinations']=true;
         $d['config']=$cfg;$d['next_run_at']=0;$ok=s4ThirdPartyExplorerSave($d);@flock($lf,LOCK_UN);@fclose($lf);echo json_encode(['ok'=>$ok,'config'=>$cfg],JSON_UNESCAPED_UNICODE);exit;}
     $vid=(int)($_POST['vendor_id']??0);$op=(string)($_POST['explorer_action']??'');
@@ -37269,6 +37347,11 @@ if(function_exists('s4CronMaybeRunDailyAiTest')){
    its own lock keep this from increasing Basalam pressure uncontrollably. */
 if(function_exists('s4ThirdPartyExplorerTick')){
     try{$GLOBALS['_thirdPartyExplorer']=s4ThirdPartyExplorerTick('cron');}catch(Throwable $_tpe){$GLOBALS['_thirdPartyExplorer']=['ok'=>false,'error'=>$_tpe->getMessage()];}
+}
+/* v10.665: one bounded best-seller discovery or exact-sales verification
+   checkpoint per due cron, independently locked and 429-backed off. */
+if(function_exists('s4BasalamBestSellersTick')){
+    try{$GLOBALS['_basalamBestSellers']=s4BasalamBestSellersTick('cron');}catch(Throwable $_bbs){$GLOBALS['_basalamBestSellers']=['ok'=>false,'error'=>$_bbs->getMessage()];}
 }
 /* v10.643: extraction owns an independent flock, so it must not wait even to
    acquire .cron_run.lock. An older matrix/network request may legitimately
@@ -50067,6 +50150,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'th.tpe-sortable')!==false
         &&strpos($selfSrc,"{v:'10." . "664'")!==false
         &&version_compare(APP_VERSION,'10.664','>='));
+    $add('10.665','جمع‌آور پرفروش‌های باسلام پایدار، بدون سقف برنامه و با فروش دقیق است',
+        s4BasalamBestSellersProfileUrl()==='https://basalam.com/s/products?sort=sales&s4_profile=best-sellers'
+        &&s4BasalamBestSellersDefaults()['interval_sec']===1
+        &&strpos($selfSrc,'number-of-sales-per-product')!==false
+        &&strpos($selfSrc,"'name'=>'باسلام -پرفروش ها'")!==false
+        &&strpos($selfSrc,'filters.categories=')!==false
+        &&strpos($selfSrc,"max(1,min(86400,(int)(\$cfg['interval_sec']??1)))")!==false
+        &&strpos($selfSrc,"{v:'10." . "665'")!==false
+        &&version_compare(APP_VERSION,'10.665','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -91732,6 +91824,16 @@ html[data-skin="gloss"] .progress-bar{
 </div>
 </div>
 
+<!-- v10.665: persistent marketplace best-seller collection -->
+<div class="smenu" id="basalamBestSellersSmenu">
+<div class="smenu-hdr" style="background:linear-gradient(90deg,#b45309,#0f172a)" onclick="toggleSmenu(this);bbsLoad()"><h3>🏆 پرفروش‌ترین محصولات باسلام</h3><span class="cst on" id="bbsBadge">فعال</span><span class="arrow">▼</span></div>
+<div class="smenu-body">
+<div style="font-size:10.5px;color:#cbd5e1;line-height:1.9">محصولات بازار با ترتیب فروش کشف می‌شوند، فروش ارسال‌شدهٔ هر محصول به‌تدریج از آمار عمومی دقیق باسلام تأیید می‌شود و همهٔ نتایج بدون محدودیت تعداد برنامه در پروفایل <b>باسلام -پرفروش ها</b> ادغام می‌شوند. پیشرفت و صف تأیید پس از هر اجرا ذخیره می‌شود.</div>
+<div class="tpe-actions"><button type="button" class="btn btn-cyan" onclick="bbsRun()">↻ اجرای گام بعدی</button><button type="button" class="btn btn-gray" onclick="bbsLoad()">تازه‌سازی وضعیت</button></div>
+<div class="tpe-stats" id="bbsStats"><span class="tpe-stat">در انتظار بارگذاری…</span></div>
+<div id="bbsMsg" class="tpe-note"></div>
+</div></div>
+
 <!-- v10.647: review-first third-party Basalam discovery -->
 <div class="smenu" id="thirdPartyExplorerSmenu">
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#7c3aed,#0f172a)" onclick="toggleSmenu(this);tpeLoad()"><h3>🧭 Third-Party Shop Explorer</h3><span class="cst off" id="tpeBadge">متوقف</span><span class="arrow">▼</span></div>
@@ -91747,7 +91849,7 @@ html[data-skin="gloss"] .progress-bar{
 <div class="tpe-box"><label>کلیدواژه‌ها (با کاما)</label><input id="tpeWords" placeholder="پوشاک, هدیه"></div>
 <div class="tpe-box"><label>حداقل محصولات</label><input id="tpeMinProducts" type="number" min="0" value="1"></div>
 <div class="tpe-box"><label>حداقل فروش تخمینی</label><input id="tpeMinSales" type="number" min="0" value="0"></div>
-<div class="tpe-box"><label>فاصله درخواست (ثانیه)</label><input id="tpeInterval" type="number" min="30" value="120"></div>
+<div class="tpe-box"><label>فاصله درخواست (ثانیه)</label><input id="tpeInterval" type="number" min="1" value="1"><small>حداقل ۱ ثانیه؛ در خطای 429 مکث تصاعدی خودکار اعمال می‌شود.</small></div>
 <div class="tpe-box"><label>افزایش قیمت پروفایل (%)</label><input id="tpePrice" type="number" value="20"></div>
 <div class="tpe-box"><label>الگوی پسوند یکتا</label><input id="tpeSuffix" value="(کد:{n})"></div>
 </div>
@@ -91763,6 +91865,8 @@ let tpeBusy=false,tpeShowingProbe=false,tpeLiveStatus=null,tpeSort={col:1,type:'
 function tpeEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function tpeForm(extra){const f=new FormData();if(TPE_WP_NONCE)f.append('_wpnonce',TPE_WP_NONCE);if(TPE_BROWSER_NONCE)f.append('explorer_nonce',TPE_BROWSER_NONCE);Object.entries(extra||{}).forEach(([k,v])=>f.append(k,v));return f;}
 async function tpeReq(extra,post=false){const r=await fetch(post?'':'?third_party_explorer_status=1&_t='+Date.now(),post?{method:'POST',body:tpeForm(extra)}:{});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d;}
+async function bbsLoad(){const msg=document.getElementById('bbsMsg');try{const r=await fetch('?basalam_best_sellers_status=1&_t='+Date.now(),{cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||('HTTP '+r.status));document.getElementById('bbsBadge').textContent=d.enabled?'فعال':'متوقف';document.getElementById('bbsStats').innerHTML=`<span class="tpe-stat">ذخیره‌شده: ${Number(d.saved_count||0).toLocaleString()}</span><span class="tpe-stat">کشف‌شده: ${Number(d.products_discovered||0).toLocaleString()}</span><span class="tpe-stat">فروش دقیق: ${Number(d.products_verified||0).toLocaleString()}</span><span class="tpe-stat">صف تأیید: ${Number(d.verify_pending||0).toLocaleString()}</span><span class="tpe-stat">صفحات: ${Number(d.pages_scanned||0).toLocaleString()}</span><span class="tpe-stat">نقطه ادامه: ${Number(d.offset||0).toLocaleString()}</span><span class="tpe-stat">سقف گزارش بیرونی: ${Number(d.reported_total||0).toLocaleString()}</span>`;msg.textContent=(d.last_error?'آخرین خطا: '+d.last_error:'آخرین کار: '+(d.last_action||'—'))+' • پروفایل: '+d.profile_title;}catch(e){msg.textContent='خطا: '+e.message;}}
+async function bbsRun(){const msg=document.getElementById('bbsMsg');msg.textContent='در حال اجرای یک گام محدود…';try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_run:1})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));await bbsLoad();}catch(e){msg.textContent='خطا: '+e.message;}}
 function tpeSet(id,v){const e=document.getElementById(id);if(e)e.value=v??'';}
 function tpeNum(v){const s=String(v??'').replace(/[۰-۹]/g,c=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(c)).replace(/[٠-٩]/g,c=>'٠١٢٣٤٥٦٧٨٩'.indexOf(c));const n=Number(s.replace(/[^0-9.\-]/g,''));return Number.isFinite(n)?n:0;}
 function tpeApplySort(){const body=document.getElementById('tpeRows');if(!body)return;const rows=[...body.querySelectorAll('tr[data-rank]')];if(!rows.length)return;const{col,type,dir}=tpeSort;rows.sort((a,b)=>{let av,bv;if(type==='rank'){av=Number(a.dataset.rank);bv=Number(b.dataset.rank);}else{av=(a.cells[col]?.innerText||'').trim();bv=(b.cells[col]?.innerText||'').trim();if(type==='number'){av=tpeNum(av);bv=tpeNum(bv);}else{const c=av.localeCompare(bv,'fa');return c*dir;}}return(av-bv)*dir;});rows.forEach((r,i)=>{body.appendChild(r);if(r.cells[1])r.cells[1].textContent=String(i+1);});document.querySelectorAll('.tpe-sort-mark').forEach(m=>m.textContent=Number(m.dataset.col)===col?(dir>0?'▲':'▼'):'');}
@@ -102839,6 +102943,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.665', t:'🏆 پروفایل پایدار پرفروش‌های باسلام و فاصلهٔ یک‌ثانیه‌ای', items:[
+    'بخش مستقل پرفروش‌ترین محصولات، صفحه‌های مرتب‌شده بر اساس فروش را با checkpoint پایدار می‌خواند و همهٔ محصولات را بدون سقف تعداد برنامه در پروفایل «باسلام -پرفروش ها» ادغام می‌کند.',
+    'هر محصول به‌صورت نوبتی با number-of-sales-per-product تأیید می‌شود؛ قفل تک‌اجرا، ذخیرهٔ اتمیک، ادامه از همان نقطه، تفکیک دسته‌ای پس از سقف بیرونی جست‌وجو و backoff تصاعدی 429 فعال است.',
+    'حداقل فاصلهٔ Explorer از انتخاب محافظه‌کارانه و مستندنشدهٔ ۱۲۰ ثانیه به ۱ ثانیه کاهش یافت؛ تنظیم‌های سفارشی حفظ می‌شوند و فقط مقدار پیش‌فرض قدیمی مهاجرت می‌کند.'
+  ]},
   {v:'10.664', t:'⚡ داشبورد کاملاً زنده و جدول مرتب‌شونده', items:[
     'شمارنده‌های کل، بررسی‌شده، فروش مثبت، در انتظار فروش، صفحات، محصولات و تعداد نمایشی هر پنج ثانیه از state سرور تازه می‌شوند و نوار پیشرفت نیز همزمان حرکت می‌کند.',
     'زمان آخرین اجرا، زمان باقی‌مانده تا اجرای بعدی و آخرین فروش غنی‌سازی‌شده هر ثانیه به‌صورت زنده نمایش داده می‌شود.',
