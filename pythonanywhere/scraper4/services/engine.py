@@ -385,8 +385,8 @@ def _tick_locked(db, settings, budget_seconds=None, max_entries=25, *, max_steps
             'seconds': round(time.monotonic() - start, 2)}
 
 
-def http_tick(db, settings):
-    """One resumable page/product per authenticated external cron request.
+def http_tick(db, settings, *, source="external"):
+    """One resumable page/product per external or browser-fallback request.
 
     This is intentionally not maintain(): no pip, code deployment, shell or
     background thread in WSGI. Timeouts/budget are soft request bounds, not an
@@ -399,11 +399,24 @@ def http_tick(db, settings):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {'ok': True, 'busy': True, 'ran': 0}
+        if source == 'browser':
+            from .browser_cron import priority
+            blocked = priority(db, settings)
+            if blocked:
+                return {'ok': True, 'ran': 0, 'mode': 'browser_fallback', **blocked}
+            # Polling an idle panel must not consume the shared rate window or
+            # auto-create work unless periodic extraction was explicitly set.
+            with db.connect() as conn:
+                pending=conn.execute("SELECT 1 FROM queue_entries WHERE status IN ('waiting','running') LIMIT 1").fetchone()
+            if not pending and settings.auto_extract_minutes <= 0:
+                return {'ok': True, 'ran': 0, 'reason': 'idle', 'retry_after_seconds': 45}
+        else:
+            db.checkpoint_write('cron:external', {'started_at': utc_now(), 'started_epoch': time.time()})
         previous = db.checkpoint_read('cron:last')
         since = time.time() - previous.get('started_epoch', 0)
         if since < 45:
             return {'ok': True, 'throttled': True, 'retry_after_seconds': math.ceil(45 - since), 'ran': 0}
-        started = {'started_at': utc_now(), 'started_epoch': time.time(), 'status': 'running'}
+        started = {'started_at': utc_now(), 'started_epoch': time.time(), 'status': 'running', 'source': source}
         db.checkpoint_write('cron:last', started)
         # Avoid inheriting arbitrarily long pacing / rendering timeouts.
         bounded = replace(settings, fetch_timeout=8, connect_timeout=3,
@@ -414,7 +427,9 @@ def http_tick(db, settings):
         except Exception:
             db.checkpoint_write('cron:last', {**started, 'status': 'failed', 'done_at': utc_now()})
             raise
-        db.checkpoint_write('cron:last', {**started, 'status': 'done', 'done_at': utc_now(), 'result': result})
+        completed = {**started, 'status': 'done', 'done_at': utc_now(), 'result': result}
+        db.checkpoint_write('cron:last', completed)
+        if source == 'browser':db.checkpoint_write('browser-cron:last', completed)
         return {**result, 'mode': 'single_step', 'code_updates': False}
 
 

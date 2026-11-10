@@ -1,0 +1,5 @@
+{% if not preview_mode %}<aside id="browser-cron" class="notice" aria-label="کران جایگزین مرورگر">
+<label><input type="checkbox" data-browser-cron-toggle checked> کران خودکار مرورگر، فقط وقتی کران بیرونی یا worker فعال نیست</label>
+<span data-browser-cron-status role="status" aria-live="polite">در حال بررسی زمان‌بندی…</span>
+<small>این صفحه را باز نگه دارید. صف‌های ثبت‌شدهٔ استخراج و ارسال مرحله‌ای اجرا می‌شوند؛ کار مکث‌شده/ناموفق خودکار ادامه نمی‌یابد. با بسته‌شدن مرورگر یا خواب دستگاه، این جایگزین متوقف می‌شود؛ تب پس‌زمینه ممکن است کند شود.</small>
+</aside>{% endif %}

@@ -191,5 +191,5 @@ def contracts():
     return {'ok':True,'read_actions':sorted(php_ui.READS|READS|php_ui_start.READS),'write_actions':sorted(php_ui.WRITES|WRITES|php_ui_start.WRITES),
             'ui_actions':['python_open_panel'],'full_php_parity':False,'heartbeat_can_run_cron':False,
             'trusted_panels':['woocommerce','basalam','backup','general','version','render','guardian','profile-stats','profile','selectors','results','audit','help','audit-one','audit-pages','audit-all','trial','diagnostics','endpoint-inventory','shared-workspace','sync-audit-all']+['metric:'+{'all':'total','has_image':'with_image','web_link':'linked'}.get(k,k) for k in php_ui.start_page.METRICS],
-            'boot_policy':{'legacy_background_jobs':False,'automatic_selector_probes':False,'service_worker':False},
+            'boot_policy':{'legacy_background_jobs':False,'automatic_selector_probes':False,'service_worker':False,'trusted_browser_queue_fallback':True},
             'secret_operations':'trusted_parent_only','unknown_action_http_status':501}

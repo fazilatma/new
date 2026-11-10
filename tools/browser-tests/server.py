@@ -20,6 +20,7 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
     def forbidden(*args,**kwargs):
         raise AssertionError('Browser boot must never fetch a source/destination')
     mode=os.environ.get('S4_BROWSER_EXTRACTION_FIXTURE','');source_calls=[]
+    if mode!='browser-cron':db.checkpoint_write('browser-cron:config',{'enabled':False})
     if mode:
         if mode=='detail':
             db.upsert_profile('one',p['url'],p['name'],selectors=p['selectors'],settings={'detailSelectors':{'longDesc':'.description','sku':'.sku'}})
@@ -28,7 +29,7 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
             for row in db.list_products(p['id']):db.mark_product_target(row['id'],'woo',77)
         if mode in ('resume','resume-denied'):
             db.enqueue('extract',p['id'],{'pages':3,'_page':2,'with_detail':False},status='failed')
-        if mode=='waiting':
+        if mode in ('waiting','browser-cron'):
             db.upsert_profile('one',p['url'],'مانتو پاتریس',selectors=p['selectors'])
             db.enqueue('extract',p['id'],{'pages':1,'with_detail':False})
         other=db.upsert_profile('other','https://example.com/other','Unrelated fixture')

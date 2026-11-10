@@ -57,4 +57,26 @@ def register_cron(app, db, settings):
         result = http_tick(db, settings)
         return jsonify(result), 503 if result.get('maintenance') else 200
 
+    @bp.route('/api/cron/browser/config', methods=['GET', 'POST'])
+    def browser_config():
+        from .services.browser_cron import status
+        if not session.get('authenticated') or request.environ.get('s4.bearer'):
+            abort(403)
+        if request.args:raise ValueError('Browser cron query parameters are not accepted')
+        if request.method == 'POST':
+            data=request.get_json()
+            if not isinstance(data,dict) or set(data)!={'enabled'} or type(data['enabled']) is not bool:
+                raise ValueError('Expected {"enabled": true|false}')
+            db.checkpoint_write('browser-cron:config',data)
+        return jsonify(status(db,settings))
+
+    @bp.post('/api/cron/browser/run')
+    def browser_run():
+        if not session.get('authenticated') or request.environ.get('s4.bearer'):
+            abort(403)
+        if request.args or (request.content_length and request.get_json()!={}):
+            raise ValueError('Browser cron accepts only an empty body or {} and no query')
+        result=http_tick(db,settings,source='browser')
+        return jsonify(result),503 if result.get('maintenance') else 200
+
     app.register_blueprint(bp)

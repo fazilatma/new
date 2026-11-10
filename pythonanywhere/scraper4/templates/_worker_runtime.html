@@ -1,6 +1,8 @@
 <section id="worker-runtime" aria-labelledby="worker-runtime-title">
-  <h2 id="worker-runtime-title">⚡ کران داخلی و worker طولانی‌مدت</h2>
+  <h2 id="worker-runtime-title">⚡ worker سمت سرور و Task داخلی</h2>
   <p>worker مستقل از وب، صف‌های ثبت‌شدهٔ استخراج و ارسال را پیوسته پردازش می‌کند؛ داخل درخواست HTTP حلقهٔ دائمی یا پردازش پس‌زمینه شروع نمی‌شود. کران بیرونی می‌تواند به‌عنوان پشتیبان باقی بماند؛ قفل مشترک از اجرای هم‌زمان جلوگیری می‌کند.</p>
+  <p>کران جایگزین مرورگر در بخش وضعیت کران مرورگر جداگانه فعال است؛ این بخش برای اجرای مستقل از مرورگر با Task/Always-on است. عملیات پایتون ذاتاً محدود به یک دقیقه نیست؛ محدودیت درخواست وب با عمر worker فرق دارد.</p>
+  {% if browser_cron_in_settings %}{% include '_browser_cron.html' %}{% endif %}
   <form id="worker-runtime-form"><div class="pair"><label class="check"><input type="checkbox" name="enabled"> اجازهٔ پردازش صف توسط worker داخلی (شامل ارسال‌های ثبت‌شده)</label><label>فاصلهٔ بررسی صف · ثانیه<input type="number" name="poll_seconds" min="5" max="60" value="5" required></label></div><div class="actions"><button type="submit">ذخیرهٔ تنظیم worker</button><button type="button" id="worker-native-schedule" class="secondary">فعال‌سازی Task داخلی PythonAnywhere</button><button type="button" id="worker-runtime-refresh" class="secondary">بررسی اجرا</button></div></form>
   <p id="worker-runtime-message" role="status" aria-live="polite">در حال دریافت وضعیت…</p><pre id="worker-runtime-state" dir="ltr"></pre>
   <details><summary>فرمان آماده برای Tasks یا سرور شخصی</summary><p>برای اجرای دائمی در PythonAnywhere، فرمان Always-on را در Tasks قرار دهید؛ این قابلیت به حساب پولی نیاز دارد. کنسول معمولی تضمین اجرای دائمی ندارد. روی سرور شخصی می‌توانید همین فرمان را با systemd یا supervisor مدیریت کنید.</p><pre id="worker-runtime-commands" dir="ltr"></pre></details>

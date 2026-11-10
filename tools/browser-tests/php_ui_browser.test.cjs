@@ -321,3 +321,18 @@ for(const route of ['/','/php-ui'])test('Snappshop Digikala Basalam legacy brows
  const calls=(await(await page.request.get(origin+'/__test__/source-calls')).json()).urls;assert.ok(calls.some(u=>u.startsWith('https://apix.snappshop.ir/')));assert.ok(calls.some(u=>u.startsWith('https://api.digikala.com/')));assert.ok(calls.some(u=>u.startsWith('https://core.basalam.com/')));assert.ok(calls.every(u=>/^https:\/\/(apix.snappshop.ir|api.digikala.com|core.basalam.com)\//.test(u)));
  assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);assert.deepEqual(errors,[]);
 });
+
+for(const route of ['/','/php-ui'])test('browser cron automatically advances existing queue without external cron in '+route,{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'browser-cron',true),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ // Clock installed only in this test: all other browser fixtures explicitly
+ // disable browser cron so manual-action tests cannot race a real scheduler.
+ await page.clock.install();const response=page.waitForResponse(r=>r.url().endsWith('/api/cron/browser/run'));
+ await page.goto(origin+route);await page.clock.fastForward(6000);const data=await(await response).json();assert.equal(data.ran,1);
+ const state=(await(await page.request.get(origin+'/__test__/extract-state')).json());const job=state.jobs.find(e=>e.profile_id===1);assert.equal(job.status,'done');assert.equal(job.counters.found,1);
+ const calls=(await(await page.request.get(origin+'/__test__/source-calls')).json()).urls;assert.equal(calls.length,1);assert.ok(calls[0].startsWith('https://example.com/shop'));
+ if(route==='/php-ui'){
+  const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await page.frameLocator('#php-original-ui').locator('html[data-s4-ready="1"]').waitFor();await page.evaluate(()=>S4Menu.open('general'));
+ }
+ await page.locator('[data-browser-cron-toggle]').uncheck();await page.waitForFunction(()=>!document.querySelector('[data-browser-cron-toggle]').disabled);assert.equal((await(await page.request.get(origin+'/api/cron/browser/config')).json()).config.enabled,false);
+ assert.deepEqual(errors,[]);
+});
