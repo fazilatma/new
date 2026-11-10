@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.657';
+const APP_VERSION = '10.658';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26931,11 +26931,11 @@ function s4ThirdPartyExplorerEnrichPublicOrders(array &$d,int $timeout=8,?int $o
     if($onlyVendorId!==null&&isset($d['vendors'][(string)$onlyVendorId]))$chosen=$d['vendors'][(string)$onlyVendorId];else foreach($candidates as$v)if((int)($v['vendor_id']??0)>0&&$now-(int)($v['sales_checked_at']??0)>=86400){$chosen=$v;break;}if(!$chosen)return['ok'=>true,'skipped'=>'all_fresh'];
     $vid=(int)$chosen['vendor_id'];$key=(string)$vid;if(!isset($d['vendors'][$key]))return['ok'=>false,'vendor_id'=>$vid,'error'=>'vendor_disappeared'];
     $r=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/vendors/'.$vid,$timeout);$vendor=!empty($r['ok'])&&is_array($r['body']??null)?$r['body']:[];if(is_array($vendor['data']??null)&&isset($vendor['data']['id']))$vendor=$vendor['data'];$orders=s4ThirdPartyExplorerPublicOrders($vendor);
-    $sales=0;$reviews=0;$sampled=0;$productCode=0;if($orders===null){$pr=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/vendors/'.$vid.'/products?statuses=2976&per_page=100&sort=sales_count%3Adesc',$timeout);$productCode=(int)($pr['code']??0);$prows=!empty($pr['ok'])?s4ThirdPartyExplorerRows((array)($pr['body']??[])):[];$sampled=count($prows);
+    $sales=0;$reviews=0;$sampled=0;$productCode=0;if($orders===null){/* Public API rejects sales/review sorting and caps pages at 20. Oldest active products provide a stable, historically useful conservative sample. */$pr=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/products?vendor_ids='.$vid.'&status=2976&per_page=20&sort=id%3Aasc',$timeout);$productCode=(int)($pr['code']??0);$prows=!empty($pr['ok'])?s4ThirdPartyExplorerRows((array)($pr['body']??[])):[];$sampled=count($prows);
         foreach($prows as$product){$raw=(int)($product['sales_count']??0);if($raw>0)$sales+=$raw;$reviews+=max(0,(int)($product['review_count']??$product['reviews_count']??0));}}
     $d['vendors'][$key]['sales_checked_at']=$now;$source='public_sales_unavailable';$value=(int)($d['vendors'][$key]['sales_estimate']??0);$estimated=true;$label='فروش عمومی در دسترس نیست';
     if($orders!==null){$value=$orders;$estimated=false;$source='public_vendor_order_count';$label='تعداد سفارش عمومی غرفه';$d['vendors'][$key]['public_order_count']=$orders;}
-    elseif($sales>0){$value=$sales;$source='top_products_sales_lower_bound';$label='حداقل فروش محصولات پرفروش عمومی';}
+    elseif($sales>0){$value=$sales;$source='sampled_product_sales_lower_bound';$label='حداقل فروش نمونهٔ محصولات عمومی';}
     elseif($reviews>0){$value=$reviews;$source='product_reviews_lower_bound';$label='حداقل فروش بر پایهٔ نظرهای عمومی';}
     $d['vendors'][$key]['sales_estimate']=$value;$d['vendors'][$key]['sales_is_estimate']=$estimated;$d['vendors'][$key]['sales_source']=$source;$d['vendors'][$key]['sales_metric_label']=$label;$d['vendors'][$key]['sales_sampled_products']=$sampled;
     foreach(['product_count','products_count']as$pk)if(isset($vendor[$pk])&&is_numeric($vendor[$pk])){$d['vendors'][$key]['product_count']=max((int)$d['vendors'][$key]['product_count'],(int)$vendor[$pk]);break;}$created=s4ThirdPartyExplorerTimestamp($vendor['created_at']??0);if($created>0)$d['vendors'][$key]['created_at']=$created;
@@ -49990,9 +49990,8 @@ if (isset($_GET['selftest'])) {
     $add('10.655','فروش محصولات پرفروش و نظرهای عمومی fallback صفرهای order_count هستند',
         s4ThirdPartyExplorerSales(['sales_count'=>0,'review_count'=>9])===9
         &&s4ThirdPartyExplorerRows(['items'=>[['id'=>1]]])[0]['id']===1
-        &&strpos($selfSrc,'top_products_sales_lower_bound')!==false
+        &&strpos($selfSrc,'sampled_product_sales_lower_bound')!==false
         &&strpos($selfSrc,'product_reviews_lower_bound')!==false
-        &&strpos($selfSrc,'sort=sales_count%3Adesc')!==false
         &&strpos($selfSrc,"{v:'10." . "655'")!==false
         &&version_compare(APP_VERSION,'10.655','>='));
     $add('10.656','آخرین نتیجهٔ غنی‌سازی فروش و شمار منبع‌ها قابل تشخیص است',
@@ -50001,10 +50000,16 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"third_party_explorer_sales_test")!==false
         &&strpos($selfSrc,"{v:'10." . "656'")!==false
         &&version_compare(APP_VERSION,'10.656','>='));
-    $add('10.657','محصولات فروشگاه از قرارداد اختصاصی vendor با statuses خوانده می‌شوند',
-        strpos($selfSrc,"'/products?statuses=2976&per_page=100&sort=sales_count%3Adesc'")!==false
+    $add('10.657','کد HTTP محصول در probe ثبت و پاسخ ناموفق cache نمی‌شود',
+        strpos($selfSrc,"(int)(\$last['product_code']??0)===200")!==false
         &&strpos($selfSrc,"{v:'10." . "657'")!==false
         &&version_compare(APP_VERSION,'10.657','>='));
+    $add('10.658','نمونهٔ عمومی محصولات با محدودیت واقعی Basalam دریافت می‌شود',
+        strpos($selfSrc,'vendor_ids=')!==false
+        &&strpos($selfSrc,'per_page=20&sort=id%3Aasc')!==false
+        &&strpos($selfSrc,'sampled_product_sales_lower_bound')!==false
+        &&strpos($selfSrc,"{v:'10." . "658'")!==false
+        &&version_compare(APP_VERSION,'10.658','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102770,6 +102775,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.658', t:'✅ نمونهٔ فروش عمومی مطابق محدودیت واقعی باسلام', items:[
+    'آزمایش مستقیم API ثابت کرد فیلتر vendor_ids عمومی کار می‌کند، اما sort بر پایهٔ sales_count و review_count صریحاً رد می‌شود و per_page نیز حداکثر ۲۰ است.',
+    'Explorer اکنون ۲۰ محصول فعال و قدیمی غرفه را با قرارداد پذیرفته‌شده می‌گیرد؛ این نمونهٔ پایدار شانس مشاهدهٔ سابقهٔ نظر/فروش را بدون فشار صفحه‌بندی بالا می‌برد.',
+    'sales_count مثبت نمونه همچنان حداقل فروش و در صورت پنهان‌بودن آن، جمع review_count حداقل محافظه‌کارانه است؛ هر دو منبع دقیقاً برچسب‌گذاری می‌شوند.'
+  ]},
   {v:'10.657', t:'🛠️ اصلاح قرارداد فهرست محصولات هر غرفه', items:[
     'آزمایش زنده نشان داد endpoint غرفه پاسخ ۲۰۰ می‌دهد اما فیلتر vendor_ids در فهرست عمومی با ۴۲۲ رد می‌شود.',
     'fallback فروش اکنون از endpoint رسمی و اختصاصی /v1/vendors/{id}/products با پارامتر statuses استفاده می‌کند تا محصولات همان غرفه واقعاً دریافت شوند.',
