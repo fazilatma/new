@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.661';
+const APP_VERSION = '10.662';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26919,12 +26919,15 @@ function s4ThirdPartyExplorerCategoryFromRow(array $row):array{
     if($title==='')$title=trim((string)($cat['title']??$cat['name']??$row['category_title']??''));return['id'=>$id,'title'=>$title];
 }
 function s4ThirdPartyExplorerProbe(bool $fresh=false):array{
-    $cache=__DIR__.'/.third-party-shop-explorer-probe.json';$cached=json_decode((string)@file_get_contents($cache),true);if(!$fresh&&is_array($cached)&&time()-(int)($cached['tested_at']??0)<60)return$cached+['cached'=>true];
+    $cache=__DIR__.'/.third-party-shop-explorer-probe.json';$cached=json_decode((string)@file_get_contents($cache),true);if(!$fresh&&is_array($cached)&&(string)($cached['version']??'')===APP_VERSION&&time()-(int)($cached['tested_at']??0)<60)return$cached+['cached'=>true];
     $lf=@fopen(__DIR__.'/.third-party-shop-explorer.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>false,'error'=>'explorer_busy'];}
     try{$d=s4ThirdPartyExplorerLoad();$seeds=s4ThirdPartyExplorerSeeds($d['config']);$seed=$seeds[0];$url=s4ThirdPartyExplorerUrl($seed,0);$r=s4ThirdPartyExplorerFetchJson($url,15);$body=is_array($r['body']??null)?$r['body']:[];$rows=!empty($r['ok'])?s4ThirdPartyExplorerRows($body):[];
         $profiles=loadProfiles();$used=s4ThirdPartyExplorerProfileCodes($profiles,$d['config']);$next=$used?max(array_keys($used))+1:max(1,(int)($d['config']['suffix_start']??1));$samples=[];$seen=[];
-        foreach($rows as$row){$v=s4ThirdPartyExplorerVendorFromRow((array)$row);$vid=(int)($v['id']??0);if($vid<=0||isset($seen[$vid]))continue;$seen[$vid]=true;$publicOrders=s4ThirdPartyExplorerPublicOrders($v);$sales=$publicOrders??s4ThirdPartyExplorerSales((array)$row);$products=max(1,(int)($v['products_count']??$v['product_count']??1));$created=s4ThirdPartyExplorerTimestamp($v['created_at']??$row['created_at']??0);$scores=s4ThirdPartyExplorerScores($sales,$products,$created);$cat=s4ThirdPartyExplorerCategoryFromRow((array)$row);
-            $samples[]=['vendor_id'=>$vid,'title'=>(string)($v['title']??('غرفه '.$vid)),'url'=>s4ThirdPartyExplorerStorefrontUrl($v),'proposed_profile_name'=>s4ThirdPartyExplorerProfileTitle($v,$d['config'],$next),'assigned_code'=>$next,'assigned_suffix'=>s4ThirdPartyExplorerFormatSuffix($d['config'],$next),'categories'=>$cat['title']!==''?[$cat]:[],'sales_estimate'=>$sales,'sales_is_estimate'=>$publicOrders===null,'sales_metric_label'=>$publicOrders!==null?'تعداد سفارش عمومی غرفه':'فروش تخمینی محصول','product_count'=>$products,'age_days'=>$scores['age_days'],'active_score'=>$scores['balanced'],'state'=>'test'];$next++;if(count($samples)>=8)break;}
+        foreach($rows as$row){$v=s4ThirdPartyExplorerVendorFromRow((array)$row);$vid=(int)($v['id']??0);if($vid<=0||isset($seen[$vid]))continue;$seen[$vid]=true;
+            /* The Test table must use the same storefront statistic as persistent
+               candidates; catalogue product/vendor rows commonly redact it to zero. */
+            $sr=s4ThirdPartyExplorerFetchJson('https://services.basalam.com/web/v1/order-processing/orders-calculate-stats?vendor_id='.$vid.'&resource_count=number-of-sales-per-vendor',6);$publicSales=!empty($sr['ok'])?s4ThirdPartyExplorerPublicSales((array)($sr['body']??[])):null;$publicOrders=s4ThirdPartyExplorerPublicOrders($v);$sales=$publicSales??($publicOrders??s4ThirdPartyExplorerSales((array)$row));$products=max(1,(int)($v['products_count']??$v['product_count']??1));$created=s4ThirdPartyExplorerTimestamp($v['created_at']??$row['created_at']??0);$scores=s4ThirdPartyExplorerScores($sales,$products,$created);$cat=s4ThirdPartyExplorerCategoryFromRow((array)$row);$exact=$publicSales!==null||$publicOrders!==null;$source=$publicSales!==null?'public_vendor_sales_count':($publicOrders!==null?'catalog_vendor_order_count':'observed_product_sales');$label=$publicSales!==null?'تعداد فروش عمومی غرفه':($publicOrders!==null?'تعداد سفارش عمومی غرفه (نه تعداد فروش)':'فروش تخمینی محصول');
+            $samples[]=['vendor_id'=>$vid,'title'=>(string)($v['title']??('غرفه '.$vid)),'url'=>s4ThirdPartyExplorerStorefrontUrl($v),'proposed_profile_name'=>s4ThirdPartyExplorerProfileTitle($v,$d['config'],$next),'assigned_code'=>$next,'assigned_suffix'=>s4ThirdPartyExplorerFormatSuffix($d['config'],$next),'categories'=>$cat['title']!==''?[$cat]:[],'sales_estimate'=>$sales,'sales_is_estimate'=>!$exact,'sales_source'=>$source,'sales_metric_label'=>$label,'sales_stats_code'=>(int)($sr['code']??0),'product_count'=>$products,'age_days'=>$scores['age_days'],'active_score'=>$scores['balanced'],'state'=>'test'];$next++;if(count($samples)>=8)break;}
         $out=['ok'=>!empty($r['ok']),'version'=>APP_VERSION,'tested_at'=>time(),'http_code'=>(int)($r['code']??0),'full_representation'=>!empty($r['representation']),'seed'=>$seed['key']??'public','request_url'=>$url,'top_level_keys'=>array_keys($body),'row_count'=>count($rows),'vendor_count'=>count($samples),'first_row_keys'=>isset($rows[0])?array_keys((array)$rows[0]):[],'samples'=>$samples,'error'=>(string)($r['error']??'')];
         @file_put_contents($cache,json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);return$out;
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
@@ -50043,6 +50046,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"v.selectable!==false&&v.state==='pending'")!==false
         &&strpos($selfSrc,"{v:'10." . "661'")!==false
         &&version_compare(APP_VERSION,'10.661','>='));
+    $add('10.662','جدول تست نیز فروش دقیق storefront را به‌جای صفر catalogue می‌خواند',
+        strpos($selfSrc,'The Test table must use the same storefront statistic')!==false
+        &&substr_count($selfSrc,'number-of-sales-per-vendor')>=2
+        &&strpos($selfSrc,"'sales_stats_code'=>(int)(\$sr['code']??0)")!==false
+        &&strpos($selfSrc,"{v:'10." . "662'")!==false
+        &&version_compare(APP_VERSION,'10.662','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102808,6 +102817,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.662', t:'🧪 فروش دقیق در جدول آزمایش Explorer', items:[
+    'جدول موقت دکمهٔ آزمایش دیگر sales_count صفرِ ردیف catalogue را معیار قرار نمی‌دهد و برای هر یک از حداکثر هشت غرفهٔ نمونه، آمار عمومی storefront را می‌خواند.',
+    'برای gallery-chaveh با vendor_id 1041892 پاسخ زنده ۵۲۸ است؛ بنابراین مقدار صفحهٔ غرفه یعنی 500+ اکنون در جدول به‌صورت عدد دقیق ۵۲۸ دیده می‌شود.',
+    'نمونه‌ها همچنان cache شصت‌ثانیه‌ای، سقف هشت غرفه و timeout محدود دارند تا فشار API کنترل شود.'
+  ]},
   {v:'10.661', t:'🔗 لینک صحیح غرفه و محافظ غرفه‌های خودمان', items:[
     'لینک عنوان هر ردیف اکنون از identifier عمومی استفاده می‌کند؛ برای نمونه /nooshdaroo99 جایگزین مسیر نامعتبر /vendor/119301 شده است.',
     'شناسهٔ غرفهٔ پیش‌فرض و همهٔ غرفه‌های اضافی ذخیره‌شده در بخش باسلام با Explorer تطبیق داده می‌شود و checkbox و دکمهٔ افزودن آن‌ها غیرفعال است.',
