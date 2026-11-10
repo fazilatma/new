@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.673';
+const APP_VERSION = '10.674';
 
 
 if (!function_exists('str_starts_with')) {
@@ -28183,6 +28183,56 @@ send_sse('done', []);
 exit;
 }
 
+/* v10.674: Basalam seller-panel Excel bridge. The export is deliberately a
+ * separate, reviewable hand-off: creating a file never marks a product sent.
+ * Only an imported result containing a real Basalam product ID updates the
+ * normal remote-map ledger. */
+function s4BslExcelStateFile():string{return __DIR__.'/.basalam-excel-imports.json';}
+function s4BslExcelStateLoad():array{$d=json_decode((string)@file_get_contents(s4BslExcelStateFile()),true);return is_array($d)?$d:['exports'=>[]];}
+function s4BslExcelStateSave(array $d):bool{$d['exports']=array_slice((array)($d['exports']??[]),-5,null,true);$tmp=s4BslExcelStateFile().'.tmp.'.getmypid();$j=json_encode($d,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);if(!is_string($j)||@file_put_contents($tmp,$j,LOCK_EX)===false){@unlink($tmp);return false;}if(@rename($tmp,s4BslExcelStateFile()))return true;@unlink($tmp);return false;}
+function s4BslExcelNorm(string $v):string{$v=strip_tags($v);$v=str_replace(['ي','ك','‌'],['ی','ک',' '],$v);$v=mb_strtolower(trim(preg_replace('~\s+~u',' ',$v)));return$v;}
+function s4BslExcelCol(int $n):string{$s='';for($n++;$n>0;$n=intdiv($n-1,26))$s=chr(65+(($n-1)%26)).$s;return$s;}
+function s4BslExcelBuildXlsx(array $headers,array $rows,string $path):bool{
+    if(!class_exists('ZipArchive'))return false;$strings=[];$indices=[];$idx=function($v)use(&$strings,&$indices){$v=(string)$v;if(isset($indices[$v]))return$indices[$v];$n=count($strings);$indices[$v]=$n;$strings[]=$v;return$n;};$xmlRows='';$all=array_merge([$headers],$rows);
+    foreach($all as$ri=>$vals){$r=$ri+1;$xmlRows.='<row r="'.$r.'">';foreach(array_values((array)$vals)as$ci=>$val){$ref=s4BslExcelCol($ci).$r;if(is_int($val)||is_float($val)||($val!==''&&is_numeric($val)))$xmlRows.='<c r="'.$ref.'"><v>'.htmlspecialchars((string)$val,ENT_XML1|ENT_QUOTES,'UTF-8').'</v></c>';else$xmlRows.='<c r="'.$ref.'" t="s"><v>'.$idx($val).'</v></c>';}$xmlRows.='</row>';}
+    $ss='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="'.count($strings).'" uniqueCount="'.count($strings).'">';foreach($strings as$v)$ss.='<si><t xml:space="preserve">'.htmlspecialchars($v,ENT_XML1|ENT_QUOTES,'UTF-8').'</t></si>';$ss.='</sst>';
+    $sheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0" rightToLeft="1"/></sheetViews><sheetData>'.$xmlRows.'</sheetData></worksheet>';
+    $wb='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="محصولات" sheetId="1" r:id="rId1"/></sheets></workbook>';
+    $rels='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>';
+    $root='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+    $ct='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>';
+    $z=new ZipArchive();if($z->open($path,ZipArchive::CREATE|ZipArchive::OVERWRITE)!==true)return false;$z->addFromString('[Content_Types].xml',$ct);$z->addFromString('_rels/.rels',$root);$z->addFromString('xl/workbook.xml',$wb);$z->addFromString('xl/_rels/workbook.xml.rels',$rels);$z->addFromString('xl/worksheets/sheet1.xml',$sheet);$z->addFromString('xl/sharedStrings.xml',$ss);$z->close();return is_file($path)&&filesize($path)>0;
+}
+function s4BslExcelProfileProducts(string $profileRef,string $scope,array $filters=[]):array{
+    $profiles=loadProfiles();$key=isset($profiles[$profileRef])?$profileRef:(profileResolveKey(s4NormalizeInputUrl($profileRef),$profiles)?:$profileRef);$profile=is_array($profiles[$key]??null)?$profiles[$key]:[];if(!$profile)return['ok'=>false,'error'=>'profile_not_found'];
+    if($scope==='best_sellers_filtered'&&function_exists('s4BasalamBestSellersCatalogLoad')){$catalog=s4BasalamBestSellersCatalogLoad($profile);$map=s4BasalamBestSellersFilterProducts($catalog,$filters);}else$map=function_exists('s4BasalamBestSellersProductMap')?s4BasalamBestSellersProductMap((array)($profile['products']??[])):[];
+    return['ok'=>true,'key'=>$key,'profile'=>$profile,'products'=>$map];
+}
+function s4BslExcelExport(array $args):array{
+    $picked=s4BslExcelProfileProducts(trim((string)($args['profile']??'')),(string)($args['scope']??'profile'),(array)($args['filters']??[]));if(empty($picked['ok']))return$picked;$profile=$picked['profile'];$vendor=max(0,(int)($args['vendor_id']??0));$batch=max(50,min(2000,(int)($args['batch_size']??500)));$includeMapped=!empty($args['include_mapped']);$cn=loadConnections();$bc=(array)($cn['basalam']??[]);if($vendor<=0)$vendor=(int)($bc['vendor_id']??0);$prep=max(1,(int)($bc['preparation_days']??3));$defaultStock=max(0,(int)($bc['stock']??10));$defaultWeight=max(1,(int)($bc['weight']??500));$defaultPack=max(0,(int)($bc['package_weight']??0));$ledger=remoteMapLoad()['bsl']??[];
+    $headers=['عنوان','قیمت (تومان)','موجودی','شناسه دسته‌بندی','توضیحات','توضیح کوتاه','وزن (گرم)','وزن بسته‌بندی (گرم)','زمان آماده‌سازی (روز)','تصویر اصلی','گالری تصاویر','کد کالا','تنوع‌ها'];$rows=[];$entries=[];
+    foreach($picked['products']as$key=>$raw){if(!is_array($raw))continue;$mapKey=bslShopMapKey((string)$key,['vendor_id'=>$vendor]);if(!$includeMapped&&!empty($ledger[$mapKey]['id']))continue;$p=prepareForSend($profile,(string)$key,$raw);$sku=trim((string)($p['sku']??''));if($sku==='')$sku='S4-'.substr((string)$key,0,16);$cat=(int)($profile['bslCategoryId']??0);if($cat<=0)$cat=(int)($p['bsl_category_id']??0);$stock=is_numeric($p['stock']??null)?max(0,(int)$p['stock']):$defaultStock;$weight=is_numeric($p['weight']??null)&&((int)$p['weight'])>0?(int)$p['weight']:$defaultWeight;$pack=is_numeric($p['package_weight']??null)?max(0,(int)$p['package_weight']):$defaultPack;$images=array_values(array_unique(array_filter((array)($p['images']??[]))));$main=(string)($p['image']??($images[0]??''));$gallery=array_values(array_filter($images,fn($u)=>$u!==$main));$vars=$p['variations']??[];$varsText=is_array($vars)?json_encode($vars,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES):((string)$vars);$finalPrice=(int)preg_replace('/\D+/','',(string)$p['final_price']);if($finalPrice<=0)continue;
+        $rows[]=[(string)$p['title'],$finalPrice,$stock,$cat,trim(strip_tags((string)$p['long_desc'])),trim(strip_tags((string)$p['short_desc'])),$weight,$pack,$prep,$main,implode("\n",$gallery),$sku,$varsText];
+        $entries[]=['key'=>(string)$key,'map_key'=>$mapKey,'title'=>(string)$p['title'],'title_norm'=>s4BslExcelNorm((string)$p['title']),'sku'=>$sku,'vendor_id'=>$vendor,'profile_key'=>$picked['key'],'status'=>'awaiting_import','remote_id'=>0];
+    }
+    if(!$rows)return['ok'=>false,'error'=>'no_unmapped_products'];$id='bx_'.gmdate('Ymd_His').'_'.substr(bin2hex(random_bytes(4)),0,8);$dir=sys_get_temp_dir().'/'.$id;@mkdir($dir,0700,true);$files=[];foreach(array_chunk($rows,$batch)as$i=>$chunk){$path=$dir.'/basalam-products-'.($i+1).'.xlsx';if(!s4BslExcelBuildXlsx($headers,$chunk,$path))return['ok'=>false,'error'=>'xlsx_build_failed'];$files[]=$path;}
+    $state=s4BslExcelStateLoad();$state['exports'][$id]=['id'=>$id,'created_at'=>time(),'profile_key'=>$picked['key'],'profile_name'=>(string)($profile['name']??''),'vendor_id'=>$vendor,'count'=>count($entries),'batch_size'=>$batch,'batches'=>count($files),'status'=>'awaiting_import','entries'=>$entries];s4BslExcelStateSave($state);
+    if(count($files)===1)return['ok'=>true,'path'=>$files[0],'filename'=>$id.'.xlsx','mime'=>'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','export_id'=>$id,'count'=>count($entries)];if(!class_exists('ZipArchive'))return['ok'=>false,'error'=>'zip_unavailable'];$zipPath=$dir.'/'.$id.'.zip';$z=new ZipArchive();if($z->open($zipPath,ZipArchive::CREATE|ZipArchive::OVERWRITE)!==true)return['ok'=>false,'error'=>'zip_build_failed'];foreach($files as$f)$z->addFile($f,basename($f));$z->close();return['ok'=>true,'path'=>$zipPath,'filename'=>$id.'.zip','mime'=>'application/zip','export_id'=>$id,'count'=>count($entries),'batches'=>count($files)];
+}
+function s4BslExcelRowAssoc(array $row):array{$out=[];$h=(array)($row['headers']??[]);$v=(array)($row['values']??[]);foreach($h as$i=>$name)$out[s4BslExcelNorm((string)$name)]=(string)($v[$i]??'');return$out;}
+function s4BslExcelFirst(array $row,array $aliases):string{foreach($aliases as$a){$a=s4BslExcelNorm($a);if(isset($row[$a])&&trim($row[$a])!=='')return trim($row[$a]);}return'';}
+function s4BslExcelReconcile(string $path,string $ext,int $vendor=0):array{
+    $parsed=parseUploadedFile($path,$ext);if(empty($parsed['rows']))return['ok'=>false,'error'=>(string)($parsed['error']??'result_file_empty')];$state=s4BslExcelStateLoad();$matches=[];$unmatched=[];$seen=[];
+    foreach($state['exports']??[]as$exportId=>$export)foreach((array)($export['entries']??[])as$ei=>$entry){if($vendor>0&&(int)($entry['vendor_id']??0)!==$vendor)continue;$sku=s4BslExcelNorm((string)($entry['sku']??''));$title=(string)($entry['title_norm']??'');if($sku!=='')$matches['sku:'.$sku][]=[$exportId,$ei,$entry];if($title!=='')$matches['title:'.$title][]=[$exportId,$ei,$entry];}
+    $mapRows=[];foreach($parsed['rows']as$row){$a=s4BslExcelRowAssoc((array)$row);$idRaw=s4BslExcelFirst($a,['شناسه محصول','شناسه باسلام','product id','product_id','id']);$id=(int)preg_replace('/\D+/','',$idRaw);if($id<=0)continue;$sku=s4BslExcelNorm(s4BslExcelFirst($a,['کد کالا','کد محصول','sku','شناسه داخلی']));$title=s4BslExcelNorm(s4BslExcelFirst($a,['عنوان','نام محصول','عنوان محصول','title','name']));$candidate=$sku!==''?($matches['sku:'.$sku]??[]):[];if(count($candidate)!==1&&$title!=='')$candidate=$matches['title:'.$title]??[];if(count($candidate)!==1){$unmatched[]=['remote_id'=>$id,'sku'=>$sku,'title'=>$title];continue;}[$exportId,$ei,$entry]=$candidate[0];$sig=$exportId.':'.$ei;if(isset($seen[$sig]))continue;$seen[$sig]=true;$mapRows[]=['key'=>(string)$entry['map_key'],'remote_id'=>$id,'title'=>(string)$entry['title']];$state['exports'][$exportId]['entries'][$ei]['status']='imported';$state['exports'][$exportId]['entries'][$ei]['remote_id']=$id;$state['exports'][$exportId]['entries'][$ei]['imported_at']=time();}
+    $byProfile=[];foreach($mapRows as$r){$profile='';foreach($state['exports']as$export)foreach($export['entries']??[]as$entry)if(($entry['map_key']??'')===$r['key']){$profile=(string)($entry['profile_key']??'');break 2;}$byProfile[$profile][]=$r;}$recorded=0;foreach($byProfile as$profile=>$rows)$recorded+=remoteMapRecord('bsl',$rows,$profile);foreach($state['exports']as&$export){$pending=0;$done=0;foreach($export['entries']??[]as$entry){if(($entry['status']??'')==='imported')$done++;else$pending++;}$export['imported']=$done;$export['pending']=$pending;$export['status']=$pending?'partially_imported':'imported';}unset($export);s4BslExcelStateSave($state);return['ok'=>true,'recorded'=>$recorded,'unmatched_count'=>count($unmatched),'unmatched'=>array_slice($unmatched,0,30)];
+}
+function s4BslExcelStatus():array{$d=s4BslExcelStateLoad();$rows=[];foreach(array_reverse($d['exports']??[],true)as$e){$rows[]=['id'=>$e['id']??'','created_at'=>(int)($e['created_at']??0),'profile_name'=>$e['profile_name']??'','vendor_id'=>(int)($e['vendor_id']??0),'count'=>(int)($e['count']??0),'batches'=>(int)($e['batches']??0),'imported'=>(int)($e['imported']??0),'pending'=>(int)($e['pending']??$e['count']??0),'status'=>$e['status']??'awaiting_import'];}return['ok'=>true,'exports'=>$rows,'version'=>APP_VERSION];}
+
+if(isset($_GET['basalam_excel_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4BslExcelStatus(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
+if(isset($_POST['basalam_excel_export'])){s4RequireAuthenticatedMutation();$filters=json_decode((string)($_POST['filters']??'{}'),true);if(!is_array($filters))$filters=[];$out=s4BslExcelExport(['profile'=>(string)($_POST['profile']??''),'scope'=>(string)($_POST['scope']??'profile'),'filters'=>$filters,'vendor_id'=>(int)($_POST['vendor_id']??0),'batch_size'=>(int)($_POST['batch_size']??500),'include_mapped'=>!empty($_POST['include_mapped'])]);if(empty($out['ok'])){http_response_code(422);header('Content-Type: application/json; charset=UTF-8');echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}$path=(string)$out['path'];while(ob_get_level())@ob_end_clean();header('Content-Type: '.$out['mime']);header('Content-Disposition: attachment; filename="'.preg_replace('/[^A-Za-z0-9_.-]/','-',(string)$out['filename']).'"');header('X-S4-Basalam-Export-Id: '.$out['export_id']);header('X-S4-Product-Count: '.(int)$out['count']);header('Content-Length: '.filesize($path));readfile($path);$dir=dirname($path);foreach(glob($dir.'/*')?:[]as$f)@unlink($f);@rmdir($dir);exit;}
+if(isset($_POST['basalam_excel_reconcile'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();$file=$_FILES['result_file']??null;if(!is_array($file)||(int)($file['error']??UPLOAD_ERR_NO_FILE)!==UPLOAD_ERR_OK){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'result_file_required']);exit;}$ext=strtolower(pathinfo((string)($file['name']??''),PATHINFO_EXTENSION));if(!in_array($ext,['csv','xls','xlsx','xml'],true)){http_response_code(422);echo json_encode(['ok'=>false,'error'=>'unsupported_result_format']);exit;}echo json_encode(s4BslExcelReconcile((string)$file['tmp_name'],$ext,(int)($_POST['vendor_id']??0)),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+
 if (($_POST['action'] ?? '') === 'csv') {
 $products = json_decode($_POST['products'] ?? '[]', true) ?: [];
 $useCustom = !empty($_POST['useCustom']);
@@ -34818,7 +34868,7 @@ function prepareForSend(array $profile, string $key, array $p): array {
         'sku'         => (string)($p['sku'] ?? ''),
         'short_desc'  => (string)($p['shortDesc'] ?? ($p['short_desc'] ?? '')),
         'long_desc'   => s4MergeSpecsTableIntoHtml((string)($p['longDesc'] ?? ($p['long_desc'] ?? '')), $p),
-        'specs'       => (string)($p['specs'] ?? ''),
+        'specs'       => is_array($p['specs'] ?? null) ? json_encode($p['specs'], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : (string)($p['specs'] ?? ''),
         'brand'       => (string)($p['brand'] ?? ''),
         'category'    => (string)($p['category'] ?? ''),
         'bsl_category_id' => (int)($p['bsl_category_id'] ?? $p['bslCategoryId'] ?? $p['category_id'] ?? 0),
@@ -34834,7 +34884,7 @@ function prepareForSend(array $profile, string $key, array $p): array {
         'variation_prices'       => is_array($p['variation_prices'] ?? null) ? $p['variation_prices'] : [],
         'variation_combinations' => is_array($p['variation_combinations'] ?? null) ? $p['variation_combinations'] : [],
         'variations_text'  => (string)($p['variations_text']
-                              ?? (is_array($p['variations'] ?? null) ? implode('، ', $p['variations']) : '')),
+                              ?? (is_array($p['variations'] ?? null) ? json_encode($p['variations'], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : '')),
     ];
 }
 
@@ -50297,6 +50347,17 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"\$d['detail_queue']=\$detailQueue;\$d['last_detail_enrichment']=array_merge(['at'=>\$now],\$enrichment);s4BasalamBestSellersSave(\$d);")!==false
         &&strpos($selfSrc,"{v:'10." . "673'")!==false
         &&version_compare(APP_VERSION,'10.673','>='));
+    $__bslExcelPrepared674=prepareForSend(['titleSuffix'=>'(کد:۷)','priceMode'=>'percent','priceVal'=>10,'roundPrice'=>'1000'],'excel-k',['title'=>'محصول','price'=>'100,000 تومان','stock'=>5,'specs'=>['رنگ'=>'قرمز'],'variations'=>[['title'=>'بزرگ']]]);
+    $add('10.674','خروجی Excel باسلام و تطبیق نتیجه به دفترچهٔ عادی متصل است',
+        $__bslExcelPrepared674['title']==='محصول (کد:۷)'
+        &&(int)$__bslExcelPrepared674['final_price']===110000
+        &&strpos($__bslExcelPrepared674['specs'],'قرمز')!==false
+        &&s4BslExcelNorm(' كالا ')==='کالا'
+        &&strpos($selfSrc,'basalam_excel_export')!==false
+        &&strpos($selfSrc,'basalam_excel_reconcile')!==false
+        &&strpos($selfSrc,"remoteMapRecord('bsl',\$rows,\$profile)")!==false
+        &&strpos($selfSrc,"{v:'10." . "674'")!==false
+        &&version_compare(APP_VERSION,'10.674','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -91980,7 +92041,7 @@ html[data-skin="gloss"] .progress-bar{
 <div class="tpe-box"><label>مرتب‌سازی</label><select id="bbsSort" onchange="bbsFiltersChanged(true)"><option value="exact_sales">فروش دقیق</option><option value="indexed_sales">فروش فهرست</option><option value="weekly_sales">فروش هفته</option><option value="price">قیمت</option><option value="stock">موجودی</option><option value="title">عنوان</option><option value="vendor">غرفه</option><option value="category">دسته</option></select></div>
 <div class="tpe-box"><label>جهت</label><select id="bbsDir" onchange="bbsFiltersChanged(true)"><option value="desc">نزولی</option><option value="asc">صعودی</option></select></div>
 </div>
-<div class="tpe-actions"><button type="button" class="btn btn-gray" onclick="bbsResetFilters()">پاک‌کردن فیلترها</button><span class="tpe-stat" id="bbsFilteredCount">۰ نتیجه</span><span class="tpe-stat">هر تغییر فیلتر مستقیماً محصولات پروفایل را بروزرسانی می‌کند</span></div>
+<div class="tpe-actions"><button type="button" class="btn btn-gray" onclick="bbsResetFilters()">پاک‌کردن فیلترها</button><button type="button" class="btn btn-green" onclick="bslExcelExport('best_sellers_filtered')">⬇ Excel باسلام از نتیجهٔ فیلترشده</button><span class="tpe-stat" id="bbsFilteredCount">۰ نتیجه</span><span class="tpe-stat">هر تغییر فیلتر مستقیماً محصولات پروفایل را بروزرسانی می‌کند</span></div>
 <div class="tpe-table-wrap" style="max-height:58vh;overflow:auto"><table class="tpe-table" id="bbsTable"><thead><tr><th>رتبه</th><th>تصویر</th><th class="tpe-sortable" onclick="bbsSetSort('title')">محصول</th><th class="tpe-sortable" onclick="bbsSetSort('exact_sales')">فروش دقیق</th><th class="tpe-sortable" onclick="bbsSetSort('indexed_sales')">فروش فهرست</th><th class="tpe-sortable" onclick="bbsSetSort('weekly_sales')">فروش هفته</th><th class="tpe-sortable" onclick="bbsSetSort('price')">قیمت</th><th class="tpe-sortable" onclick="bbsSetSort('stock')">موجودی</th><th class="tpe-sortable" onclick="bbsSetSort('vendor')">غرفه</th><th class="tpe-sortable" onclick="bbsSetSort('category')">دسته</th></tr></thead><tbody id="bbsRows"><tr><td colspan="10">برای نمایش جدول، این بخش را باز کنید.</td></tr></tbody></table></div>
 <div class="tpe-actions" style="justify-content:center"><button type="button" class="btn btn-gray" id="bbsPrev" onclick="bbsPageMove(-1)">صفحهٔ قبل</button><span class="tpe-stat" id="bbsPageLabel">صفحه ۱ از ۱</span><button type="button" class="btn btn-gray" id="bbsNext" onclick="bbsPageMove(1)">صفحهٔ بعد</button></div>
 </div></div>
@@ -92017,6 +92078,14 @@ function tpeEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':
 function tpeForm(extra){const f=new FormData();if(TPE_WP_NONCE)f.append('_wpnonce',TPE_WP_NONCE);if(TPE_BROWSER_NONCE)f.append('explorer_nonce',TPE_BROWSER_NONCE);Object.entries(extra||{}).forEach(([k,v])=>f.append(k,v));return f;}
 async function tpeReq(extra,post=false){const r=await fetch(post?'':'?third_party_explorer_status=1&_t='+Date.now(),post?{method:'POST',body:tpeForm(extra)}:{});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d;}
 let bbsCurrentPage=1,bbsTotalPages=1,bbsFilterTimer=null,bbsFiltersHydrated=false;
+function bslExcelMsg(text,bad=false){const e=document.getElementById('bslExcelStatus');if(e){e.textContent=text;e.style.color=bad?'#fca5a5':'#86efac';}const b=document.getElementById('bbsMsg');if(b&&String(text).includes('Excel'))b.textContent=text;}
+async function bslExcelExport(scope='profile'){
+  const profile=scope==='best_sellers_filtered'?'https://basalam.com/s/products?sort=sales&s4_profile=best-sellers':(currentProfileKey||currentProfileUrl||(($('url')||{}).value||''));if(!profile){bslExcelMsg('ابتدا یک پروفایل را انتخاب کنید.',true);return;}
+  const vendor=parseInt((document.getElementById('bslExcelVendor')||{}).value)||0,batch=Math.max(50,Math.min(2000,parseInt((document.getElementById('bslExcelBatch')||{}).value)||500));const include=!!((document.getElementById('bslExcelIncludeMapped')||{}).checked);bslExcelMsg('در حال ساخت Excel باسلام…');
+  try{const f=tpeForm({basalam_excel_export:1,profile,scope,vendor_id:vendor,batch_size:batch,include_mapped:include?1:0,filters:JSON.stringify(scope==='best_sellers_filtered'?bbsFilterValues():{})});const r=await fetch('',{method:'POST',body:f});if(!r.ok){let m='HTTP '+r.status;try{const d=await r.json();m=d.error||m;}catch(e){}throw new Error(m);}const blob=await r.blob(),cd=r.headers.get('content-disposition')||'',m=cd.match(/filename="?([^";]+)"?/i),name=m?m[1]:'basalam-products.xlsx',a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),3000);bslExcelMsg(`Excel آماده شد: ${r.headers.get('X-S4-Product-Count')||'—'} محصول. پس از آپلود در پنل، فایل نتیجه را برای ثبت شناسه‌ها برگردانید.`);bslExcelLoadStatus();}catch(e){bslExcelMsg('خطای Excel باسلام: '+e.message,true);}
+}
+async function bslExcelReconcile(){const input=document.getElementById('bslExcelResultFile'),file=input?.files?.[0];if(!file){bslExcelMsg('فایل نتیجهٔ CSV/Excel پنل باسلام را انتخاب کنید.',true);return;}const vendor=parseInt((document.getElementById('bslExcelVendor')||{}).value)||0;bslExcelMsg('در حال تطبیق شناسه‌های واقعی باسلام…');try{const f=tpeForm({basalam_excel_reconcile:1,vendor_id:vendor});f.append('result_file',file,file.name);const r=await fetch('',{method:'POST',body:f}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));bslExcelMsg(`${Number(d.recorded||0).toLocaleString()} شناسه در دفترچه ثبت شد${d.unmatched_count?'؛ '+Number(d.unmatched_count).toLocaleString()+' ردیف تطبیق نشد':''}.`);bslExcelLoadStatus();}catch(e){bslExcelMsg('خطای ثبت نتیجه: '+e.message,true);}}
+async function bslExcelLoadStatus(){try{const r=await fetch('?basalam_excel_status=1&_t='+Date.now(),{cache:'no-store'}),d=await r.json(),rows=d.exports||[];if(!rows.length){bslExcelMsg('هنوز خروجی Excel ثبت نشده است.');return;}const x=rows[0];bslExcelMsg(`آخرین Excel: ${Number(x.count||0).toLocaleString()} محصول · ${Number(x.imported||0).toLocaleString()} ثبت‌شده · ${Number(x.pending||0).toLocaleString()} در انتظار نتیجه · ${Number(x.batches||1).toLocaleString()} فایل`);}catch(e){bslExcelMsg('خطا در خواندن وضعیت Excel',true);}}
 function bbsVal(id,fallback=''){const e=document.getElementById(id);return e?e.value:fallback;}
 function bbsQueryParams(page){const p=new URLSearchParams({basalam_best_sellers_status:'1',page:String(page),page_size:'50',q:bbsVal('bbsQuery'),category:bbsVal('bbsCategory'),vendor:bbsVal('bbsVendor'),exact:bbsVal('bbsExact','all'),min_sales:bbsVal('bbsMinSales','0'),stock:bbsVal('bbsStock','all'),sort:bbsVal('bbsSort','exact_sales'),dir:bbsVal('bbsDir','desc'),_t:String(Date.now())});return p.toString();}
 function bbsFilterValues(){return{q:bbsVal('bbsQuery'),category:bbsVal('bbsCategory'),vendor:bbsVal('bbsVendor'),exact:bbsVal('bbsExact','all'),min_sales:bbsVal('bbsMinSales','0'),stock:bbsVal('bbsStock','all'),sort:bbsVal('bbsSort','exact_sales'),dir:bbsVal('bbsDir','desc')};}
@@ -95632,6 +95701,21 @@ worker دائمی در این فاصله مسیر cron_run را اجرا می‌
             <button class="btn btn-green" onclick="dlCSV()" style="flex:1">📄 CSV</button>
             <button class="btn btn-purple" onclick="dlExcel()" style="flex:1">📊 Excel</button>
             <button class="btn btn-red" onclick="clearResults()" style="flex:1">🗑️ پاک کردن نتایج</button>
+        </div>
+        <div id="bslExcelBridge" style="margin:8px 0;padding:9px;background:#0f172a;border:1px solid #166534;border-radius:9px">
+            <div style="font-size:11px;color:#bbf7d0;line-height:1.8"><b>📦 درون‌ریزی سریع پنل باسلام</b> — فایل‌ها فقط «در انتظار درون‌ریزی» ثبت می‌شوند؛ پس از آپلود در پنل، فایل نتیجهٔ دارای شناسه محصول را اینجا برگردانید تا دفترچهٔ ارسال بروزرسانی و از ساخت تکراری جلوگیری شود.</div>
+            <div class="row" style="margin-top:7px;align-items:center">
+                <input id="bslExcelVendor" type="number" min="0" placeholder="شناسه غرفه" style="max-width:130px">
+                <input id="bslExcelBatch" type="number" min="50" max="2000" value="500" title="تعداد ردیف هر فایل" style="max-width:100px">
+                <label style="font-size:10px;color:#94a3b8"><input id="bslExcelIncludeMapped" type="checkbox"> شامل محصولات قبلاً نگاشت‌شده</label>
+                <button class="btn btn-green" type="button" onclick="bslExcelExport('profile')">⬇ Excel باسلام برای این پروفایل</button>
+            </div>
+            <div class="row" style="margin-top:7px;align-items:center">
+                <input id="bslExcelResultFile" type="file" accept=".csv,.xls,.xlsx,.xml" style="flex:2">
+                <button class="btn btn-blue" type="button" onclick="bslExcelReconcile()">↥ ثبت نتیجه و شناسه‌های باسلام</button>
+                <button class="btn btn-gray" type="button" onclick="bslExcelLoadStatus()">وضعیت</button>
+            </div>
+            <div id="bslExcelStatus" style="font-size:10px;color:#94a3b8;line-height:1.7"></div>
         </div>
         <div id="resultFilterBar" style="display:none;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0;padding:8px;background:#0f172a;border:1px solid #334155;border-radius:8px">
             <span style="font-size:11px;color:#94a3b8">نمایش:</span>
@@ -103120,6 +103204,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.674', t:'📦 پل Excel درون‌ریزی سریع باسلام', items:[
+    'از هر پروفایل یا نتیجهٔ فیلترشدهٔ پرفروش‌ها فایل XLSX آمادهٔ پنل باسلام ساخته می‌شود؛ تعدیل قیمت، گردکردن، پسوند عنوان، دسته، موجودی، وزن، توضیحات، تصویر، گالری و تنوع‌ها فقط هنگام خروجی اعمال می‌شوند.',
+    'محصولات دارای شناسهٔ قبلی به‌طور پیش‌فرض از خروجی حذف می‌شوند، فایل‌های بزرگ در بسته‌های قابل تنظیم شکسته و در ZIP تحویل می‌شوند و هر خروجی با وضعیت «در انتظار نتیجه» ثبت می‌شود، نه ارسال‌شده.',
+    'فایل نتیجهٔ CSV/XLS/XLSX پنل با کد کالا یا عنوان تطبیق داده می‌شود و فقط شناسه‌های واقعی برگشتی در remote-map همان غرفه ثبت می‌شوند تا ارسال‌های بعدی محصول تکراری نسازند.'
+  ]},
   {v:'10.673', t:'💾 checkpoint مستقل جزئیات پرفروش‌ها', items:[
     'نتیجهٔ هر غنی‌سازی و صف ادامهٔ جزئیات بلافاصله ذخیره می‌شود؛ شلوغ بودن profiles در مرحلهٔ فروش دقیق یا ادامهٔ کران دیگر باعث تکرار همان محصول یا عقب‌رفتن شمارنده نمی‌شود.'
   ]},
