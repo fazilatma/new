@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.651';
+const APP_VERSION = '10.652';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26877,10 +26877,15 @@ function s4ThirdPartyExplorerTimestamp($value):int{
 }
 function s4ThirdPartyExplorerScores(int $sales,int $products,int $created):array{
     $products=max(1,$products);$ageDays=$created>0?max(1,(int)floor((time()-$created)/86400)):365;$months=max(1,$ageDays/30);
-    $perProduct=$sales/$products;$perMonth=$sales/$months;
-    return['balanced'=>round(log(1+$sales)*35+log(1+$perProduct)*35+log(1+$perMonth)*30,4),
-        'efficiency'=>round(($perProduct*0.65)+($perMonth*0.35),6),'volume'=>(float)$sales,
+    $perProduct=$sales/$products;$perMonth=$sales/$months;$catalog=log(1+$products);$ageTrust=log(1+min($ageDays,3650)/30);
+    /* Balanced remains meaningful before a sampled product exposes any sales:
+       catalogue breadth and shop age are public ranking signals, not tie-breakers. */
+    return['balanced'=>round(log(1+$sales)*30+log(1+$perProduct)*25+log(1+$perMonth)*20+$catalog*15+$ageTrust*10,4),
+        'efficiency'=>round(($perProduct*0.65)+($perMonth*0.35)+($ageTrust*0.01),6),'volume'=>(float)$sales,
         'sales_per_product'=>round($perProduct,4),'sales_per_month'=>round($perMonth,4),'age_days'=>$ageDays];
+}
+function s4ThirdPartyExplorerRefreshScores(array &$d):bool{
+    $changed=false;foreach((array)($d['vendors']??[])as$key=>$v){$scores=s4ThirdPartyExplorerScores((int)($v['sales_estimate']??0),(int)($v['product_count']??1),(int)($v['created_at']??0));if(($v['scores']??null)!==$scores){$d['vendors'][$key]['scores']=$scores;$changed=true;}}return$changed;
 }
 function s4ThirdPartyExplorerUrl(array $seed,int $cursor=0):string{
     $url='https://core.basalam.com/v4/products?per_page=20&status=2976';if($cursor>0)$url.='&cursor='.$cursor;
@@ -27018,7 +27023,7 @@ function s4ThirdPartyExplorerApprove(int $vendorId):array{
 }
 function s4ThirdPartyExplorerStatus():array{
     /* One-time migration for candidates discovered before code reservations existed. */
-    $lf=@fopen(__DIR__.'/.third-party-shop-explorer.lock','c');if($lf&&@flock($lf,LOCK_EX|LOCK_NB)){$d=s4ThirdPartyExplorerLoad();if(s4ThirdPartyExplorerAssignMissingCodes($d,loadProfiles()))s4ThirdPartyExplorerSave($d);@flock($lf,LOCK_UN);@fclose($lf);}else{if($lf)@fclose($lf);$d=s4ThirdPartyExplorerLoad();}
+    $lf=@fopen(__DIR__.'/.third-party-shop-explorer.lock','c');if($lf&&@flock($lf,LOCK_EX|LOCK_NB)){$d=s4ThirdPartyExplorerLoad();$changed=s4ThirdPartyExplorerAssignMissingCodes($d,loadProfiles());$changed=s4ThirdPartyExplorerRefreshScores($d)||$changed;if($changed)s4ThirdPartyExplorerSave($d);@flock($lf,LOCK_UN);@fclose($lf);}else{if($lf)@fclose($lf);$d=s4ThirdPartyExplorerLoad();}
     $rank=(string)($d['config']['ranking']??'balanced');$scoreKey=$rank==='absolute'?'volume':$rank;
     $minProducts=max(0,(int)($d['config']['min_products']??1));$minSales=max(0,(int)($d['config']['min_sales']??0));
     $rows=array_values(array_filter($d['vendors'],fn($v)=>(int)($v['product_count']??0)>=$minProducts&&(int)($v['sales_estimate']??0)>=$minSales));
@@ -49927,6 +49932,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'دسته‌های مشاهده‌شده')!==false
         &&strpos($selfSrc,"{v:'10." . "651'")!==false
         &&version_compare(APP_VERSION,'10.651','>='));
+    $__score652Small=s4ThirdPartyExplorerScores(0,2,time()-86400*30);$__score652Large=s4ThirdPartyExplorerScores(0,200,time()-86400*365);
+    $add('10.652','رتبهٔ متعادل حتی پیش از مشاهدهٔ فروش از تعداد محصول و سن غرفه امتیاز می‌گیرد',
+        (float)($__score652Small['balanced']??0)>0
+        &&(float)($__score652Large['balanced']??0)>(float)($__score652Small['balanced']??0)
+        &&strpos($selfSrc,'function s4ThirdPartyExplorerRefreshScores')!==false
+        &&strpos($selfSrc,"{v:'10." . "652'")!==false
+        &&version_compare(APP_VERSION,'10.652','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102692,6 +102704,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.652', t:'📊 رتبه‌بندی معنادار پیش از آشکارشدن فروش', items:[
+    'امتیاز متعادل علاوه بر فروش تخمینی و بازده، گستردگی کاتالوگ و سن عمومی غرفه را نیز وزن می‌دهد؛ بنابراین غرفه‌های با فروش مشاهده‌شدهٔ صفر دیگر همگی امتیاز صفر و ترتیب نامشخص ندارند.',
+    'امتیازهای ذخیره‌شدهٔ قدیمی هنگام خواندن جدول زیر قفل Explorer یک‌بار بازسازی می‌شوند و ۵۰ ردیف واقعاً به‌ترتیب امتیاز تازه نمایش داده می‌شوند.'
+  ]},
   {v:'10.651', t:'🏪 کشف دائمی و افزودن گروهی ۵۰ غرفهٔ برتر', items:[
     'کاوشگر دیگر حالت توقف ندارد: تنظیم قدیمیِ خاموش خودکار مهاجرت می‌شود و cron همیشه با checkpoint، فاصلهٔ درخواست و backoff به کشف سرور‌ساید ادامه می‌دهد.',
     'جدول دقیقاً ۵۰ نتیجهٔ برتر را بر اساس فرمول امتیاز انتخابی نشان می‌دهد؛ هر ردیف تیک، انتخاب همه، شمارندهٔ انتخاب و دکمهٔ افزودن انتخاب‌شده‌ها دارد.',
