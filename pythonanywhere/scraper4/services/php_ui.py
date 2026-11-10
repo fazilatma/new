@@ -213,6 +213,8 @@ def save(db,data):
     if source.get('mode')=='github':
         from .github_products import config
         github=config({k:v for k,v in source.items() if k!='mode'})
+    from .scraping.engines import source_api
+    engine=source_api(url) or engine
     with db.connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         if previous:

@@ -50,6 +50,25 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
                 if '/detail/' not in url:raise AssertionError('Detail-only must never fetch listing')
                 return {'ok':True,'code':200,'url':url,'html':'<div class="description"><b>Enriched detail</b><script>bad()</script></div><span class="sku">SKU-DETAIL</span>'}
             return {'ok':True,'code':200,'url':url,'html':'<article class="product"><h2>Fixture '+('page two' if 'page=2' in url else 'page one')+'</h2></article>'}
+        if mode=='source-apis':
+            db.upsert_profile('one','https://snappshop.ir/category/mobile','Snapp fixture',settings={'extractionEngine':'selenium'})
+            db.upsert_profile('other','https://digikala.com/search/','Digikala fixture',settings={'extractionEngine':'playwright'})
+            db.upsert_profile('bsl-api','https://basalam.com/vendors/7','Basalam fixture',settings={'extractionEngine':'selenium'})
+            from scraper4.services.scraping import snappshop_api
+            from scraper4.services.scraping.render import RenderedFetcher
+            RenderedFetcher.get=staticmethod(forbidden)
+            def snapp_fixture(ep,*a,**kw):
+                source_calls.append('https://apix.snappshop.ir/'+ep)
+                return {'data':{'token':'FIXTURE-GUEST'}} if ep=='guest/v2/token' else {'data':{'items':[{'href':'/product/snp-1','title':'Snapp API fixture','price':1000}],'pagination':{'total_pages':1}}}
+            snappshop_api.request_json=snapp_fixture
+            def fixture(url,**kw):
+                source_calls.append(url)
+                if url.startswith('https://api.digikala.com/'):
+                    body={'data':{'products':[{'id':12,'title_fa':'DK fixture','status':'marketable','default_variant':{'price':{'selling_price':20000}}}],'pager':{'total_pages':1}}}
+                elif url.startswith('https://core.basalam.com/'):
+                    body={'data':[{'id':13,'title':'BSL fixture','status':2976,'primary_price':30000}],'next_cursor':0}
+                else:raise AssertionError('API sources must not fetch HTML')
+                return {'ok':True,'code':200,'url':url,'html':json.dumps(body)}
         HtmlFetcher.get=staticmethod(fixture)
         from scraper4.services import github_products
         import base64

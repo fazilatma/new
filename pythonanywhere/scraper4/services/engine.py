@@ -59,7 +59,7 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
     html, effective = result.get('html', ''), result.get('url') or url
     products = result['products']
     counts['last_page_products'] = len(products)
-    counts['warning'] = ('هیچ محصولی در این صفحه تشخیص داده نشد؛ سلکتور کارت، آدرس فهرست و نیاز سایت به JavaScript را بررسی کنید.' if not products
+    counts['warning'] = ('API مبدأ محصولی برنگرداند؛ آدرس، فیلترها و پایان صفحه‌بندی را بررسی کنید.' if not products and result['engine'].endswith('_api') else 'هیچ محصولی در این صفحه تشخیص داده نشد؛ سلکتور کارت، آدرس فهرست و نیاز سایت به JavaScript را بررسی کنید.' if not products
                          else 'رندر JavaScript ناموفق بود؛ نتیجه از HTML ایستا استخراج شد.' if counts['render_failed'] else '')
     if requested == 0 and products:
         import hashlib
@@ -148,8 +148,8 @@ def _detail_step(db, settings, entry, profile, network_timeout=None):
     already=payload.get('detail_mode')=='two_stage' and db.checkpoint_read(seen).get('done')
     if row and row['link'] and not already:
         url = validate_url(row['link'])
-        from .scraping.engines import extract, profile_engine, for_installation
-        engine = profile_engine(profile)
+        from .scraping.engines import extract, profile_engine, for_installation, source_api
+        engine = source_api(url) or profile_engine(profile)
         if engine == 'selectors':
             # Preserve the established static detail contract for legacy profiles.
             net = settings.net.as_dict() if network_timeout else settings.net
@@ -162,9 +162,14 @@ def _detail_step(db, settings, entry, profile, network_timeout=None):
             effective = validate_url(result.get('url') or url)
             fresh = parse_detail(result.get('html', ''), effective, payload['_detail_selectors'])
         else:
-            result = extract(url, {}, engine, for_installation(settings,db), timeout=network_timeout or settings.fetch_timeout)
+            try:
+                result = extract(url, {}, engine, for_installation(settings,db), timeout=network_timeout or settings.fetch_timeout)
+            except ValueError as exc:
+                counts.update(last_http_status=getattr(exc,'upstream_status',0),engine=engine)
+                raise
+            counts.update(last_http_status=result.get('code',0),engine=result['engine'],used_engine=result['used_engine'])
             effective = validate_url(result.get('url') or url)
-            if engine in ('basalam_api','digikala_api'):
+            if engine in ('basalam_api','digikala_api','snappshop_api'):
                 record = next(iter(result['products'].values()), {})
                 fresh = {k:record[k] for k in payload['_detail_selectors'] if record.get(k)}
                 for k in ('shortDesc','longDesc','specs'):
@@ -312,6 +317,8 @@ def run_entry(db, settings, entry, deadline, *, max_steps=None, network_timeout=
                 done = _send_step(db, settings, entry, profile, network_timeout)
             else:
                 raise ValueError('Unknown queue kind')
+            if entry['kind']=='extract':
+                entry['counters'].pop('error_code',None);entry['counters'].pop('error_hint',None)
             steps += 1
             # Do not overwrite a pause/cancel requested during a network call.
             db.update_entry(entry['id'], payload=entry['payload'], counters=entry['counters'], heartbeat=utc_now())

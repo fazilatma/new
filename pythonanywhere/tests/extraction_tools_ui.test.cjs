@@ -12,7 +12,7 @@ with TemporaryDirectory() as directory:
     with c.session_transaction() as s:s['authenticated']=True
     print(c.get('/').text)
 `],{cwd:root,env:{...process.env,PYTHONPATH:path.join(root,'pythonanywhere')},encoding:'utf8'});
-const engines=['selectors','auto','heuristic','jsonld','jina','digikala_api','basalam_api','playwright','selenium'];
+const engines=['selectors','auto','heuristic','jsonld','jina','snappshop_api','digikala_api','basalam_api','playwright','selenium'];
 const profiles=[{id:1,name:'اول',extraction_engine:'basalam_api'},{id:2,name:'دوم',extraction_engine:'jsonld',enabled:false}];
 function setup(t,script){const dom=new JSDOM(html,{url:'https://example.test/',runScripts:'outside-only'});t.after(()=>dom.window.close());const w=dom.window,d=w.document,calls=[],hooks={begin:0,end:0,dirty:0,clean:0};w.confirm=()=>true;
   let revision=0;d.addEventListener('input',()=>revision++);w.S4Refresh={beginMutation(){hooks.begin++;},endMutation(){hooks.end++;},changed(){hooks.dirty++;},revision(){return revision;},clean(){hooks.clean++;}};
@@ -26,16 +26,16 @@ function setup(t,script){const dom=new JSDOM(html,{url:'https://example.test/',r
   w.eval(fs.readFileSync(path.join(root,'pythonanywhere/scraper4/static/'+script),'utf8'));
   e.flush=async()=>{for(let i=0;i<10;i++)await new Promise(setImmediate);};e.submit=id=>d.querySelector(id).dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));return e;
 }
-test('benchmark never runs on page load; all nine engine choices are present in the real editor',async t=>{
+test('benchmark never runs on page load; all engine choices including Snappshop API are present in the real editor',async t=>{
   const e=setup(t,'extraction-audit.js');await e.flush();assert.equal(e.calls.length,0);assert.deepEqual([...e.d.querySelectorAll('#profile-form [name=extractionEngine] option')].map(v=>v.value),engines);
 });
 test('all-profile configured-engine audit includes disabled profiles and never enqueues or sends',async t=>{
   const e=setup(t,'extraction-audit.js');e.submit('#extraction-audit-form');await e.flush();const probes=e.calls.filter(c=>c.url.endsWith('/probe'));assert.deepEqual(probes.map(c=>c.data),[{profile_id:1,engine:'basalam_api'},{profile_id:2,engine:'jsonld'}]);
   assert(probes.every(c=>c.options.headers['X-CSRF-Token']));assert.equal(e.d.querySelector('#audit-done').textContent,'2');assert.equal(e.d.querySelectorAll('#audit-results tr').length,2);assert.equal(e.hooks.begin,e.hooks.end);assert(e.calls.every(c=>!c.url.includes('/jobs')));
 });
-test('nine-engine comparison has exactly one sequential request per actual engine',async t=>{
+test('engine comparison has exactly one sequential request per actual engine',async t=>{
   const e=setup(t,'extraction-audit.js');const form=e.d.querySelector('#extraction-audit-form');form.elements.profile_id.value='1';form.elements.engine.value='all';let pending=0,max=0;const old=e.reply;e.reply=async(...args)=>{pending++;max=Math.max(max,pending);const r=await old(...args);pending--;return r;};
-  e.submit('#extraction-audit-form');await e.flush();assert.deepEqual(e.calls.filter(c=>c.url.endsWith('/probe')).map(c=>c.data.engine),engines);assert.equal(e.d.querySelector('#audit-done').textContent,'9');assert.equal(max,2); // only the two metadata GETs run in parallel
+  e.submit('#extraction-audit-form');await e.flush();assert.deepEqual(e.calls.filter(c=>c.url.endsWith('/probe')).map(c=>c.data.engine),engines);assert.equal(e.d.querySelector('#audit-done').textContent,String(engines.length));assert.equal(max,2); // only the two metadata GETs run in parallel
 });
 test('failure and zero products stay distinct and do not stop the next profile',async t=>{
   const e=setup(t,'extraction-audit.js');const old=e.reply;e.reply=async(url,options,data)=>url.endsWith('/probe')?{ok:true,report:{name:profiles[data.profile_id-1].name,engine:data.engine,status:data.profile_id===1?'failed':'empty',count:0,hint:'نیاز به بررسی'}}:old(url,options,data);

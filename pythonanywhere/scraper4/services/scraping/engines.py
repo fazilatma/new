@@ -1,7 +1,8 @@
 """PHP 10.641 extractionEngineAllowed/fetch_html_for_engine/parse_list_by_engine.
 
-All nine engine routes execute real fetch/parse code. Browser engines require a
-trusted remote renderer; explicit browser/API failures never become static success.
+Snappshop, Digikala and Basalam are always routed to their public APIs,
+including profiles imported with browser settings. Other sites retain optional
+explicit engines; API failures never fall back to a browser or static HTML.
 """
 import json
 import re
@@ -28,12 +29,13 @@ ENGINES = {
     'heuristic': 'Heuristic · ساختار کارت‌ها',
     'jsonld': 'JSON-LD Product',
     'jina': 'Jina Reader',
+    'snappshop_api': 'Snappshop Public API · بدون مرورگر',
     'digikala_api': 'Digikala Official API',
     'basalam_api': 'Basalam Public API',
     'playwright': 'Playwright / CDP · رندر بیرونی',
     'selenium': 'Selenium · رندر بیرونی',
 }
-ALIASES = {**dict.fromkeys(('css','cheerio','htmlrewriter'), 'selectors'),
+ALIASES = {**dict.fromkeys(('snappshop','snappshop-api','snapp-api','snapp_api'),'snappshop_api'),**dict.fromkeys(('css','cheerio','htmlrewriter'), 'selectors'),
            **dict.fromkeys(('browser','render','js','cdp','chrome','chromium','puppeteer'), 'playwright'),
            **dict.fromkeys(('reader','jina-reader','jina_reader','rjina','r.jina.ai'), 'jina'),
            **dict.fromkeys(('digikala','digikala-api','dk-api','dk_api'), 'digikala_api'),
@@ -50,7 +52,7 @@ def profile_engine(profile):
     cfg = profile.get('settings') or {}
     legacy=cfg.get('legacy_profile_settings') or {}
     if not isinstance(legacy,dict): legacy={}
-    return normalize(cfg.get('extractionEngine', legacy.get('extractionEngine', 'selectors')))
+    return source_api(profile.get('url','')) or normalize(cfg.get('extractionEngine', legacy.get('extractionEngine', 'selectors')))
 
 
 def for_installation(settings, db):
@@ -63,6 +65,16 @@ def for_installation(settings, db):
 def on_host(url, host):
     name = (urlsplit(url).hostname or '').lower()
     return name == host or name.endswith('.'+host)
+
+
+def source_api(url):
+    # Host boundary prevents lookalikes such as digikala.com.evil.example.
+    return next((engine for host,engine in (('snappshop.ir','snappshop_api'),('digikala.com','digikala_api'),('basalam.com','basalam_api')) if on_host(url,host)),None)
+
+
+def next_api_page(url,page):
+    u=urlsplit(url);q=parse_qs(u.query);q['page']=[str(page)]
+    return urlunsplit((u.scheme,u.netloc,u.path,urlencode(q,doseq=True),''))
 
 
 def indexed(rows, base):
@@ -253,7 +265,7 @@ def basalam_rows(rows):
 
 
 def extract(url, selectors, engine, settings, *, timeout=25, render_mode='static', probe=False):
-    engine=normalize(engine);validate_url(url)
+    engine=source_api(url) or normalize(engine);validate_url(url)
     if probe:
         settings=replace(settings,net=replace(settings.net,gap_ms=min(settings.net.gap_ms,500),fallback=False))
     started=time.monotonic();deadline=started+(8 if probe else min(90,max(1,timeout)))
@@ -271,12 +283,18 @@ def extract(url, selectors, engine, settings, *, timeout=25, render_mode='static
         if not isinstance(body,dict): raise ValueError('ساختار پاسخ API معتبر نیست.')
         return body
     result={};rows=None;used=engine;next_url=None;last_page=False
-    if engine=='digikala_api':
+    if engine=='snappshop_api':
+        from .snappshop_api import extract as snapp_extract
+        rows,last_page=snapp_extract(url,settings,deadline)
+        if not last_page:next_url=next_api_page(url,int(parse_qs(urlsplit(url).query).get('page',['1'])[0])+1)
+        result={'ok':True,'code':200,'url':url,'html':''}
+    elif engine=='digikala_api':
         endpoint=digikala_endpoint(url);body=read(endpoint);rows,pager=digikala_rows(body)
         requested=max(1,int(parse_qs(urlsplit(url).query).get('page',['1'])[0]))
         total=integer(obj(pager).get('total_pages'))
         last_page=bool(total and requested>=total) or bool(re.match(r'^/product/',urlsplit(url).path))
         if total and requested>total: rows={}
+        if rows and not last_page:next_url=next_api_page(url,requested+1)
         result={'ok':True,'code':200,'url':url,'html':''}
     elif engine=='basalam_api':
         if not on_host(url,'basalam.com'): raise ValueError('موتور باسلام فقط آدرس عمومی basalam.com را می‌پذیرد.')

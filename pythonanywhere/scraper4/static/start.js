@@ -29,7 +29,7 @@
   el.pages.addEventListener('input',()=>{job.elements.pages.value=el.pages.value;});
   job.elements.pages.addEventListener('input',()=>{el.pages.value=job.elements.pages.value;setDirty();});
   el.url.addEventListener('change',()=>{
-    try{const host=new URL(el.url.value).hostname.toLowerCase();const engine=host==='digikala.com'||host.endsWith('.digikala.com')?'digikala_api':host==='basalam.com'||host.endsWith('.basalam.com')?'basalam_api':'';
+    try{const host=new URL(el.url.value).hostname.toLowerCase();const engine=host==='snappshop.ir'||host.endsWith('.snappshop.ir')?'snappshop_api':host==='digikala.com'||host.endsWith('.digikala.com')?'digikala_api':host==='basalam.com'||host.endsWith('.basalam.com')?'basalam_api':'';
       if(engine){el.engine.value=engine;$('#start-engine-hint').textContent='موتور پیشنهادی آدرس انتخاب شد؛ پیش از شروع می‌توانید تغییرش دهید.';}}
     catch(_error){}
   });

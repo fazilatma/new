@@ -43,6 +43,7 @@ def register_extraction_tools(app,db,settings):
         if not profile: abort(404)
         engine=data.get('engine',engines.profile_engine(profile))
         if not isinstance(engine,str) or engine not in engines.ENGINES: raise ValueError('موتور انتخابی معتبر نیست.')
+        engine=engines.source_api(profile['url']) or engine
         digest=hashlib.sha256(json.dumps([profile['url'],profile['selectors'],profile['settings'],profile['pagination']],sort_keys=True).encode()).hexdigest()
         signer=URLSafeTimedSerializer(settings.secret_key,salt='s4-start-five-page-probe')
         state={'page':1,'url':profile['url'],'visited':[],'signatures':[]}

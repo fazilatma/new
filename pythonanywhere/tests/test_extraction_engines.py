@@ -33,12 +33,14 @@ def network(monkeypatch):
     # No live network in fixture tests; public/private validation has separate tests.
     original=engines.validate_url
     monkeypatch.setattr(engines,'validate_url',lambda url,**kw:original(url))
+    from scraper4.services.scraping import snappshop_api
+    monkeypatch.setattr(snappshop_api,'request_json',lambda endpoint,*a,**kw:{'data':{'token':'fixture-guest'}} if endpoint=='guest/v2/token' else {'data':{'items':[{'href':'/product/snp-1','title':'Fixture Snapp','price':12000}],'pagination':{'total_pages':1}}})
     return calls
 
 
 @pytest.mark.parametrize('engine',list(engines.ENGINES))
 def test_each_php_engine_executes_fetch_parse_and_real_queue_to_completion(db,settings,network,engine):
-    url='https://www.digikala.com/search/category-mobile/' if engine=='digikala_api' else 'https://basalam.com/vendor/7' if engine=='basalam_api' else 'https://example.com/shop'
+    url='https://snappshop.ir/search/?q=phone' if engine=='snappshop_api' else 'https://www.digikala.com/search/category-mobile/' if engine=='digikala_api' else 'https://basalam.com/vendor/7' if engine=='basalam_api' else 'https://example.com/shop'
     p=db.upsert_profile(engine,url,selectors=SELECTORS,settings={'extractionEngine':engine})
     jid=db.enqueue('extract',p['id'],{'pages':1});result=tick(db,settings)
     assert result['ok'] and db.get_entry(jid)['status']=='done'

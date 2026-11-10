@@ -161,6 +161,8 @@ def save_profile(db,data):
     if source not in ('direct','github'):raise ValueError('منبع معتبر نیست.')
     from .github_products import config
     github=config(data.get('github')) if source=='github' else (previous or {}).get('settings',{}).get('sourceGithub',{})
+    from .scraping.engines import source_api
+    engine=source_api(url) or engine
     with db.connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         if previous:

@@ -38,9 +38,11 @@ def configuration(data):
     selectors = {k: v.strip() for k, v in selectors.items() if v.strip()}
     if mode == 'detail':
         selectors = normalize_selectors(selectors)
-        if not selectors:
+        from .scraping.engines import source_api
+        if not selectors and not source_api(url):
             raise ValueError('برای آزمایش جزئیات حداقل یک سلکتور وارد کنید.')
-    for field, selector in selectors.items():
+    from .scraping.engines import source_api
+    for field, selector in ({} if source_api(url) else selectors).items():
         expression = css_to_xpath(selector, True)
         try:
             if not expression:
@@ -102,6 +104,15 @@ def preview(data, settings):
     if not _GATE.acquire(blocking=False):
         return {'ok': False, 'error': 'یک آزمایش دیگر در این پردازش در حال اجراست؛ کمی بعد دوباره تلاش کنید.'}, 429
     try:
+        from .scraping.engines import source_api,extract
+        api_engine=source_api(url)
+        if api_engine:
+            try:
+                result=extract(url,{},api_engine,settings,timeout=8,probe=True)
+                products=list(result['products'].values())
+                return {'ok':True,'mode':mode,'url':url,'fields':[],'products':[{k:str(r.get(k) or '')[:1500] for k in ('title','price','sku','link','image')} for r in products[:8]],'total':len(products),'sample_limit':8,'automatic':True,'persisted':False,'render':'public_api','engine':api_engine,'warnings':['این مبدأ فقط با API عمومی خوانده می‌شود؛ سلکتور CSS و Selenium/Playwright استفاده نمی‌شوند.']},200
+            except ValueError as exc:
+                return {'ok':False,'error':'دریافت یا پردازش API مبدأ ناموفق بود؛ دسترسی شبکه و مسیر عمومی را بررسی کنید.','upstream_status':getattr(exc,'upstream_status',0)},502
         fetched = HtmlFetcher.get(url, timeout=8, net={'mode': 'direct', '_deadline_seconds': 8}, settings=settings)
         if not fetched.get('ok'):
             # Do not echo proxy errors, raw upstream bodies, cookies or credentials.

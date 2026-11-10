@@ -307,3 +307,17 @@ for(const route of ['/','/php-ui'])test('saved-product detail extraction in '+ro
  for(const product of state.products){const old=before.products.find(x=>x.id===product.id);for(const key of ['title','price_num','woo_id','basalam_id','key','link'])assert.equal(product[key],old[key]);assert.ok(product.extra.longDesc.includes('Enriched detail'));assert.ok(!product.extra.longDesc.includes('<script'));assert.equal(product.sku,'SKU-DETAIL');}
  assert.deepEqual(state.jobs.filter(j=>j.profile_id!==1),before.jobs);assert.deepEqual(errors,[]);
 });
+
+for(const route of ['/','/php-ui'])test('Snappshop Digikala Basalam legacy browser profiles use only source APIs in '+route,{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'source-apis',true),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());await page.goto(origin+route);
+ if(route==='/php-ui'){
+  const f=page.frameLocator('#php-original-ui');await f.locator('html[data-s4-ready="1"]').waitFor();const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await f.locator('#hdrProfileSelect').selectOption('one');await child.waitForFunction(()=>profileFormReady&&currentProfileKey==='one');assert.equal(await f.locator('#extractionEngine').inputValue(),'snappshop_api');await child.evaluate(()=>toggleSettingsPanel());await f.locator('[data-python-panel="shared-workspace"]').click();
+ }
+ const before=await(await page.request.get(origin+'/__test__/extract-state')).json();
+ const profiles=(await(await page.request.get(origin+'/api/profiles')).json()).profiles;
+ for(const [key,engine] of [['one','snappshop_api'],['other','digikala_api'],['bsl-api','basalam_api']]){const id=String(profiles.find(p=>p.key===key).id);
+  await page.locator('#shared-php-profile').selectOption(id);const response=page.waitForResponse(r=>r.url().endsWith('/api/extraction/probe'));await page.locator('#shared-php-probe').click();const report=(await(await response).json()).report;assert.equal(report.engine,engine);assert.equal(report.used_engine,engine);assert.equal(report.status,'passed');assert.equal(report.count,1);await page.waitForFunction(()=>!document.getElementById('shared-php-profile').disabled);
+ }
+ const calls=(await(await page.request.get(origin+'/__test__/source-calls')).json()).urls;assert.ok(calls.some(u=>u.startsWith('https://apix.snappshop.ir/')));assert.ok(calls.some(u=>u.startsWith('https://api.digikala.com/')));assert.ok(calls.some(u=>u.startsWith('https://core.basalam.com/')));assert.ok(calls.every(u=>/^https:\/\/(apix.snappshop.ir|api.digikala.com|core.basalam.com)\//.test(u)));
+ assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);assert.deepEqual(errors,[]);
+});

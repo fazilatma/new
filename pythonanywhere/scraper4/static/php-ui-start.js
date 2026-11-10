@@ -13,6 +13,7 @@ document.getElementById('startBackendBtn').closest('.row').after(message);
 const showJobs=document.createElement('button');showJobs.type='button';showJobs.id='python-start-show-jobs';showJobs.className='btn btn-cyan';showJobs.textContent='نمایش کارها و عیب‌یابی همین پروفایل';message.after(showJobs);
 showJobs.onclick=async()=>{await refresh();box.scrollIntoView?.({block:'start',behavior:'smooth'});};
 let pending=false,statusTicket=0,catalogEnabled=false;
+for(const id of ['extractionEngine','extractionEngine2']){const engineSelect=document.getElementById(id);if(engineSelect&&!Array.from(engineSelect.options).some(o=>o.value==='snappshop_api'))engineSelect.add(new Option('Snappshop Public API · بدون مرورگر','snappshop_api'));}
 const originalLoad=window.loadProfileFromServer;
 window.loadProfileFromServer=(key,silent,...rest)=>{if(silent&&isDirty)return;catalogEnabled=false;return originalLoad(key,silent,...rest);};
 // User edits invalidate already-in-flight hydration; a delayed read must not

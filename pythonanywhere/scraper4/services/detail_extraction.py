@@ -15,6 +15,8 @@ def enqueue(db,profile):
         if not row:raise ValueError('پروفایل حذف شده است.')
         settings=json.loads(row['settings'] or '{}')
         selectors=normalize_selectors(settings.get('detailSelectors') or {})
+        from .scraping.engines import source_api
+        if source_api(profile['url']) and not selectors:selectors={k:'@api' for k in ('longDesc','shortDesc','images','sku','brand','category','tags')}
         if not selectors:raise ValueError('ابتدا حداقل یک سلکتور جزئیات را در پروفایل ذخیره کنید.')
         active=conn.execute("SELECT id,kind,status,payload FROM queue_entries WHERE profile_id=? AND status IN ('waiting','running','paused','failed')",(profile['id'],)).fetchall()
         if active:
