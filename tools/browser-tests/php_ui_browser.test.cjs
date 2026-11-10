@@ -346,3 +346,13 @@ for(const route of ['/','/php-ui'])test('source network PHP connection saves mas
  await page.locator('#source-network-profile').selectOption(id);const probed=page.waitForResponse(r=>r.url().endsWith('/api/extraction/probe'));await page.locator('#source-network-test').click();const r=(await(await probed).json()).report;assert.equal(r.engine,'snappshop_api');assert.equal(r.status,'passed');await page.waitForFunction(()=>document.getElementById('source-network-result').textContent.includes('passed'));
  assert.ok(!(await page.locator('#source-network-result').textContent()).includes('BROWSER-PRIVATE'));assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);assert.deepEqual(errors,[]);
 });
+
+for(const route of ['/','/php-ui'])test('support report and gallery operation work without console copying in '+route,{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'detail',true),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());await page.goto(origin+route);
+ if(route==='/php-ui')await page.frameLocator('#php-original-ui').locator('html[data-s4-ready="1"]').waitFor();
+ await page.evaluate(()=>S4Menu.open('version'));await page.locator('#support-report-read').click();await page.waitForFunction(()=>document.getElementById('support-report-status').textContent.includes('24'));
+ const downloaded=await page.request.get(origin+'/api/support/report?download=1');assert.ok(downloaded.headers()['content-disposition'].includes('attachment'));const d=await downloaded.json();assert.equal(d.coverage.families_with_remaining_work,16);assert.equal(d.contains_credentials,false);assert.equal(d.console_output_included,false);
+ await page.locator('#settings-menu-close').click();
+ if(route==='/php-ui'){await page.frames().find(f=>f.url().endsWith('/php-ui/frame')).evaluate(()=>galleryTest());await page.locator('#php-tools[open]').waitFor();}
+ const before=await(await page.request.get(origin+'/__test__/extract-state')).json();await page.locator('#shared-php-profile').selectOption('1');const response=page.waitForResponse(r=>r.url().endsWith('/api/extraction/gallery-preview'));await page.locator('#shared-php-gallery').click();const value=await(await response).json();assert.equal(value.count,1);assert.deepEqual(value.images,['https://example.com/gallery.jpg']);assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);assert.deepEqual(errors,[]);
+});

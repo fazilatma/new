@@ -32,6 +32,12 @@ def register_extraction_tools(app,db,settings):
             db.put_config('source_network',cfg)
         return jsonify(source_network.public(db,settings))
 
+    @bp.post('/api/extraction/gallery-preview')
+    def gallery_preview():
+        from .services.gallery_preview import preview
+        value,code=preview(db,settings,request.get_json())
+        return jsonify(value),code
+
     @bp.get('/api/extraction/diagnostics')
     def diagnostics():
         from .services.extraction_diagnostics import report

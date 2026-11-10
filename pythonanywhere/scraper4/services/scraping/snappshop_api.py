@@ -125,6 +125,33 @@ def route(url):
     return endpoint,payload,page
 
 
+def detail_images(data):
+    from .engines import obj,arr,on_host
+    from ..support.url import is_image
+    images=[];visited=0
+    def push(value,depth=0):
+        nonlocal visited
+        visited+=1
+        if depth>8 or visited>1000 or len(images)>=30:return
+        if isinstance(value,str):
+            url=web_url(value,'https://cdn.snappshop.ir')
+            if url and 'placeholder' not in url.lower() and (is_image(url) or on_host(url,'cdn.snappshop.ir')) and url not in images:images.append(url)
+        elif isinstance(value,dict):
+            for key in ('original','large','main','src','url','file','path'):
+                if isinstance(value.get(key),str):push(value[key],depth+1);return
+            for sub in value.values():push(sub,depth+1)
+        elif isinstance(value,list):
+            for sub in value:push(sub,depth+1)
+    content=obj(data.get('content'))
+    for value in (data.get('image'),data.get('images'),content.get('images'),content.get('gallery'),data.get('gallery'),data.get('media')):push(value)
+    for variant in arr(data.get('variants')):
+        push(obj(variant).get('image'));push(obj(variant).get('images'))
+    for meta in arr(obj(data.get('page')).get('extra_meta')):
+        meta=obj(meta)
+        if str(meta.get('property') or meta.get('name')).lower() in ('og:image','twitter:image'):push(meta.get('content'))
+    return images
+
+
 def rows(body,product_id=None):
     from .engines import obj,arr,integer,indexed
     data=body.get('data',body)
@@ -137,12 +164,7 @@ def rows(body,product_id=None):
             a=integer(v.get('price'));b=integer(v.get('special_price'));return b if b>0 and (a<=0 or b<=a) else a
         priced=[v for v in available if amount(v)>0]
         chosen=next((v for v in priced if default and str(v.get('vendor_product_info_id'))==default),None) or min(priced,key=amount,default={})
-        images=[]
-        for value in [data.get('image'),*arr(data.get('images')),*arr(content.get('images'))]:
-            value=obj(value).get('src') or obj(value).get('url') if isinstance(value,dict) else value
-            if isinstance(value,str):
-                url=web_url(value,'https://cdn.snappshop.ir')
-                if url and url not in images:images.append(url)
+        images=detail_images(data)
         link='https://snappshop.ir/product/snp-'+product_id
         title=normalize_text(content.get('title_fa') or page.get('title') or data.get('title') or '')
         if not title:raise ValueError('عنوان محصول API اسنپ‌شاپ پیدا نشد.')

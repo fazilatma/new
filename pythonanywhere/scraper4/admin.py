@@ -5,7 +5,7 @@ import secrets
 import json
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, jsonify, request, session, render_template
+from flask import Blueprint, abort, current_app, jsonify, request, session, render_template, Response
 
 from .services import updates
 from .services.engine import selftest
@@ -28,6 +28,20 @@ def register_admin(app, db, settings):
     def parity_status():
         ledger = json.loads(Path(__file__).with_name('parity.json').read_text(encoding='utf-8'))
         return jsonify(ok=True, **ledger)
+
+    @bp.get('/api/operations/coverage')
+    def operation_coverage():
+        from .services.operation_coverage import report
+        return jsonify(report())
+
+    @bp.get('/api/support/report')
+    def support_report():
+        if not session.get('authenticated') or request.environ.get('s4.bearer'):abort(403)
+        if set(request.args)-{'download'} or request.args.get('download','0') not in ('0','1'):raise ValueError('پارامتر گزارش معتبر نیست.')
+        from .services.support_report import report
+        data=report(db,settings,app.config.get('S4_LOADED_COMMIT'))
+        headers={'Content-Disposition':'attachment; filename="scraper4-support.json"'} if request.args.get('download')=='1' else {}
+        return Response(json.dumps(data,ensure_ascii=False,indent=2)+'\n',mimetype='application/json',headers=headers)
 
     @bp.get('/api/endpoints')
     def endpoints():

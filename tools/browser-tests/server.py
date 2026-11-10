@@ -49,7 +49,7 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
             if mode in ('denied','resume-denied'):return {'ok':False,'code':403,'error':'PRIVATE-FIXTURE-TOKEN'}
             if mode=='detail':
                 if '/detail/' not in url:raise AssertionError('Detail-only must never fetch listing')
-                return {'ok':True,'code':200,'url':url,'html':'<div class="description"><b>Enriched detail</b><script>bad()</script></div><span class="sku">SKU-DETAIL</span>'}
+                return {'ok':True,'code':200,'url':url,'html':'<div class="description"><b>Enriched detail</b><script>bad()</script></div><span class="sku">SKU-DETAIL</span><div class="gallery"><img src="https://example.com/gallery.jpg"></div>'}
             return {'ok':True,'code':200,'url':url,'html':'<article class="product"><h2>Fixture '+('page two' if 'page=2' in url else 'page one')+'</h2></article>'}
         if mode=='source-apis':
             db.upsert_profile('one','https://snappshop.ir/category/mobile','Snapp fixture',settings={'extractionEngine':'selenium'})
