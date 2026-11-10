@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.679';
+const APP_VERSION = '10.680';
 
 
 if (!function_exists('str_starts_with')) {
@@ -50450,6 +50450,18 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'terminal_queue_error'")!==false
         &&strpos($selfSrc,"{v:'10." . "679'")!==false
         &&version_compare(APP_VERSION,'10.679','>='));
+    $__shops680=bslFanoutShops(['basalam'=>['token'=>'t1','vendor_id'=>6801,'vendors'=>[['token'=>'t2','vendor_id'=>6802]]]]);
+    $__laneProduct680=bslQueueProductsForLane([['_profile_key'=>'profile-680','title'=>'x','image'=>'https://x.test/a.jpg','longDesc'=>'detail']], 'fast');
+    $add('10.680','ارسال ذخیره‌شده همهٔ غرفه‌ها را پوشش می‌دهد و نبود دسته خطای محصول نمی‌سازد',
+        count($__shops680)===2
+        &&(string)($__laneProduct680[0]['_profile_key']??'')==='profile-680'
+        &&!isset($__laneProduct680[0]['longDesc'])
+        &&strpos($selfSrc,'$manualShops=bslFanoutShops($cn)')!==false
+        &&strpos($selfSrc,"'basalam_categories_unavailable'")!==false
+        &&strpos($selfSrc,"'payload_profile_repaired_at'")!==false
+        &&strpos($selfSrc,"isset(\$_GET['bsl_all_shop_coverage_repair'])")!==false
+        &&strpos($selfSrc,"{v:'10." . "680'")!==false
+        &&version_compare(APP_VERSION,'10.680','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -68770,7 +68782,7 @@ function manualSyncProfileRunning(string $which, string $profileKey): bool {
     $q = $which === 'bsl' ? bslReadQueue() : wooReadQueue();
     foreach ((array)($q['entries'] ?? []) as $entry) {
         if (is_array($entry) && (string)($entry['profile_key'] ?? '') === $profileKey
-            && (string)($entry['status'] ?? '') === 'running') return true;
+            && in_array((string)($entry['status'] ?? ''), ['running','waiting','paused'], true)) return true;
     }
     return false;
 }
@@ -68794,6 +68806,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         if ($pk === '') $pk = productKey((string)($entry['title'] ?? ''), (string)($entry['link'] ?? ''));
         if ($pk === '') continue;
         $entry['key'] = $pk;
+        $entry['_profile_key'] = $key;
         $products[$pk] = $entry;
     }
     if (!$products) {
@@ -68876,7 +68889,8 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
 
     if ($bslOn && $bslProducts && function_exists('bslReadQueue') && function_exists('bslWriteQueue') && ($allowParallel||!manualSyncProfileRunning('bsl', $key))) {
         try {
-            $bslSend = array_values($bslProducts);
+            $_enqueueLane=bslRequestedProfileLane($enqueueOpts['lane']??'fast');
+            $bslSend = array_values(bslQueueProductsForLane(array_values($bslProducts),$_enqueueLane));
             $qFile = $qDir . '/bsl_queue_' . $safeKey . '_' . $stamp . '.json';
             $bslJson = json_encode($bslSend, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
             if (!is_string($bslJson) || @file_put_contents($qFile, $bslJson, LOCK_EX) !== strlen($bslJson))
@@ -68904,7 +68918,9 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
             $delayMs = (int)($cn['basalam']['delay_ms'] ?? 400);
             $retryDelayMs = (int)($cn['basalam']['retry_delay_ms'] ?? 1500);
             $allFallbackCats = is_array($profile['bslFallbackCatIds'] ?? null) ? $profile['bslFallbackCatIds'] : [];
-            $manualShops=is_array($cn['basalam']['send_shop_ids']??null)?bslFanoutShops($cn):[];$createdBslIds=[];
+            /* A missing legacy send_shop_ids means every configured shop (the
+               same rule bslShopSelectedForSend already uses), not default-only. */
+            $manualShops=bslFanoutShops($cn);$createdBslIds=[];
             $_explicitShopTarget=($queueTrigger==='cell_equalize'&&isset($enqueueOpts['bsl_vendor_id'])&&(int)$enqueueOpts['bsl_vendor_id']>0)?1:0;
             $_manShopMode=bslEffectiveShopSendMode($cn, $enqueueOpts);
             if(count($manualShops)>1&&$_manShopMode==='parallel'&&!$_explicitShopTarget){
@@ -68915,6 +68931,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                     'id'=>$queueId,'status'=>'waiting','products_file'=>$qFile,'total'=>count($bslSend),
                     'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'created_at'=>$now,'done_at'=>0,'paused_at'=>0,
                     'only_changed'=>false,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),
+                    'lane'=>$_enqueueLane,'with_details'=>$_enqueueLane==='detail',
                     'shop_send_mode'=>'parallel','parallel_shop_vids'=>$_manParVids,'shop_name'=>'⚡ موازی ('.count($manualShops).' غرفه)',
                     'explicit_shop_target'=>0,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':($isPeriodicQueue?'periodic':'manual'),'origin_trigger'=>$queueTrigger==='cell_equalize'?'manual':$queueOrigin,'auto_sync'=>$isPeriodicQueue,
                     'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,'delay_ms'=>$delayMs,
@@ -68928,6 +68945,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                         'id'=>$_mid,'status'=>'waiting','products_file'=>$qFile,'total'=>count($bslSend),
                         'sent'=>0,'updated'=>0,'skipped'=>0,'failed'=>0,'current'=>0,'started_at'=>0,'created_at'=>$now,'done_at'=>0,'paused_at'=>0,
                         'only_changed'=>false,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),
+                        'lane'=>$_enqueueLane,'with_details'=>$_enqueueLane==='detail',
                         'shop_vendor_id'=>$_mvid,'shop_name'=>(string)($_msh['shop_name']??''),'shop_is_default'=>!empty($_msh['is_default']),
                         'shop_send_mode'=>'serial','explicit_shop_target'=>$_explicitShopTarget,
                         'batch_id'=>$queueId,'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':($isPeriodicQueue?'periodic':'manual'),'origin_trigger'=>$queueTrigger==='cell_equalize'?'manual':$queueOrigin,'auto_sync'=>$isPeriodicQueue,
@@ -68944,7 +68962,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
                     'only_changed'=>false,'config'=>['category_id'=>$catId,'auto_category'=>$autoCat,'title_suffix'=>$titleSuffix,
                         'delay_ms'=>$delayMs,'retry_delay_ms'=>$retryDelayMs,'fallback_cat_ids'=>$allFallbackCats,
                         'send_all_shops'=>!empty($cn['basalam']['send_all_shops']),'force_all'=>true],
-                    'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),'trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':($isPeriodicQueue?'periodic':'manual'),'origin_trigger'=>$queueTrigger==='cell_equalize'?'manual':$queueOrigin,'auto_sync'=>$isPeriodicQueue,
+                    'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),'lane'=>$_enqueueLane,'with_details'=>$_enqueueLane==='detail','trigger'=>$queueTrigger,'origin'=>$queueTrigger==='cell_equalize'?'cell_equalize':($isPeriodicQueue?'periodic':'manual'),'origin_trigger'=>$queueTrigger==='cell_equalize'?'manual':$queueOrigin,'auto_sync'=>$isPeriodicQueue,
                 ];
             }
             bslWriteQueue($queue);
@@ -68968,6 +68986,39 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
         $out['log'][] = 'ℹ️ مقصد فعالی برای صف ارسال نبود (target=' . $target . ')';
     }
     return $out;
+}
+
+/* v10.680: rebuild coverage from durable profiles after older default-only or
+ * failed-category runs. One parallel row per profile targets every currently
+ * selected shop. Active Lane-2 profiles are left untouched so a profile never
+ * occupies both physical lanes; an active Lane-1 profile may receive one
+ * same-lane successor which starts only after its current row completes. */
+if(isset($_GET['bsl_all_shop_coverage_repair'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');@set_time_limit(300);
+    if((string)($_GET['_release']??'')!=='10680'){http_response_code(403);echo json_encode(['ok'=>false,'error'=>'release_guard']);exit;}
+    $cn=loadConnections();$profiles=loadProfiles();$before=bslReadQueue();$detailActive=[];
+    foreach((array)($before['entries']??[])as$row){
+        if(!is_array($row)||!in_array((string)($row['status']??''),['running','waiting','paused'],true)||bslRowLane($row)!=='detail')continue;
+        $pk=trim((string)($row['profile_key']??''));if($pk!=='')$detailActive[$pk]=true;
+    }
+    $queued=[];$skipped=[];$totalProducts=0;
+    foreach($profiles as$pk=>$profile){
+        if(!is_array($profile))continue;$pk=(string)$pk;$n=count(profileProductsMap($profile));
+        if($n<=0){$skipped[$pk]='empty_profile';continue;}
+        if(isset($detailActive[$pk])){$skipped[$pk]='active_detail_lane_already_covers_all_shops';continue;}
+        $repairProfile=$profile;$repairProfile['syncConfig']=array_merge((array)($profile['syncConfig']??[]),[
+            'target'=>'bsl','actionBasis'=>'profile','bslAddUpdate'=>true,'bslOnlyChanged'=>false]);
+        $r=manualSyncEnqueueSends($pk,$repairProfile,$cn,['ok'=>true],[
+            'target'=>'bsl','trigger'=>'coverage_repair','replace_waiting'=>true,'allow_parallel'=>true,
+            'shop_send_mode'=>'parallel','lane'=>'fast']);
+        $ids=array_values(array_filter(array_map('strval',(array)($r['bsl_ids']??[]))));
+        if($ids){$queued[$pk]=['products'=>$n,'queue_ids'=>$ids];$totalProducts+=$n;}
+        else$skipped[$pk]=(string)($r['error']??implode(' · ',array_map('strval',(array)($r['log']??[]))));
+    }
+    $kick=bslKickParallelProfileLanes();
+    echo json_encode(['ok'=>true,'version'=>APP_VERSION,'shops'=>count(bslFanoutShops($cn)),
+        'profiles_queued'=>count($queued),'products_queued'=>$totalProducts,'queued'=>$queued,'skipped'=>$skipped,
+        'dispatch'=>$kick,'policy'=>'all_selected_shops_parallel_lane_1'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 
 function manualServerSendRun(int $roundMs = 1500000, int $maxRounds = 12): array {
@@ -81240,7 +81291,7 @@ function bslQueueProductsForLane(array $products,string $lane): array {
         $product['image']=$listImage;
         $product['images']=$listImage!==''?[$listImage]:[];
         $product['images_count']=$listImage!==''?1:0;
-        $allowed=['key','title','name','final_price','price','price_unit','image','images','images_count',
+        $allowed=['key','_profile_key','title','name','final_price','price','price_unit','image','images','images_count',
             'bsl_category_id','bslCategoryId','category_id','category','stock','in_stock','link','orig_price','originalPrice'];
         foreach(array_keys($product)as$key)if(!in_array((string)$key,$allowed,true))unset($product[$key]);
     }
@@ -81697,7 +81748,7 @@ function bslWriteQueue(array $queue): void {
                         if((int)($r['current']??0)>(int)($n['current']??0)){
                             foreach(['current','sent','updated','skipped','failed','sent_details','updated_details','skipped_details','failed_details','shop_stats','recent_log','phase','phase_label','phase_current','phase_total','phase_pct','last_progress_ts'] as $k)if(array_key_exists($k,$r))$n[$k]=$r[$k];
                         }
-                        if(($r['status']??'')==='running'&&in_array((string)($n['status']??''),['waiting','running'],true))$n['status']='running';
+                        if(($r['status']??'')==='running'&&in_array((string)($n['status']??''),['waiting','running'],true)&&empty($n['infrastructure_deferred']))$n['status']='running';
                         $merged[]=$n;unset($incoming[$id]);
                     }else $merged[]=$r;
                 }
@@ -83464,6 +83515,22 @@ exit;
 }
 
 $verifyProducts=json_decode(@file_get_contents($bslProductsFile)?:'',true)?:[];
+/* New queue payloads are profile-scoped. If a stale/shared file ever crosses
+   profile boundaries, rebuild this row from its own durable profile instead of
+   silently updating thousands of unrelated products under the wrong card. */
+$__expectedProfile=trim((string)($nextEntry['profile_key']??''));$__payloadProfiles=[];
+foreach((array)$verifyProducts as$__vp)if(is_array($__vp)&&trim((string)($__vp['_profile_key']??''))!=='')$__payloadProfiles[trim((string)$__vp['_profile_key'])]=true;
+if($__payloadProfiles&&($__expectedProfile===''||count($__payloadProfiles)!==1||!isset($__payloadProfiles[$__expectedProfile]))){
+    $__ownProfile=bslLoadSingleProfileSnapshot($__expectedProfile);$__own=[];
+    foreach(profileOrderedProducts((array)$__ownProfile,null,true)as$__op){if(!is_array($__op))continue;$__op['_profile_key']=$__expectedProfile;$__own[]=$__op;}
+    if($__own){
+        $verifyProducts=bslQueueProductsForLane($__own,$_bslLane);$__fixedJson=json_encode($verifyProducts,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+        if(is_string($__fixedJson)){@file_put_contents((string)$nextEntry['products_file'],$__fixedJson,LOCK_EX);@file_put_contents($bslProductsFile,$__fixedJson,LOCK_EX);}
+        foreach(['current','sent','updated','skipped','failed']as$__rk)$queue['entries'][$nextIdx][$__rk]=0;
+        $queue['entries'][$nextIdx]['total']=count($verifyProducts);$queue['entries'][$nextIdx]['payload_profile_repaired_at']=time();
+        $nextEntry=$queue['entries'][$nextIdx];$bslResumeStart=0;$GLOBALS['_bslResumeFloor']=0;bslWriteQueue($queue);
+    }else $verifyProducts=[];
+}
 if(empty($verifyProducts)){
 $queue['entries'][$nextIdx]['status']='failed';$queue['entries'][$nextIdx]['done_at']=time();
 bslWriteQueue($queue);
@@ -83647,6 +83714,24 @@ if($__scopeShop){bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['🏪 �
 bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',['دریافت دسته‌بندی‌ها...']);
 /* v10.41 (۵۵): از کشِ مشترک */
 $bslFlatCats=bslCatsAll($tk);
+if(!$bslFlatCats){usleep(max(250000,$bslRetryDelayMs*1000));$bslFlatCats=bslCatsAll($tk,true);}
+if(!$bslFlatCats){
+    /* Category metadata is infrastructure, not a product validation result.
+       Never submit a configured parent blindly and create thousands of 422s. */
+    $queue=bslReadQueue();foreach($queue['entries'] as &$qe){
+        if(!is_array($qe)||(string)($qe['id']??'')!==$bslQueueId)continue;
+        $qe['status']='waiting';$qe['infrastructure_deferred']='basalam_categories_unavailable';
+        $qe['resume_requested_at']=0;$qe['updated_at']=time();break;
+    }unset($qe);bslWriteQueue($queue);
+    writeProgress($bslProgressFile,['running'=>false,'done'=>false,'retryable'=>true,'queue_id'=>$bslQueueId,
+        'current'=>(int)($nextEntry['current']??0),'total'=>count($verifyProducts),'last_progress_ts'=>time(),
+        'phase'=>'infrastructure_wait','phase_label'=>'در انتظار درخت دسته‌بندی باسلام',
+        'recent_log'=>['⏳ درخت دسته‌بندی باسلام در دسترس نیست؛ ردیف بدون ثبت خطای محصول در cron بعدی ادامه می‌یابد']]);
+    @unlink($bslProductsFile);header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(['ok'=>false,'retryable'=>true,'code'=>'basalam_categories_unavailable','queue_id'=>$bslQueueId],JSON_UNESCAPED_UNICODE);exit;
+}
+/* A successful retry clears the durable infrastructure handoff marker. */
+$queue=bslReadQueue();$__catMarkerChanged=false;foreach($queue['entries'] as &$qe){if(is_array($qe)&&(string)($qe['id']??'')===$bslQueueId&&!empty($qe['infrastructure_deferred'])){unset($qe['infrastructure_deferred']);$__catMarkerChanged=true;break;}}unset($qe);if($__catMarkerChanged)bslWriteQueue($queue);
 bslSetCatNameMap($bslFlatCats);
 bslBackendProgress(0,0,0,0,count($verifyProducts),0,'',[count($bslFlatCats).' دسته']);
 
@@ -103383,6 +103468,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.680', t:'🏪 پوشش واقعی همهٔ غرفه‌ها و جلوگیری از خطای دستهٔ سراسری', items:[
+    'علت اصلی کمبود پوشش رفع شد: تنظیم قدیمیِ بدون send_shop_ids دیگر فقط غرفهٔ پیش‌فرض را صف نمی‌کند و طبق قرارداد رابط، همهٔ غرفه‌های پیکربندی‌شده را هدف می‌گیرد.',
+    'اگر درخت دسته‌بندی باسلام موقتاً قابل دریافت نباشد، ردیف بدون ساختن هزاران خطای 422 در waiting می‌ماند و cron بعدی ادامه می‌دهد؛ دستهٔ والد دیگر کورکورانه ارسال نمی‌شود.',
+    'صف‌های ساخته‌شده از پروفایل اکنون لین و هویت پروفایل را داخل payload ثبت می‌کنند؛ لین ۱ فقط دادهٔ فهرست را نگه می‌دارد و هر payload جابه‌جا/آلوده پیش از ارسال از پروفایل درست بازسازی می‌شود.',
+    'عملیات ترمیم پوشش، محصولات ذخیره‌شدهٔ همهٔ پروفایل‌ها را بدون محدودیت تعداد و به‌صورت موازی برای تمام غرفه‌های انتخاب‌شده دوباره صف می‌کند؛ پروفایل فعال لین ۲ تکراری نمی‌شود.'
+  ]},
   {v:'10.679', t:'🏷 تشخیص دقیق تاریخچهٔ صف باسلام', items:[
     'گزارش خطا دیگر همهٔ ردیف‌های failed قدیمی را «جایگزین‌شده» نمی‌نامد؛ checkpoint منقضی، فایل جزئیات پاک‌شده و خطای نهایی داده هرکدام عنوان صریح خود را دارند.',
     'ردیف‌های واقعاً جایگزین‌شده همچنان فقط تاریخچهٔ تکمیل‌شده‌اند و از خطاهای محصول و صف جدا می‌مانند.'
