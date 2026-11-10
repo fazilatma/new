@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.655';
+const APP_VERSION = '10.656';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26926,9 +26926,9 @@ function s4ThirdPartyExplorerProbe(bool $fresh=false):array{
         @file_put_contents($cache,json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);return$out;
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
-function s4ThirdPartyExplorerEnrichPublicOrders(array &$d,int $timeout=8):array{
+function s4ThirdPartyExplorerEnrichPublicOrders(array &$d,int $timeout=8,?int $onlyVendorId=null):array{
     $now=time();$candidates=(array)($d['vendors']??[]);uasort($candidates,fn($a,$b)=>(int)($a['sales_checked_at']??0)<=>(int)($b['sales_checked_at']??0));$chosen=null;
-    foreach($candidates as$v)if((int)($v['vendor_id']??0)>0&&$now-(int)($v['sales_checked_at']??0)>=86400){$chosen=$v;break;}if(!$chosen)return['ok'=>true,'skipped'=>'all_fresh'];
+    if($onlyVendorId!==null&&isset($d['vendors'][(string)$onlyVendorId]))$chosen=$d['vendors'][(string)$onlyVendorId];else foreach($candidates as$v)if((int)($v['vendor_id']??0)>0&&$now-(int)($v['sales_checked_at']??0)>=86400){$chosen=$v;break;}if(!$chosen)return['ok'=>true,'skipped'=>'all_fresh'];
     $vid=(int)$chosen['vendor_id'];$key=(string)$vid;if(!isset($d['vendors'][$key]))return['ok'=>false,'vendor_id'=>$vid,'error'=>'vendor_disappeared'];
     $r=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/vendors/'.$vid,$timeout);$vendor=!empty($r['ok'])&&is_array($r['body']??null)?$r['body']:[];if(is_array($vendor['data']??null)&&isset($vendor['data']['id']))$vendor=$vendor['data'];$orders=s4ThirdPartyExplorerPublicOrders($vendor);
     $sales=0;$reviews=0;$sampled=0;$productCode=0;if($orders===null){$pr=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/products?vendor_ids='.$vid.'&status=2976&per_page=100&sort=sales_count%3Adesc',$timeout);$productCode=(int)($pr['code']??0);$prows=!empty($pr['ok'])?s4ThirdPartyExplorerRows((array)($pr['body']??[])):[];$sampled=count($prows);
@@ -26976,7 +26976,7 @@ function s4ThirdPartyExplorerTick(string $source='cron',bool $force=false):array
         }
         /* Reserve stable codes immediately after discovery. Ranking changes, Stop/Resume
            and later approvals therefore cannot reorder candidate codes. */
-        s4ThirdPartyExplorerAssignMissingCodes($d,loadProfiles());$enriched=s4ThirdPartyExplorerEnrichPublicOrders($d,8);if(empty($enriched['ok'])&&(int)($enriched['code']??0)===429)$d['backoff_until']=$now+300;
+        s4ThirdPartyExplorerAssignMissingCodes($d,loadProfiles());$enriched=s4ThirdPartyExplorerEnrichPublicOrders($d,8);$d['last_sales_enrichment']=array_merge(['at'=>$now,'trigger'=>$source],$enriched);if(empty($enriched['ok'])&&(int)($enriched['code']??0)===429)$d['backoff_until']=$now+300;
         $next=s4ThirdPartyExplorerNextCursor((array)($r['body']??[]));if($next>0&&$rows)$d['cursor']['by_seed'][$seed['key']]=$next;
         else{$d['cursor']['by_seed'][$seed['key']]=0;$d['cursor']['seed']=($si+1)%count($seeds);}
         $d['pages_scanned']=(int)($d['pages_scanned']??0)+1;$d['products_scanned']=(int)($d['products_scanned']??0)+count($rows);$d['last_error']='';
@@ -27053,12 +27053,20 @@ function s4ThirdPartyExplorerStatus():array{
     $rows=array_values(array_filter($d['vendors'],fn($v)=>(int)($v['product_count']??0)>=$minProducts&&(int)($v['sales_estimate']??0)>=$minSales));
     usort($rows,fn($a,$b)=>(float)($b['scores'][$scoreKey]??0)<=>(float)($a['scores'][$scoreKey]??0));$rows=array_slice($rows,0,50);
     foreach($rows as&$row){$row['active_score']=(float)($row['scores'][$scoreKey]??0);$row['age_days']=(int)($row['scores']['age_days']??0);$row['categories']=array_values((array)($row['categories']??[]));unset($row['observed_product_sales']);}unset($row);
-    $counts=['pending'=>0,'approved'=>0,'rejected'=>0,'public_orders'=>0];foreach($d['vendors']as$v){$s=(string)($v['state']??'pending');if(isset($counts[$s]))$counts[$s]++;if(($v['sales_is_estimate']??true)===false)$counts['public_orders']++;}
+    $counts=['pending'=>0,'approved'=>0,'rejected'=>0,'public_orders'=>0,'sales_sources'=>[]];foreach($d['vendors']as$v){$s=(string)($v['state']??'pending');if(isset($counts[$s]))$counts[$s]++;if(($v['sales_is_estimate']??true)===false)$counts['public_orders']++;$ss=(string)($v['sales_source']??'unknown');$counts['sales_sources'][$ss]=(int)($counts['sales_sources'][$ss]??0)+1;}
     return['ok'=>true,'version'=>APP_VERSION,'explorer_nonce'=>s4ThirdPartyExplorerBrowserNonce(),'config'=>$d['config'],'counts'=>$counts,'candidates'=>$rows,'vendors_total'=>count($d['vendors']),
         'pages_scanned'=>(int)$d['pages_scanned'],'products_scanned'=>(int)$d['products_scanned'],'last_run_at'=>(int)$d['last_run_at'],
-        'next_run_at'=>(int)$d['next_run_at'],'backoff_until'=>(int)$d['backoff_until'],'last_error'=>(string)$d['last_error'],'audit'=>array_slice($d['audit'],-30)];
+        'next_run_at'=>(int)$d['next_run_at'],'backoff_until'=>(int)$d['backoff_until'],'last_error'=>(string)$d['last_error'],'last_sales_enrichment'=>(array)($d['last_sales_enrichment']??[]),'audit'=>array_slice($d['audit'],-30)];
+}
+function s4ThirdPartyExplorerSalesDiagnostic(int $vendorId):array{
+    $lf=@fopen(__DIR__.'/.third-party-shop-explorer.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>false,'error'=>'busy'];}
+    try{$d=s4ThirdPartyExplorerLoad();if($vendorId<=0||!isset($d['vendors'][(string)$vendorId]))return['ok'=>false,'error'=>'unknown_vendor'];
+        $last=(array)($d['last_sales_enrichment']??[]);if((int)($last['vendor_id']??0)===$vendorId&&time()-(int)($last['at']??0)<60)return array_merge(['cached'=>true],$last);
+        $out=s4ThirdPartyExplorerEnrichPublicOrders($d,8,$vendorId);$d['last_sales_enrichment']=array_merge(['at'=>time(),'trigger'=>'diagnostic'],$out);s4ThirdPartyExplorerSave($d);return$d['last_sales_enrichment'];
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
 if(isset($_GET['third_party_explorer_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerProbe(false),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_GET['third_party_explorer_sales_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerSalesDiagnostic((int)$_GET['third_party_explorer_sales_test']),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerStatus(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_run'])){http_response_code(405);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'POST required']);exit;}
 if(isset($_POST['third_party_explorer_save'])||isset($_POST['third_party_explorer_action'])||isset($_POST['third_party_explorer_run'])){
@@ -49987,6 +49995,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'sort=sales_count%3Adesc')!==false
         &&strpos($selfSrc,"{v:'10." . "655'")!==false
         &&version_compare(APP_VERSION,'10.655','>='));
+    $add('10.656','آخرین نتیجهٔ غنی‌سازی فروش و شمار منبع‌ها قابل تشخیص است',
+        strpos($selfSrc,"'last_sales_enrichment'")!==false
+        &&strpos($selfSrc,"'sales_sources'")!==false
+        &&strpos($selfSrc,"third_party_explorer_sales_test")!==false
+        &&strpos($selfSrc,"{v:'10." . "656'")!==false
+        &&version_compare(APP_VERSION,'10.656','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102752,6 +102766,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.656', t:'🔎 تشخیص زندهٔ مسیر فروش غرفه', items:[
+    'وضعیت Explorer اکنون نتیجهٔ آخرین غنی‌سازی را همراه با HTTP code غرفه و محصولات، تعداد محصولات نمونه و منبع عدد برمی‌گرداند.',
+    'شمار غرفه‌ها به تفکیک منبع فروش نیز گزارش می‌شود تا موفقیت برآوردهای حداقلی خارج از ۵۰ ردیف اول پنهان نماند.',
+    'یک probe محدود به غرفه‌های از قبل کشف‌شده و دارای فاصلهٔ زمانی، بررسی واقعی مسیر فروش را بدون ساخت پروفایل یا دورزدن فشار API ممکن می‌کند.'
+  ]},
   {v:'10.655', t:'📈 برآورد چندمرحله‌ای فروش به‌جای صفر غیرکاربردی', items:[
     'اگر order_count عمومی غرفه ارائه نشود، Explorer تا ۱۰۰ محصول عمومی پرفروش همان غرفه را با sort فروش می‌خواند و جمع sales_count را به‌عنوان حداقل فروش مشاهده‌شده ثبت می‌کند.',
     'اگر باسلام sales_count را نیز صفر پنهان کند، جمع review_count محصولات به‌عنوان حداقل محافظه‌کارانهٔ فروش استفاده می‌شود؛ هیچ نرخ تبدیل ساختگی از بازدید به فروش اعمال نمی‌شود.',
