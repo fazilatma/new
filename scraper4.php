@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.656';
+const APP_VERSION = '10.657';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26931,7 +26931,7 @@ function s4ThirdPartyExplorerEnrichPublicOrders(array &$d,int $timeout=8,?int $o
     if($onlyVendorId!==null&&isset($d['vendors'][(string)$onlyVendorId]))$chosen=$d['vendors'][(string)$onlyVendorId];else foreach($candidates as$v)if((int)($v['vendor_id']??0)>0&&$now-(int)($v['sales_checked_at']??0)>=86400){$chosen=$v;break;}if(!$chosen)return['ok'=>true,'skipped'=>'all_fresh'];
     $vid=(int)$chosen['vendor_id'];$key=(string)$vid;if(!isset($d['vendors'][$key]))return['ok'=>false,'vendor_id'=>$vid,'error'=>'vendor_disappeared'];
     $r=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/vendors/'.$vid,$timeout);$vendor=!empty($r['ok'])&&is_array($r['body']??null)?$r['body']:[];if(is_array($vendor['data']??null)&&isset($vendor['data']['id']))$vendor=$vendor['data'];$orders=s4ThirdPartyExplorerPublicOrders($vendor);
-    $sales=0;$reviews=0;$sampled=0;$productCode=0;if($orders===null){$pr=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/products?vendor_ids='.$vid.'&status=2976&per_page=100&sort=sales_count%3Adesc',$timeout);$productCode=(int)($pr['code']??0);$prows=!empty($pr['ok'])?s4ThirdPartyExplorerRows((array)($pr['body']??[])):[];$sampled=count($prows);
+    $sales=0;$reviews=0;$sampled=0;$productCode=0;if($orders===null){$pr=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/vendors/'.$vid.'/products?statuses=2976&per_page=100&sort=sales_count%3Adesc',$timeout);$productCode=(int)($pr['code']??0);$prows=!empty($pr['ok'])?s4ThirdPartyExplorerRows((array)($pr['body']??[])):[];$sampled=count($prows);
         foreach($prows as$product){$raw=(int)($product['sales_count']??0);if($raw>0)$sales+=$raw;$reviews+=max(0,(int)($product['review_count']??$product['reviews_count']??0));}}
     $d['vendors'][$key]['sales_checked_at']=$now;$source='public_sales_unavailable';$value=(int)($d['vendors'][$key]['sales_estimate']??0);$estimated=true;$label='فروش عمومی در دسترس نیست';
     if($orders!==null){$value=$orders;$estimated=false;$source='public_vendor_order_count';$label='تعداد سفارش عمومی غرفه';$d['vendors'][$key]['public_order_count']=$orders;}
@@ -27061,7 +27061,7 @@ function s4ThirdPartyExplorerStatus():array{
 function s4ThirdPartyExplorerSalesDiagnostic(int $vendorId):array{
     $lf=@fopen(__DIR__.'/.third-party-shop-explorer.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>false,'error'=>'busy'];}
     try{$d=s4ThirdPartyExplorerLoad();if($vendorId<=0||!isset($d['vendors'][(string)$vendorId]))return['ok'=>false,'error'=>'unknown_vendor'];
-        $last=(array)($d['last_sales_enrichment']??[]);if((int)($last['vendor_id']??0)===$vendorId&&time()-(int)($last['at']??0)<60)return array_merge(['cached'=>true],$last);
+        $last=(array)($d['last_sales_enrichment']??[]);if((int)($last['vendor_id']??0)===$vendorId&&(int)($last['product_code']??0)===200&&time()-(int)($last['at']??0)<60)return array_merge(['cached'=>true],$last);
         $out=s4ThirdPartyExplorerEnrichPublicOrders($d,8,$vendorId);$d['last_sales_enrichment']=array_merge(['at'=>time(),'trigger'=>'diagnostic'],$out);s4ThirdPartyExplorerSave($d);return$d['last_sales_enrichment'];
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
@@ -50001,6 +50001,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"third_party_explorer_sales_test")!==false
         &&strpos($selfSrc,"{v:'10." . "656'")!==false
         &&version_compare(APP_VERSION,'10.656','>='));
+    $add('10.657','محصولات فروشگاه از قرارداد اختصاصی vendor با statuses خوانده می‌شوند',
+        strpos($selfSrc,"'/products?statuses=2976&per_page=100&sort=sales_count%3Adesc'")!==false
+        &&strpos($selfSrc,"{v:'10." . "657'")!==false
+        &&version_compare(APP_VERSION,'10.657','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102766,6 +102770,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.657', t:'🛠️ اصلاح قرارداد فهرست محصولات هر غرفه', items:[
+    'آزمایش زنده نشان داد endpoint غرفه پاسخ ۲۰۰ می‌دهد اما فیلتر vendor_ids در فهرست عمومی با ۴۲۲ رد می‌شود.',
+    'fallback فروش اکنون از endpoint رسمی و اختصاصی /v1/vendors/{id}/products با پارامتر statuses استفاده می‌کند تا محصولات همان غرفه واقعاً دریافت شوند.',
+    'probe ناموفق ۴۲۲ cache نمی‌شود تا اصلاح مسیر بلافاصله و بدون انتظار دوباره آزمایش شود.'
+  ]},
   {v:'10.656', t:'🔎 تشخیص زندهٔ مسیر فروش غرفه', items:[
     'وضعیت Explorer اکنون نتیجهٔ آخرین غنی‌سازی را همراه با HTTP code غرفه و محصولات، تعداد محصولات نمونه و منبع عدد برمی‌گرداند.',
     'شمار غرفه‌ها به تفکیک منبع فروش نیز گزارش می‌شود تا موفقیت برآوردهای حداقلی خارج از ۵۰ ردیف اول پنهان نماند.',
