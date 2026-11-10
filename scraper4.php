@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.653';
+const APP_VERSION = '10.654';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26902,6 +26902,10 @@ function s4ThirdPartyExplorerVendorFromRow(array $row):array{
     $v=is_array($row['vendor']??null)?$row['vendor']:(is_array($row['vendor_info']??null)?$row['vendor_info']:[]);$vid=(int)($v['id']??$v['vendor_id']??$row['vendor_id']??0);
     if($vid>0&&!isset($v['id']))$v['id']=$vid;if(empty($v['title']))$v['title']=(string)($v['name']??$row['vendor_name']??$row['vendor_title']??'');return$v;
 }
+function s4ThirdPartyExplorerFetchJson(string $url,int $timeout=12):array{
+    if(function_exists('curl_init')){$ch=curl_init($url);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>3,CURLOPT_CONNECTTIMEOUT=>min(6,$timeout),CURLOPT_TIMEOUT=>$timeout,CURLOPT_ENCODING=>'',CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_SSL_VERIFYHOST=>false,CURLOPT_HTTPHEADER=>['Accept: application/json','Prefer: return=representation','User-Agent: Mozilla/5.0 (compatible; S4 Public Shop Explorer)']]);$raw=curl_exec($ch);$err=(string)curl_error($ch);$code=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);curl_close($ch);$body=is_string($raw)?json_decode($raw,true):null;if(is_array($body)&&$code>=200&&$code<300)return['ok'=>true,'code'=>$code,'body'=>$body,'url'=>$url,'representation'=>true];if($code===429)return['ok'=>false,'code'=>429,'error'=>$err?:'HTTP 429'];}
+    $fallback=basalamApiFetchJson($url,$timeout);$fallback['representation']=false;return$fallback;
+}
 function s4ThirdPartyExplorerPublicOrders(array $vendor):?int{
     foreach(['order_count','orders_count','successful_orders_count','sales_count']as$key)if(array_key_exists($key,$vendor)&&is_numeric($vendor[$key]))return max(0,(int)$vendor[$key]);return null;
 }
@@ -26912,18 +26916,18 @@ function s4ThirdPartyExplorerCategoryFromRow(array $row):array{
 function s4ThirdPartyExplorerProbe(bool $fresh=false):array{
     $cache=__DIR__.'/.third-party-shop-explorer-probe.json';$cached=json_decode((string)@file_get_contents($cache),true);if(!$fresh&&is_array($cached)&&time()-(int)($cached['tested_at']??0)<60)return$cached+['cached'=>true];
     $lf=@fopen(__DIR__.'/.third-party-shop-explorer.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>false,'error'=>'explorer_busy'];}
-    try{$d=s4ThirdPartyExplorerLoad();$seeds=s4ThirdPartyExplorerSeeds($d['config']);$seed=$seeds[0];$url=s4ThirdPartyExplorerUrl($seed,0);$r=basalamApiFetchJson($url,15);$body=is_array($r['body']??null)?$r['body']:[];$rows=!empty($r['ok'])?s4ThirdPartyExplorerRows($body):[];
+    try{$d=s4ThirdPartyExplorerLoad();$seeds=s4ThirdPartyExplorerSeeds($d['config']);$seed=$seeds[0];$url=s4ThirdPartyExplorerUrl($seed,0);$r=s4ThirdPartyExplorerFetchJson($url,15);$body=is_array($r['body']??null)?$r['body']:[];$rows=!empty($r['ok'])?s4ThirdPartyExplorerRows($body):[];
         $profiles=loadProfiles();$used=s4ThirdPartyExplorerProfileCodes($profiles,$d['config']);$next=$used?max(array_keys($used))+1:max(1,(int)($d['config']['suffix_start']??1));$samples=[];$seen=[];
         foreach($rows as$row){$v=s4ThirdPartyExplorerVendorFromRow((array)$row);$vid=(int)($v['id']??0);if($vid<=0||isset($seen[$vid]))continue;$seen[$vid]=true;$publicOrders=s4ThirdPartyExplorerPublicOrders($v);$sales=$publicOrders??s4ThirdPartyExplorerSales((array)$row);$products=max(1,(int)($v['products_count']??$v['product_count']??1));$created=s4ThirdPartyExplorerTimestamp($v['created_at']??$row['created_at']??0);$scores=s4ThirdPartyExplorerScores($sales,$products,$created);$cat=s4ThirdPartyExplorerCategoryFromRow((array)$row);
             $samples[]=['vendor_id'=>$vid,'title'=>(string)($v['title']??('غرفه '.$vid)),'proposed_profile_name'=>s4ThirdPartyExplorerProfileTitle($v,$d['config'],$next),'assigned_code'=>$next,'assigned_suffix'=>s4ThirdPartyExplorerFormatSuffix($d['config'],$next),'categories'=>$cat['title']!==''?[$cat]:[],'sales_estimate'=>$sales,'sales_is_estimate'=>$publicOrders===null,'sales_metric_label'=>$publicOrders!==null?'تعداد سفارش عمومی غرفه':'فروش تخمینی محصول','product_count'=>$products,'age_days'=>$scores['age_days'],'active_score'=>$scores['balanced'],'state'=>'test'];$next++;if(count($samples)>=8)break;}
-        $out=['ok'=>!empty($r['ok']),'version'=>APP_VERSION,'tested_at'=>time(),'http_code'=>(int)($r['code']??0),'seed'=>$seed['key']??'public','request_url'=>$url,'top_level_keys'=>array_keys($body),'row_count'=>count($rows),'vendor_count'=>count($samples),'first_row_keys'=>isset($rows[0])?array_keys((array)$rows[0]):[],'samples'=>$samples,'error'=>(string)($r['error']??'')];
+        $out=['ok'=>!empty($r['ok']),'version'=>APP_VERSION,'tested_at'=>time(),'http_code'=>(int)($r['code']??0),'full_representation'=>!empty($r['representation']),'seed'=>$seed['key']??'public','request_url'=>$url,'top_level_keys'=>array_keys($body),'row_count'=>count($rows),'vendor_count'=>count($samples),'first_row_keys'=>isset($rows[0])?array_keys((array)$rows[0]):[],'samples'=>$samples,'error'=>(string)($r['error']??'')];
         @file_put_contents($cache,json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);return$out;
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
 function s4ThirdPartyExplorerEnrichPublicOrders(array &$d,int $timeout=8):array{
     $now=time();$candidates=(array)($d['vendors']??[]);uasort($candidates,fn($a,$b)=>(int)($a['sales_checked_at']??0)<=>(int)($b['sales_checked_at']??0));$chosen=null;
     foreach($candidates as$v)if((int)($v['vendor_id']??0)>0&&$now-(int)($v['sales_checked_at']??0)>=86400){$chosen=$v;break;}if(!$chosen)return['ok'=>true,'skipped'=>'all_fresh'];
-    $vid=(int)$chosen['vendor_id'];$r=basalamApiFetchJson('https://openapi.basalam.com/v1/vendors/'.$vid,$timeout);if(empty($r['ok'])){$d['vendors'][(string)$vid]['sales_checked_at']=$now;$d['vendors'][(string)$vid]['sales_source']='public_vendor_endpoint_error';return['ok'=>false,'vendor_id'=>$vid,'code'=>(int)($r['code']??0),'error'=>(string)($r['error']??'vendor_sales_fetch_failed')];}
+    $vid=(int)$chosen['vendor_id'];$r=s4ThirdPartyExplorerFetchJson('https://openapi.basalam.com/v1/vendors/'.$vid,$timeout);if(empty($r['ok'])){$d['vendors'][(string)$vid]['sales_checked_at']=$now;$d['vendors'][(string)$vid]['sales_source']='public_vendor_endpoint_error';return['ok'=>false,'vendor_id'=>$vid,'code'=>(int)($r['code']??0),'error'=>(string)($r['error']??'vendor_sales_fetch_failed')];}
     $vendor=is_array($r['body']??null)?$r['body']:[];if(is_array($vendor['data']??null)&&isset($vendor['data']['id']))$vendor=$vendor['data'];$orders=s4ThirdPartyExplorerPublicOrders($vendor);$key=(string)$vid;if(!isset($d['vendors'][$key]))return['ok'=>false,'vendor_id'=>$vid,'error'=>'vendor_disappeared'];
     $d['vendors'][$key]['sales_checked_at']=$now;$d['vendors'][$key]['sales_source']=$orders!==null?'public_vendor_order_count':'public_vendor_missing_order_count';
     if($orders!==null){$d['vendors'][$key]['public_order_count']=$orders;$d['vendors'][$key]['sales_estimate']=$orders;$d['vendors'][$key]['sales_is_estimate']=false;$d['vendors'][$key]['sales_metric_label']='تعداد سفارش عمومی غرفه';}
@@ -26940,7 +26944,7 @@ function s4ThirdPartyExplorerTick(string $source='cron',bool $force=false):array
         if($now<(int)($d['backoff_until']??0))return['ok'=>true,'skipped'=>'backoff','retry_at'=>(int)$d['backoff_until']];
         if($now<(int)($d['next_run_at']??0))return['ok'=>true,'skipped'=>'interval','retry_at'=>(int)$d['next_run_at']];
         $seeds=s4ThirdPartyExplorerSeeds($cfg);$si=max(0,(int)($d['cursor']['seed']??0))%count($seeds);$seed=$seeds[$si];$cursor=max(0,(int)($d['cursor']['by_seed'][$seed['key']]??0));
-        $url=s4ThirdPartyExplorerUrl($seed,$cursor);$r=basalamApiFetchJson($url,10);$d['last_run_at']=$now;$d['next_run_at']=$now+max(30,min(86400,(int)($cfg['interval_sec']??120)));
+        $url=s4ThirdPartyExplorerUrl($seed,$cursor);$r=s4ThirdPartyExplorerFetchJson($url,10);$d['last_run_at']=$now;$d['next_run_at']=$now+max(30,min(86400,(int)($cfg['interval_sec']??120)));
         if(empty($r['ok'])){
             $code=(int)($r['code']??0);$d['last_error']=(string)($r['error']??'Basalam discovery failed');if($code===429)$d['backoff_until']=$now+300;
             s4ThirdPartyExplorerSave($d);return['ok'=>false,'code'=>$code,'error'=>$d['last_error'],'backoff_until'=>(int)$d['backoff_until']];
@@ -49962,6 +49966,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'سفارش/فروش عمومی')!==false
         &&strpos($selfSrc,"{v:'10." . "653'")!==false
         &&version_compare(APP_VERSION,'10.653','>='));
+    $add('10.654','درخواست‌های Explorer نمایش کامل عمومی vendor را با هدر Prefer می‌گیرند',
+        strpos($selfSrc,'function s4ThirdPartyExplorerFetchJson')!==false
+        &&strpos($selfSrc,'Prefer: return=representation')!==false
+        &&substr_count($selfSrc,'s4ThirdPartyExplorerFetchJson(')>=4
+        &&strpos($selfSrc,"'full_representation'=>!empty")!==false
+        &&strpos($selfSrc,"{v:'10." . "654'")!==false
+        &&version_compare(APP_VERSION,'10.654','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102727,6 +102738,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.654', t:'📨 درخواست نمایش کامل آمار عمومی باسلام', items:[
+    'Core API به‌طور پیش‌فرض vendor را minimal برمی‌گرداند و order_count حذف می‌شود؛ درخواست‌های اختصاصی Explorer اکنون هدر رسمی Prefer: return=representation می‌فرستند.',
+    'مسیر کاتالوگ و غنی‌سازی تک‌غرفه هر دو از JSON client محدود و مخصوص Explorer استفاده می‌کنند؛ در نبود curl مسیر شبکهٔ قبلی fallback می‌شود و 429 بدون دورزدن backoff گزارش می‌گردد.',
+    'تست کشف نشان می‌دهد پاسخ کامل دریافت شده یا fallback بوده است تا صفرهای واقعی از صفرهای ناشی از پاسخ minimal تفکیک شوند.'
+  ]},
   {v:'10.653', t:'🧾 دریافت تعداد سفارش عمومی غرفه به‌جای فروش صفر', items:[
     'پاسخ عمومی رسمی باسلام در شیء vendor فیلد order_count دارد؛ Explorer اکنون این عدد غرفه‌ای را مقدم بر sales_count محصول می‌داند و آن را با برچسب «سفارش عمومی» نمایش می‌دهد، نه تخمین فروش محصول.',
     'غرفه‌های قدیمی نیز هر تیک به‌صورت محدود، روزانه و یک‌به‌یک از مسیر عمومی openapi.basalam.com/v1/vendors غنی‌سازی می‌شوند تا فشار API کنترل شود و صفرهای ذخیره‌شده تدریجاً اصلاح شوند.',
