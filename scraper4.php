@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.676';
+const APP_VERSION = '10.677';
 
 
 if (!function_exists('str_starts_with')) {
@@ -3731,15 +3731,21 @@ function extractProductHasDetailData(array $product,array $detailSelectors): boo
     if((int)($product['_detail_checked_at']??0)>0||trim((string)($product['_detail_cycle']??''))!=='')return true;
     return extractProductHasDetailValues($product,$detailSelectors);
 }
+function extractProfileUsesBasalamApiDetails(array $profile): bool {
+    $engine=function_exists('normalizeExtractionEngine')?normalizeExtractionEngine((string)($profile['extractionEngine']??'')):strtolower((string)($profile['extractionEngine']??''));
+    return $engine==='basalam_api'||($profile['source']??'')==='basalam_best_sellers'||!empty($profile['best_sellers_managed']);
+}
 function extractProfileDetailSummary(array $profile): array {
-    $selectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);
+    if(function_exists('s4BasalamBestSellersOverlayProfile'))$profile=s4BasalamBestSellersOverlayProfile($profile);
+    $selectors=extractNormalizeDetailSelectors($profile['detailSelectors']??[]);$basalamApi=extractProfileUsesBasalamApiDetails($profile);
     $total=0;$detailed=0;
     foreach(profileProductsMap($profile)as$product){
         if(!is_array($product))continue;$total++;
+        if($basalamApi&&(!empty($product['_basalam_api'])||(int)($product['_basalam_detail_enriched_at']??0)>0)){$detailed++;continue;}
         if($selectors&&extractProductHasDetailValues($product,$selectors))$detailed++;
     }
-    return ['enabled'=>count($selectors)>0,'selector_count'=>count($selectors),
-        'total'=>$total,'detailed'=>$detailed];
+    return ['enabled'=>$basalamApi||count($selectors)>0,'selector_count'=>count($selectors),
+        'provider'=>$basalamApi?'basalam_core_api':'selectors','total'=>$total,'detailed'=>$detailed];
 }
 /** Lane 2 needs actual detail data somewhere in the saved profile, but not on
  * every product; products without detail values remain eligible for basic send. */
@@ -50397,6 +50403,16 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$profile=s4BasalamBestSellersOverlayProfile(\$profile)")!==false
         &&strpos($selfSrc,"{v:'10." . "676'")!==false
         &&version_compare(APP_VERSION,'10.676','>='));
+    $__bslApiDetail677=extractProfileDetailSummary(['extractionEngine'=>'basalam_api','detailSelectors'=>[],'products'=>[['api-1',['title'=>'API product','basalam_product_id'=>677,'_basalam_api'=>true,'longDesc'=>'detail']]]]);
+    $add('10.677','لین ۲ موتور باسلام به Core API متکی است و سلکتور CSS نمی‌خواهد',
+        !empty($__bslApiDetail677['enabled'])
+        &&(string)($__bslApiDetail677['provider']??'')==='basalam_core_api'
+        &&(int)($__bslApiDetail677['selector_count']??-1)===0
+        &&(int)($__bslApiDetail677['detailed']??0)===1
+        &&extractProfileHasAnyDetailData($__bslApiDetail677)
+        &&strpos($selfSrc,'function extractProfileUsesBasalamApiDetails')!==false
+        &&strpos($selfSrc,"{v:'10." . "677'")!==false
+        &&version_compare(APP_VERSION,'10.677','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -81197,7 +81213,7 @@ function bslLoadSingleProfileSnapshot(string $profileKey): ?array {
     $profileKey=trim($profileKey);if($profileKey==='')return null;
     $all=loadProfiles();$resolved=profileResolveKey($profileKey,$all)?:$profileKey;
     $one=is_array($all[$resolved]??null)?$all[$resolved]:(is_array($all[$profileKey]??null)?$all[$profileKey]:null);
-    unset($all);if(function_exists('gc_collect_cycles'))gc_collect_cycles();
+    unset($all);if(is_array($one)&&function_exists('s4BasalamBestSellersOverlayProfile'))$one=s4BasalamBestSellersOverlayProfile($one);if(function_exists('gc_collect_cycles'))gc_collect_cycles();
     return $one;
 }
 function bslLaneProgressFile(string $lane): string {
@@ -103244,6 +103260,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.677', t:'🧾 لین ۲ موتور باسلام بدون سلکتور CSS', items:[
+    'پروفایل‌های عادی با موتور Basalam Public API و پروفایل «باسلام -پرفروش ها» برای جزئیات از Core v4 استفاده می‌کنند و دیگر به‌علت خالی‌بودن detailSelectors از لین ۲ رد نمی‌شوند.',
+    'پوشش جزئیات این پروفایل‌ها از marker واقعی پاسخ API و غنی‌سازی محصول شمرده می‌شود؛ پروفایل‌های وب عادی همچنان با سلکتورهای ذخیره‌شده اعتبارسنجی می‌شوند.',
+    'اعتبارسنجی زمان ثبت صف، اجرای worker و snapshot زندهٔ پرفروش‌ها همگی از یک تشخیص provider مشترک استفاده می‌کنند.'
+  ]},
   {v:'10.676', t:'🔓 ادامهٔ پرفروش‌ها هنگام اشغال قفل پروفایل', items:[
     'جمع‌آوری، فروش دقیق و جزئیات در کاتالوگ مستقل پرفروش‌ها ادامه پیدا می‌کند و دیگر به‌خاطر استخراج طولانی پروفایل دیگری با profiles_busy روی یک عدد ثابت نمی‌ماند.',
     'پروفایل عادی «باسلام -پرفروش ها» و سازندهٔ صف ارسال، کاتالوگ زنده را فوراً می‌خوانند؛ نوشتن فیزیکی profiles فقط تا آزادشدن قفل عقب می‌افتد و سپس خودکار همگام می‌شود.',
