@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.665';
+const APP_VERSION = '10.666';
 
 
 if (!function_exists('str_starts_with')) {
@@ -37276,6 +37276,11 @@ if(isset($_GET['matrix_execution_status'])){
    cron request carry the exact queue checkpoint instead of launching another
    short-lived child. This happens before entering the cron route on purpose. */
 if(isset($_GET['cron_run'])||((string)($_POST['action']??'')==='cron_run')){
+    /* v10.666: this lightweight collector has its own non-blocking lock and
+       must advance even while a long main cron still owns .cron_run.lock. */
+    if(function_exists('s4BasalamBestSellersTick')){
+        try{$GLOBALS['_basalamBestSellers']=s4BasalamBestSellersTick('cron_arrival');}catch(Throwable $_bbs){$GLOBALS['_basalamBestSellers']=['ok'=>false,'error'=>$_bbs->getMessage()];}
+    }
     /* Lane pumping happens on every arrival, even when queue handoff changes
        this request's route or another long cron owns .cron_run.lock. */
     if(function_exists('bslCronPumpProfileLanes'))$GLOBALS['_cronBslLanePumps']=bslCronPumpProfileLanes();
@@ -37347,11 +37352,6 @@ if(function_exists('s4CronMaybeRunDailyAiTest')){
    its own lock keep this from increasing Basalam pressure uncontrollably. */
 if(function_exists('s4ThirdPartyExplorerTick')){
     try{$GLOBALS['_thirdPartyExplorer']=s4ThirdPartyExplorerTick('cron');}catch(Throwable $_tpe){$GLOBALS['_thirdPartyExplorer']=['ok'=>false,'error'=>$_tpe->getMessage()];}
-}
-/* v10.665: one bounded best-seller discovery or exact-sales verification
-   checkpoint per due cron, independently locked and 429-backed off. */
-if(function_exists('s4BasalamBestSellersTick')){
-    try{$GLOBALS['_basalamBestSellers']=s4BasalamBestSellersTick('cron');}catch(Throwable $_bbs){$GLOBALS['_basalamBestSellers']=['ok'=>false,'error'=>$_bbs->getMessage()];}
 }
 /* v10.643: extraction owns an independent flock, so it must not wait even to
    acquire .cron_run.lock. An older matrix/network request may legitimately
@@ -50159,6 +50159,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"max(1,min(86400,(int)(\$cfg['interval_sec']??1)))")!==false
         &&strpos($selfSrc,"{v:'10." . "665'")!==false
         &&version_compare(APP_VERSION,'10.665','>='));
+    $__bbsArrivalNeedle="s4BasalamBestSellersTick"."('cron_arrival')";
+    $add('10.666','جمع‌آور پرفروش‌ها پیش از قفل طولانی کران و مستقل از آن پیش می‌رود',
+        substr_count($selfSrc,$__bbsArrivalNeedle)===1
+        &&strpos($selfSrc,$__bbsArrivalNeedle)<strpos($selfSrc,"if (isset(\$_GET['cron_run'])")
+        &&strpos($selfSrc,"{v:'10." . "666'")!==false
+        &&version_compare(APP_VERSION,'10.666','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102943,6 +102949,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.666', t:'🔄 پیشروی مستقل جمع‌آور پرفروش‌ها', items:[
+    'هر ورود cron پیش از قفل سراسری و عملیات‌های طولانی، دقیقاً یک checkpoint محدودِ جمع‌آور پرفروش‌ها را با قفل مستقل اجرا می‌کند.',
+    'صف پرفروش‌ها دیگر پشت کران طولانی ارسال، ماتریس یا مغایرت‌گیری متوقف نمی‌ماند؛ فاصلهٔ یک‌ثانیه‌ای، backoff 429 و قفل تک‌اجرا همچنان رعایت می‌شوند.'
+  ]},
   {v:'10.665', t:'🏆 پروفایل پایدار پرفروش‌های باسلام و فاصلهٔ یک‌ثانیه‌ای', items:[
     'بخش مستقل پرفروش‌ترین محصولات، صفحه‌های مرتب‌شده بر اساس فروش را با checkpoint پایدار می‌خواند و همهٔ محصولات را بدون سقف تعداد برنامه در پروفایل «باسلام -پرفروش ها» ادغام می‌کند.',
     'هر محصول به‌صورت نوبتی با number-of-sales-per-product تأیید می‌شود؛ قفل تک‌اجرا، ذخیرهٔ اتمیک، ادامه از همان نقطه، تفکیک دسته‌ای پس از سقف بیرونی جست‌وجو و backoff تصاعدی 429 فعال است.',
