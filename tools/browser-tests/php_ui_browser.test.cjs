@@ -213,7 +213,7 @@ for(const route of ['/','/php-ui'])test('shared real report/probe/inventory in '
  report=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(probes.length,1);assert.deepEqual(probes[0],{profile_id:1});assert.equal(report.live_probe.status,'passed');assert.equal(report.live_probe.count,1);assert.equal(report.live_probe.products_changed,false);assert.ok(!('next' in report.live_probe));
  const event=page.waitForEvent('download');await page.locator('#shared-php-download').click();const download=await event;assert.equal(download.suggestedFilename(),'scraper4-diagnostic-1.json');const content=fs.readFileSync(await download.path(),'utf8');assert.deepEqual(JSON.parse(content),report);assert.ok(!/PIPELINE-PRIVATE|temporary-browser-fixture|https:\/\/example.com|csrf/.test(content));
  const after=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.deepEqual(after,before);
- await page.locator('#shared-php-contracts').click();await page.locator('#shared-php-status').filter({hasText:'712'}).waitFor();const inventory=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(inventory.inventory.source_version,'10.684');assert.equal(inventory.connected.full_php_parity,false);
+ await page.locator('#shared-php-contracts').click();await page.locator('#shared-php-status').filter({hasText:'712'}).waitFor();const inventory=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(inventory.inventory.source_version,'10.685');assert.equal(inventory.connected.full_php_parity,false);
  await page.locator('#shared-php-profile').selectOption('');assert.equal(await page.locator('#shared-php-preview').inputValue(),'');assert.equal(await page.locator('#shared-php-download').isVisible(),false);assert.deepEqual(errors,[]);
 });
 
@@ -258,4 +258,34 @@ for(const route of ['/','/php-ui'])test('real local product cleanup in '+route+'
   accept=true;const done=page.waitForResponse(r=>r.url().endsWith('/cleanup'));await button.click();assert.equal((await(await done).json()).removed,1);
  }
  const after=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal(after.products.length,0);assert.deepEqual(after.jobs,before.jobs);assert.ok(dialogs>=2);assert.deepEqual(errors,[]);
+});
+
+for(const route of ['/','/php-ui'])test('stuck extraction resumes inside its exact queue row in '+route+' without navigation, new job or unrelated sends',{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'resume',true),errors=[],actions=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());page.on('request',r=>{if(r.url().endsWith('/api/php-ui/write'))actions.push(r.postDataJSON()?.action);});
+ await page.goto(origin+route);const before=await(await page.request.get(origin+'/__test__/extract-state')).json(),url=page.url();assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,0);
+ let f,child;
+ if(route==='/php-ui'){
+  f=page.frameLocator('#php-original-ui');await f.locator('html[data-s4-ready="1"]').waitFor();child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));
+  await f.locator('#hdrProfileSelect').selectOption('other');await child.waitForFunction(()=>profileFormReady&&currentProfileKey==='other');await page.waitForTimeout(1200);await child.evaluate(()=>switchMainTab('start'));
+  await f.locator('#profileName').filter({visible:true}).fill('unsaved draft keep');
+  const row=f.locator('[data-python-extract-id="1"]');await row.waitFor();await row.locator('button[onclick*="resumeExtractQueue"]').click();
+  await row.locator('[data-python-extract-message]').filter({hasText:'یک مرحلهٔ واقعی اجرا شد'}).waitFor();
+  assert.equal(await child.evaluate(()=>currentProfileKey),'other');assert.equal(await f.locator('#profileName').inputValue(),'unsaved draft keep');assert.equal(await page.locator('#settings-menu').evaluate(e=>e.open),false);
+  // Read the original row report in place; automatic callback cannot write.
+  await child.evaluate(()=>showExtractLogModal('1'));await row.locator('[data-python-extract-message]').filter({hasText:'گزارش محلی همین ردیف'}).waitFor();
+  await child.evaluate(()=>resumeExtractQueue('one','1',999,true));
+ }else{
+  const row=page.locator('#extraction-jobs tr[data-extract-id="1"]');await row.waitFor();await row.locator('[data-extract-resume="1"]').click();await row.locator('[data-extract-row-message="1"]').filter({hasText:'یک مرحلهٔ واقعی اجرا شد'}).waitFor();
+ }
+ let after=await(await page.request.get(origin+'/__test__/extract-state')).json();const resumed=after.jobs.find(j=>j.id===1);assert.equal(resumed.payload._page,3);assert.equal(resumed.status,'waiting');assert.equal(after.jobs.length,before.jobs.length);assert.deepEqual(after.jobs.filter(j=>j.id!==1),before.jobs.filter(j=>j.id!==1));assert.equal(page.url(),url);assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,1);assert.deepEqual(actions,['python_extract_resume']);
+ // Immediate explicit retry is throttled, and feedback remains in that row.
+ if(route==='/php-ui'){const row=f.locator('[data-python-extract-id="1"]');await row.locator('[data-python-extract-continue="1"]').waitFor();await row.locator('[data-python-extract-continue="1"]').click();await row.locator('[data-python-extract-message]').filter({hasText:'۴۵ ثانیه'}).waitFor();}
+ else{const row=page.locator('#extraction-jobs tr[data-extract-id="1"]');await row.locator('[data-extract-resume="1"]').click();await row.locator('[data-extract-row-message="1"]').filter({hasText:'۴۵ ثانیه'}).waitFor();}
+ assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,1);assert.deepEqual(errors,[]);
+});
+
+test('native resume denial and cancelled confirmation stay in row without false success or automatic retry',{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'resume-denied',true);let accept=false;page.on('dialog',d=>accept?d.accept():d.dismiss());await page.goto(origin+'/php-ui');const f=page.frameLocator('#php-original-ui');await f.locator('html[data-s4-ready="1"]').waitFor();const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await child.evaluate(()=>switchMainTab('start'));const row=f.locator('[data-python-extract-id="1"]');await row.waitFor();
+ await row.locator('button[onclick*="resumeExtractQueue"]').click();await row.locator('[data-python-extract-message]').filter({hasText:'لغو شد'}).waitFor();assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,0);
+ accept=true;await row.locator('button[onclick*="resumeExtractQueue"]').click();await row.locator('[data-python-extract-message]').filter({hasText:'403'}).waitFor();assert.ok(!(await row.innerText()).includes('PRIVATE-FIXTURE-TOKEN'));await page.waitForTimeout(3500);assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,1);assert.equal((await(await page.request.get(origin+'/__test__/extract-state')).json()).jobs.find(j=>j.id===1).status,'failed');assert.equal(await page.locator('#settings-menu').evaluate(e=>e.open),false);
 });

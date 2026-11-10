@@ -53,7 +53,32 @@ for(const [name,kind]of [['deleteExtractQueue','extract'],['deleteWooQueue','woo
 for(const [name,kind]of [['clearExtractQueueDone','extract'],['clearWooQueueDone','woo_send'],['clearBslQueueDone','bsl_send']])window[name]=async()=>{try{const d=await call('python_queue_clear',{kind});showToast(`${d.removed} کار پایان‌یافته/لغوشده پاک شد؛ ناموفق‌ها و کارهای فعال حفظ شدند.`);refreshExtractQueue();checkWooQueue();checkBslQueue();}catch(e){showToast(e.message,true);}};
 for(const name of ['stopExtractQueue','pauseBslQueue'])window[name]=async id=>{try{await control(String(id),'pause');showToast('مکث ذخیره شد؛ درخواست درحال پرواز ممکن است تمام شود.');refreshExtractQueue();checkBslQueue();}catch(e){showToast(e.message,true);}};
 for(const name of ['resumeBslQueue','startWooServer','startBslServer'])window[name]=()=>panel('guardian');
-window.resumeExtractQueue=(profile,id,page,autoResume)=>{if(!autoResume)return panel('guardian');};
+// Native queue commands stay in their own row. They do not select a profile,
+// open a parent panel, rewind a checkpoint or retry from a browser timer.
+const extractRows=new Map(),extractMessages=new Map(),extractPending=new Set();
+const originalQueueRender=window.renderExtractQueue;
+function rowText(job){const c=job?.counts||{};return job?`#${job.id} · ${job.status} · ${job.phase||'listing'} · صفحه/مرحله ${c.current||0} · محصول ${c.found||0}`+(job.hint?' · '+job.hint:''):'';}
+function paintExtractRows(){const list=document.getElementById('extractQueueList');if(!list)return;
+ for(const row of list.children){const id=row.dataset.pythonExtractId;if(!id)continue;let note=row.querySelector('[data-python-extract-message]');
+  if(!note){note=document.createElement('p');note.dataset.pythonExtractMessage=id;note.setAttribute('role','status');note.setAttribute('aria-live','polite');note.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;color:#a5f3fc;margin:8px 0';row.append(note);}
+  note.textContent=extractMessages.get(id)||'';note.hidden=!note.textContent;
+  for(const b of row.querySelectorAll('button'))b.disabled=extractPending.has(id);
+ }}
+window.renderExtractQueue=(entries,progress)=>{originalQueueRender(entries,progress);extractRows.clear();const list=document.getElementById('extractQueueList');if(!list)return;
+ entries.slice().reverse().forEach((e,i)=>{const id=String(e.id),row=list.children[i];if(!row||!/^\d+$/.test(id))return;row.dataset.pythonExtractId=id;extractRows.set(id,e);
+  if(e.profile_key&&(e.status==='waiting'||(e.status==='running'&&e.stale))){const b=document.createElement('button');b.type='button';b.className='btn btn-cyan';b.dataset.pythonExtractContinue=id;b.textContent=e.status==='waiting'?'▶ مرحلهٔ بعد همین ردیف':'▶ ادامهٔ استخراج گیرکرده';b.onclick=event=>{event.stopPropagation();window.resumeExtractQueue(e.profile_key,id,0,false);};row.append(b);}
+ });paintExtractRows();while(extractMessages.size>200)extractMessages.delete(extractMessages.keys().next().value);
+};
+window.resumeExtractQueue=async(profile,id,page,autoResume)=>{id=String(id);if(autoResume||extractPending.has(id))return;
+ extractPending.add(id);extractMessages.set(id,'در حال ادامهٔ همین استخراج از checkpoint ذخیره‌شده…');paintExtractRows();
+ try{const d=await call('python_extract_resume',{profile,id});extractMessages.set(id,d.message+'\n'+rowText(d.job));}
+ catch(e){extractMessages.set(id,e.message+' · بدون تلاش خودکار؛ وضعیت همین ردیف را بررسی کنید.');}
+ finally{extractPending.delete(id);paintExtractRows();refreshExtractQueue();}
+};
+window.showExtractLogModal=async id=>{id=String(id);const e=extractRows.get(id);if(!e?.profile_key||extractPending.has(id))return;
+ try{const d=await call('python_extract_row',{profile:e.profile_key,id});extractMessages.set(id,rowText(d.job)+' · گزارش محلی همین ردیف؛ بدون اجرای صف.');}
+ catch(error){extractMessages.set(id,error.message);}paintExtractRows();
+};
 // These are scheduling callbacks, not user commands. Python alone claims work.
 window.bslManageLaneOperations=()=>{};window.startNextBslQueueEntry=()=>{};window.bslWatchHiddenLane=()=>{};
 window.restartBslServer=unsupported;

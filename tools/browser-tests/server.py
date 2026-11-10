@@ -19,8 +19,10 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
     from scraper4.services.scraping.fetch import HtmlFetcher
     def forbidden(*args,**kwargs):
         raise AssertionError('Browser boot must never fetch a source/destination')
-    mode=os.environ.get('S4_BROWSER_EXTRACTION_FIXTURE','')
+    mode=os.environ.get('S4_BROWSER_EXTRACTION_FIXTURE','');source_calls=[]
     if mode:
+        if mode in ('resume','resume-denied'):
+            db.enqueue('extract',p['id'],{'pages':3,'_page':2,'with_detail':False},status='failed')
         if mode=='waiting':
             db.upsert_profile('one',p['url'],'مانتو پاتریس',selectors=p['selectors'])
             db.enqueue('extract',p['id'],{'pages':1,'with_detail':False})
@@ -37,7 +39,8 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
             db.enqueue('woo_send',p['id'],status='waiting') # unrelated, never linked
         def fixture(url,**kwargs):
             if not url.startswith('https://example.com/'):raise AssertionError('Unexpected source')
-            if mode=='denied':return {'ok':False,'code':403,'error':'PRIVATE-FIXTURE-TOKEN'}
+            source_calls.append(url)
+            if mode in ('denied','resume-denied'):return {'ok':False,'code':403,'error':'PRIVATE-FIXTURE-TOKEN'}
             return {'ok':True,'code':200,'url':url,'html':'<article class="product"><h2>Fixture '+('page two' if 'page=2' in url else 'page one')+'</h2></article>'}
         HtmlFetcher.get=staticmethod(fixture)
         from scraper4.services import github_products
@@ -50,6 +53,8 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
                 return {'type':'file','encoding':'base64','size':len(raw),'content':base64.b64encode(raw).decode()}
             raise AssertionError('Unexpected GitHub fixture endpoint')
         github_products.api_read=github_fixture
+        @app.get('/__test__/source-calls')
+        def source_call_state():return {'urls':source_calls}
         @app.get('/__test__/extract-state')
         def extract_state():return {'jobs':db.list_entries(),'products':db.list_products(p['id'])}
         @app.post('/__test__/age-step')

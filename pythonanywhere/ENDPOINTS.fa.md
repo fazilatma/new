@@ -230,3 +230,9 @@ npm test --prefix tools/browser-tests
 - broker نوشتن `python_cleanup_products` با `fields.profile` و proof داخلی پیش‌نمایش، پس از تأیید trusted parent، همان سرویس `/api/profile-settings/<pid>/cleanup` را اجرا می‌کند. اثبات پیش‌نمایش یک سازوکار همسانی داده است، نه ورود/رمز اضافه برای کاربر. در open با csrf خالی کار می‌کند؛ قبلاً endpoint قدیمی به session.csrf ناموجود مراجعه می‌کرد.
 - `cleanup-preview` فرم پایتون اکنون mode=all را هم می‌پذیرد. هر دو مسیر قفل worker و تراکنش دارند، کار ناموفق را هم حفظ می‌کنند، digest شامل شناسه‌های مقصد است و هیچ HTTP مقصد/مبدأ یا اجرای صف ندارند. دکمه‌های اصلی بعد از موفقیت اطلاعات واقعی را دوباره بار می‌گیرند.
 - bootstrap برای virtualenv حذف‌شده از `repair_environment.py` مستقل از site-packages جهت خواندن تنظیمات و پشتیبان SQLite استفاده می‌کند، سپس محیط/وابستگی‌ها را دوباره می‌سازد؛ backup قبل از کپی کد زیر قفل انجام می‌شود. هیچ endpoint عمومی برای بازسازی محیط اضافه نشده است.
+
+## قرارداد ادامه و گزارش همان ردیف — 1.23.0
+
+- `POST /api/php-ui/read`: action=`python_extract_row`، fields={profile: کلید ذخیره‌شده، id: رشتهٔ شناسه}. یک ردیف استخراج متعلق به همان پروفایل را با فیلتر شناسه قبل از LIMIT می‌خواند؛ فقط شمارنده/فاز/خطای دسته‌بندی‌شده، بدون payload، URL خصوصی یا متن خام خطا. تغییر صف/شبکه ندارد.
+- `POST /api/php-ui/write`: action=`python_extract_resume` و همان fields. قفل و فاصلهٔ دستی مشترک، بررسی نوع/profile و وضعیت؛ ادامهٔ دقیق waiting/paused/failed یا running واقعاً قدیمی، یک مرحلهٔ محدود، حفظ checkpoint؛ terminal=409، نوع/پروفایل غلط=400، شکست استخراج=422، نگهداری=503، busy/throttled با ran=0 و پیام روشن. هیچ ارسال اجرا نمی‌کند. همان controller توسط جدول رابط اولیه استفاده می‌شود.
+- `extract_queue_status` اکنون فقط extract را قبل از LIMIT100 می‌خواند تا صف‌های شلوغ ارسال، استخراج قدیمی را پنهان نکنند؛ resumable واقعی و stale categorical دارد. ادامه/گزارش ردیف اصلی دیگر python_open_panel(guardian) نیست. autoResume=true پس‌زمینه هیچ نوشتنی انجام نمی‌دهد و client resumePage به سرور ارسال نمی‌شود.

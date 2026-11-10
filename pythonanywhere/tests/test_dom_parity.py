@@ -94,6 +94,6 @@ def test_price_num_remains_digits_only_not_currency_conversion():
 def test_parity_status_honestly_reports_partial_scope(client):
     result=client.get('/api/port-status')
     assert result.status_code==200
-    assert result.json['source']['version']=='10.684'
+    assert result.json['source']['version']=='10.685'
     assert result.json['full_php_parity'] is False
     assert result.json['pending']

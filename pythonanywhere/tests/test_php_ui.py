@@ -17,7 +17,7 @@ def form(**kwargs):
 def test_original_ui_is_pinned_entire_client_not_a_redesign():
     raw=(php_ui.ROOT/'upstream/php-ui.html').read_bytes();m=php_ui.manifest()
     assert len(raw)==m['client_bytes'] and hashlib.sha256(raw).hexdigest()==m['client_sha256']
-    assert m['source_commit']=='a7e4f29cc7544cf8115120912a3489a908fd1b76'
+    assert m['source_commit']=='01e99bfefdea6f5ef73838e4393fc85e22c254b5'
     assert raw.startswith(b'<!DOCTYPE html>') and raw.rstrip().endswith(b'</html>')
     assert len(re.findall(rb'<\?(?:php|=).*?\?>',raw,re.S))==m['php_slot_count']==41
     assert b'function collectProfileData(' in raw and b'function backendExtractFor(' in raw

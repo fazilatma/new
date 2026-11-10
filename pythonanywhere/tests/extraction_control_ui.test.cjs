@@ -72,3 +72,13 @@ print(json.dumps(value))
   e.d.querySelector('#extraction-refresh').click();await e.flush();e.click();await e.flush();assert(e.d.querySelector('#extraction-jobs').textContent.includes('پایان‌یافته'));assert(e.d.querySelector('#extraction-action-status').textContent.includes('یک مرحله'));
   assert.equal(e.calls.filter(c=>c.options.method==='POST').length,1);
 });
+
+test('selected stuck row resumes in place, blocks duplicate clicks and keeps feedback over status polls',async t=>{
+ const e=setup(t);await e.flush();const row={id:11,profile_key:'one',profile_name:'stuck profile',status:'failed',counters:{current:2,found:3},error:''};let finish;
+ e.reply=(url,options)=>options.method==='GET'?{...snapshot,jobs:[row]}:new Promise(resolve=>finish=resolve);
+ e.d.querySelector('#extraction-refresh').click();await e.flush();const b=e.d.querySelector('[data-extract-resume="11"]');b.click();b.click();await e.flush();
+ const writes=e.calls.filter(c=>c.options.method==='POST');assert.equal(writes.length,1);assert.equal(writes[0].url,'/api/php-ui/write');assert.deepEqual(JSON.parse(writes[0].options.body),{action:'python_extract_resume',query:{},fields:{profile:'one',id:'11'}});
+ assert.equal(e.w.location.pathname,'/');assert(e.d.querySelector('[data-extract-row-message="11"]').textContent.includes('همین ردیف'));
+ finish({ok:true,ran:1,message:'صفحهٔ بعدی همین کار اجرا شد'});await e.flush();e.d.querySelector('#extraction-refresh').click();await e.flush();assert.equal(e.d.querySelector('[data-extract-row-message="11"]').textContent,'صفحهٔ بعدی همین کار اجرا شد');
+ for(const fn of e.intervals)fn();await e.flush();assert.equal(e.calls.filter(c=>c.options.method==='POST').length,1);assert.deepEqual(e.hooks,{begin:1,end:1});
+});

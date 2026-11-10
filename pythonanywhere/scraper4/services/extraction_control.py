@@ -8,8 +8,9 @@ import json
 import math
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 
-from ..db import utc_now
+from ..db import utc_now, parse_ts
 from .engine import run_entry
 
 
@@ -19,7 +20,7 @@ def status(db):
         counts = {row['status']: row['n'] for row in conn.execute(
             "SELECT status,count(*) n FROM queue_entries WHERE kind='extract' GROUP BY status")}
         rows = conn.execute('''SELECT q.id,q.profile_id,q.status,q.error,q.counters,q.updated_at,
-            coalesce(nullif(p.name,''),p.key,'پروفایل حذف‌شده') AS profile_name
+            p.key AS profile_key, coalesce(nullif(p.name,''),p.key,'پروفایل حذف‌شده') AS profile_name
             FROM queue_entries q LEFT JOIN profiles p ON p.id=q.profile_id
             WHERE q.kind='extract' ORDER BY q.id DESC LIMIT 10''').fetchall()
     jobs = []
@@ -39,7 +40,12 @@ def status(db):
             'note': 'ثبت در صف به‌تنهایی کار را اجرا نمی‌کند. برای پیشرفت از کران/worker یا دکمهٔ اجرای یک مرحله استفاده کنید؛ وضعیت کران، اثبات فعال‌بودن یک زمان‌بندی خارجی نیست.'}
 
 
-def step(db, settings, *, entry_id=None):
+def stale(entry,settings):
+    stamp=parse_ts(entry.get('heartbeat') or entry.get('started_at') or entry.get('updated_at'))
+    return bool(stamp and (datetime.now(timezone.utc)-stamp).total_seconds()>=max(120,settings.worker_stale_seconds))
+
+
+def step(db, settings, *, entry_id=None, resume=False, profile_id=None):
     if (settings.base_dir / '.maintenance.json').exists():
         return {'ok': False, 'error': 'برنامه در حالت نگهداری است.'}, 503
     with settings.db_path.with_suffix('.worker.lock').open('a') as lock:
@@ -52,17 +58,28 @@ def step(db, settings, *, entry_id=None):
         if since < 45:
             return {'ok': True, 'throttled': True, 'ran': 0, 'retry_after_seconds': math.ceil(45 - since),
                     'message': 'برای مرحلهٔ دستی بعدی دست‌کم ۴۵ ثانیه فاصله لازم است.'}, 200
+        if resume and entry_id is None:raise ValueError('شناسهٔ صریح استخراج برای ادامه لازم است.')
         if entry_id is None:
             entry = db.claim_next(('extract',))
         else:
             # Native Start must run its selected job, never an older unrelated
-            # profile or a sender. Shared flock + atomic waiting-only claim.
+            # profile or a sender. Resume is explicit and validated under the same
+            # flock; normal steps retain their waiting-only claim.
             with db.connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
-                row=conn.execute("SELECT id FROM queue_entries WHERE id=? AND kind='extract' AND status='waiting'",(entry_id,)).fetchone()
+                row=conn.execute("SELECT * FROM queue_entries WHERE id=? AND kind='extract'",(entry_id,)).fetchone()
+                if row and profile_id is not None and row['profile_id']!=profile_id:raise ValueError('شناسهٔ کار متعلق به این پروفایل نیست.')
+                if resume:
+                    if not row:raise ValueError('استخراج پیدا نشد؛ صف ارسال قابل ادامه با این عملیات نیست.')
+                    if not conn.execute('SELECT id FROM profiles WHERE id=?',(row['profile_id'],)).fetchone():raise ValueError('پروفایل کار حذف شده است.')
+                    if row['status']=='running' and not stale(dict(row),settings):
+                        return {'ok':False,'ran':0,'error':'استخراج هنوز ضربان تازه دارد؛ کار فعال دوباره اجرا نمی‌شود.'},409
+                    if row['status'] not in ('waiting','paused','failed','running'):
+                        return {'ok':False,'ran':0,'error':'استخراج پایان‌یافته یا لغوشده قابل ادامه نیست.'},409
+                elif row and row['status']!='waiting':row=None
                 if row:
                     now=utc_now()
-                    conn.execute("UPDATE queue_entries SET status='running',started_at=?,heartbeat=?,updated_at=? WHERE id=?",(now,now,now,entry_id))
+                    conn.execute("UPDATE queue_entries SET status='running',error='',started_at=?,heartbeat=?,updated_at=? WHERE id=?",(now,now,now,entry_id))
             entry=db.get_entry(entry_id) if row else None
         if not entry:
             return {'ok': True, 'ran': 0, 'message': 'استخراج در انتظار وجود ندارد؛ کار مکث‌شده/ناموفق را پس از بررسی جداگانه ادامه دهید.'}, 200

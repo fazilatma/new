@@ -7,16 +7,19 @@ import json
 from urllib.parse import quote
 from . import php_ui, extraction_control, extraction_diagnostics, github_products
 
-READS={'python_start_status','python_github_catalog','sync_diagnose','sync_pipeline_status','python_sync_audit'}
-WRITES={'python_extract_start','python_extract_step'}
+READS={'python_extract_row','python_start_status','python_github_catalog','sync_diagnose','sync_pipeline_status','python_sync_audit'}
+WRITES={'python_extract_start','python_extract_step','python_extract_resume'}
 
 
-def jobs(db,settings,profile=None):
+def jobs(db,settings,profile=None,entry_id=None):
     # Filter before LIMIT: busy send queues/other profiles must not hide this
     # profile's older waiting or failed extraction and its actionable diagnosis.
     with db.connect() as conn:
-        query="SELECT id,profile_id,status,counters,updated_at FROM queue_entries WHERE kind='extract'"
-        rows=conn.execute(query+(' AND profile_id=?' if profile else '')+" ORDER BY CASE WHEN status IN ('waiting','running','paused','failed') THEN 0 ELSE 1 END, CASE WHEN status IN ('waiting','running','paused','failed') THEN id ELSE -id END LIMIT 100",(profile['id'],) if profile else ()).fetchall()
+        query="SELECT id,profile_id,status,counters,updated_at,heartbeat,started_at FROM queue_entries WHERE kind='extract'"
+        args=[]
+        if profile:query+=' AND profile_id=?';args.append(profile['id'])
+        if entry_id is not None:query+=' AND id=?';args.append(entry_id)
+        rows=conn.execute(query+" ORDER BY CASE WHEN status IN ('waiting','running','paused','failed') THEN 0 ELSE 1 END, CASE WHEN status IN ('waiting','running','paused','failed') THEN id ELSE -id END LIMIT 100",args).fetchall()
     values=[]
     for e in rows:
         try:c=json.loads(e['counters'] or '{}')
@@ -28,7 +31,7 @@ def jobs(db,settings,profile=None):
                        'error_code':error,'hint':extraction_diagnostics.SAFE_HINTS.get(error,'خطای اجرای قدیمی؛ متن خام برای حفظ اطلاعات محرمانه نمایش داده نمی‌شود.') if e['status']=='failed' else '',
                        'empty':e['status']=='done' and counts.get('found',0)==0,
                        'phase':c.get('phase') if c.get('phase') in ('listing','detail','complete') else '',
-                       'updated_at':e['updated_at']})
+                       'updated_at':e['updated_at'],'stale':e['status']=='running' and extraction_control.stale(dict(e),settings)})
     return values
 
 
@@ -46,6 +49,11 @@ def catalog(fields):
 
 
 def read(db,settings,data):
+    if data['action']=='python_extract_row':
+        f=data['fields'];p=php_ui.find(db,f.get('profile',''));eid=php_ui.integer(f.get('id',''),minimum=1)
+        result=jobs(db,settings,p,entry_id=eid)
+        if not result:raise ValueError('استخراج این ردیف پیدا نشد.')
+        return {'ok':True,'job':result[0],'read_only':True,'processed':False}
     if data['action']=='python_github_catalog':return catalog(data['fields'])
     if data['action']=='python_sync_audit':
         from .sync_audit import page
@@ -65,14 +73,15 @@ def write(db,settings,data):
     else:
         entry_id=php_ui.integer(f.get('id',''),minimum=1);e=db.get_entry(entry_id)
         if not e or e['kind']!='extract' or e['profile_id']!=p['id']:raise ValueError('این شناسه متعلق به استخراج پروفایل انتخاب‌شده نیست.')
-    result,code=extraction_control.step(db,settings,entry_id=entry_id)
+    result,code=extraction_control.step(db,settings,entry_id=entry_id,resume=data['action']=='python_extract_resume',profile_id=p['id'])
     # Never pass through raw exception/error/counters; old jobs may contain keys
     # or private URLs. Diagnostics are categorical and allowlisted.
-    value=next((j for j in jobs(db,settings,p) if j['id']==entry_id),None)
-    if value and value['status']=='failed':message=value['hint']
+    value=next((j for j in jobs(db,settings,p,entry_id=entry_id) if j['id']==entry_id),None)
+    if result.get('error') and code==409:message=result['error']
     elif code==503:message='برنامه در حالت نگهداری است؛ استخراج هنوز اجرا نشده است.'
     elif result.get('busy'):message='worker یا کران در حال اجراست؛ این کار در صف مانده است.'
     elif result.get('throttled'):message='برای اجرای دستی بعدی دست‌کم ۴۵ ثانیه فاصله لازم است.'
+    elif value and value['status']=='failed':message=value['hint']
     elif result.get('ran'):
         message='یک مرحلهٔ واقعی اجرا شد؛ برای ادامه، worker/کران یا مرحلهٔ بعد لازم است.'
         if value and value['empty']:message='استخراج صفر محصول داشت؛ موتور، سلکتور و دسترسی مبدأ را بررسی کنید.'

@@ -126,15 +126,16 @@ def stats(db):
             'matrix':{'destinations':[]},'source':'local_saved_products_and_remote_ids','remote_inventory':False}
 
 
-def queue(db):
+def queue(db,settings):
+    from .php_ui_start import jobs
     profiles={p['id']:p for p in db.list_profiles()};entries=[]
-    for row in db.list_entries(limit=100):
-        if row['kind']!='extract':continue
-        p=profiles.get(row['profile_id'],{});c=row['counters']
+    for row in jobs(db,settings):
+        p=profiles.get(row['profile_id'],{});c=row['counts']
         entries.append({'id':str(row['id']),'profile_key':p.get('key',''),'profile_name':p.get('name',''),'status':row['status'],
                         'current':c.get('current',0),'total':c.get('total',0),'products_count':c.get('found',0),
-                        'error':SAFE_HINTS.get(c.get('error_code'),'خطای اجرای استخراج؛ گزارش امن را در مدیریت فعلی ببینید.') if row['status']=='failed' else '', 'resumable':False})
-    return {'ok':True,'entries':entries,'progress':{},'read_only':True}
+                        'phase':'detail' if row['phase']=='detail' else 'list','stale':row['stale'],
+                        'error':row['hint'],'resumable':bool(p) and row['status'] in ('waiting','paused','failed')})
+    return {'ok':True,'entries':entries,'progress':{},'read_only':True,'limit':100}
 
 
 def read(db,settings,data):
@@ -150,7 +151,7 @@ def read(db,settings,data):
             out[name]={k:('••••' if k in ('token','consumer_key','consumer_secret') and cfg[k] else cfg[k]) for k in ('store_url','vendor_id','category_id','token','consumer_key','consumer_secret','price_mode','price_val','price_round') if k in cfg}
         out['basalam']['vendors']=[{**v,'token':'••••' if v['token_configured'] else ''} for v in public_shops(db.get_config('basalam')) if not v['is_default']]
         return {'ok':True,'connections':out,'read_only':True}
-    if op=='extract_queue_status':return queue(db)
+    if op=='extract_queue_status':return queue(db,settings)
     if op=='whoami':return {'ok':True,'version':manifest()['source_version'],'runtime':'Python','source_sha':manifest()['source_sha256']}
     raise ValueError(UNSUPPORTED)
 
