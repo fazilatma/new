@@ -336,3 +336,13 @@ for(const route of ['/','/php-ui'])test('browser cron automatically advances exi
  await page.locator('[data-browser-cron-toggle]').uncheck();await page.waitForFunction(()=>!document.querySelector('[data-browser-cron-toggle]').disabled);assert.equal((await(await page.request.get(origin+'/api/cron/browser/config')).json()).config.enabled,false);
  assert.deepEqual(errors,[]);
 });
+
+for(const route of ['/','/php-ui'])test('source network PHP connection saves masked config and probes stored API profile in '+route,{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'source-apis',true),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());await page.goto(origin+route);
+ if(route==='/php-ui')await page.frameLocator('#php-original-ui').locator('html[data-s4-ready="1"]').waitFor();
+ await page.evaluate(()=>S4Menu.open('general'));const form=page.locator('#source-network-form');await form.waitFor();await page.waitForFunction(()=>document.getElementById('source-network-status').textContent.length>0);
+ await form.locator('[name=proxy_auth]').fill('user:BROWSER-PRIVATE');const saved=page.waitForResponse(r=>r.url().endsWith('/api/source-network/config')&&r.request().method()==='POST');await form.locator('[type=submit]').click();const config=await(await saved).json();assert.equal(config.config.proxy_auth,'');assert.equal(config.config.proxy_auth_configured,true);await page.waitForFunction(()=>!document.getElementById('source-network-test').disabled);assert.equal(await form.locator('[name=proxy_auth]').inputValue(),'');
+ const before=await(await page.request.get(origin+'/__test__/extract-state')).json(),profiles=(await(await page.request.get(origin+'/api/profiles')).json()).profiles;const id=String(profiles.find(p=>p.key==='one').id);
+ await page.locator('#source-network-profile').selectOption(id);const probed=page.waitForResponse(r=>r.url().endsWith('/api/extraction/probe'));await page.locator('#source-network-test').click();const r=(await(await probed).json()).report;assert.equal(r.engine,'snappshop_api');assert.equal(r.status,'passed');await page.waitForFunction(()=>document.getElementById('source-network-result').textContent.includes('passed'));
+ assert.ok(!(await page.locator('#source-network-result').textContent()).includes('BROWSER-PRIVATE'));assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);assert.deepEqual(errors,[]);
+});

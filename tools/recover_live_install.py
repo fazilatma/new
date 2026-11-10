@@ -60,7 +60,7 @@ def recover(settings, db, updates, *, apply=False, clock=time.time):
 
 
 def safe_probe(value):
-    fields=('profile_id','name','engine','used_engine','tested_at','status','page','count','priced','linked','imaged','elapsed_ms','http_status','products_changed','queue_changed')
+    fields=('profile_id','name','engine','used_engine','tested_at','status','page','count','priced','linked','imaged','elapsed_ms','http_status','network_error','failure_stage','products_changed','queue_changed')
     return {k:value[k] for k in fields if type(value.get(k)) in (str,int,float,bool) and (not isinstance(value[k],float) or math.isfinite(value[k]))}
 
 

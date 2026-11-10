@@ -92,6 +92,8 @@ class HtmlFetcher:
                 if cfg.get('proxy_auth'):
                     user, _, password = str(cfg['proxy_auth']).partition(':')
                     proxy = proxy.replace('://', '://' + quote(user, safe='') + ':' + quote(password, safe='') + '@', 1)
+                parsed=urlsplit(proxy)
+                validate_url(parsed.scheme+'://'+str(parsed.hostname),resolve=True)
                 proxies = {'http': proxy, 'https': proxy}
             elif mode != 'direct':
                 raise ValueError('Unknown fetch mode')
@@ -125,6 +127,8 @@ class HtmlFetcher:
                         return result
                 raise ValueError('Too many redirects')
         except (requests.RequestException, ValueError, OSError) as exc:
+            from .network_errors import classify
+            result['error_kind']=classify(exc)
             result['error'] = str(exc)
         return result
 

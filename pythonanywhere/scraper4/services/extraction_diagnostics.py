@@ -6,6 +6,8 @@ from .scraping.engines import profile_engine
 
 def failure(exc,counts):
     code=counts.get('last_http_status',0);message=str(exc).lower()
+    from .scraping.network_errors import KINDS
+    if counts.get('network_error') in KINDS:return 'source_network','اتصال شبکهٔ مبدأ ناموفق بود؛ نوع خطای شبکه و مرحلهٔ درخواست را در آزمایش مبدأ بررسی کنید.'
     if code in (401,403):return 'source_access_denied','مبدأ یا شبکهٔ میزبان دسترسی را رد کرده است؛ تغییر سلکتور راه‌حل HTTP 401/403 نیست. محدودیت پلن/شبکه و دسترسی همان مبدأ را بررسی کنید.'
     if code==429:return 'source_rate_limit','مبدأ محدودیت تعداد درخواست داده است؛ پس از زمان انتظار و بررسی نرخ، فقط استخراج را دستی ادامه دهید.'
     if code==404:return 'source_not_found','مسیر مبدأ یا API پیدا نشد؛ آدرس و موتور انتخابی را بررسی کنید.'
@@ -25,6 +27,7 @@ def report(db,settings):
     profiles={p['id']:p for p in db.list_profiles()};items=[]
     with db.connect() as conn:
         rows=conn.execute("SELECT id,profile_id,status,counters,updated_at FROM queue_entries WHERE kind='extract' ORDER BY id DESC LIMIT 100").fetchall()
+    from .scraping.network_errors import KINDS
     for row in rows:
         p=profiles.get(row['profile_id'])
         try:counts=json.loads(row['counters'] or '{}')
@@ -32,10 +35,13 @@ def report(db,settings):
         if not isinstance(counts,dict):counts={}
         safe={k:counts[k] for k in ('last_http_status','last_page_products','found','current','total','detail_current','detail_total','last_html_chars') if type(counts.get(k)) is int}
         error_code=counts.get('error_code') if counts.get('error_code') in ('source_access_denied','source_rate_limit','source_not_found','invalid_api_response','renderer_unavailable','source_network','source_shape','extraction_error') else None
+        if row['status']!='failed':error_code=None
         hint=SAFE_HINTS.get(error_code,'')
+        if p and profile_engine(p).endswith('_api') and error_code=='renderer_unavailable':
+            hint='این خطای تاریخیِ مسیر قدیمی است؛ موتور مؤثر فعلی API مبدأ است و renderer لازم ندارد. آزمایش مبدأ را اجرا کنید.'
         # Legacy raw errors/URLs, HTML, selectors, settings, payloads and tokens are deliberately omitted.
         items.append({'job_id':row['id'],'profile_id':row['profile_id'],'status':row['status'],'engine':profile_engine(p) if p else 'profile_deleted','updated_at':row['updated_at'],
-                      'counts':safe,'error_code':error_code,'hint':hint if error_code else 'گزارش دسته‌بندی‌شده از این اجرای قدیمی در دسترس نیست؛ متن خام خطا عمداً خارج از گزارش امن است.'})
+                      'counts':safe,'network_error':counts.get('network_error') if counts.get('network_error') in KINDS else '', 'failure_stage':counts.get('failure_stage') if counts.get('failure_stage') in ('snappshop_listing','snappshop_detail','snappshop_guest','source_api','source_fetch') else '', 'error_code':error_code,'hint':hint if error_code else 'گزارش دسته‌بندی‌شده از این اجرای قدیمی در دسترس نیست؛ متن خام خطا عمداً خارج از گزارش امن است.'})
     return {'ok':True,'generated_at':utc_now(),'jobs':items,'renderer_configured':bool(db.get_config('render').get('url') or settings.render.url),
             'cron_public_get':db.checkpoint_read('cron:config').get('public_get') is True,
             'read_only':True,'source_reachability_tested':False,'note':'این گزارش فقط صف ذخیره‌شده را می‌خواند؛ سایت‌های خصوصی را آزمایش و صف/کلیدها/تنظیم کران را تغییر نمی‌دهد.'}

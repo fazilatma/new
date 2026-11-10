@@ -23,6 +23,15 @@ def register_extraction_tools(app,db,settings):
     def browser_only():
         if not session.get('authenticated') or request.environ.get('s4.bearer'): abort(403)
 
+    @bp.route('/api/source-network/config',methods=['GET','POST'])
+    def source_network_config():
+        from .services import source_network
+        if request.args:raise ValueError('پارامتر query پذیرفته نمی‌شود.')
+        if request.method=='POST':
+            cfg=source_network.validate(request.get_json(),db.get_config('source_network'))
+            db.put_config('source_network',cfg)
+        return jsonify(source_network.public(db,settings))
+
     @bp.get('/api/extraction/diagnostics')
     def diagnostics():
         from .services.extraction_diagnostics import report
@@ -78,12 +87,18 @@ def register_extraction_tools(app,db,settings):
                         report['next']=signer.dumps({'profile_id':profile['id'],'engine':engine,'fingerprint':digest,'page':page,'url':nxt,'visited':state['visited']+[state['url']],'signatures':state['signatures']+[signature]})
             except ValueError as exc:
                 # Only engine-authored safe messages. JSON/parser errors may contain source snippets.
+                from .services.scraping.network_errors import KINDS,MESSAGES
+                network_error=getattr(exc,'network_error','')
+                report['network_error']=network_error if network_error in KINDS else ''
+                report['failure_stage']=getattr(exc,'stage','') if getattr(exc,'stage','') in ('snappshop_listing','snappshop_detail','snappshop_guest','source_api','source_fetch') else ''
+                report['http_status']=getattr(exc,'upstream_status',0)
                 message=str(exc)
                 if message.startswith(('دسترسی API','دریافت با موتور','موتور ','مسیر عمومی','شناسهٔ غرفه','آدرس غرفه','مهلت دریافت','HTML برای','سرویس رندر','آدرس اصلی')): hint=message[:500]
                 else: hint='ساختار پاسخ/آدرس/JSON قابل پردازش نیست؛ موتور یا صفحهٔ نمونه را بررسی کنید.'
+                if network_error in MESSAGES:hint=MESSAGES[network_error]
                 report.update(status='failed',count=0,hint=hint)
             except Exception:
-                report.update(status='failed',count=0,hint='دریافت یا پردازش ناموفق بود؛ شبکه/renderer و موتور را بررسی کنید. هیچ محصولی ارسال نشد.')
+                report.update(status='failed',count=0,hint='دریافت یا پردازش ناموفق بود؛ شبکه و ساختار پاسخ مبدأ را بررسی کنید. هیچ محصولی ارسال نشد.')
             db.checkpoint_write(f"probe:{profile['id']}:{engine}"+(f":{state['page']}" if state['page']>1 else ''),{k:v for k,v in report.items() if k!='next'})
             return jsonify(ok=True,report=report)
         finally: _GATE.release()

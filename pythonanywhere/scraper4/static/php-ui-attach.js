@@ -34,6 +34,8 @@ window.pythonOpenPanel=panel;
 window.testSel=type=>{const out=document.getElementById('prev-'+type);if(out)out.textContent='آزمایش خودکار غیرفعال است؛ دکمهٔ تست، آزمایشگاه امن را باز می‌کند.';};
 for(const button of document.querySelectorAll('[onclick^="testSel("]'))button.onclick=()=>panel('selectors');
 window.testDetailSel=()=>panel('selectors');
+// PHP srcNetTest now opens the connected saved-source transport/probe panel.
+window.srcNetTest=()=>panel('general');
 window.s4RuntimeHealthCheck=async()=>{const el=document.getElementById('runtimePulse'),tag=document.getElementById('runtimePulseTag');if(!el||s4RuntimeHealthBusy)return;s4RuntimeHealthBusy=true;try{const d=await(await fetch('?runtime_health=1')).json();if(!d.ok)throw Error(d.error||'پاسخ سلامت نامعتبر است.');el.classList.remove('checking','offline');el.classList.add('online');if(tag)tag.textContent='Py';el.title=`Python v${d.version} · رابط PHP v${d.ui_version} · پاسخ واقعی فقط‌خواندنی`;el.setAttribute('aria-label','بک‌اند پایتون پاسخ می‌دهد');}catch(e){el.classList.remove('checking','online');el.classList.add('offline');if(tag)tag.textContent='!';el.title='خطای دریافت وضعیت پایتون: '+e.message;}finally{s4RuntimeHealthBusy=false;}};
 
 function saved(){if(!currentProfileKey||!profileFormReady||isDirty)throw Error('ابتدا پروفایل و تغییراتش را صریحاً ذخیره کنید؛ صف از دادهٔ ذخیره‌شده استفاده می‌کند.');return currentProfileKey;}

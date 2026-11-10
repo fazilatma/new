@@ -19,8 +19,8 @@ from .detail import web_url
 from ..support.persian import normalize_text, price
 
 class ExtractionFailure(ValueError):
-    def __init__(self,message,code=0):
-        super().__init__(message);self.upstream_status=code
+    def __init__(self,message,code=0,*,network_error="",stage=""):
+        super().__init__(message);self.upstream_status=code;self.network_error=network_error;self.stage=stage
 
 
 ENGINES = {
@@ -56,6 +56,8 @@ def profile_engine(profile):
 
 
 def for_installation(settings, db):
+    from ..source_network import effective
+    settings=effective(settings,db)
     cfg = db.get_config('render')
     if not cfg: return settings
     return replace(settings, render=replace(settings.render, url=cfg.get('url', settings.render.url),
@@ -277,7 +279,7 @@ def extract(url, selectors, engine, settings, *, timeout=25, render_mode='static
         return HtmlFetcher.get(target,timeout=min(timeout,remaining),net=cfg,settings=settings)
     def read(target):
         response=fetch(target)
-        if not response.get('ok'): raise ExtractionFailure(f"دسترسی API ناموفق: HTTP {response.get('code',0)}؛ محدودیت شبکه/پلن میزبان را بررسی کنید.",response.get('code',0))
+        if not response.get('ok'): raise ExtractionFailure(f"دسترسی API ناموفق: HTTP {response.get('code',0)}؛ محدودیت شبکه/پلن میزبان را بررسی کنید.",response.get('code',0),network_error=response.get('error_kind',''),stage='source_api')
         try:body=json.loads(response.get('html',''))
         except (ValueError,TypeError):raise ExtractionFailure('پاسخ API به‌جای JSON معتبر، HTML/متن یا پاسخ ناقص است؛ وضعیت دسترسی مبدأ را بررسی کنید.',response.get('code',0)) from None
         if not isinstance(body,dict): raise ValueError('ساختار پاسخ API معتبر نیست.')
@@ -338,7 +340,7 @@ def extract(url, selectors, engine, settings, *, timeout=25, render_mode='static
         net=settings.net.as_dict() if hasattr(settings.net,'as_dict') else dict(settings.net)
         net['_deadline_seconds']=max(.1,deadline-time.monotonic())
         result=SmartFetcher.get(url,timeout=min(timeout,8) if probe else timeout,net=net,mode='static' if probe else render_mode,settings=settings)
-    if not result.get('ok'): raise ExtractionFailure(f"دریافت با موتور {engine} ناموفق: HTTP {result.get('code',0)}؛ شبکه، محدودیت میزبان یا تنظیم سرویس رندر را بررسی کنید.",result.get('code',0))
+    if not result.get('ok'): raise ExtractionFailure(f"دریافت با موتور {engine} ناموفق: HTTP {result.get('code',0)}؛ دسترسی شبکه و پاسخ مبدأ را بررسی کنید.",result.get('code',0),network_error=result.get('error_kind',''),stage='source_fetch')
     source=result.get('html','')
     cap=(2 if probe else 12)*1024*1024
     if len(source.encode())>cap: raise ValueError(f'HTML برای پردازش بیش از سقف {cap//1024//1024} MiB است.')

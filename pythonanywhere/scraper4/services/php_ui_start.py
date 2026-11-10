@@ -26,9 +26,11 @@ def jobs(db,settings,profile=None,entry_id=None):
         except (ValueError,TypeError):c={}
         if not isinstance(c,dict):c={}
         counts={k:c[k] for k in ('last_http_status','last_page_products','found','current','total','detail_current','detail_total','detail_enriched','detail_empty','detail_skipped','last_html_chars') if type(c.get(k)) is int}
+        from .scraping.network_errors import KINDS
+        network_error=c.get('network_error') if c.get('network_error') in KINDS else ''
         error=c.get('error_code') if isinstance(c.get('error_code'),str) and c['error_code'] in extraction_diagnostics.SAFE_HINTS else None
         values.append({'id':e['id'],'profile_id':e['profile_id'],'status':e['status'],'counts':counts,
-                       'error_code':error,'hint':extraction_diagnostics.SAFE_HINTS.get(error,'خطای اجرای قدیمی؛ متن خام برای حفظ اطلاعات محرمانه نمایش داده نمی‌شود.') if e['status']=='failed' else '',
+                       'network_error':network_error,'failure_stage':c.get('failure_stage') if c.get('failure_stage') in ('snappshop_listing','snappshop_detail','snappshop_guest','source_api','source_fetch') else '', 'error_code':error,'hint':extraction_diagnostics.SAFE_HINTS.get(error,'خطای اجرای قدیمی؛ متن خام برای حفظ اطلاعات محرمانه نمایش داده نمی‌شود.') if e['status']=='failed' else '',
                        'empty':e['status']=='done' and counts.get('found',0)==0 and c.get('detail_only') is not True,'detail_only':c.get('detail_only') is True,
                        'phase':c.get('phase') if c.get('phase') in ('listing','detail','complete') else '',
                        'updated_at':e['updated_at'],'stale':e['status']=='running' and extraction_control.stale(dict(e),settings)})

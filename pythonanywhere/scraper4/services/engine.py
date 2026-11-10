@@ -23,7 +23,10 @@ from .basalam.client import BasalamClient
 
 
 def _extract_step(db, settings, entry, profile, network_timeout=None):
+    from .scraping.engines import for_installation
+    settings=for_installation(settings,db)
     payload, counts = entry['payload'], entry['counters']
+    if network_timeout:settings=replace(settings,net=replace(settings.net,gap_ms=min(settings.net.gap_ms,500),fallback=False))
     if payload.get('_detail_only') is True:
         from .detail_extraction import step
         return step(db,settings,entry,profile,network_timeout)
@@ -44,14 +47,16 @@ def _extract_step(db, settings, entry, profile, network_timeout=None):
     pages = 1000 if requested == 0 else max(1,min(1000,requested))
     pagination = profile['pagination']
     kind, val = pagination.get('type', 'query_page'), pagination.get('val', '')
-    url = payload.get('_next_url') or (profile['url'] if page == 1 else build(profile['url'], profile['url'], page, kind, val))
+    from .scraping.engines import source_api,next_api_page
+    api=source_api(profile['url'])
+    url = payload.get('_next_url') or (next_api_page(profile['url'],page) if api in ('snappshop_api','digikala_api') else profile['url'] if page == 1 else build(profile['url'], profile['url'], page, kind, val))
     validate_url(url)
     from .scraping.engines import extract, profile_engine, for_installation
     try:
-        result = extract(url, profile['selectors'], profile_engine(profile), for_installation(settings, db),
+        result = extract(url, profile['selectors'], profile_engine(profile), settings,
                          timeout=network_timeout or settings.fetch_timeout, render_mode=payload.get('render', 'static'))
     except ValueError as exc:
-        counts.update(last_http_status=getattr(exc,'upstream_status',0),engine=profile_engine(profile))
+        counts.update(last_http_status=getattr(exc,'upstream_status',0),engine=profile_engine(profile),network_error=getattr(exc,'network_error',''),failure_stage=getattr(exc,'stage',''),used_engine='',last_html_chars=0)
         raise
     counts.update(last_http_status=result.get('code', 0), last_html_chars=len(result.get('html') or ''),
                   js_shell=bool(result.get('js_shell_detected') or looks_like_js_shell(result.get('html') or '')),
@@ -136,6 +141,9 @@ def _next_detail_page(db,entry):
 
 
 def _detail_step(db, settings, entry, profile, network_timeout=None):
+    from .scraping.engines import for_installation
+    settings=for_installation(settings,db)
+    if network_timeout:settings=replace(settings,net=replace(settings.net,gap_ms=min(settings.net.gap_ms,500),fallback=False))
     payload, counts = entry['payload'], entry['counters']
     index, keys = int(payload.get('_detail_index', 0)), payload.get('_detail_keys', [])
     if not keys and payload.get('detail_mode')=='two_stage':return _next_detail_page(db,entry)
@@ -163,9 +171,9 @@ def _detail_step(db, settings, entry, profile, network_timeout=None):
             fresh = parse_detail(result.get('html', ''), effective, payload['_detail_selectors'])
         else:
             try:
-                result = extract(url, {}, engine, for_installation(settings,db), timeout=network_timeout or settings.fetch_timeout)
+                result = extract(url, {}, engine, settings, timeout=network_timeout or settings.fetch_timeout)
             except ValueError as exc:
-                counts.update(last_http_status=getattr(exc,'upstream_status',0),engine=engine)
+                counts.update(last_http_status=getattr(exc,'upstream_status',0),engine=engine,network_error=getattr(exc,'network_error',''),failure_stage=getattr(exc,'stage',''),used_engine='',last_html_chars=0)
                 raise
             counts.update(last_http_status=result.get('code',0),engine=result['engine'],used_engine=result['used_engine'])
             effective = validate_url(result.get('url') or url)
@@ -319,6 +327,7 @@ def run_entry(db, settings, entry, deadline, *, max_steps=None, network_timeout=
                 raise ValueError('Unknown queue kind')
             if entry['kind']=='extract':
                 entry['counters'].pop('error_code',None);entry['counters'].pop('error_hint',None)
+                entry['counters'].pop('network_error',None);entry['counters'].pop('failure_stage',None)
             steps += 1
             # Do not overwrite a pause/cancel requested during a network call.
             db.update_entry(entry['id'], payload=entry['payload'], counters=entry['counters'], heartbeat=utc_now())
