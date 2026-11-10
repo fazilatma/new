@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.680';
+const APP_VERSION = '10.681';
 
 
 if (!function_exists('str_starts_with')) {
@@ -13251,15 +13251,21 @@ function bslFilterSafeManualCategories(string $productTitle, array $manualChain,
     foreach ($manualChain as $rawCid) {
         $cid = (int)$rawCid;
         if ($cid <= 0) continue;
+        $candidates=[$cid];$expandedParent=false;
         if (isset($meta['by_id'][$cid]) && !empty($meta['has_hierarchy']) && empty($meta['by_id'][$cid]['is_leaf'])) {
-            $leafCid = findLeafCategory($cid, $flatCategories);
-            if ($leafCid > 0 && !empty($meta['by_id'][$leafCid]['is_leaf'])) $cid = $leafCid;
-            else continue;
+            $candidates=bslCategoryDescendantLeafIds($cid,$flatCategories);$expandedParent=true;
+            if(!$candidates)continue;
         }
-        $catPath = isset($meta['by_id'][$cid]) ? ($meta['by_id'][$cid]['path'] ?: $meta['by_id'][$cid]['name']) : '';
-        if ($catPath !== '' && bslIsBannedCategoryTitle($catPath, $productTitle)) continue;
-        if ($cid !== $explicitProductCat && bslCategoryHasSemanticClash($productTitle, $cid, $flatCategories)) continue;
-        if (!in_array($cid, $safe, true)) $safe[] = $cid;
+        foreach($candidates as$candidateId){
+            $candidateId=(int)$candidateId;if($candidateId<=0)continue;
+            $catPath=isset($meta['by_id'][$candidateId])?($meta['by_id'][$candidateId]['path']?:$meta['by_id'][$candidateId]['name']):'';
+            if($catPath!==''&&bslIsBannedCategoryTitle($catPath,$productTitle))continue;
+            /* Explicit parent expansion must remain exhaustive as requested;
+               semantic ranking may choose the first candidate elsewhere, but
+               it must not silently remove siblings from this retry chain. */
+            if(!$expandedParent&&$candidateId!==$explicitProductCat&&bslCategoryHasSemanticClash($productTitle,$candidateId,$flatCategories))continue;
+            if(!in_array($candidateId,$safe,true))$safe[]=$candidateId;
+        }
     }
     return $safe;
 }
@@ -15735,6 +15741,23 @@ function bslCatsTrueLeaves(array $flatCats): array {
     }
     return !empty($deepLeaves) ? $deepLeaves : $allLeaves;
 }
+/** Ordered leaf descendants of one exact Basalam category in the cached
+ * preorder tree. The parent itself is never returned. This lets product create
+ * retry every valid terminal descendant without wandering into another branch. */
+function bslCategoryDescendantLeafIds(int $parentId,array $flatCats): array {
+    if($parentId<=0||!$flatCats)return[];$rows=array_values($flatCats);$start=-1;$parentLevel=0;
+    foreach($rows as$i=>$row){if(is_array($row)&&(int)($row['id']??0)===$parentId){$start=$i;$parentLevel=(int)($row['level']??0);break;}}
+    if($start<0)return[];$out=[];$n=count($rows);
+    for($i=$start+1;$i<$n;$i++){
+        $row=$rows[$i];if(!is_array($row))continue;$level=(int)($row['level']??0);
+        if($level<=$parentLevel)break;
+        $nextLevel=$parentLevel;
+        for($j=$i+1;$j<$n;$j++){if(is_array($rows[$j])){$nextLevel=(int)($rows[$j]['level']??0);break;}}
+        if($i+1>=$n||$nextLevel<=$level){$id=(int)($row['id']??0);if($id>0&&!in_array($id,$out,true))$out[]=$id;}
+    }
+    return$out;
+}
+
 function bslCatsLeaves(string $tk): array {
     $flat = bslCatsAll($tk);
     $leaves = bslCatsTrueLeaves($flat);
@@ -34734,6 +34757,11 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     if (bslIsCategoryError($r)) {
         $triedAll = [$catUsed];
         $finalResp = $r;
+        /* Basalam may know newer children than an older profile choice. On the
+           exact “category has children” rejection, exhaust this category's
+           cached leaf descendants in preorder before AI or unrelated fallback. */
+        $childLeafFallbacks=bslCategoryDescendantLeafIds($catUsed,$flatCats);
+        if($childLeafFallbacks)$remainingManual=array_values(array_unique(array_merge($childLeafFallbacks,$remainingManual)));
         if (!empty($remainingManual)) {
             $fb = bslTryCreateWithFallback($tk, $vid, $bp, $remainingManual, $title, false, [], []);
             if (!empty($fb['ok']) && !empty($fb['body']['id'])) {
@@ -50462,6 +50490,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"isset(\$_GET['bsl_all_shop_coverage_repair'])")!==false
         &&strpos($selfSrc,"{v:'10." . "680'")!==false
         &&version_compare(APP_VERSION,'10.680','>='));
+    $__cats681=[['id'=>10,'name'=>'والد','level'=>0],['id'=>11,'name'=>'فرزند الف','level'=>1],
+        ['id'=>111,'name'=>'برگ الف یک','level'=>2],['id'=>112,'name'=>'برگ الف دو','level'=>2],
+        ['id'=>12,'name'=>'فرزند ب','level'=>1],['id'=>121,'name'=>'برگ ب یک','level'=>2],['id'=>20,'name'=>'شاخه دیگر','level'=>0]];
+    $__leaves681=bslCategoryDescendantLeafIds(10,$__cats681);
+    $__safe681=bslFilterSafeManualCategories('محصول آزمایشی',[10],$__cats681,10);
+    $add('10.681','خطای دستهٔ دارای فرزند همهٔ برگ‌های همان شاخه را ترتیبی امتحان می‌کند',
+        $__leaves681===[111,112,121]
+        &&$__safe681===[111,112,121]
+        &&strpos($selfSrc,'$childLeafFallbacks=bslCategoryDescendantLeafIds($catUsed,$flatCats)')!==false
+        &&strpos($selfSrc,"{v:'10." . "681'")!==false
+        &&version_compare(APP_VERSION,'10.681','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -103468,6 +103507,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.681', t:'🌳 آزمون ترتیبی همهٔ فرزندان دستهٔ ردشده', items:[
+    'اگر باسلام اعلام کند دستهٔ انتخابی دارای فرزند است، همهٔ دسته‌های برگ زیر همان والد با ترتیب پایدار درخت امتحان می‌شوند و با نخستین موفقیت متوقف می‌گردند.',
+    'این fallback از شاخهٔ والد خارج نمی‌شود؛ 429، خطای شبکه، خطای غیر‌دسته‌بندی، نام تکراری و توقف کاربر نیز زنجیره را ایمن متوقف می‌کنند.',
+    'دستهٔ والدِ شناخته‌شده پیش از نخستین درخواست به زنجیرهٔ کامل برگ‌های خودش تبدیل می‌شود تا درخواست 422 غیرضروری ساخته نشود.'
+  ]},
   {v:'10.680', t:'🏪 پوشش واقعی همهٔ غرفه‌ها و جلوگیری از خطای دستهٔ سراسری', items:[
     'علت اصلی کمبود پوشش رفع شد: تنظیم قدیمیِ بدون send_shop_ids دیگر فقط غرفهٔ پیش‌فرض را صف نمی‌کند و طبق قرارداد رابط، همهٔ غرفه‌های پیکربندی‌شده را هدف می‌گیرد.',
     'اگر درخت دسته‌بندی باسلام موقتاً قابل دریافت نباشد، ردیف بدون ساختن هزاران خطای 422 در waiting می‌ماند و cron بعدی ادامه می‌دهد؛ دستهٔ والد دیگر کورکورانه ارسال نمی‌شود.',
