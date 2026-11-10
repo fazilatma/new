@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.659';
+const APP_VERSION = '10.660';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26930,8 +26930,8 @@ function s4ThirdPartyExplorerProbe(bool $fresh=false):array{
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
 function s4ThirdPartyExplorerEnrichPublicOrders(array &$d,int $timeout=8,?int $onlyVendorId=null):array{
-    $now=time();$candidates=(array)($d['vendors']??[]);uasort($candidates,fn($a,$b)=>(int)($a['sales_checked_at']??0)<=>(int)($b['sales_checked_at']??0));$chosen=null;
-    if($onlyVendorId!==null&&isset($d['vendors'][(string)$onlyVendorId]))$chosen=$d['vendors'][(string)$onlyVendorId];else foreach($candidates as$v)if((int)($v['vendor_id']??0)>0&&$now-(int)($v['sales_checked_at']??0)>=86400){$chosen=$v;break;}if(!$chosen)return['ok'=>true,'skipped'=>'all_fresh'];
+    $now=time();$candidates=(array)($d['vendors']??[]);uasort($candidates,function($a,$b){$ae=(string)($a['sales_source']??'')==='public_vendor_sales_count';$be=(string)($b['sales_source']??'')==='public_vendor_sales_count';if($ae!==$be)return$ae<=>$be;if(!$ae&&($av=(int)($a['sales_estimate']??0))!==($bv=(int)($b['sales_estimate']??0)))return$bv<=>$av;return(int)($a['sales_checked_at']??0)<=>(int)($b['sales_checked_at']??0);});$chosen=null;
+    if($onlyVendorId!==null&&isset($d['vendors'][(string)$onlyVendorId]))$chosen=$d['vendors'][(string)$onlyVendorId];else foreach($candidates as$v){$exact=(string)($v['sales_source']??'')==='public_vendor_sales_count';if((int)($v['vendor_id']??0)>0&&(!$exact||$now-(int)($v['sales_checked_at']??0)>=86400)){$chosen=$v;break;}}if(!$chosen)return['ok'=>true,'skipped'=>'all_fresh'];
     $vid=(int)$chosen['vendor_id'];$key=(string)$vid;if(!isset($d['vendors'][$key]))return['ok'=>false,'vendor_id'=>$vid,'error'=>'vendor_disappeared'];
     /* This is the same public web-gateway statistic used by Basalam storefronts:
        shipped item quantities, not order/parcels. For example 16526 is rendered 16.5k+. */
@@ -50024,6 +50024,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'public_vendor_sales_count')!==false
         &&strpos($selfSrc,"{v:'10." . "659'")!==false
         &&version_compare(APP_VERSION,'10.659','>='));
+    $add('10.660','ردیف‌های دارای معیار قدیمی بدون انتظار کش ۲۴ ساعته بازخوانی می‌شوند',
+        strpos($selfSrc,"if(\$ae!==\$be)return\$ae<=>\$be")!==false
+        &&strpos($selfSrc,"(!\$exact||\$now-(int)(\$v['sales_checked_at']??0)>=86400)")!==false
+        &&strpos($selfSrc,"{v:'10." . "660'")!==false
+        &&version_compare(APP_VERSION,'10.660','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -102789,6 +102794,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.660', t:'🔄 جایگزینی فوری اعداد سفارشِ cache‌شده با فروش دقیق', items:[
+    'ردیف‌هایی که پیش از v10.659 با order_count یا تخمین ذخیره شده‌اند دیگر برای دریافت فروش دقیق منتظر پایان cache بیست‌وچهارساعته نمی‌مانند.',
+    'غنی‌سازی محدود همچنان در هر تیک فقط یک غرفه را اصلاح می‌کند، اما ابتدا ردیف‌های فاقد public_vendor_sales_count و سپس مقادیر بزرگ‌تر جدول را به‌روزرسانی می‌کند.',
+    'غرفهٔ نوشدارو99 در تولید فوراً بازخوانی شد و اکنون ۱۶٬۵۲۶ فروش دقیق را به‌جای ۳٬۱۲۰ سفارش نشان می‌دهد.'
+  ]},
   {v:'10.659', t:'🎯 فروش دقیق مطابق عدد صفحهٔ غرفه', items:[
     'عدد «فروش» صفحهٔ غرفه از web gateway عمومی باسلام و resource رسمی number-of-sales-per-vendor خوانده می‌شود؛ این عدد مجموع تعداد اقلام ارسال‌شده است.',
     'برای نمونهٔ نوشدارو99، API مقدار ۱۶۵۲۶ را می‌دهد که رابط باسلام به‌شکل 16.5k+ نمایش می‌دهد؛ order_count برابر ۳۱۲۰ معیار جداگانهٔ تعداد سفارش‌هاست.',
