@@ -71,3 +71,15 @@ or direct networking. The parent broker checks exact frame source/null origin,
 whitelists operations and confirms every write. Never map legacy GET heartbeats
 to production cron or auto-retry remote sends. Keep the working default dashboard
 until native-client capability gaps are closed and browser-verified.
+
+## Live maintenance recovery boundary
+If production returns Maintenance in progress, check health AND deploy route
+before claiming a new signed HTTP request can repair it. Existing maintenance
+intentionally blocks signed deployments too. Do not weaken that guard or erase
+a remote marker without validating the installed code. The owner-console helper
+`tools/recover_live_install.py` is inspect-only by default; explicit --recover-code
+uses the existing code-only snapshot rollback under the worker lock, and optional
+--probe-all diagnoses the installed real app in a fresh process without running
+queues. See tools/RECOVERY.fa.md. Do not suggest the plain maintain CLI for a
+no-queue recovery: it invokes tick afterwards. A CLI WSGI/source probe is NOT an
+external authenticated HTTP test; record that transport distinction explicitly.
