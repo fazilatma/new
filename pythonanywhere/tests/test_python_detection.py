@@ -32,7 +32,7 @@ def detect(tmp_path, executables, extra=None):
     bindir.mkdir(exist_ok=True)
     for name,version in executables.items():
         interpreter(bindir/name,version)
-    env={**os.environ,'HOME':str(tmp_path),'PATH':str(bindir)}
+    env={**os.environ,'HOME':str(tmp_path),'PATH':str(bindir),'APP_DIR':str(tmp_path/'app')}
     for name in ('PYTHON_BIN','S4_VENV'):
         env.pop(name,None)
     env.update(extra or {})

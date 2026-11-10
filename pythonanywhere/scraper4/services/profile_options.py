@@ -82,12 +82,12 @@ def save(db,profile_id,value):
 
 
 def cleanup_candidates(conn,profile,mode):
-    if mode not in ('no_price','below_min'):raise ValueError('روش پاک‌سازی معتبر نیست.')
+    if mode not in ('no_price','below_min','all'):raise ValueError('روش پاک‌سازی معتبر نیست.')
     minimum=active(profile)['minPrice'];items=[]
-    for row in conn.execute('SELECT id,price_num,updated_at FROM products WHERE profile_id=? ORDER BY id',(profile['id'],)):
+    for row in conn.execute('SELECT id,price_num,updated_at,woo_id,basalam_id FROM products WHERE profile_id=? ORDER BY id',(profile['id'],)):
         amount=price(profile,row['price_num'])
-        if (mode=='no_price' and amount<=0) or (mode=='below_min' and 0<amount<minimum):
-            items.append((row['id'],row['price_num'],row['updated_at']))
+        if mode=='all' or (mode=='no_price' and amount<=0) or (mode=='below_min' and 0<amount<minimum):
+            items.append(tuple(row))
             if len(items)==1000:break
     digest=hashlib.sha256(json.dumps([items,active(profile)],sort_keys=True).encode()).hexdigest()
     return items,digest

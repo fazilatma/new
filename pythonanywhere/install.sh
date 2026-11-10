@@ -16,6 +16,25 @@ if [[ -n "$PYTHON_BIN" ]]; then
     echo "Unset PYTHON_BIN to auto-detect, or select an installed Python 3.10+ interpreter." >&2
     exit 1
   fi
+elif [[ ! -x "$VENV/bin/python" && -f "$APP_DIR/.runtime.json" ]]; then
+  # Read JSON using any available Python, then select the recorded Web ABI.
+  reader=""
+  for candidate in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then reader="$candidate"; break; fi
+  done
+  [[ -n "$reader" ]] || { echo "No Python available to inspect .runtime.json" >&2; exit 1; }
+  recorded="$("$reader" - "$APP_DIR/.runtime.json" <<'PYABI'
+import json,re,sys
+v=json.load(open(sys.argv[1])).get('python_version','')
+if not isinstance(v,str) or not re.fullmatch(r'3\.\d{1,2}',v):raise SystemExit('Invalid recorded Python version; inspect .runtime.json')
+print(v)
+PYABI
+)"
+  PYTHON_BIN="python$recorded"
+  if ! s4_python_ok "$PYTHON_BIN"; then
+    echo "Deleted virtualenv used Python $recorded, but $PYTHON_BIN is unavailable. Select the matching system image/interpreter; no data changed." >&2
+    exit 1
+  fi
 elif s4_python_ok "$VENV/bin/python"; then
   PYTHON_BIN="$VENV/bin/python"
 else

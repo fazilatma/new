@@ -5,14 +5,16 @@ confirmation. Sends enqueue pinned destinations; no remote HTTP occurs here.
 """
 import json
 import uuid
+from flask import session
+from . import product_cleanup
 from ..db import utc_now
 from ..config import VERSION
 from . import php_ui
 from .basalam.shops import resolve
 from .extraction_diagnostics import SAFE_HINTS
 
-READS={'woo_queue_status','bsl_queue_status','tasks_list','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','python_capabilities','runtime_health'}
-WRITES={'python_send_enqueue','python_manual_sync','python_queue_control','python_queue_clear','python_profile_duplicate','python_profile_delete'}
+READS={'python_cleanup_preview','woo_queue_status','bsl_queue_status','tasks_list','poll_woo','poll_basalam','poll_bsl','poll_extract','python_contracts','python_capabilities','runtime_health'}
+WRITES={'python_cleanup_products','python_send_enqueue','python_manual_sync','python_queue_control','python_queue_clear','python_profile_duplicate','python_profile_delete'}
 
 
 def rows(db,kind=None):
@@ -59,6 +61,9 @@ def progress(db,kind):
 
 def read(db,settings,data):
     action=data['action']
+    if action=='python_cleanup_preview':
+        f=data['fields'];p=php_ui.find(db,f.get('profile',''))
+        return product_cleanup.preview(db,settings,p['id'],f.get('mode'),session.get('csrf',''))
     if action=='runtime_health':return {'ok':True,'runtime':'Python','version':VERSION,'ui_version':php_ui.manifest()['source_version'],'read_only':True,'processed':False}
     if action=='tasks_list':return tasks(db)
     if action in ('woo_queue_status','bsl_queue_status'):return queue(db,'woo_send' if action.startswith('woo') else 'bsl_send')
@@ -171,6 +176,9 @@ def profile_change(db,data):
 
 def write(db,settings,data):
     op=data['action']
+    if op=='python_cleanup_products':
+        f=data['fields'];p=php_ui.find(db,f.get('profile',''))
+        return product_cleanup.apply(db,settings,p['id'],f.get('proof'),session.get('csrf',''))
     if op in ('python_send_enqueue','python_manual_sync'):return create(db,data,op=='python_manual_sync')
     if op=='python_queue_control':return control(db,data)
     if op=='python_queue_clear':return clear(db,data)

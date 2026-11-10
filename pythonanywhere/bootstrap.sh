@@ -20,6 +20,25 @@ if [[ -n "$PYTHON_BIN" ]]; then
     echo "Unset PYTHON_BIN to auto-detect, or select an installed Python 3.10+ interpreter." >&2
     exit 1
   fi
+elif [[ ! -x "$VENV/bin/python" && -f "$APP_DIR/.runtime.json" ]]; then
+  # Read JSON using any available Python, then select the recorded Web ABI.
+  reader=""
+  for candidate in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then reader="$candidate"; break; fi
+  done
+  [[ -n "$reader" ]] || { echo "No Python available to inspect .runtime.json" >&2; exit 1; }
+  recorded="$("$reader" - "$APP_DIR/.runtime.json" <<'PYABI'
+import json,re,sys
+v=json.load(open(sys.argv[1])).get('python_version','')
+if not isinstance(v,str) or not re.fullmatch(r'3\.\d{1,2}',v):raise SystemExit('Invalid recorded Python version; inspect .runtime.json')
+print(v)
+PYABI
+)"
+  PYTHON_BIN="python$recorded"
+  if ! s4_python_ok "$PYTHON_BIN"; then
+    echo "Deleted virtualenv used Python $recorded, but $PYTHON_BIN is unavailable. Select the matching system image/interpreter; no data changed." >&2
+    exit 1
+  fi
 elif s4_python_ok "$VENV/bin/python"; then
   PYTHON_BIN="$VENV/bin/python"
 else
@@ -117,19 +136,15 @@ with tarfile.open(archive, 'r:gz') as source:
         path.parent.mkdir(parents=True, exist_ok=True)
         with source.extractfile(entry) as src, path.open('wb') as dst:
             shutil.copyfileobj(src, dst)
-for required in ('install.sh', 'requirements.txt', 'wsgi.py', 'scraper4/__init__.py'):
+for required in ('install.sh', 'requirements.txt', 'repair_environment.py', 'wsgi.py', 'scraper4/__init__.py'):
     if not (target / required).is_file():
         raise SystemExit('Incomplete download: missing ' + required)
 PY
 
 # Preserve secrets/data. A pre-upgrade SQLite snapshot uses the old code/env.
 if [[ -f "$APP_DIR/.env" ]]; then
-  if [[ ! -x "$VENV/bin/python" ]]; then
-    echo "Existing .env detected but its virtualenv was not found: $VENV" >&2
-    echo "Set S4_VENV to the existing environment before upgrading." >&2
-    exit 1
-  fi
-  LOCK_PATH="$(cd "$APP_DIR" && "$VENV/bin/python" -c 'from scraper4.config import Settings; print(Settings.load().db_path.with_suffix(".worker.lock"))')"
+  # Stdlib preflight works even when all virtualenv dependencies are gone.
+  LOCK_PATH="$("$PYTHON_BIN" "$STAGE/repair_environment.py" lock-path "$APP_DIR")"
   mkdir -p "$(dirname "$LOCK_PATH")"
   exec 9>"$LOCK_PATH"
   if ! flock -n 9; then
@@ -139,7 +154,7 @@ if [[ -f "$APP_DIR/.env" ]]; then
   mkdir -p "$HOME/scraper4-backups"
   BACKUP="$HOME/scraper4-backups/pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ)-$$.sqlite3"
   echo "Backing up existing data to $BACKUP"
-  (cd "$APP_DIR" && "$VENV/bin/python" -m scraper4 backup --output "$BACKUP")
+  "$PYTHON_BIN" "$STAGE/repair_environment.py" backup "$APP_DIR" "$BACKUP"
 fi
 
 mkdir -p "$APP_DIR"

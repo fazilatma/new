@@ -95,3 +95,14 @@ so connections are not lost. This auth-mode change is CLI-only: do NOT relay it
 through the signed HTTP code deployer. The one-time CLI bootstrap can explicitly
 recover stale maintenance after full installed-code validation under its held
 worker lock with `S4_RECOVER_MAINTENANCE=1`; no tick/queue execution follows.
+
+## Deleted virtualenv recovery
+bootstrap's existing-install preflight must NOT import Flask or require the old
+venv: use staged repair_environment.py with stdlib, load the existing config and
+.env without replacing the encryption key, lock the existing worker path before
+SQLite backup/copy. Rebuild the recorded .runtime.json Python ABI when available;
+do not silently pick a different Web ABI. Environment/dependency restoration is
+CLI work, not signed WSGI code deployment. A warm 1.19.0 health response does not
+prove a deleted virtualenv has been restored. Native product cleanup now shares
+one service with Python forms; preserve worker lock, failed jobs and reviewed
+snapshot checks; never equate clearResults (local products) with clearAll reset.

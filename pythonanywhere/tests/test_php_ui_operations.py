@@ -43,7 +43,7 @@ def test_new_reads_never_mutate_or_run_a_worker(app,client,auth_headers,action,m
     db=app.extensions['s4_db'];p=seed(db);db.enqueue('woo_send',p['id'])
     monkeypatch.setattr('scraper4.services.engine.tick',lambda *a,**k:pytest.fail('read must not process'))
     with db.connect() as c:before=list(c.iterdump())
-    response=request(client,auth_headers,action);assert response.status_code==200
+    response=request(client,auth_headers,action,fields={'profile':'one','mode':'no_price'} if action=='python_cleanup_preview' else {});assert response.status_code==200
     assert 'private' not in response.text
     with db.connect() as c:assert list(c.iterdump())==before
 

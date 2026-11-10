@@ -243,3 +243,19 @@ for(const route of ['/','/php-ui'])test('owner open mode in '+route+' needs no l
  assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);
  assert.equal((await page.request.get(origin+'/api/deploy/run')).status(),401);assert.equal((await page.context().cookies()).filter(c=>c.name==='session').length,0);assert.deepEqual(errors,[]);
 });
+
+for(const route of ['/','/php-ui'])test('real local product cleanup in '+route+' confirms, persists and needs no login in open mode',{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'success',true),errors=[];page.on('pageerror',e=>errors.push(e.message));let accept=false,dialogs=0;
+ page.on('dialog',async d=>{dialogs++;if(accept)await d.accept();else await d.dismiss();});
+ await page.goto(origin+route);const before=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal(before.products.length,1);
+ if(route==='/php-ui'){
+  const f=page.frameLocator('#php-original-ui');await f.locator('#python-start-control').waitFor();await f.locator('#hdrProfileSelect').selectOption('one');const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await child.waitForFunction(()=>profileFormReady&&currentProfileKey==='one');await page.waitForTimeout(1200);
+  await child.evaluate(()=>removeBelowMinPrice());assert.equal((await(await page.request.get(origin+'/__test__/extract-state')).json()).products.length,1);
+  accept=true;const done=page.waitForResponse(r=>r.url().endsWith('/api/php-ui/write')&&r.request().postDataJSON()?.action==='python_cleanup_products');await child.evaluate(()=>removeBelowMinPrice());assert.equal((await(await done).json()).removed,1);await child.waitForFunction(()=>products.size===0);
+ }else{
+  await page.locator('#start-profile option[value="1"]').waitFor({state:'attached'});accept=true;await page.locator('#start-profile').selectOption('1');await page.locator('#profile-settings-name').filter({hasText:'مرجع آزمایشی'}).waitFor({state:'attached'});accept=false;await page.locator('#tab-settings').click();const button=page.locator('[data-profile-cleanup="all"]');await button.waitFor();await page.waitForFunction(()=>!document.querySelector('[data-profile-cleanup="all"]').disabled);
+  const preview=page.waitForResponse(r=>r.url().endsWith('/cleanup-preview'));await button.click();assert.equal((await(await preview).json()).count,1);await page.waitForTimeout(150);assert.equal((await(await page.request.get(origin+'/__test__/extract-state')).json()).products.length,1);
+  accept=true;const done=page.waitForResponse(r=>r.url().endsWith('/cleanup'));await button.click();assert.equal((await(await done).json()).removed,1);
+ }
+ const after=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal(after.products.length,0);assert.deepEqual(after.jobs,before.jobs);assert.ok(dialogs>=2);assert.deepEqual(errors,[]);
+});
