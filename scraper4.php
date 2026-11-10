@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.675';
+const APP_VERSION = '10.676';
 
 
 if (!function_exists('str_starts_with')) {
@@ -22152,7 +22152,8 @@ $key = ($rawLoad !== '' && isset($profiles[$rawLoad]))
     ? $rawLoad
     : (profileResolveKey($url, $profiles) ?: (strpos($url, '://') !== false ? profileKey($url) : $rawLoad));
 if (isset($profiles[$key])) {
-echo json_encode(['ok' => true, 'key' => $key, 'profile' => $profiles[$key]], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+$loadedProfile=$profiles[$key];if(function_exists('s4BasalamBestSellersOverlayProfile'))$loadedProfile=s4BasalamBestSellersOverlayProfile($loadedProfile);
+echo json_encode(['ok' => true, 'key' => $key, 'profile' => $loadedProfile], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 } else {
 echo json_encode(['ok' => false, 'error' => 'Not found', 'key' => $key], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 }
@@ -26997,17 +26998,28 @@ function s4BasalamBestSellersWriteProfile(array &$profiles,array $catalog,array 
     $profiles[$pk]=array_replace($defaults,$profile,['name'=>'باسلام -پرفروش ها','title'=>'باسلام -پرفروش ها','url'=>s4BasalamBestSellersProfileUrl(),'source'=>'basalam_best_sellers','products'=>$rows,'productsOrder'=>array_keys($active),'lastUpdate'=>date('Y-m-d H:i:s'),'updatedAt'=>time(),'best_sellers_managed'=>true,'best_sellers_filter'=>s4BasalamBestSellersNormalizeFilters($filter)]);
     return['active_count'=>count($active),'catalog_count'=>count($catalog),'profile_key'=>$pk];
 }
+/* v10.676: The catalogue is the collector's independent durable store. A long
+ * extraction may legitimately own the global profiles lock for hours, so all
+ * readers of this managed profile overlay the current catalogue immediately. */
+function s4BasalamBestSellersOverlayProfile(array $profile):array{
+    if(($profile['source']??'')!=='basalam_best_sellers'&&empty($profile['best_sellers_managed']))return$profile;
+    $catalog=s4BasalamBestSellersCatalogLoad($profile);$d=s4BasalamBestSellersLoad();$active=s4BasalamBestSellersFilterProducts($catalog,(array)$d['profile_filter']);$rows=[];foreach($active as$key=>$p)$rows[]=[$key,$p];
+    $profile['products']=$rows;$profile['productsOrder']=array_keys($active);$profile['best_sellers_managed']=true;$profile['best_sellers_filter']=s4BasalamBestSellersNormalizeFilters((array)$d['profile_filter']);$profile['catalog_count']=count($catalog);return$profile;
+}
 function s4BasalamBestSellersMergeProducts(array $incoming):array{
-    $lf=@fopen(PROFILES_FILE.'.extract.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>false,'error'=>'profiles_busy'];}
-    try{$profiles=loadProfiles();$pk=s4BasalamBestSellersProfileKey();$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];$products=s4BasalamBestSellersCatalogLoad($profile);$d=s4BasalamBestSellersLoad();
-        foreach($incoming as$p){if(!is_array($p)||(int)($p['basalam_product_id']??0)<=0)continue;$k=productKey($p);$old=is_array($products[$k]??null)?$products[$k]:[];if(array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']===null&&isset($old['sales_count_exact'])){unset($p['sales_count_exact'],$p['sales_verified_at']);$p['sales_count']=(int)$old['sales_count_exact'];}$products[$k]=array_replace($old,$p);}
-        if(!s4BasalamBestSellersCatalogSave($products))return['ok'=>false,'error'=>'catalog_save_failed'];$counts=s4BasalamBestSellersWriteProfile($profiles,$products,(array)$d['profile_filter']);$ok=saveProfiles($profiles);return['ok'=>$ok,'saved_count'=>$counts['active_count'],'catalog_count'=>$counts['catalog_count'],'profile_key'=>$pk,'profile_settings_applied'=>true];
+    $profiles=loadProfiles();$pk=s4BasalamBestSellersProfileKey();$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];$products=s4BasalamBestSellersCatalogLoad($profile);$d=s4BasalamBestSellersLoad();
+    foreach($incoming as$p){if(!is_array($p)||(int)($p['basalam_product_id']??0)<=0)continue;$k=productKey($p);$old=is_array($products[$k]??null)?$products[$k]:[];if(array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']===null&&isset($old['sales_count_exact'])){unset($p['sales_count_exact'],$p['sales_verified_at']);$p['sales_count']=(int)$old['sales_count_exact'];}$products[$k]=array_replace($old,$p);}
+    if(!s4BasalamBestSellersCatalogSave($products))return['ok'=>false,'error'=>'catalog_save_failed'];$activeCount=count(s4BasalamBestSellersFilterProducts($products,(array)$d['profile_filter']));
+    $lf=@fopen(PROFILES_FILE.'.extract.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>true,'saved_count'=>$activeCount,'catalog_count'=>count($products),'profile_key'=>$pk,'profile_saved'=>false,'profile_deferred'=>true];}
+    try{$profiles=loadProfiles();$counts=s4BasalamBestSellersWriteProfile($profiles,$products,(array)$d['profile_filter']);$ok=saveProfiles($profiles);return['ok'=>$ok,'saved_count'=>$counts['active_count'],'catalog_count'=>$counts['catalog_count'],'profile_key'=>$pk,'profile_saved'=>$ok,'profile_deferred'=>false,'profile_settings_applied'=>true];
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
 function s4BasalamBestSellersApplyFilter(array $filters):array{
-    $filters=s4BasalamBestSellersNormalizeFilters($filters);$stateLock=@fopen(__DIR__.'/.basalam-bestsellers.lock','c');if(!$stateLock||!@flock($stateLock,LOCK_EX)){if($stateLock)@fclose($stateLock);return['ok'=>false,'error'=>'collector_lock_failed'];}$lf=@fopen(PROFILES_FILE.'.extract.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);@flock($stateLock,LOCK_UN);@fclose($stateLock);return['ok'=>false,'error'=>'profiles_busy'];}
-    try{$profiles=loadProfiles();$pk=s4BasalamBestSellersProfileKey();$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];$catalog=s4BasalamBestSellersCatalogLoad($profile);if(!s4BasalamBestSellersCatalogSave($catalog))return['ok'=>false,'error'=>'catalog_save_failed'];$counts=s4BasalamBestSellersWriteProfile($profiles,$catalog,$filters);if(!saveProfiles($profiles))return['ok'=>false,'error'=>'profile_save_failed'];$d=s4BasalamBestSellersLoad();$d['profile_filter']=$filters;$d['saved_count']=$counts['active_count'];$d['catalog_count']=$counts['catalog_count'];$d['last_action']='applied filtered result to profile';s4BasalamBestSellersSave($d);return['ok'=>true,'filter'=>$filters]+$counts;
-    }finally{@flock($lf,LOCK_UN);@fclose($lf);@flock($stateLock,LOCK_UN);@fclose($stateLock);}
+    $filters=s4BasalamBestSellersNormalizeFilters($filters);$stateLock=@fopen(__DIR__.'/.basalam-bestsellers.lock','c');if(!$stateLock||!@flock($stateLock,LOCK_EX)){if($stateLock)@fclose($stateLock);return['ok'=>false,'error'=>'collector_lock_failed'];}
+    try{$profiles=loadProfiles();$pk=s4BasalamBestSellersProfileKey();$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];$catalog=s4BasalamBestSellersCatalogLoad($profile);if(!s4BasalamBestSellersCatalogSave($catalog))return['ok'=>false,'error'=>'catalog_save_failed'];$d=s4BasalamBestSellersLoad();$d['profile_filter']=$filters;$d['saved_count']=count(s4BasalamBestSellersFilterProducts($catalog,$filters));$d['catalog_count']=count($catalog);$d['last_action']='applied filtered result to managed profile';s4BasalamBestSellersSave($d);
+        $lf=@fopen(PROFILES_FILE.'.extract.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>true,'filter'=>$filters,'active_count'=>$d['saved_count'],'catalog_count'=>$d['catalog_count'],'profile_key'=>$pk,'profile_deferred'=>true];}
+        try{$profiles=loadProfiles();$counts=s4BasalamBestSellersWriteProfile($profiles,$catalog,$filters);if(!saveProfiles($profiles))return['ok'=>false,'error'=>'profile_save_failed'];return['ok'=>true,'filter'=>$filters,'profile_deferred'=>false]+$counts;}finally{@flock($lf,LOCK_UN);@fclose($lf);}
+    }finally{@flock($stateLock,LOCK_UN);@fclose($stateLock);}
 }
 function s4BasalamBestSellersTick(string $source='cron',bool $force=false):array{
     $lf=@fopen(__DIR__.'/.basalam-bestsellers.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>true,'skipped'=>'busy'];}
@@ -27052,7 +27064,7 @@ function s4BasalamBestSellersTick(string $source='cron',bool $force=false):array
 function s4BasalamBestSellersStatus(int $page=1,int $pageSize=50,array $filters=[]):array{
     $d=s4BasalamBestSellersLoad();$d['verify_pending']=count((array)$d['verify_queue']);$d['detail_pending']=count((array)$d['detail_queue']);unset($d['known_ids'],$d['verify_queue'],$d['detail_queue']);$d['ok']=true;$d['profile_title']='باسلام -پرفروش ها';$d['profile_key']=s4BasalamBestSellersProfileKey();$d['version']=APP_VERSION;
     $page=max(1,$page);$pageSize=max(10,min(100,$pageSize));$profiles=loadProfiles();$profile=is_array($profiles[$d['profile_key']]??null)?$profiles[$d['profile_key']]:[];$d['profile_settings']=['title_suffix'=>(string)($profile['titleSuffix']??''),'price_mode'=>(string)($profile['priceMode']??'none'),'price_value'=>(float)($profile['priceVal']??0),'round_price'=>(string)($profile['roundPrice']??'0'),'basalam_category_id'=>(int)($profile['bslCategoryId']??0),'sync_config'=>(array)($profile['syncConfig']??[])];
-    $catalog=s4BasalamBestSellersCatalogLoad($profile);$allTotal=count($catalog);$d['catalog_count']=$allTotal;$d['saved_count']=count(s4BasalamBestSellersProductMap(is_array($profile['products']??null)?$profile['products']:[]));$normalizedFilters=s4BasalamBestSellersNormalizeFilters($filters);$products=array_values(s4BasalamBestSellersFilterProducts($catalog,$normalizedFilters));
+    $catalog=s4BasalamBestSellersCatalogLoad($profile);$allTotal=count($catalog);$d['catalog_count']=$allTotal;$d['saved_count']=count(s4BasalamBestSellersFilterProducts($catalog,(array)$d['profile_filter']));$normalizedFilters=s4BasalamBestSellersNormalizeFilters($filters);$products=array_values(s4BasalamBestSellersFilterProducts($catalog,$normalizedFilters));
     $total=count($products);$pages=max(1,(int)ceil($total/$pageSize));$page=min($page,$pages);$rows=array_slice($products,($page-1)*$pageSize,$pageSize);
     $d['table']=['page'=>$page,'page_size'=>$pageSize,'pages'=>$pages,'total'=>$total,'all_total'=>$allTotal,'rows'=>$rows,'filters'=>$normalizedFilters,'applied_filter'=>s4BasalamBestSellersNormalizeFilters((array)($d['profile_filter']??[]))];return$d;
 }
@@ -28204,8 +28216,8 @@ function s4BslExcelBuildXlsx(array $headers,array $rows,string $path):bool{
     $z=new ZipArchive();if($z->open($path,ZipArchive::CREATE|ZipArchive::OVERWRITE)!==true)return false;$z->addFromString('[Content_Types].xml',$ct);$z->addFromString('_rels/.rels',$root);$z->addFromString('xl/workbook.xml',$wb);$z->addFromString('xl/_rels/workbook.xml.rels',$rels);$z->addFromString('xl/worksheets/sheet1.xml',$sheet);$z->addFromString('xl/sharedStrings.xml',$ss);$z->close();return is_file($path)&&filesize($path)>0;
 }
 function s4BslExcelProfileProducts(string $profileRef,string $scope,array $filters=[]):array{
-    $profiles=loadProfiles();$key=isset($profiles[$profileRef])?$profileRef:(profileResolveKey(s4NormalizeInputUrl($profileRef),$profiles)?:$profileRef);$profile=is_array($profiles[$key]??null)?$profiles[$key]:[];if(!$profile)return['ok'=>false,'error'=>'profile_not_found'];
-    if($scope==='best_sellers_filtered'&&function_exists('s4BasalamBestSellersCatalogLoad')){$catalog=s4BasalamBestSellersCatalogLoad($profile);$map=s4BasalamBestSellersFilterProducts($catalog,$filters);}else$map=function_exists('s4BasalamBestSellersProductMap')?s4BasalamBestSellersProductMap((array)($profile['products']??[])):[];
+    $profiles=loadProfiles();$key=isset($profiles[$profileRef])?$profileRef:(profileResolveKey(s4NormalizeInputUrl($profileRef),$profiles)?:$profileRef);$profile=is_array($profiles[$key]??null)?$profiles[$key]:[];if(!$profile)return['ok'=>false,'error'=>'profile_not_found'];if(function_exists('s4BasalamBestSellersOverlayProfile'))$profile=s4BasalamBestSellersOverlayProfile($profile);
+    if($scope='best_sellers_filtered'&&function_exists('s4BasalamBestSellersCatalogLoad')){$catalog=s4BasalamBestSellersCatalogLoad($profile);$map=s4BasalamBestSellersFilterProducts($catalog,$filters);}else$map=function_exists('s4BasalamBestSellersProductMap')?s4BasalamBestSellersProductMap((array)($profile['products']??[])):[];
     return['ok'=>true,'key'=>$key,'profile'=>$profile,'products'=>$map];
 }
 function s4BslExcelExport(array $args):array{
@@ -34899,6 +34911,7 @@ function prepareForSend(array $profile, string $key, array $p): array {
  * پروفایل ذخیره‌شده بدون نیاز به آپلود چندمگابایتی JSON/HTML از مرورگر کاربر.
  */
 function s4BuildQueueProductsFromProfile(array $profile, array $overrides = []): array {
+    if(function_exists('s4BasalamBestSellersOverlayProfile'))$profile=s4BasalamBestSellersOverlayProfile($profile);
     $profCopy = $profile;
     if (array_key_exists('title_suffix', $overrides) && $overrides['title_suffix'] !== null) {
         $profCopy['titleSuffix'] = trim((string)$overrides['title_suffix']);
@@ -50376,6 +50389,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$matches['sku:'.\$sku]=[[\$exportId,\$ei,\$entry]]")!==false
         &&strpos($selfSrc,"{v:'10." . "675'")!==false
         &&version_compare(APP_VERSION,'10.675','>='));
+    $__overlay676=s4BasalamBestSellersOverlayProfile(['source'=>'other','products'=>[['x',['title'=>'x']]]]);
+    $add('10.676','جمع‌آور پرفروش‌ها هنگام اشغال قفل پروفایل متوقف نمی‌شود',
+        count((array)($__overlay676['products']??[]))===1
+        &&strpos($selfSrc,"'profile_deferred'=>true")!==false
+        &&strpos($selfSrc,"s4BasalamBestSellersOverlayProfile(\$loadedProfile)")!==false
+        &&strpos($selfSrc,"\$profile=s4BasalamBestSellersOverlayProfile(\$profile)")!==false
+        &&strpos($selfSrc,"{v:'10." . "676'")!==false
+        &&version_compare(APP_VERSION,'10.676','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -103223,6 +103244,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.676', t:'🔓 ادامهٔ پرفروش‌ها هنگام اشغال قفل پروفایل', items:[
+    'جمع‌آوری، فروش دقیق و جزئیات در کاتالوگ مستقل پرفروش‌ها ادامه پیدا می‌کند و دیگر به‌خاطر استخراج طولانی پروفایل دیگری با profiles_busy روی یک عدد ثابت نمی‌ماند.',
+    'پروفایل عادی «باسلام -پرفروش ها» و سازندهٔ صف ارسال، کاتالوگ زنده را فوراً می‌خوانند؛ نوشتن فیزیکی profiles فقط تا آزادشدن قفل عقب می‌افتد و سپس خودکار همگام می‌شود.',
+    'شمارندهٔ محصولات فعال از کاتالوگ فیلترشدهٔ واقعی محاسبه می‌شود، نه snapshot قدیمی داخل profiles.'
+  ]},
   {v:'10.675', t:'🏪 بستهٔ Excel همزمان برای همهٔ غرفه‌های باسلام', items:[
     'یک کلیک برای همهٔ غرفه‌های فعال/انتخاب‌شده، ZIP واحدی با پوشه و workbook مستقل هر vendor می‌سازد و قیمت، گردکردن، دسته و پیش‌فرض‌های همان غرفه را روی ردیف‌های خودش اعمال می‌کند.',
     'manifest و وضعیت انتظار هر غرفه مستقل و با vendor_id ذخیره می‌شود؛ نتیجه فقط در دفترچهٔ همان vendor تطبیق داده می‌شود و جدیدترین ردیفِ در انتظار بر خروجی‌های قدیمی اولویت دارد.',
