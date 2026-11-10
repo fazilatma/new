@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.684';
+const APP_VERSION = '10.685';
 
 
 if (!function_exists('str_starts_with')) {
@@ -10333,10 +10333,10 @@ function aiProductHasVariations(array $p): bool {
         foreach ($p['variation_groups'] as $g) {
             if (!is_array($g)) continue;
             $vals = $g['values'] ?? $g['options'] ?? [];
-            if (is_array($vals) && count(array_filter(array_map('strval', $vals))) > 0) return true;
+            if (is_array($vals) && count(array_filter(array_map('s4VariationScalarText', $vals))) > 0) return true;
         }
     }
-    if (trim((string)($p['variations_text'] ?? '')) !== '') return true;
+    if (is_scalar($p['variations_text']??'') && trim((string)$p['variations_text']) !== '') return true;
     return false;
 }
 
@@ -10528,7 +10528,7 @@ function aiApplyVariationsToProduct(array $p, $rawVars): array {
         if ($nv['text'] !== '') $p['variations_text'] = $nv['text'];
     } else {
         /* فقط variations_text را غنی کن اگر خالی است */
-        if (trim((string)($p['variations_text'] ?? '')) === '' && $nv['text'] !== '') {
+        if ((!is_scalar($p['variations_text']??'') || trim((string)$p['variations_text']) === '') && $nv['text'] !== '') {
             $p['variations_text'] = $nv['text'];
         }
         if (empty($p['variation_groups']) && $nv['groups']) $p['variation_groups'] = $nv['groups'];
@@ -10728,7 +10728,7 @@ function aiFillProductContent(array $p, bool $webSearch = true, bool $mapBsl = t
                     $changed = true;
                     $needVar = false;
                     unset($p['ai_var_fail_at']);
-                } elseif ($before && trim((string)($p['variations_text'] ?? '')) !== '') {
+                } elseif ($before && is_scalar($p['variations_text']??'') && trim((string)$p['variations_text']) !== '') {
                     $changed = true;
                 }
             } elseif ($needVar) {
@@ -11123,10 +11123,7 @@ function aiGenerateProductDescriptionAndCategory(string $title, bool $webSearch 
     // Build Prompt — v10.98: تنوع‌ها (رنگ/سایز/…) هم خواسته می‌شود
     $ctxBits = '';
     if (is_array($productCtx)) {
-        $exVar = trim((string)($productCtx['variations_text'] ?? ''));
-        if ($exVar === '' && !empty($productCtx['variations']) && is_array($productCtx['variations'])) {
-            $exVar = implode('، ', array_map('strval', $productCtx['variations']));
-        }
+        $exVar = s4ProductVariationsText($productCtx);
         if ($exVar !== '') $ctxBits .= "تنوع‌های از قبل استخراج‌شده از مبدأ: {$exVar}\n";
         $brand = trim((string)($productCtx['brand'] ?? ''));
         if ($brand !== '') $ctxBits .= "برند: {$brand}\n";
@@ -13925,17 +13922,41 @@ function wooRemoteContent(array $ex): array {
  * با قیمتِ تعدیل‌شده تبدیل می‌کند تا هم در ووکامرس (products/{id}/variations/batch)
  * و هم در باسلام (آرایهٔ استاندارد variants در OpenAPI با fallback هوشمند) ارسال شوند.
  */
+/** Convert heterogeneous stored/API variation rows without ever casting an
+ * array to the literal string "Array" shown by destination product panels. */
+function s4VariationScalarText($value):string{
+    if(is_scalar($value)){$text=trim((string)$value);return strcasecmp($text,'array')===0?'':$text;}
+    if(!is_array($value))return'';foreach(['option','value','title','name','label','value_title']as$key)if(array_key_exists($key,$value)){$text=s4VariationScalarText($value[$key]);if($text!=='')return$text;}return'';
+}
+function s4VariationAttributeMap(array $row):array{
+    $out=[];$sets=[];foreach(['attributes','properties','attribute_values']as$key)if(is_array($row[$key]??null))$sets[]=$row[$key];
+    foreach($sets as$set)foreach($set as$key=>$attr){if(!is_array($attr)){$name=is_string($key)?trim($key):'';$value=s4VariationScalarText($attr);if($name!==''&&$value!=='')$out[$name]=$value;continue;}$name=s4VariationScalarText($attr['property']??$attr['attribute']??($attr['name']??$attr['label']??$attr['key']??''));$value=s4VariationScalarText($attr['option']??$attr['value']??$attr['value_title']??'');if($name===''&&is_string($key))$name=trim($key);if($name!==''&&$value!=='')$out[$name]=$value;}
+    foreach(['color'=>'رنگ','size'=>'سایز','material'=>'جنس','model'=>'مدل']as$key=>$label)if(array_key_exists($key,$row)){ $value=s4VariationScalarText($row[$key]);if($value!=='')$out[$label]=$value;}
+    if(!$out){$title=s4VariationScalarText($row['title']??$row['name']??$row['label']??'');if($title!=='')$out['مدل']=$title;}
+    return$out;
+}
+function s4StructuredVariationCombinations(array $p):array{
+    $raw=[];foreach(['variations','variants','product_variations','selectable_variations']as$key)if(is_array($p[$key]??null)&&$p[$key]){$raw=$p[$key];break;}if(isset($raw['data'])&&is_array($raw['data']))$raw=$raw['data'];if(!$raw)return[];$out=[];
+    foreach(array_slice(array_values($raw),0,40)as$row){if(is_scalar($row)){$value=s4VariationScalarText($row);if($value!=='')$out[]=['attributes'=>['مدل'=>$value]];continue;}if(!is_array($row))continue;$attrs=s4VariationAttributeMap($row);if(!$attrs)continue;$price=0;foreach(['display_price','price','primary_price','sale_price']as$key)if(isset($row[$key])&&is_numeric($row[$key])&&(float)$row[$key]>0){$price=(int)round((float)$row[$key]);break;}$stock=max(0,(int)($row['stock']??$row['inventory']??$p['stock']??0));$inStock=array_key_exists('in_stock',$row)?!empty($row['in_stock']):(array_key_exists('is_in_stock',$row)?!empty($row['is_in_stock']):$stock>0);$id=(int)($row['variation_id']??$row['variant_id']??$row['id']??0);$out[]=['id'=>$id,'variation_id'=>$id,'attributes'=>$attrs,'price'=>$price,'stock'=>$stock,'in_stock'=>$inStock,'sku'=>(string)($row['sku']??'')];}
+    return$out;
+}
+function s4ProductVariationsText(array $p):string{
+    $copy=$p;$copy['variations_text']='';$attrs=wooVariationAttributes($copy,true);$parts=[];foreach($attrs as$attr){$values=array_values(array_filter(array_map('s4VariationScalarText',(array)($attr['options']??[]))));if($values)$parts[]=trim((string)($attr['name']??'ویژگی')).': '.implode('، ',$values);}if($parts)return implode(' | ',$parts);
+    $stored=$p['variations_text']??'';$raw=is_scalar($stored)?trim((string)$stored):'';if($raw===''||strcasecmp($raw,'array')===0)return'';if(($raw[0]??'')==='['||($raw[0]??'')==='{'){$decoded=@json_decode($raw,true);if(is_array($decoded)){$normalized=aiNormalizeVariations($decoded);return trim((string)($normalized['text']??''));}}return$raw;
+}
 function wooVariationAttributes(array $p, bool $forVariable = true): array {
     $groups = $p['variation_groups'] ?? null;
     if (!is_array($groups) || !$groups) {
         $combs = is_array($p['variation_combinations'] ?? null) ? $p['variation_combinations'] : [];
+        if(!$combs)$combs=s4StructuredVariationCombinations($p);
         if ($combs) {
             $byAttr = [];
             foreach ($combs as $cb) {
                 if (!is_array($cb)) continue;
                 foreach ((array)($cb['attributes'] ?? []) as $an => $av) {
-                    $an = trim((string)$an);
-                    $av = trim((string)$av);
+                    if(is_array($av)){$an=s4VariationScalarText($av['name']??$av['property']??$av['attribute']??$an);$av=s4VariationScalarText($av['option']??$av['value']??$av['title']??'');}
+                    $an = is_string($an)?trim($an):'';
+                    $av = s4VariationScalarText($av);
                     if ($an === '' || $av === '') continue;
                     if (!isset($byAttr[$an])) $byAttr[$an] = [];
                     if (!in_array($av, $byAttr[$an], true)) $byAttr[$an][] = $av;
@@ -13960,7 +13981,7 @@ function wooVariationAttributes(array $p, bool $forVariable = true): array {
     foreach ($groups as $g) {
         if (!is_array($g)) continue;
         $vals = array_values(array_unique(array_filter(array_map(
-            fn($v) => trim((string)$v), (array)($g['values'] ?? [])))));
+            's4VariationScalarText', (array)($g['values'] ?? $g['options'] ?? [])))));
         if (!$vals) continue;
         $name = trim((string)($g['name'] ?? ''));
         if ($name === '') $name = 'ویژگی ' . ($pos + 1);
@@ -14005,14 +14026,16 @@ function s4BuildProductVariationMatrix(array $p, int $destBasePrice, int $defaul
     }
     $rows = [];
     $combs = is_array($p['variation_combinations'] ?? null) ? $p['variation_combinations'] : [];
+    if(!$combs)$combs=s4StructuredVariationCombinations($p);
     if ($combs) {
         foreach (array_slice($combs, 0, 40) as $cb) {
             if (!is_array($cb) || empty($cb['attributes']) || !is_array($cb['attributes'])) continue;
             $pairList = [];
             $posIdx = 0;
             foreach ($cb['attributes'] as $an => $av) {
-                $an = trim((string)$an);
-                $av = trim((string)$av);
+                if(is_array($av)){$an=s4VariationScalarText($av['name']??$av['property']??$av['attribute']??$an);$av=s4VariationScalarText($av['option']??$av['value']??$av['title']??'');}
+                $an = is_string($an)?trim($an):'';
+                $av = s4VariationScalarText($av);
                 if ($av === '') continue;
                 if ($an === '' || isset($attrs[$posIdx])) {
                     $matched = false;
@@ -14033,12 +14056,14 @@ function s4BuildProductVariationMatrix(array $p, int $destBasePrice, int $defaul
             $cPriceToman = (int)round((float)($cb['price'] ?? 0));
             if ($srcUnitIsRial && $cPriceToman > 0) $cPriceToman = (int)round($cPriceToman / 10);
             $inStk = !array_key_exists('in_stock', $cb) || !empty($cb['in_stock']);
+            $rowStock=array_key_exists('stock',$cb)?max(0,(int)$cb['stock']):max(0,$defaultStock);
             $rows[] = [
                 'attributes' => $pairList,
                 'price'      => $scalePrice($cPriceToman),
-                'stock'      => $inStk ? max(1, $defaultStock) : 0,
+                'stock'      => $inStk ? $rowStock : 0,
                 'in_stock'   => $inStk,
                 'sku'        => trim((string)($cb['sku'] ?? '')),
+                'source_variation_id' => (int)($cb['variation_id'] ?? $cb['variant_id'] ?? $cb['id'] ?? 0),
             ];
         }
         if ($rows) return $rows;
@@ -14538,25 +14563,8 @@ function bslBuildUnifiedDescription(array $p, string $fallbackTitle = ''): array
     if ($longPlain !== '')  $parts[] = $longPlain;
     $unified = implode("\n\n", $parts);
 
-    /* درج تنوع‌ها به‌صورت متن ساده و خوانا (بدون هیچ تگ HTML) */
-    $varTxt = trim((string)($p['variations_text'] ?? ''));
-    if ($varTxt === '' && !empty($p['variations']) && is_array($p['variations'])) {
-        $flatVars = [];
-        foreach ($p['variations'] as $vr) {
-            if (is_scalar($vr)) {
-                $vt = trim((string)$vr);
-                if ($vt !== '') $flatVars[] = $vt;
-            } elseif (is_array($vr)) {
-                $vt = trim((string)($vr['label'] ?? $vr['title'] ?? $vr['value'] ?? $vr['name'] ?? ''));
-                if ($vt !== '') $flatVars[] = $vt;
-            }
-        }
-        if ($flatVars) $varTxt = implode('، ', array_values(array_unique($flatVars)));
-    }
-    if ($varTxt === '' && !empty($p['variation_groups']) && is_array($p['variation_groups'])) {
-        $nv = function_exists('aiNormalizeVariations') ? aiNormalizeVariations($p['variation_groups']) : ['text' => ''];
-        $varTxt = trim((string)($nv['text'] ?? ''));
-    }
+    /* درج تنوع‌ها به‌صورت متن ساده و خوانا؛ ساختارهای تو‌در‌تو هرگز به Array تبدیل نمی‌شوند. */
+    $varTxt=s4ProductVariationsText($p);
     if ($varTxt !== '') {
         $varTxt = trim((string)(preg_replace('~\s+~u', ' ', s4HtmlToPlainTextForBsl($varTxt)) ?? $varTxt));
     }
@@ -28306,7 +28314,7 @@ function s4BslExcelExport(array $args):array{
         if(!$included){$zip->close();@unlink($masterPath);@rmdir($masterDir);return['ok'=>false,'error'=>'no_unmapped_products'];}$zip->addFromString('manifest.json',json_encode(['created_at'=>time(),'scope'=>(string)($args['scope']??'profile'),'included'=>$included,'skipped'=>$skipped],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT));$zip->close();foreach($children as$child){foreach(glob($child['dir'].'/*')?:[]as$f)@unlink($f);@rmdir($child['dir']);}return['ok'=>true,'path'=>$masterPath,'filename'=>$masterId.'.zip','mime'=>'application/zip','export_id'=>$masterId,'count'=>$total,'shops'=>count($included),'all_shops'=>true];}
     $picked=s4BslExcelProfileProducts(trim((string)($args['profile']??'')),(string)($args['scope']??'profile'),(array)($args['filters']??[]));if(empty($picked['ok']))return$picked;$profile=$picked['profile'];$vendor=max(0,(int)($args['vendor_id']??0));$batch=max(50,min(2000,(int)($args['batch_size']??500)));$includeMapped=!empty($args['include_mapped']);$cn=loadConnections();$bc=(array)($cn['basalam']??[]);if($vendor<=0)$vendor=(int)($bc['vendor_id']??0);$prep=max(1,(int)($bc['preparation_days']??3));$defaultStock=max(0,(int)($bc['stock']??10));$defaultWeight=max(1,(int)($bc['weight']??500));$defaultPack=max(0,(int)($bc['package_weight']??0));$ledger=remoteMapLoad()['bsl']??[];$shopCfg=['vendor_id'=>$vendor,'is_default'=>true,'price_mode'=>(string)($bc['price_mode']??'none'),'price_val'=>(float)($bc['price_val']??0),'price_round'=>(int)($bc['price_round']??0)];foreach(bslAllShops($cn)as$knownShop)if((int)($knownShop['vendor_id']??0)===$vendor){$shopCfg=$knownShop;break;}$shopName=(string)($shopCfg['shop_name']??('غرفه '.$vendor));$prep=max(1,(int)($shopCfg['preparation_days']??$prep));$defaultStock=max(0,(int)($shopCfg['stock']??$defaultStock));$defaultWeight=max(1,(int)($shopCfg['weight']??$defaultWeight));$defaultPack=max(0,(int)($shopCfg['package_weight']??$defaultPack));
     $headers=['عنوان','قیمت (تومان)','موجودی','شناسه دسته‌بندی','توضیحات','توضیح کوتاه','وزن (گرم)','وزن بسته‌بندی (گرم)','زمان آماده‌سازی (روز)','تصویر اصلی','گالری تصاویر','کد کالا','تنوع‌ها'];$rows=[];$entries=[];
-    foreach($picked['products']as$key=>$raw){if(!is_array($raw))continue;$mapKey=bslShopMapKey((string)$key,['vendor_id'=>$vendor]);if(!$includeMapped&&!empty($ledger[$mapKey]['id']))continue;$p=prepareForSend($profile,(string)$key,$raw);$sku=trim((string)($p['sku']??''));if($sku==='')$sku='S4-'.substr((string)$key,0,16);$cat=(int)($shopCfg['category_id']??0);if($cat<=0)$cat=(int)($profile['bslCategoryId']??0);if($cat<=0)$cat=(int)($p['bsl_category_id']??0);$stock=is_numeric($p['stock']??null)?max(0,(int)$p['stock']):$defaultStock;$weight=is_numeric($p['weight']??null)&&((int)$p['weight'])>0?(int)$p['weight']:$defaultWeight;$pack=is_numeric($p['package_weight']??null)?max(0,(int)$p['package_weight']):$defaultPack;$images=array_values(array_unique(array_filter((array)($p['images']??[]))));$main=(string)($p['image']??($images[0]??''));$gallery=array_values(array_filter($images,fn($u)=>$u!==$main));$vars=$p['variations']??[];$varsText=is_array($vars)?json_encode($vars,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES):((string)$vars);$shopPrice=bslShopPriceForProfile($profile,$raw['price']??($p['final_price']??0),$shopCfg);$finalPrice=(int)($shopPrice['price']??0);if($finalPrice<=0)continue;
+    foreach($picked['products']as$key=>$raw){if(!is_array($raw))continue;$mapKey=bslShopMapKey((string)$key,['vendor_id'=>$vendor]);if(!$includeMapped&&!empty($ledger[$mapKey]['id']))continue;$p=prepareForSend($profile,(string)$key,$raw);$sku=trim((string)($p['sku']??''));if($sku==='')$sku='S4-'.substr((string)$key,0,16);$cat=(int)($shopCfg['category_id']??0);if($cat<=0)$cat=(int)($profile['bslCategoryId']??0);if($cat<=0)$cat=(int)($p['bsl_category_id']??0);$stock=is_numeric($p['stock']??null)?max(0,(int)$p['stock']):$defaultStock;$weight=is_numeric($p['weight']??null)&&((int)$p['weight'])>0?(int)$p['weight']:$defaultWeight;$pack=is_numeric($p['package_weight']??null)?max(0,(int)$p['package_weight']):$defaultPack;$images=array_values(array_unique(array_filter((array)($p['images']??[]))));$main=(string)($p['image']??($images[0]??''));$gallery=array_values(array_filter($images,fn($u)=>$u!==$main));$varsText=s4ProductVariationsText($p);$shopPrice=bslShopPriceForProfile($profile,$raw['price']??($p['final_price']??0),$shopCfg);$finalPrice=(int)($shopPrice['price']??0);if($finalPrice<=0)continue;
         $rows[]=[(string)$p['title'],$finalPrice,$stock,$cat,trim(strip_tags((string)$p['long_desc'])),trim(strip_tags((string)$p['short_desc'])),$weight,$pack,$prep,$main,implode("\n",$gallery),$sku,$varsText];
         $entries[]=['key'=>(string)$key,'map_key'=>$mapKey,'title'=>(string)$p['title'],'title_norm'=>s4BslExcelNorm((string)$p['title']),'sku'=>$sku,'vendor_id'=>$vendor,'profile_key'=>$picked['key'],'status'=>'awaiting_import','remote_id'=>0];
     }
@@ -34978,6 +34986,8 @@ function prepareForSend(array $profile, string $key, array $p): array {
     }
     $unit = (mb_strpos($raw, 'ریال') !== false || mb_strpos($raw, 'ر.ی') !== false)
           ? 'rial' : 'toman';
+    $variationCombinations=is_array($p['variation_combinations']??null)?$p['variation_combinations']:[];
+    if(!$variationCombinations)$variationCombinations=s4StructuredVariationCombinations($p);
     return [
         'key'         => $key,
         'title'       => $title,
@@ -35005,9 +35015,8 @@ function prepareForSend(array $profile, string $key, array $p): array {
         'variations'             => is_array($p['variations'] ?? null) ? $p['variations'] : [],
         'variation_groups'       => is_array($p['variation_groups'] ?? null) ? $p['variation_groups'] : [],
         'variation_prices'       => is_array($p['variation_prices'] ?? null) ? $p['variation_prices'] : [],
-        'variation_combinations' => is_array($p['variation_combinations'] ?? null) ? $p['variation_combinations'] : [],
-        'variations_text'  => (string)($p['variations_text']
-                              ?? (is_array($p['variations'] ?? null) ? json_encode($p['variations'], JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES) : '')),
+        'variation_combinations' => $variationCombinations,
+        'variations_text'  => s4ProductVariationsText($p),
     ];
 }
 
@@ -50617,6 +50626,34 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$__coverageRows=bslUpgradeDefaultOnlyFastRows($queue,$__selectionCn)')!==false
         &&strpos($selfSrc,"{v:'10." . "684'")!==false
         &&version_compare(APP_VERSION,'10.684','>='));
+    $__basalamRaw685=[
+        'id'=>68501,'title'=>'پیراهن آزمایشی','primary_price'=>2500000,'inventory'=>7,
+        'variants'=>[
+            ['id'=>11,'primary_price'=>2500000,'inventory'=>3,'sku'=>'RED-M','attributes'=>[
+                ['property'=>['title'=>'رنگ'],'value'=>['title'=>'قرمز']],
+                ['attribute'=>['title'=>'سایز'],'value_title'=>'M'],
+            ]],
+            ['id'=>12,'primary_price'=>2700000,'inventory'=>0,'sku'=>'BLUE-L','attributes'=>[
+                ['property'=>['title'=>'رنگ'],'value'=>['title'=>'آبی']],
+                ['attribute'=>['title'=>'سایز'],'value'=>['title'=>'L']],
+            ]],
+        ],
+    ];
+    $__mapped685=basalamApiProductMap($__basalamRaw685);$__prepared685=prepareForSend([], 'basalam-685', $__mapped685);$__payload685=bslBuildVariantsPayload($__prepared685,2500000,7);$__text685=s4ProductVariationsText($__prepared685);$__encoded685=json_encode([$__payload685,$__text685],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+    $add('10.685','تنوع‌های تو‌در‌توی مبدأ باسلام به گزینه‌های واقعی مقصد تبدیل می‌شوند',
+        count($__payload685)===2
+        &&(int)($__prepared685['variation_combinations'][0]['variation_id']??0)===11
+        &&($__payload685[0]['properties'][0]['property']??'')==='رنگ'
+        &&($__payload685[0]['properties'][0]['value']??'')==='قرمز'
+        &&($__payload685[0]['properties'][1]['value']??'')==='M'
+        &&($__payload685[0]['primary_price']??0)===2500000
+        &&($__payload685[0]['stock']??-1)===3
+        &&($__payload685[0]['sku']??'')==='RED-M'
+        &&($__payload685[1]['stock']??-1)===0
+        &&strpos((string)$__encoded685,'Array')===false
+        &&strpos($__text685,'رنگ: قرمز، آبی')!==false
+        &&strpos($selfSrc,"{v:'10." . "685'")!==false
+        &&version_compare(APP_VERSION,'10.685','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -103634,6 +103671,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.685', t:'🧩 بازسازی صحیح تنوع‌های مبدأ باسلام', items:[
+    'ردیف‌های تو‌در‌توی variants باسلام اکنون به گروه‌های ویژگی و ترکیب‌های واقعی با نام و مقدار معنادار تبدیل می‌شوند و دیگر متن PHP یعنی Array وارد گزینه‌ها نمی‌شود.',
+    'قیمت، موجودی، وضعیت موجودبودن و SKU هر ترکیب در ماتریس حفظ و در payload ساخت/ویرایش باسلام و تنوع‌های ووکامرس استفاده می‌شود.',
+    'متن تنوع و توضیحات از نمایش خوانای گروه‌ها ساخته می‌شود؛ JSON تو‌در‌تو یا واژهٔ Array دیگر به توضیح محصول نشت نمی‌کند.',
+    'آزمون رگرسیون رنگ/سایز، قیمت متفاوت، موجودی صفر و SKU را تا payload نهایی باسلام بررسی می‌کند.'
+  ]},
   {v:'10.684', t:'🏪 پوشش واقعی همهٔ غرفه‌ها در لین ۱', items:[
     'مسیر دوره‌ای لین ۱ دیگر نبودن send_shop_ids را به ارسال تک‌غرفه‌ای پیش‌فرض تبدیل نمی‌کند؛ null اکنون در همهٔ مسیرها صریحاً به معنی همهٔ غرفه‌های معتبر و دارای توکن است.',
     'درخواست مستقیم مرورگر انتخاب «همه» را همراه shop_picker_sync به سرور می‌فرستد و سرور مقدار null را نیز پایدار می‌کند؛ یک انتخاب ذخیره‌شدهٔ قدیمی دیگر درخواست صریح همهٔ غرفه‌ها را محدود نمی‌کند.',
