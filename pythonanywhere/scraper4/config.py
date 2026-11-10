@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 APP_NAME = "scraper4-pythonanywhere"
-VERSION = "1.20.0"
+VERSION = "1.21.0"
 
 # ریشهٔ پروژه: پوشه‌ای که wsgi.py و .env در آن هستند (pythonanywhere/)
 BASE_DIR = Path(os.environ.get("S4_BASE_DIR") or Path(__file__).resolve().parent.parent)
@@ -117,7 +117,7 @@ class Settings:
     base_dir: Path = field(default_factory=lambda: BASE_DIR)
     db_path: Path = field(default_factory=lambda: BASE_DIR / "data" / "scraper4.sqlite3")
     secret_key: str = ""
-    password: str = ""            # required; plaintext or Werkzeug password hash
+    password: str = ""            # required in password mode only
     timezone: str = "Asia/Tehran"
 
     fetch_timeout: int = 25
@@ -137,6 +137,8 @@ class Settings:
     auto_extract_minutes: int = 0     # 0 = خاموش (استخراجِ دوره‌ای)
     tick_budget_seconds: int = 240    # سقفِ زمانِ هر تیک
     worker_stale_seconds: int = 900   # ردیفِ running بدونِ نبض → بازگشت به صف
+
+    access_mode: str = "password"  # owner CLI opt-in: password | open
 
     @classmethod
     def load(cls, env_path: Path | str | None = None) -> "Settings":
@@ -161,6 +163,7 @@ class Settings:
             db_path=Path(os.environ.get("S4_DB") or (data_dir / "scraper4.sqlite3")),
             secret_key=os.environ.get("S4_SECRET_KEY") or "",
             password=os.environ.get("S4_PASSWORD") or "",
+            access_mode=os.environ.get("S4_ACCESS_MODE") or "password",
             timezone=os.environ.get("S4_TIMEZONE") or "Asia/Tehran",
             fetch_timeout=_int(os.environ.get("SCRAPER_FETCH_TIMEOUT"), 25),
             connect_timeout=_int(os.environ.get("SCRAPER_CONNECT_TIMEOUT"), 10),

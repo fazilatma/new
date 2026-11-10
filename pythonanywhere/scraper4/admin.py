@@ -145,6 +145,8 @@ def register_admin(app, db, settings):
 
     @bp.route('/api/auth/token', methods=['POST', 'DELETE'])
     def token():
+        if settings.access_mode=='open' and request.method=='POST':
+            return jsonify(ok=False,error='در حالت دسترسی باز نیازی به ساخت کلید نیست؛ کلید ماندگار تازه ساخته نمی‌شود.'),409
         # Creating/revoking automation credentials requires a browser login + CSRF.
         if not session.get('authenticated') or request.environ.get('s4.bearer'):
             abort(403)

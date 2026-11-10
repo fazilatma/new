@@ -25,6 +25,8 @@ def register_cron(app, db, settings):
 
     @bp.route('/api/cron/token', methods=['POST', 'DELETE'])
     def token():
+        if settings.access_mode=='open' and request.method=='POST':
+            return jsonify(ok=False,error='در حالت دسترسی باز نیازی به ساخت کلید نیست؛ کلید ماندگار تازه ساخته نمی‌شود.'),409
         if not session.get('authenticated') or request.environ.get('s4.bearer'):
             abort(403)
         if request.method == 'DELETE':

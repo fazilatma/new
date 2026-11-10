@@ -152,6 +152,25 @@ from pathlib import Path
 (Path(sys.argv[1]) / '.release.json').write_text(json.dumps({'commit': sys.argv[2]}))
 PYRELEASE
 
+# Explicit owner-only stale-maintenance recovery after a full CLI installation.
+# FD9 was acquired before copying any code and is inherited by this subprocess.
+if [[ "${S4_RECOVER_MAINTENANCE:-0}" == 1 ]]; then
+  if [[ -z "${LOCK_PATH:-}" ]]; then
+    echo "Recovery requires an existing installation and its worker lock." >&2
+    exit 1
+  fi
+  (cd "$APP_DIR" && "$VENV/bin/python" - <<'PYRECOVER'
+import json
+from scraper4.config import Settings
+from scraper4.db import DB
+from scraper4.services.owner_install import finish_recovery
+cfg=Settings.load()
+result=finish_recovery(DB(cfg.db_path,cfg.secret_key),cfg,lock_fd=9)
+print(json.dumps(result))
+PYRECOVER
+  )
+fi
+
 # Reuse the encrypted on-server credential. No CLI token prompt or Task needed.
 # Check the actual running build so a successful download cannot look like a
 # successful deployment when Web still imports an old directory.

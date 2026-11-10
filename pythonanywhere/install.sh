@@ -60,18 +60,24 @@ if [[ ! -x "$VENV/bin/python" ]]; then "$PYTHON_BIN" -m venv "$VENV"; fi
 cd "$APP_DIR"
 "$VENV/bin/python" - <<'PY'
 from pathlib import Path
+import os
 import secrets
 from scraper4.config import load_env_file
 from werkzeug.security import generate_password_hash
 p = Path('.env')
 if not p.exists():
     p.write_text(Path('.env.example').read_text(encoding='utf-8'), encoding='utf-8')
+requested_access = os.environ.get('S4_ACCESS_MODE')
+if requested_access is not None and requested_access not in ('password','open'):
+    raise SystemExit('S4_ACCESS_MODE must be password or open')
 values = load_env_file(p)
 import os
 additions = []
+if requested_access is not None and values.get('S4_ACCESS_MODE')!=requested_access:
+    additions.append('S4_ACCESS_MODE='+requested_access)
 if not os.environ.get('S4_SECRET_KEY'):
     additions.append('S4_SECRET_KEY=' + secrets.token_urlsafe(48))
-if not os.environ.get('S4_PASSWORD'):
+if os.environ.get('S4_ACCESS_MODE','password')!='open' and not os.environ.get('S4_PASSWORD'):
     password = secrets.token_urlsafe(20)
     additions.append('S4_PASSWORD=' + generate_password_hash(password))
     # Print once to the private terminal, never to a tracked file or URL.

@@ -2,8 +2,8 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),zlib=require('node:zlib');
 const {spawn}=require('node:child_process'),{chromium:playwright}=require('playwright-core'),chromium=require('@sparticuz/chromium').default;
 const root=path.resolve(__dirname,'../..');
-async function setup(t,mode=""){
- const server=spawn('python3',[path.join(__dirname,'server.py')],{cwd:root,env:{...process.env,PYTHONPATH:path.join(root,'pythonanywhere'),S4_BROWSER_EXTRACTION_FIXTURE:mode},stdio:['ignore','pipe','pipe']});let log='';server.stderr.on('data',s=>log+=s);t.after(()=>server.kill());
+async function setup(t,mode="",open=false){
+ const server=spawn('python3',[path.join(__dirname,'server.py')],{cwd:root,env:{...process.env,PYTHONPATH:path.join(root,'pythonanywhere'),S4_BROWSER_EXTRACTION_FIXTURE:mode,S4_BROWSER_OPEN:open?'1':''},stdio:['ignore','pipe','pipe']});let log='';server.stderr.on('data',s=>log+=s);t.after(()=>server.kill());
  const port=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Flask startup timeout: '+log)),15000);server.once('exit',code=>{clearTimeout(timer);reject(Error('Flask exited '+code+': '+log));});server.stdout.once('data',s=>{clearTimeout(timer);try{resolve(JSON.parse(s).port);}catch(e){reject(e);}});});
  // On non-Lambda Linux these three libraries may not be installed. The pinned
  // npm package already ships them. No OS install/network dependency is needed.
@@ -13,6 +13,7 @@ async function setup(t,mode=""){
  const {execFileSync}=require('node:child_process');execFileSync('tar',['-xf',tar,'-C',libDir]);
  const browser=await playwright.launch({headless:true,executablePath:await chromium.executablePath(),args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu'],env:{...process.env,LD_LIBRARY_PATH:[path.join(libDir,'lib'),process.env.LD_LIBRARY_PATH||''].join(':')}});t.after(()=>browser.close());
  const page=await browser.newPage(),origin='http://127.0.0.1:'+port;
+ if(open){await page.goto(origin+'/');await page.waitForLoadState('networkidle');return {page,origin,log:()=>log};}
  await page.goto(origin+'/login');await page.locator('[name=password]').fill('test');await Promise.all([page.waitForURL(origin+'/'),page.locator('form button').click()]);await page.waitForLoadState('networkidle');
  return {page,origin,log:()=>log};
 }
@@ -229,4 +230,16 @@ for(const route of ['/','/php-ui'])test('all-profile synchronization audit and s
  await page.locator('#shared-php-probe-all').click();await page.locator('#shared-php-status').filter({hasText:'پایان بررسی'}).waitFor();report=JSON.parse(await page.locator('#shared-php-preview').inputValue());assert.equal(report.complete,true);assert.equal(report.live_probe_count,2);assert.equal(probes.length,3);assert.ok(report.profiles.every(p=>['passed','empty'].includes(p.live_probe.status)));assert.ok(report.profiles.some(p=>p.live_probe.status==='passed'));
  const event=page.waitForEvent('download');await page.locator('#shared-php-download').click();const download=await event;assert.equal(download.suggestedFilename(),'scraper4-synchronization-all.json');const content=fs.readFileSync(await download.path(),'utf8');assert.deepEqual(JSON.parse(content),report);assert.ok(!/PIPELINE-PRIVATE|https:\/\/example.com|csrf|consumer_secret/.test(content));
  assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);assert.deepEqual(errors,[]);
+});
+
+
+for(const route of ['/','/php-ui'])test('owner open mode in '+route+' needs no login, API token, CSRF or persistent admin cookie',{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'pipeline',true),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+ await page.goto(origin+route);if(route==='/php-ui'){const f=page.frameLocator('#php-original-ui');await f.locator('html[data-s4-ready="1"]').waitFor();const child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await child.evaluate(()=>toggleSettingsPanel());await f.locator('[data-python-panel="shared-workspace"]').click();}else assert.match(await page.locator('header').innerText(),/دسترسی باز/);
+ assert.equal(await page.locator('meta[name=csrf]').getAttribute('content'),'');await page.locator('#shared-php-profile').selectOption('1');await page.locator('#shared-php-report').click();await page.locator('#shared-php-download').waitFor();assert.ok(JSON.parse(await page.locator('#shared-php-preview').inputValue()).pipeline);
+ const read=await page.request.post(origin+'/api/php-ui/read',{data:{action:'python_sync_audit',fields:{},query:{}}});assert.equal(read.status(),200);assert.ok((await read.json()).profiles.length===2);
+ const before=await(await page.request.get(origin+'/__test__/extract-state')).json();
+ const probe=await page.request.post(origin+'/api/extraction/probe',{data:{profile_id:1}});assert.equal(probe.status(),200);assert.equal((await probe.json()).report.status,'passed');
+ assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);
+ assert.equal((await page.request.get(origin+'/api/deploy/run')).status(),401);assert.equal((await page.context().cookies()).filter(c=>c.name==='session').length,0);assert.deepEqual(errors,[]);
 });

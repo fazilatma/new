@@ -11,7 +11,7 @@ from scraper4.config import Settings
 
 with TemporaryDirectory(prefix='s4-real-browser-') as folder:
     base=Path(folder)
-    app=create_app(Settings(base_dir=base,db_path=base/'ui.db',secret_key='temporary-browser-fixture',password='test'))
+    app=create_app(Settings(base_dir=base,db_path=base/'ui.db',secret_key='temporary-browser-fixture',password='' if os.environ.get('S4_BROWSER_OPEN')=='1' else 'test',access_mode='open' if os.environ.get('S4_BROWSER_OPEN')=='1' else 'password'))
     db=app.extensions['s4_db']
     p=db.upsert_profile('one','https://example.com/shop','مرجع آزمایشی',selectors={'container':'.product','title':'h2'})
     db.upsert_product(p['id'],'a',{'title':'محصول آزمایشی','price_num':1000})

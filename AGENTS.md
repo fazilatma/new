@@ -83,3 +83,15 @@ uses the existing code-only snapshot rollback under the worker lock, and optiona
 queues. See tools/RECOVERY.fa.md. Do not suggest the plain maintain CLI for a
 no-queue recovery: it invokes tick afterwards. A CLI WSGI/source probe is NOT an
 external authenticated HTTP test; record that transport distinction explicitly.
+
+## Owner-selected no-login mode
+The latest user explicitly requests removal of everyday login/API-token/CSRF
+friction. `S4_ACCESS_MODE=open` is an owner-console opt-in shared by both UIs and
+working APIs; it does not change the deployment signing key, TLS, source URL
+validation, frame isolation, queue ownership or ambiguous-send retry rules.
+Do not persist a public-mode admin session cookie or grant one that survives
+switching back to password mode. Keep existing encryption keys/service credentials
+so connections are not lost. This auth-mode change is CLI-only: do NOT relay it
+through the signed HTTP code deployer. The one-time CLI bootstrap can explicitly
+recover stale maintenance after full installed-code validation under its held
+worker lock with `S4_RECOVER_MAINTENANCE=1`; no tick/queue execution follows.

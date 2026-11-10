@@ -24,7 +24,9 @@ def create_app(settings=None):
     settings = settings or Settings.load()
     settings.ensure_dirs()
     settings.ensure_secret()
-    if not settings.password:
+    if settings.access_mode not in ('password','open'):
+        raise RuntimeError('S4_ACCESS_MODE must be password or open.')
+    if settings.access_mode=='password' and not settings.password:
         raise RuntimeError('S4_PASSWORD is required. Run pythonanywhere/install.sh first.')
     app = Flask(__name__)
     app.config.update(SECRET_KEY=settings.secret_key, MAX_CONTENT_LENGTH=2 * 1024 * 1024,
@@ -40,6 +42,7 @@ def create_app(settings=None):
     failures = defaultdict(list)
 
     def csrf():
+        if settings.access_mode=='open':return ''
         if 'csrf' not in session:
             session['csrf'] = secrets.token_urlsafe(32)
         return session['csrf']
@@ -50,7 +53,7 @@ def create_app(settings=None):
     def build_context():
         from .services.scraping.engines import ENGINES, profile_engine
         from .services.settings_transfer import SECTIONS, MAX_FILE
-        return {'app_version': VERSION, 'app_commit': str(loaded_release.get('commit') or 'local')[:12],
+        return {'open_access':settings.access_mode=='open','app_version': VERSION, 'app_commit': str(loaded_release.get('commit') or 'local')[:12],
                 'app_build': str(loaded_release.get('commit') or ''), 'settings_menu': SETTINGS_MENU, 'transfer_sections': SECTIONS, 'max_file_bytes': MAX_FILE, 'engine_choices': ENGINES, 'profile_engine': profile_engine}
 
 
@@ -64,6 +67,20 @@ def create_app(settings=None):
         if request.endpoint in ('admin.health', 'deploy.run'):
             # deploy.run validates its own Ed25519 release proof, never a public
             # cron key or session/CSRF bypass for any other route.
+            return
+        if settings.access_mode=='open':
+            # Explicit owner-console opt-in. Existing browser-only controllers
+            # share a REQUEST-ONLY local context, never a persistent admin cookie.
+            request.environ['s4.open_original_auth']=('authenticated' in session,session.get('authenticated'))
+            session['authenticated']=True
+            request.environ['s4.open_access']=True
+            # GET cron is still an opt-in execution trigger, not a read/HEAD.
+            # Maintenance, source validation, queue locks and signed deployment
+            # remain unchanged. No API key, login or CSRF is needed in open mode.
+            if request.endpoint=='cron.run' and request.method in ('GET','HEAD'):
+                if db.checkpoint_read('cron:config').get('public_get') is not True:
+                    return jsonify(ok=False,error='Public GET cron is disabled; use POST or enable it in settings'),403
+                if request.method=='HEAD':return app.response_class(status=200)
             return
         if request.endpoint == 'cron.run' and request.method in ('GET', 'HEAD'):
             if db.checkpoint_read('cron:config').get('public_get') is not True:
@@ -112,6 +129,11 @@ def create_app(settings=None):
 
     @app.after_request
     def headers(response):
+        original=request.environ.get('s4.open_original_auth')
+        if original is not None:
+            existed,value=original
+            if existed:session['authenticated']=value
+            else:session.pop('authenticated',None)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' https:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
@@ -139,6 +161,7 @@ def create_app(settings=None):
 
     @app.route('/login', methods=['GET', 'POST'])
     def login():
+        if settings.access_mode=='open':return redirect(url_for('dashboard'))
         error = ''
         if request.method == 'POST':
             # WSGI-local throttling; configure platform/WAF rate limits for shared deployments.

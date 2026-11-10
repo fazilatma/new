@@ -410,7 +410,7 @@ def selftest(db, settings, network=False):
     from .scraping.css_to_xpath import css_to_xpath
     checks = [dict(name='database', ok=isinstance(db.stats()['products'], int)),
               dict(name='secret', ok=bool(settings.secret_key)),
-              dict(name='password', ok=bool(settings.password)),
+              dict(name='password_or_explicit_open_mode', ok=settings.access_mode=='open' or bool(settings.password)),
               dict(name='selectors', ok=bool(css_to_xpath('.product'))),
               dict(name='pagination', ok=build('https://t.test/shop', 'https://t.test/shop', 2,
                    'path_pattern', '~page~{page}') == 'https://t.test/shop~page~2')]
