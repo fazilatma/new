@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.666';
+const APP_VERSION = '10.667';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26989,7 +26989,20 @@ function s4BasalamBestSellersTick(string $source='cron',bool $force=false):array
         $d['last_action']='discovered '.count($fresh).' products at offset '.$offset;$d['last_error']='';s4BasalamBestSellersSave($d);return['ok'=>true,'source'=>$source,'action'=>'discovered','rows'=>count($fresh),'offset'=>$d['offset'],'reported_total'=>$total,'saved_count'=>$d['saved_count']];
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
-function s4BasalamBestSellersStatus():array{$d=s4BasalamBestSellersLoad();$d['verify_pending']=count((array)$d['verify_queue']);unset($d['known_ids'],$d['verify_queue']);$d['ok']=true;$d['profile_title']='باسلام -پرفروش ها';$d['profile_key']=s4BasalamBestSellersProfileKey();$d['version']=APP_VERSION;return$d;}
+function s4BasalamBestSellersStatus(int $page=1,int $pageSize=50):array{
+    $d=s4BasalamBestSellersLoad();$d['verify_pending']=count((array)$d['verify_queue']);unset($d['known_ids'],$d['verify_queue']);$d['ok']=true;$d['profile_title']='باسلام -پرفروش ها';$d['profile_key']=s4BasalamBestSellersProfileKey();$d['version']=APP_VERSION;
+    $page=max(1,$page);$pageSize=max(10,min(100,$pageSize));$profiles=loadProfiles();$profile=is_array($profiles[$d['profile_key']]??null)?$profiles[$d['profile_key']]:[];$products=array_values(is_array($profile['products']??null)?$profile['products']:[]);
+    usort($products,function($a,$b){$as=(int)($a['sales_count_exact']??$a['sales_count']??0);$bs=(int)($b['sales_count_exact']??$b['sales_count']??0);if($as!==$bs)return$bs<=>$as;return(int)($b['sales_count_indexed']??0)<=>(int)($a['sales_count_indexed']??0);});
+    $total=count($products);$pages=max(1,(int)ceil($total/$pageSize));$page=min($page,$pages);$rows=array_slice($products,($page-1)*$pageSize,$pageSize);
+    $d['table']=['page'=>$page,'page_size'=>$pageSize,'pages'=>$pages,'total'=>$total,'rows'=>$rows];return$d;
+}
+function s4SettingsMenuClicksFile():string{return __DIR__.'/.settings-menu-clicks.json';}
+function s4SettingsMenuClicksLoad():array{$d=json_decode((string)@file_get_contents(s4SettingsMenuClicksFile()),true);return is_array($d)?$d:[];}
+function s4SettingsMenuClicksSave(array $d):bool{$tmp=s4SettingsMenuClicksFile().'.tmp.'.getmypid();$j=json_encode($d,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);if(!is_string($j)||@file_put_contents($tmp,$j,LOCK_EX)===false){@unlink($tmp);return false;}if(@rename($tmp,s4SettingsMenuClicksFile()))return true;@unlink($tmp);return false;}
+function s4SettingsMenuClickRecord(string $key,string $label):array{
+    $key=trim($key);$label=trim($label);if($key===''||strlen($key)>180)return['ok'=>false,'error'=>'invalid_menu_key'];$lf=@fopen(s4SettingsMenuClicksFile().'.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>true,'skipped'=>'busy'];}
+    try{$d=s4SettingsMenuClicksLoad();$old=is_array($d[$key]??null)?$d[$key]:[];$d[$key]=['count'=>max(0,(int)($old['count']??0))+1,'label'=>mb_substr($label,0,120),'last_clicked_at'=>time()];$ok=s4SettingsMenuClicksSave($d);return['ok'=>$ok,'key'=>$key,'count'=>$d[$key]['count']];}finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
 function s4ThirdPartyExplorerCategoryFromRow(array $row):array{
     $cat=is_array($row['category']??null)?$row['category']:[];$id=(int)($cat['id']??$row['category_id']??0);$title=function_exists('basalamApiCategoryPath')?basalamApiCategoryPath($cat):'';
     if($title==='')$title=trim((string)($cat['title']??$cat['name']??$row['category_title']??''));return['id'=>$id,'title'=>$title];
@@ -27161,7 +27174,9 @@ function s4ThirdPartyExplorerSalesDiagnostic(int $vendorId):array{
 if(isset($_GET['third_party_explorer_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerProbe(false),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_sales_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerSalesDiagnostic((int)$_GET['third_party_explorer_sales_test']),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerStatus(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
-if(isset($_GET['basalam_best_sellers_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4BasalamBestSellersStatus(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_GET['basalam_best_sellers_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4BasalamBestSellersStatus((int)($_GET['page']??1),(int)($_GET['page_size']??50)),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_GET['settings_menu_clicks'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(['ok'=>true,'items'=>s4SettingsMenuClicksLoad()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_POST['settings_menu_click'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();echo json_encode(s4SettingsMenuClickRecord((string)($_POST['menu_key']??''),(string)($_POST['menu_label']??'')),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
 if(isset($_GET['third_party_explorer_run'])||isset($_GET['basalam_best_sellers_run'])){http_response_code(405);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'POST required']);exit;}
 if(isset($_POST['basalam_best_sellers_run'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();echo json_encode(s4BasalamBestSellersTick('manual',true),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
 if(isset($_POST['third_party_explorer_save'])||isset($_POST['third_party_explorer_action'])||isset($_POST['third_party_explorer_run'])){
@@ -50165,6 +50180,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,$__bbsArrivalNeedle)<strpos($selfSrc,"if (isset(\$_GET['cron_run'])")
         &&strpos($selfSrc,"{v:'10." . "666'")!==false
         &&version_compare(APP_VERSION,'10.666','>='));
+    $add('10.667','جدول صفحه‌بندی‌شدهٔ پرفروش‌ها و مرتب‌سازی منو براساس کلیک فعال است',
+        strpos($selfSrc,'id="bbsRows"')!==false
+        &&strpos($selfSrc,"'table'=>['page'=>")!==false
+        &&strpos($selfSrc,'function s4SettingsMenuClickRecord')!==false
+        &&strpos($selfSrc,'function s4ApplyMenuClickOrder')!==false
+        &&strpos($selfSrc,"settings_menu_clicks=1")!==false
+        &&strpos($selfSrc,"{v:'10." . "667'")!==false
+        &&version_compare(APP_VERSION,'10.667','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -91838,6 +91861,8 @@ html[data-skin="gloss"] .progress-bar{
 <div class="tpe-actions"><button type="button" class="btn btn-cyan" onclick="bbsRun()">↻ اجرای گام بعدی</button><button type="button" class="btn btn-gray" onclick="bbsLoad()">تازه‌سازی وضعیت</button></div>
 <div class="tpe-stats" id="bbsStats"><span class="tpe-stat">در انتظار بارگذاری…</span></div>
 <div id="bbsMsg" class="tpe-note"></div>
+<div class="tpe-table-wrap" style="max-height:58vh;overflow:auto"><table class="tpe-table" id="bbsTable"><thead><tr><th>رتبه</th><th>تصویر</th><th>محصول</th><th>فروش دقیق</th><th>فروش فهرست</th><th>فروش هفته</th><th>قیمت</th><th>موجودی</th><th>غرفه</th><th>دسته</th></tr></thead><tbody id="bbsRows"><tr><td colspan="10">برای نمایش جدول، این بخش را باز کنید.</td></tr></tbody></table></div>
+<div class="tpe-actions" style="justify-content:center"><button type="button" class="btn btn-gray" id="bbsPrev" onclick="bbsPageMove(-1)">صفحهٔ قبل</button><span class="tpe-stat" id="bbsPageLabel">صفحه ۱ از ۱</span><button type="button" class="btn btn-gray" id="bbsNext" onclick="bbsPageMove(1)">صفحهٔ بعد</button></div>
 </div></div>
 
 <!-- v10.647: review-first third-party Basalam discovery -->
@@ -91871,8 +91896,16 @@ let tpeBusy=false,tpeShowingProbe=false,tpeLiveStatus=null,tpeSort={col:1,type:'
 function tpeEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function tpeForm(extra){const f=new FormData();if(TPE_WP_NONCE)f.append('_wpnonce',TPE_WP_NONCE);if(TPE_BROWSER_NONCE)f.append('explorer_nonce',TPE_BROWSER_NONCE);Object.entries(extra||{}).forEach(([k,v])=>f.append(k,v));return f;}
 async function tpeReq(extra,post=false){const r=await fetch(post?'':'?third_party_explorer_status=1&_t='+Date.now(),post?{method:'POST',body:tpeForm(extra)}:{});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d;}
-async function bbsLoad(){const msg=document.getElementById('bbsMsg');try{const r=await fetch('?basalam_best_sellers_status=1&_t='+Date.now(),{cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.error||('HTTP '+r.status));document.getElementById('bbsBadge').textContent=d.enabled?'فعال':'متوقف';document.getElementById('bbsStats').innerHTML=`<span class="tpe-stat">ذخیره‌شده: ${Number(d.saved_count||0).toLocaleString()}</span><span class="tpe-stat">کشف‌شده: ${Number(d.products_discovered||0).toLocaleString()}</span><span class="tpe-stat">فروش دقیق: ${Number(d.products_verified||0).toLocaleString()}</span><span class="tpe-stat">صف تأیید: ${Number(d.verify_pending||0).toLocaleString()}</span><span class="tpe-stat">صفحات: ${Number(d.pages_scanned||0).toLocaleString()}</span><span class="tpe-stat">نقطه ادامه: ${Number(d.offset||0).toLocaleString()}</span><span class="tpe-stat">سقف گزارش بیرونی: ${Number(d.reported_total||0).toLocaleString()}</span>`;msg.textContent=(d.last_error?'آخرین خطا: '+d.last_error:'آخرین کار: '+(d.last_action||'—'))+' • پروفایل: '+d.profile_title;}catch(e){msg.textContent='خطا: '+e.message;}}
+let bbsCurrentPage=1,bbsTotalPages=1;
+async function bbsLoad(page=bbsCurrentPage){const msg=document.getElementById('bbsMsg');try{page=Math.max(1,Number(page)||1);const r=await fetch(`?basalam_best_sellers_status=1&page=${page}&page_size=50&_t=${Date.now()}`,{cache:'no-store'}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));document.getElementById('bbsBadge').textContent=d.enabled?'فعال':'متوقف';document.getElementById('bbsStats').innerHTML=`<span class="tpe-stat">ذخیره‌شده: ${Number(d.saved_count||0).toLocaleString()}</span><span class="tpe-stat">کشف‌شده: ${Number(d.products_discovered||0).toLocaleString()}</span><span class="tpe-stat">فروش دقیق: ${Number(d.products_verified||0).toLocaleString()}</span><span class="tpe-stat">صف تأیید: ${Number(d.verify_pending||0).toLocaleString()}</span><span class="tpe-stat">صفحات: ${Number(d.pages_scanned||0).toLocaleString()}</span><span class="tpe-stat">نقطه ادامه: ${Number(d.offset||0).toLocaleString()}</span><span class="tpe-stat">سقف گزارش بیرونی: ${Number(d.reported_total||0).toLocaleString()}</span>`;const t=d.table||{},rows=t.rows||[];bbsCurrentPage=Number(t.page||1);bbsTotalPages=Number(t.pages||1);document.getElementById('bbsRows').innerHTML=rows.length?rows.map((p,i)=>{const rank=(bbsCurrentPage-1)*Number(t.page_size||50)+i+1,exact=p.sales_count_exact;return `<tr><td>${rank.toLocaleString()}</td><td>${p.image?`<img src="${tpeEsc(p.image)}" loading="lazy" style="width:42px;height:42px;object-fit:cover;border-radius:6px">`:'—'}</td><td><a href="${tpeEsc(p.link||'#')}" target="_blank" rel="noopener" style="color:#7dd3fc">${tpeEsc(p.title||'—')}</a></td><td>${exact===null||exact===undefined?'در انتظار':Number(exact).toLocaleString()}</td><td>${Number(p.sales_count_indexed||0).toLocaleString()}</td><td>${Number(p.sales_count_week||0).toLocaleString()}</td><td>${tpeEsc(p.price||'—')}</td><td>${Number(p.stock||0).toLocaleString()}</td><td>${tpeEsc(p.vendor_name||p.vendor_id||'—')}</td><td>${tpeEsc(p.category||p.category_id||'—')}</td></tr>`;}).join(''):'<tr><td colspan="10">هنوز محصولی ذخیره نشده است.</td></tr>';document.getElementById('bbsPageLabel').textContent=`صفحه ${bbsCurrentPage.toLocaleString()} از ${bbsTotalPages.toLocaleString()} • ${Number(t.total||0).toLocaleString()} محصول`;document.getElementById('bbsPrev').disabled=bbsCurrentPage<=1;document.getElementById('bbsNext').disabled=bbsCurrentPage>=bbsTotalPages;msg.textContent=(d.last_error?'آخرین خطا: '+d.last_error:'آخرین کار: '+(d.last_action||'—'))+' • پروفایل: '+d.profile_title;}catch(e){msg.textContent='خطا: '+e.message;}}
+function bbsPageMove(delta){bbsLoad(Math.max(1,Math.min(bbsTotalPages,bbsCurrentPage+delta)));}
 async function bbsRun(){const msg=document.getElementById('bbsMsg');msg.textContent='در حال اجرای یک گام محدود…';try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_run:1})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));await bbsLoad();}catch(e){msg.textContent='خطا: '+e.message;}}
+let s4MenuClickCounts={};
+function s4MenuKey(menu,index){const hdr=menu.querySelector(':scope > .smenu-hdr'),label=(hdr?.querySelector('h3')?.textContent||hdr?.textContent||'menu').trim().replace(/\s+/g,' ');if(!menu.dataset.s4MenuKey)menu.dataset.s4MenuKey=menu.id||('menu-'+index+'-'+label.slice(0,80));if(!menu.dataset.s4OriginalOrder)menu.dataset.s4OriginalOrder=String(index);return{key:menu.dataset.s4MenuKey,label};}
+function s4ApplyMenuClickOrder(){const root=document.querySelector('#settingsPanel > .settings-panel-body');if(!root)return;const menus=[...root.querySelectorAll(':scope > .smenu')];menus.forEach((m,i)=>s4MenuKey(m,i));menus.sort((a,b)=>Number(s4MenuClickCounts[b.dataset.s4MenuKey]?.count||0)-Number(s4MenuClickCounts[a.dataset.s4MenuKey]?.count||0)||Number(a.dataset.s4OriginalOrder)-Number(b.dataset.s4OriginalOrder));menus.forEach(m=>root.appendChild(m));}
+async function s4LoadMenuClickOrder(){try{const r=await fetch('?settings_menu_clicks=1&_t='+Date.now(),{cache:'no-store'}),d=await r.json();if(d.ok){s4MenuClickCounts=d.items||{};s4ApplyMenuClickOrder();}}catch(e){}}
+async function s4SmenuRecordClick(hdr){const menu=hdr?.closest('.smenu'),root=document.querySelector('#settingsPanel > .settings-panel-body');if(!menu||menu.parentElement!==root)return;const menus=[...root.querySelectorAll(':scope > .smenu')],info=s4MenuKey(menu,menus.indexOf(menu));try{const r=await fetch('',{method:'POST',body:tpeForm({settings_menu_click:1,menu_key:info.key,menu_label:info.label})}),d=await r.json();if(d.ok&&d.count)s4MenuClickCounts[info.key]={count:Number(d.count),label:info.label};}catch(e){}}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',s4LoadMenuClickOrder,{once:true});else s4LoadMenuClickOrder();
 function tpeSet(id,v){const e=document.getElementById(id);if(e)e.value=v??'';}
 function tpeNum(v){const s=String(v??'').replace(/[۰-۹]/g,c=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(c)).replace(/[٠-٩]/g,c=>'٠١٢٣٤٥٦٧٨٩'.indexOf(c));const n=Number(s.replace(/[^0-9.\-]/g,''));return Number.isFinite(n)?n:0;}
 function tpeApplySort(){const body=document.getElementById('tpeRows');if(!body)return;const rows=[...body.querySelectorAll('tr[data-rank]')];if(!rows.length)return;const{col,type,dir}=tpeSort;rows.sort((a,b)=>{let av,bv;if(type==='rank'){av=Number(a.dataset.rank);bv=Number(b.dataset.rank);}else{av=(a.cells[col]?.innerText||'').trim();bv=(b.cells[col]?.innerText||'').trim();if(type==='number'){av=tpeNum(av);bv=tpeNum(bv);}else{const c=av.localeCompare(bv,'fa');return c*dir;}}return(av-bv)*dir;});rows.forEach((r,i)=>{body.appendChild(r);if(r.cells[1])r.cells[1].textContent=String(i+1);});document.querySelectorAll('.tpe-sort-mark').forEach(m=>m.textContent=Number(m.dataset.col)===col?(dir>0?'▲':'▼'):'');}
@@ -96347,6 +96380,7 @@ function toggleSettingsPanel(){
         if(hfb)hfb.classList.add('active');
       }
     }catch(e){}
+    if(typeof s4ApplyMenuClickOrder==='function')s4ApplyMenuClickOrder();
     syncSmenuStickyOffsets();
   }
   document.body.classList.toggle('spanel-full', p.classList.contains('full') && p.classList.contains('open'));
@@ -96442,6 +96476,7 @@ function initBslCategorySettingsCollapse(){
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initBslCategorySettingsCollapse,{once:true});else initBslCategorySettingsCollapse();
 
 function toggleSmenu(hdr){
+  if(typeof s4SmenuRecordClick==='function')s4SmenuRecordClick(hdr);
   const isOpen=hdr.classList.contains('open');
   hdr.classList.toggle('open');
   const body=hdr.nextElementSibling;
@@ -102949,6 +102984,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.667', t:'📊 جدول پرفروش‌ها و منوی مرتب‌شونده براساس استفاده', items:[
+    'بخش پرفروش‌های باسلام اکنون جدول واقعی محصولات را با تصویر، رتبه، فروش دقیق و فهرست‌شده، فروش هفتگی، قیمت، موجودی، غرفه و دسته نمایش می‌دهد.',
+    'جدول از state محلی پروفایل خوانده می‌شود، در هر صفحه ۵۰ محصول نشان می‌دهد و دکمه‌های صفحهٔ قبل و بعد دارد؛ تازه‌سازی جدول هیچ درخواست مستقیمی به باسلام نمی‌فرستد.',
+    'کلیک منوهای فرعی همبرگری به‌صورت اتمیک در سرور شمرده می‌شود و منوها در بازشدن بعدی براساس بیشترین تعداد کلیک مرتب می‌شوند.'
+  ]},
   {v:'10.666', t:'🔄 پیشروی مستقل جمع‌آور پرفروش‌ها', items:[
     'هر ورود cron پیش از قفل سراسری و عملیات‌های طولانی، دقیقاً یک checkpoint محدودِ جمع‌آور پرفروش‌ها را با قفل مستقل اجرا می‌کند.',
     'صف پرفروش‌ها دیگر پشت کران طولانی ارسال، ماتریس یا مغایرت‌گیری متوقف نمی‌ماند؛ فاصلهٔ یک‌ثانیه‌ای، backoff 429 و قفل تک‌اجرا همچنان رعایت می‌شوند.'
