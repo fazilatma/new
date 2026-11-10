@@ -24,6 +24,9 @@ from .basalam.client import BasalamClient
 
 def _extract_step(db, settings, entry, profile, network_timeout=None):
     payload, counts = entry['payload'], entry['counters']
+    if payload.get('_detail_only') is True:
+        from .detail_extraction import step
+        return step(db,settings,entry,profile,network_timeout)
     from .start_page import options
     opts=options(profile)
     if opts['source']=='github':
@@ -153,6 +156,8 @@ def _detail_step(db, settings, entry, profile, network_timeout=None):
             if network_timeout: net['_deadline_seconds'] = 12
             result = SmartFetcher.get(url, timeout=network_timeout or settings.fetch_timeout, net=net,
                                       mode=payload.get('render', 'static'), settings=settings)
+            counts['last_http_status']=int(result.get('code') or 0)
+            counts['last_html_chars']=len(result.get('html') or '')
             if not result.get('ok'): raise ValueError('Detail fetch failed; check source/network before retry')
             effective = validate_url(result.get('url') or url)
             fresh = parse_detail(result.get('html', ''), effective, payload['_detail_selectors'])

@@ -21,6 +21,11 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
         raise AssertionError('Browser boot must never fetch a source/destination')
     mode=os.environ.get('S4_BROWSER_EXTRACTION_FIXTURE','');source_calls=[]
     if mode:
+        if mode=='detail':
+            db.upsert_profile('one',p['url'],p['name'],selectors=p['selectors'],settings={'detailSelectors':{'longDesc':'.description','sku':'.sku'}})
+            db.upsert_product(p['id'],'a',{'title':'keep title','price_num':1000,'link':'https://example.com/detail/a'})
+            db.upsert_product(p['id'],'b',{'title':'keep second','price_num':2000,'link':'https://example.com/detail/b'})
+            for row in db.list_products(p['id']):db.mark_product_target(row['id'],'woo',77)
         if mode in ('resume','resume-denied'):
             db.enqueue('extract',p['id'],{'pages':3,'_page':2,'with_detail':False},status='failed')
         if mode=='waiting':
@@ -41,6 +46,9 @@ with TemporaryDirectory(prefix='s4-real-browser-') as folder:
             if not url.startswith('https://example.com/'):raise AssertionError('Unexpected source')
             source_calls.append(url)
             if mode in ('denied','resume-denied'):return {'ok':False,'code':403,'error':'PRIVATE-FIXTURE-TOKEN'}
+            if mode=='detail':
+                if '/detail/' not in url:raise AssertionError('Detail-only must never fetch listing')
+                return {'ok':True,'code':200,'url':url,'html':'<div class="description"><b>Enriched detail</b><script>bad()</script></div><span class="sku">SKU-DETAIL</span>'}
             return {'ok':True,'code':200,'url':url,'html':'<article class="product"><h2>Fixture '+('page two' if 'page=2' in url else 'page one')+'</h2></article>'}
         HtmlFetcher.get=staticmethod(fixture)
         from scraper4.services import github_products

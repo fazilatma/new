@@ -22,7 +22,7 @@
   collapseCards();
   function showCard(id){const card=$('#'+id);if(card){toggleCard(card,false);card.scrollIntoView({block:'start',behavior:'smooth'});}}
   function sourceUI(){$('#start-github').hidden=el.source.value!=='github';for(const name of ['github_repo','github_branch','github_path'])el[name].required=el.source.value==='github';}
-  function controls(){for(const id of ['start-copy','start-delete','start-stop','start-sync-stop','start-selectors'])$('#'+id).disabled=busy||!active;for(const id of ['start-save','start-enqueue','start-sync','start-experiment','start-new'])$('#'+id).disabled=busy;}
+  function controls(){for(const id of ['start-copy','start-delete','start-stop','start-sync-stop','start-selectors','start-detail-only'])$('#'+id).disabled=busy||!active;for(const id of ['start-save','start-enqueue','start-sync','start-experiment','start-new'])$('#'+id).disabled=busy;}
   function setDirty(){editRevision++;dirty=true;window.S4Refresh?.changed(form);}
   form.addEventListener('input',setDirty);form.addEventListener('change',setDirty);
   el.source.addEventListener('change',sourceUI);
@@ -85,6 +85,9 @@
     window.dispatchEvent(new Event('s4:extraction-enqueued'));window.dispatchEvent(new Event('s4:start-queued'));return true;
   });}
   window.S4Start={enqueue,select:changeProfile};
+  $('#start-detail-only').onclick=()=>action(async()=>{await ready;if(!active)throw Error('ابتدا پروفایل را انتخاب کنید.');if(dirty)throw Error('ابتدا تغییرات شروع را ذخیره کنید؛ جزئیات از تنظیمات ذخیره‌شده خوانده می‌شود.');const p=profiles.find(p=>String(p.id)===active);if(!p)throw Error('پروفایل پیدا نشد.');if(!confirm('جزئیات محصولات دارای لینک همین پروفایل با سلکتورهای ذخیره‌شده خوانده و ذخیره شود؟ یک مرحلهٔ واقعی، بدون تکرار فهرست یا ارسال مقصد.'))return;
+    status.textContent='در حال استخراج جزئیات محصولات ذخیره‌شده…';const d=await request('/api/php-ui/write','POST',{action:'python_detail_start',fields:{profile:p.key},query:{}});status.textContent=`کار جزئیات #${d.id} · ${d.message}`;window.dispatchEvent(new Event('s4:extraction-enqueued'));await refreshOverview(false);
+  });
   $('#start-sync').onclick=()=>{const targets=[];if($('#start-sync-woo').checked)targets.push({kind:'woo_send',status:'draft'});if($('#start-sync-bsl').checked){if(!$('#start-sync-vendor').value){status.textContent='ابتدا غرفهٔ مقصد را انتخاب کنید.';return;}targets.push({kind:'bsl_send',vendor_id:$('#start-sync-vendor').value});}
     if(!targets.length){status.textContent='حداقل یک مقصد انتخاب کنید.';return;}if(confirm('بعد از استخراج موفق، تمام محصولات ذخیره‌شدهٔ همین پروفایل (از جمله قبلی‌ها) به مقصدهای انتخابی ارسال شوند؟ پیش‌نمایش قیمتِ تنظیمات همین پروفایل و تنظیمات مقصد را بررسی کنید. ارسال ناموفق را بدون بررسی مقصد تکرار نکنید.'))enqueue({render:job.elements.render.value},targets);};
   async function pause(chain){return action(async()=>{if(!active)throw Error('پروفایل را انتخاب کنید.');const result=await request(`/api/start/profiles/${active}/pause`,'POST',{chain});status.textContent=`${n(result.paused)} کار مکث شد؛ درخواست جاری تا مرز امن فرصت پایان دارد و ارسال شروع‌شده ممکن است کامل شود. ادامه فقط از کنترل صف.`;window.dispatchEvent(new Event('s4:extraction-updated'));window.dispatchEvent(new Event('s4:start-queued'));});}

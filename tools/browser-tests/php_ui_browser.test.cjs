@@ -289,3 +289,21 @@ test('native resume denial and cancelled confirmation stay in row without false 
  await row.locator('button[onclick*="resumeExtractQueue"]').click();await row.locator('[data-python-extract-message]').filter({hasText:'لغو شد'}).waitFor();assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,0);
  accept=true;await row.locator('button[onclick*="resumeExtractQueue"]').click();await row.locator('[data-python-extract-message]').filter({hasText:'403'}).waitFor();assert.ok(!(await row.innerText()).includes('PRIVATE-FIXTURE-TOKEN'));await page.waitForTimeout(3500);assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,1);assert.equal((await(await page.request.get(origin+'/__test__/extract-state')).json()).jobs.find(j=>j.id===1).status,'failed');assert.equal(await page.locator('#settings-menu').evaluate(e=>e.open),false);
 });
+
+for(const route of ['/','/php-ui'])test('saved-product detail extraction in '+route+' enriches one product per step without listing or destination sends',{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'detail',true),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());await page.goto(origin+route);const before=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,0);let child,f;
+ if(route==='/php-ui'){
+  f=page.frameLocator('#php-original-ui');await f.locator('html[data-s4-ready="1"]').waitFor();child=page.frames().find(f=>f.url().endsWith('/php-ui/frame'));await f.locator('#hdrProfileSelect').selectOption('one');await child.waitForFunction(()=>profileFormReady&&currentProfileKey==='one');await page.waitForTimeout(1200);await child.evaluate(()=>switchMainTab('results'));await f.locator('#btnExtractDetail').click();await f.locator('#detailStatus').filter({hasText:'1/2'}).waitFor();assert.equal(await child.evaluate(()=>document.getElementById('pane-results').classList.contains('active')),true);
+ }else{
+  await page.locator('#start-profile option[value="1"]').waitFor({state:'attached'});await page.locator('#start-profile').selectOption('1');await page.locator('#start-detail-only').click();await page.locator('#start-action-status').filter({hasText:'کار جزئیات'}).waitFor();
+ }
+ let state=await(await page.request.get(origin+'/__test__/extract-state')).json();const j=state.jobs.find(j=>j.profile_id===1);assert.ok(j.payload._detail_only);assert.equal(j.counters.detail_current,1);assert.equal(j.status,'waiting');assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,1);
+ assert.deepEqual(state.jobs.filter(j=>j.profile_id!==1),before.jobs);
+ if(route==='/php-ui'){await f.locator('#btnStopDetail').click();await f.locator('#detailStatus').filter({hasText:'مکث همین کار'}).waitFor();assert.equal((await(await page.request.get(origin+'/__test__/extract-state')).json()).jobs.find(x=>x.id===j.id).status,'paused');}
+ await page.request.post(origin+'/__test__/age-step',{data:{}});
+ if(route==='/php-ui'){await f.locator('#python-detail-next').click();await f.locator('#detailStatus').filter({hasText:'2/2'}).waitFor();}
+ else{const row=page.locator(`#extraction-jobs tr[data-extract-id="${j.id}"]`);await row.locator('[data-extract-resume]').click();await row.locator('[data-extract-row-message]').filter({hasText:'یک مرحلهٔ واقعی اجرا شد'}).waitFor();}
+ state=await(await page.request.get(origin+'/__test__/extract-state')).json();assert.equal(state.jobs.find(x=>x.id===j.id).status,'done');assert.equal((await(await page.request.get(origin+'/__test__/source-calls')).json()).urls.length,2);
+ for(const product of state.products){const old=before.products.find(x=>x.id===product.id);for(const key of ['title','price_num','woo_id','basalam_id','key','link'])assert.equal(product[key],old[key]);assert.ok(product.extra.longDesc.includes('Enriched detail'));assert.ok(!product.extra.longDesc.includes('<script'));assert.equal(product.sku,'SKU-DETAIL');}
+ assert.deepEqual(state.jobs.filter(j=>j.profile_id!==1),before.jobs);assert.deepEqual(errors,[]);
+});

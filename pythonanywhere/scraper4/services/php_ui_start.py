@@ -8,7 +8,7 @@ from urllib.parse import quote
 from . import php_ui, extraction_control, extraction_diagnostics, github_products
 
 READS={'python_extract_row','python_start_status','python_github_catalog','sync_diagnose','sync_pipeline_status','python_sync_audit'}
-WRITES={'python_extract_start','python_extract_step','python_extract_resume'}
+WRITES={'python_detail_start','python_extract_start','python_extract_step','python_extract_resume'}
 
 
 def jobs(db,settings,profile=None,entry_id=None):
@@ -25,11 +25,11 @@ def jobs(db,settings,profile=None,entry_id=None):
         try:c=json.loads(e['counters'] or '{}')
         except (ValueError,TypeError):c={}
         if not isinstance(c,dict):c={}
-        counts={k:c[k] for k in ('last_http_status','last_page_products','found','current','total','detail_current','detail_total','last_html_chars') if type(c.get(k)) is int}
+        counts={k:c[k] for k in ('last_http_status','last_page_products','found','current','total','detail_current','detail_total','detail_enriched','detail_empty','detail_skipped','last_html_chars') if type(c.get(k)) is int}
         error=c.get('error_code') if isinstance(c.get('error_code'),str) and c['error_code'] in extraction_diagnostics.SAFE_HINTS else None
         values.append({'id':e['id'],'profile_id':e['profile_id'],'status':e['status'],'counts':counts,
                        'error_code':error,'hint':extraction_diagnostics.SAFE_HINTS.get(error,'خطای اجرای قدیمی؛ متن خام برای حفظ اطلاعات محرمانه نمایش داده نمی‌شود.') if e['status']=='failed' else '',
-                       'empty':e['status']=='done' and counts.get('found',0)==0,
+                       'empty':e['status']=='done' and counts.get('found',0)==0 and c.get('detail_only') is not True,'detail_only':c.get('detail_only') is True,
                        'phase':c.get('phase') if c.get('phase') in ('listing','detail','complete') else '',
                        'updated_at':e['updated_at'],'stale':e['status']=='running' and extraction_control.stale(dict(e),settings)})
     return values
@@ -68,7 +68,10 @@ def read(db,settings,data):
 
 def write(db,settings,data):
     f=data['fields'];p=php_ui.find(db,f.get('profile',''))
-    if data['action']=='python_extract_start':
+    if data['action']=='python_detail_start':
+        from .detail_extraction import enqueue
+        created=enqueue(db,p);entry_id=created['id']
+    elif data['action']=='python_extract_start':
         created=php_ui.enqueue(db,data,reuse_waiting=True);entry_id=created['id']
     else:
         entry_id=php_ui.integer(f.get('id',''),minimum=1);e=db.get_entry(entry_id)
@@ -85,10 +88,11 @@ def write(db,settings,data):
     elif result.get('ran'):
         message='یک مرحلهٔ واقعی اجرا شد؛ برای ادامه، worker/کران یا مرحلهٔ بعد لازم است.'
         if value and value['empty']:message='استخراج صفر محصول داشت؛ موتور، سلکتور و دسترسی مبدأ را بررسی کنید.'
+        if value and value['detail_only'] and value['counts'].get('detail_empty',0)>0 and not value['counts'].get('detail_enriched',0):message='صفحهٔ جزئیات خوانده شد ولی فیلدی مطابق سلکتورها پیدا نشد؛ دادهٔ قبلی حفظ شد. CSS و مبدأ را بررسی کنید.'
     else:message='این استخراج در انتظار نیست؛ وضعیت مکث، شکست یا پایان را بررسی کنید.'
     out={'ok':result['ok'],'id':entry_id,'job':value,'ran':result.get('ran',0),'message':message,
          'busy':result.get('busy',False),'throttled':result.get('throttled',False),'retry_after_seconds':result.get('retry_after_seconds',0),
-         'remote_send_executed':False,'automatic_execution':False,'reused':data['action']=='python_extract_start' and created.get('reused',False)}
+         'remote_send_executed':False,'automatic_execution':False,'reused':data['action'] in ('python_extract_start','python_detail_start') and created.get('reused',False)}
     if not out['ok']:out['error']=message or 'استخراج اجرا نشد؛ وضعیت و گزارش امن را بررسی کنید.'
     return out,code
 
