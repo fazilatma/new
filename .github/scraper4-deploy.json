@@ -2,8 +2,8 @@
   "protocol": "scraper4-code-deploy-v1",
   "host": "fazilatma.pythonanywhere.com",
   "tree": "af7ad83c5198cda1e3f6c34b2d6dc2d3afaa380c",
-  "nonce": "63235c9b7c2b475fac178fc2756f8287",
-  "issued": 1794352325,
-  "expires": 1794353225,
-  "signature": "ReWHEfuntUdftAAm6MFBQaS0kg1CAEH+mgkozb1FkSWvmWylPvOYQMCtoQ9BEVyGPgr00eg3mafkLpAoypV4Aw=="
+  "nonce": "40da7d2efea246b0ad6cc8244ac85b79",
+  "issued": 1794352367,
+  "expires": 1794353267,
+  "signature": "SipAy80qJMCqhLzMCEszvSWrmJ9e5SBZQuQeRUZqOOPpM+hV/302WYpSOFlT6zZC92VAbwn7zAQ4yDRIloL2Bg=="
 }
