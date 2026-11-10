@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.678';
+const APP_VERSION = '10.679';
 
 
 if (!function_exists('str_starts_with')) {
@@ -50444,6 +50444,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"failed:'نیازمند "."بررسی'")===false
         &&strpos($selfSrc,"{v:'10." . "678'")!==false
         &&version_compare(APP_VERSION,'10.678','>='));
+    $add('10.679','گزارش خطا تاریخچهٔ منقضی را با جایگزینی موفق اشتباه نمی‌گیرد',
+        strpos($selfSrc,"'legacy_detail_payload_missing'")!==false
+        &&strpos($selfSrc,"'legacy_checkpoint_payload_missing'")!==false
+        &&strpos($selfSrc,"'terminal_queue_error'")!==false
+        &&strpos($selfSrc,"{v:'10." . "679'")!==false
+        &&version_compare(APP_VERSION,'10.679','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -82035,7 +82041,12 @@ $solution=function(int $code,string $kind,string $detail):array{
     if(in_array($code,[401,403],true))return ['key'=>'auth','title'=>'توکن یا دسترسی غرفه','solution'=>'توکن و vendor_id همان غرفه بازبینی شود','auto_repair'=>false];
     if($code===404)return ['key'=>'stale_product_id','title'=>'شناسهٔ محصول قدیمی/ناموجود','solution'=>'نگاشت محلی حذف و محصول در همان غرفه دوباره جست‌وجو شود','auto_repair'=>false];
     if($code===429)return ['key'=>'rate_limit','title'=>'محدودیت نرخ','solution'=>'ارسال با backoff و همزمانی کمتر خودکار تکرار می‌شود','auto_repair'=>true];
-    if($kind==='queue')return ['key'=>'queue_replaced','title'=>'ردیف قدیمی با تنظیمات تازه جایگزین شده','solution'=>'خطای API نیست و اقدام لازم ندارد؛ ردیف جدید ادامه می‌دهد','auto_repair'=>false];
+    if($kind==='queue'){
+        if(preg_match('~جایگزین همگام دستی|جایگزین.?شده~u',$detail))return ['key'=>'queue_superseded','title'=>'ردیف قدیمی با ارسال تازه جایگزین شده','solution'=>'تاریخچهٔ تکمیل‌شده است و اقدام لازم ندارد','auto_repair'=>false];
+        if(strpos($detail,'detail_coverage_incomplete')!==false)return ['key'=>'legacy_detail_payload_missing','title'=>'وظیفهٔ قدیمی جزئیات، بدون فایل قابل ادامه','solution'=>'فایل محصولات قدیمی پاک شده است؛ ارسال تازهٔ پروفایل با قانون جدید لین ۲ جایگزین آن می‌شود','auto_repair'=>false];
+        if(preg_match('~تلاش ادامه|resume~iu',$detail))return ['key'=>'legacy_checkpoint_payload_missing','title'=>'checkpoint قدیمی بدون فایل محصولات','solution'=>'این تاریخچه قابل ادامه نیست؛ وظایف جدید تا تکمیل از checkpoint سالم ادامه می‌یابند','auto_repair'=>false];
+        return ['key'=>'terminal_queue_error','title'=>'خطای نهایی دادهٔ صف','solution'=>'علت مشخص ذخیره‌شده روی کارت صف نمایش داده می‌شود','auto_repair'=>false];
+    }
     if($code===0)return ['key'=>'network','title'=>'شبکه/توقف','solution'=>'خطای شبکه با backoff خودکار تکرار می‌شود؛ فقط توقف صریح کاربر مستثنا است','auto_repair'=>true];
     return ['key'=>$kind?:'other','title'=>'خطای دیگر','solution'=>'جزئیات خام و مرحلهٔ ثبت‌شده بررسی شود','auto_repair'=>false];
 };
@@ -103372,6 +103383,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.679', t:'🏷 تشخیص دقیق تاریخچهٔ صف باسلام', items:[
+    'گزارش خطا دیگر همهٔ ردیف‌های failed قدیمی را «جایگزین‌شده» نمی‌نامد؛ checkpoint منقضی، فایل جزئیات پاک‌شده و خطای نهایی داده هرکدام عنوان صریح خود را دارند.',
+    'ردیف‌های واقعاً جایگزین‌شده همچنان فقط تاریخچهٔ تکمیل‌شده‌اند و از خطاهای محصول و صف جدا می‌مانند.'
+  ]},
   {v:'10.678', t:'🧯 بازیابی دائمی صف‌های باسلام بدون وضعیت مبهم', items:[
     'ردیف‌های قدیمی که با همگام‌سازی دستی جدید جایگزین شده‌اند اکنون تاریخچهٔ تکمیل‌شده و «جایگزین‌شده» هستند، نه خطای ارسال.',
     'وقفه‌های worker، قفل، dispatch، شبکه، محدودیت نرخ و resume-exhausted با فایل محصولات سالم از checkpoint ذخیره‌شده دوباره در صف قرار می‌گیرند؛ توقف صریح کاربر همچنان محترم است.',
