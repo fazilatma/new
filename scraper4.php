@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.672';
+const APP_VERSION = '10.673';
 
 
 if (!function_exists('str_starts_with')) {
@@ -27022,7 +27022,7 @@ function s4BasalamBestSellersTick(string $source='cron',bool $force=false):array
             if(!empty($detailResponse['ok'])){$detailBody=(array)($detailResponse['body']??[]);if(is_array($detailBody['data']??null)&&isset($detailBody['data']['id']))$detailBody=$detailBody['data'];$detailProduct=basalamApiProductMap($detailBody);unset($detailProduct['title'],$detailProduct['price'],$detailProduct['price_num']);$detailProduct['source']='basalam_best_sellers';$detailProduct['source_id']=$detailId;$detailProduct['basalam_product_id']=$detailId;$detailProduct['_basalam_detail_enriched_at']=$now;$detailProduct['_detail_checked_at']=$now;$detailMerge=s4BasalamBestSellersMergeProducts([$detailProduct]);if(!empty($detailMerge['ok'])){$d['products_enriched']=(int)$d['products_enriched']+1;$d['saved_count']=(int)$detailMerge['saved_count'];$d['catalog_count']=(int)($detailMerge['catalog_count']??$d['catalog_count']);$enrichment=['product_id'=>$detailId,'fields'=>array_values(array_intersect(['longDesc','shortDesc','images','variations','specs','tags','brand'],array_keys($detailProduct)))];}else{array_unshift($detailQueue,$detailItem);$enrichment=['error'=>(string)($detailMerge['error']??'detail merge failed')];}}
             else{$detailItem['attempts']=(int)($detailItem['attempts']??0)+1;if($detailItem['attempts']<4)$detailQueue[]=$detailItem;$enrichment=['product_id'=>$detailId,'error'=>(string)($detailResponse['error']??'detail request failed'),'retry'=>$detailItem['attempts']<4];}
         }
-        $d['detail_queue']=$detailQueue;$queue=array_values((array)$d['verify_queue']);$verification=['skipped'=>'queue_empty'];
+        $d['detail_queue']=$detailQueue;$d['last_detail_enrichment']=array_merge(['at'=>$now],$enrichment);s4BasalamBestSellersSave($d);$queue=array_values((array)$d['verify_queue']);$verification=['skipped'=>'queue_empty'];
         if($queue){$row=array_shift($queue);$id=(int)($row['id']??$row['product_id']??0);$exact=array_key_exists('_exact_sales_pending',$row)?max(0,(int)$row['_exact_sales_pending']):null;
             if($exact===null){$r=s4ThirdPartyExplorerFetchJson('https://services.basalam.com/web/v1/order-processing/orders-calculate-stats?product_id='.$id.'&resource_count=number-of-sales-per-product',8);
                 if(empty($r['ok'])){$d['last_error']=(string)($r['error']??'Exact product sales request failed');$attempt=(int)($row['_verify_attempts']??0)+1;$row['_verify_attempts']=$attempt;if((int)($r['code']??0)===429){s4BasalamBestSellersBackoff($d,$now);array_unshift($queue,$row);}elseif($attempt<3)array_unshift($queue,$row);else$d['last_action']='skipped exact-sales product '.$id.' after 3 failures';$d['verify_queue']=$queue;s4BasalamBestSellersSave($d);return['ok'=>false,'code'=>(int)($r['code']??0),'error'=>$d['last_error']];}
@@ -50293,6 +50293,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'basalam_best_sellers_apply_filter')!==false
         &&strpos($selfSrc,"{v:'10." . "672'")!==false
         &&version_compare(APP_VERSION,'10.672','>='));
+    $add('10.673','checkpoint جزئیات پیش از عملیات‌های بعدی ذخیره می‌شود',
+        strpos($selfSrc,"\$d['detail_queue']=\$detailQueue;\$d['last_detail_enrichment']=array_merge(['at'=>\$now],\$enrichment);s4BasalamBestSellersSave(\$d);")!==false
+        &&strpos($selfSrc,"{v:'10." . "673'")!==false
+        &&version_compare(APP_VERSION,'10.673','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -103116,6 +103120,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.673', t:'💾 checkpoint مستقل جزئیات پرفروش‌ها', items:[
+    'نتیجهٔ هر غنی‌سازی و صف ادامهٔ جزئیات بلافاصله ذخیره می‌شود؛ شلوغ بودن profiles در مرحلهٔ فروش دقیق یا ادامهٔ کران دیگر باعث تکرار همان محصول یا عقب‌رفتن شمارنده نمی‌شود.'
+  ]},
   {v:'10.672', t:'🧩 جزئیات کامل و اعمال مستقیم فیلتر پرفروش‌ها', items:[
     'جمع‌آور در هر checkpoint یک محصول را از Core v4 باسلام غنی می‌کند و توضیح کوتاه و کامل، گالری، تنوع‌ها، مشخصات، برچسب، برند، وزن و موجودی را به‌صورت resumable داخل همان پروفایل ذخیره می‌کند.',
     'عنوان و قیمت خامِ کشف‌شده هنگام غنی‌سازی دست‌نخورده می‌مانند تا پسوند، تعدیل و گردکردن فقط در مسیر عادی ارسال اعمال شوند.',
