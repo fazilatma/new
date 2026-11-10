@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.646';
+const APP_VERSION = '10.647';
 
 
 if (!function_exists('str_starts_with')) {
@@ -429,7 +429,7 @@ if (!function_exists('str_ends_with')) {
     }
 }
 
-const APP_VERSION_DATE = '1405/08/14';
+const APP_VERSION_DATE = '1405/07/07';
 const UPLOAD_DIR = __DIR__ . '/uploads/';
 
 /* ==================================================================
@@ -26807,6 +26807,167 @@ if(isset($_GET['basalam_api_probe'])){
         'next_url'=>(string)($r['basalam_next_url']??''),'last_page'=>!empty($r['basalam_last_page']),'sample'=>array_slice($rows,0,3),'error'=>(string)($r['error']??'')],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;
 }
 
+/* =====================================================================
+ * v10.647: Third-party Basalam shop explorer (public data, review-first).
+ * It discovers vendor IDs incrementally from public Core catalogue pages,
+ * estimates comparable metrics, and never creates a profile before approval.
+ * ===================================================================== */
+function s4RequireAuthenticatedMutation():void{
+    $auth=function_exists('s4PhpRuntimeApplyAuth')?s4PhpRuntimeApplyAuth():['ok'=>false];
+    if(empty($auth['ok'])){http_response_code(403);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'unauthorized'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
+}
+function s4ThirdPartyExplorerFile():string{return __DIR__.'/.third-party-shop-explorer.json';}
+function s4ThirdPartyExplorerDefaults():array{return[
+    'config'=>['enabled'=>false,'mode'=>'public','ranking'=>'balanced','category_ids'=>[],'keywords'=>[],
+        'interval_sec'=>120,'min_products'=>1,'min_sales'=>0,'max_candidates'=>2000,'price_percent'=>20,
+        'suffix_pattern'=>'(کد: {n})','suffix_start'=>1,'auto_all_destinations'=>true],
+    'cursor'=>['seed'=>0,'by_seed'=>[]],'vendors'=>[],'audit'=>[],'last_run_at'=>0,'next_run_at'=>0,
+    'backoff_until'=>0,'pages_scanned'=>0,'products_scanned'=>0,'last_error'=>''];}
+function s4ThirdPartyExplorerLoad():array{
+    $d=json_decode((string)@file_get_contents(s4ThirdPartyExplorerFile()),true);if(!is_array($d))$d=[];
+    $def=s4ThirdPartyExplorerDefaults();$d=array_replace($def,$d);$d['config']=array_replace($def['config'],is_array($d['config']??null)?$d['config']:[]);
+    foreach(['vendors','audit']as$k)if(!is_array($d[$k]??null))$d[$k]=[];
+    if(!is_array($d['cursor']??null))$d['cursor']=$def['cursor'];if(!is_array($d['cursor']['by_seed']??null))$d['cursor']['by_seed']=[];
+    return$d;
+}
+function s4ThirdPartyExplorerSave(array $d):bool{
+    $tmp=s4ThirdPartyExplorerFile().'.tmp.'.getmypid();$j=json_encode($d,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    if(!is_string($j)||@file_put_contents($tmp,$j,LOCK_EX)===false){@unlink($tmp);return false;}if(@rename($tmp,s4ThirdPartyExplorerFile()))return true;@unlink($tmp);return false;
+}
+function s4ThirdPartyExplorerSeeds(array $cfg):array{
+    $mode=(string)($cfg['mode']??'public');$cats=array_values(array_unique(array_filter(array_map('intval',(array)($cfg['category_ids']??[])),fn($v)=>$v>0)));
+    $words=array_values(array_unique(array_filter(array_map(fn($v)=>trim((string)$v),(array)($cfg['keywords']??[])))));
+    $out=[];
+    if($mode==='public'||(!$cats&&!$words))$out[]=['key'=>'public','category'=>0,'keyword'=>''];
+    elseif($mode==='categories')foreach($cats as$c)$out[]=['key'=>'c'.$c,'category'=>$c,'keyword'=>''];
+    else{
+        if(!$cats)$cats=[0];if(!$words)$words=[''];
+        foreach($cats as$c)foreach($words as$w)$out[]=['key'=>'c'.$c.'q'.substr(hash('sha256',$w),0,10),'category'=>$c,'keyword'=>$w];
+    }
+    return$out?:[['key'=>'public','category'=>0,'keyword'=>'']];
+}
+function s4ThirdPartyExplorerSales(array $row):int{
+    foreach(['sales_count','sold_count','orders_count','order_count','sales','successful_orders_count']as$k)if(isset($row[$k])&&is_numeric($row[$k]))return max(0,(int)$row[$k]);
+    foreach(['stats','statistics']as$sk)if(is_array($row[$sk]??null))foreach(['sales_count','sold_count','orders_count']as$k)if(isset($row[$sk][$k]))return max(0,(int)$row[$sk][$k]);
+    return max(0,(int)($row['reviews_count']??$row['review_count']??0));
+}
+function s4ThirdPartyExplorerTimestamp($value):int{
+    if(is_numeric($value))return(int)$value;$ts=@strtotime((string)$value);return$ts>0?$ts:0;
+}
+function s4ThirdPartyExplorerScores(int $sales,int $products,int $created):array{
+    $products=max(1,$products);$ageDays=$created>0?max(1,(int)floor((time()-$created)/86400)):365;$months=max(1,$ageDays/30);
+    $perProduct=$sales/$products;$perMonth=$sales/$months;
+    return['balanced'=>round(log(1+$sales)*35+log(1+$perProduct)*35+log(1+$perMonth)*30,4),
+        'efficiency'=>round(($perProduct*0.65)+($perMonth*0.35),6),'volume'=>(float)$sales,
+        'sales_per_product'=>round($perProduct,4),'sales_per_month'=>round($perMonth,4),'age_days'=>$ageDays];
+}
+function s4ThirdPartyExplorerTick(string $source='cron',bool $force=false):array{
+    $lf=@fopen(__DIR__.'/.third-party-shop-explorer.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>true,'skipped'=>'busy'];}
+    try{
+        $d=s4ThirdPartyExplorerLoad();$cfg=$d['config'];$now=time();
+        if(empty($cfg['enabled'])&&!$force)return['ok'=>true,'skipped'=>'disabled'];
+        /* Manual steps may run while paused, but never bypass API pacing/backoff. */
+        if($now<(int)($d['backoff_until']??0))return['ok'=>true,'skipped'=>'backoff','retry_at'=>(int)$d['backoff_until']];
+        if($now<(int)($d['next_run_at']??0))return['ok'=>true,'skipped'=>'interval','retry_at'=>(int)$d['next_run_at']];
+        $seeds=s4ThirdPartyExplorerSeeds($cfg);$si=max(0,(int)($d['cursor']['seed']??0))%count($seeds);$seed=$seeds[$si];$cursor=max(0,(int)($d['cursor']['by_seed'][$seed['key']]??0));
+        $url='https://core.basalam.com/v4/products?per_page=20&status=2976';if($cursor>0)$url.='&cursor='.$cursor;
+        if((int)$seed['category']>0)$url.='&category_ids='.(int)$seed['category'];if((string)$seed['keyword']!=='')$url.='&q='.rawurlencode((string)$seed['keyword']);
+        $r=basalamApiFetchJson($url,10);$d['last_run_at']=$now;$d['next_run_at']=$now+max(30,min(86400,(int)($cfg['interval_sec']??120)));
+        if(empty($r['ok'])){
+            $code=(int)($r['code']??0);$d['last_error']=(string)($r['error']??'Basalam discovery failed');if($code===429)$d['backoff_until']=$now+300;
+            s4ThirdPartyExplorerSave($d);return['ok'=>false,'code'=>$code,'error'=>$d['last_error'],'backoff_until'=>(int)$d['backoff_until']];
+        }
+        $rows=(array)($r['body']['data']??[]);$new=0;$updated=0;
+        foreach($rows as$row){if(!is_array($row))continue;$v=is_array($row['vendor']??null)?$row['vendor']:[];$vid=(int)($v['id']??$row['vendor_id']??0);if($vid<=0)continue;
+            $key=(string)$vid;$old=is_array($d['vendors'][$key]??null)?$d['vendors'][$key]:[];$created=s4ThirdPartyExplorerTimestamp($v['created_at']??$v['createdAt']??$old['created_at']??0);
+            $productCreated=s4ThirdPartyExplorerTimestamp($row['created_at']??0);if($created<=0||($productCreated>0&&$productCreated<$created))$created=$productCreated;
+            /* Revisited catalogue pages must not inflate estimates: retain one public
+               sales observation per product ID and derive the vendor estimate from it. */
+            $pid=(int)($row['id']??0);$seen=is_array($old['observed_product_sales']??null)?$old['observed_product_sales']:[];
+            if($pid>0)$seen[(string)$pid]=s4ThirdPartyExplorerSales($row);if(count($seen)>5000)$seen=array_slice($seen,-5000,null,true);
+            $observed=count($seen);$productCount=max($observed,(int)($v['products_count']??$v['product_count']??0));
+            $observedSales=array_sum(array_map('intval',$seen));$vendorSales=max(0,(int)($v['sales_count']??$v['orders_count']??0));$sales=max($observedSales,$vendorSales);
+            $scores=s4ThirdPartyExplorerScores($sales,$productCount,$created);$state=(string)($old['state']??'pending');
+            $d['vendors'][$key]=array_replace($old,['vendor_id'=>$vid,'title'=>(string)($v['title']??$v['name']??$old['title']??('غرفه '.$vid)),
+                'identifier'=>(string)($v['identifier']??$old['identifier']??''),'url'=>(string)($v['url']??$old['url']??('https://basalam.com/vendor/'.$vid.'?s4_bsl_vendor_id='.$vid)),
+                'created_at'=>$created,'observed_product_sales'=>$seen,'observed_products'=>$observed,'product_count'=>$productCount,'observed_sales'=>$observedSales,
+                'sales_estimate'=>$sales,'sales_is_estimate'=>true,'last_seen_at'=>$now,'first_seen_at'=>(int)($old['first_seen_at']??$now),
+                'state'=>$state,'source_seed'=>$seed['key'],'scores'=>$scores]);
+            if($old)$updated++;else$new++;
+        }
+        $next=max(0,(int)($r['body']['next_cursor']??0));if($next>0&&$rows)$d['cursor']['by_seed'][$seed['key']]=$next;
+        else{$d['cursor']['by_seed'][$seed['key']]=0;$d['cursor']['seed']=($si+1)%count($seeds);}
+        $d['pages_scanned']=(int)($d['pages_scanned']??0)+1;$d['products_scanned']=(int)($d['products_scanned']??0)+count($rows);$d['last_error']='';
+        $max=max(100,min(10000,(int)($cfg['max_candidates']??2000)));if(count($d['vendors'])>$max){
+            uasort($d['vendors'],fn($a,$b)=>(float)($b['scores']['balanced']??0)<=>(float)($a['scores']['balanced']??0));$d['vendors']=array_slice($d['vendors'],0,$max,true);}
+        s4ThirdPartyExplorerSave($d);return['ok'=>true,'source'=>$source,'seed'=>$seed['key'],'rows'=>count($rows),'new'=>$new,'updated'=>$updated,'next_cursor'=>$next];
+    }finally{@flock($lf,LOCK_UN);@fclose($lf);}
+}
+function s4ThirdPartyExplorerNextSuffix(array $profiles,array $cfg):string{
+    $pattern=trim((string)($cfg['suffix_pattern']??'(کد: {n})'));if($pattern==='')$pattern='(کد: {n})';if(strpos($pattern,'{n}')===false)$pattern.=' {n}';
+    $n=max(1,(int)($cfg['suffix_start']??1));$rx='~^'.str_replace('\\{n\\}','([0-9۰-۹]+)',preg_quote($pattern,'~')).'$~u';
+    foreach($profiles as$p){$s=trim((string)($p['titleSuffix']??''));if(preg_match($rx,$s,$m)){$latin=strtr($m[1],['۰'=>'0','۱'=>'1','۲'=>'2','۳'=>'3','۴'=>'4','۵'=>'5','۶'=>'6','۷'=>'7','۸'=>'8','۹'=>'9']);$n=max($n,(int)$latin+1);}}
+    return str_replace('{n}',(string)$n,$pattern);
+}
+function s4ThirdPartyExplorerApprove(int $vendorId):array{
+    $d=s4ThirdPartyExplorerLoad();$key=(string)$vendorId;$v=is_array($d['vendors'][$key]??null)?$d['vendors'][$key]:[];if(!$v)return['ok'=>false,'error'=>'vendor_not_found'];
+    /* Share the same profile lock as save_profile/extraction so approval cannot
+       overwrite a simultaneous browser save or create two vendor profiles. */
+    $pl=@fopen(PROFILES_FILE.'.extract.lock','c');if(!$pl||!@flock($pl,LOCK_EX)){if($pl)@fclose($pl);return['ok'=>false,'error'=>'profile_lock_failed'];}
+    try{
+        $profiles=loadProfiles();$candidateIdentifier=strtolower(trim((string)($v['identifier']??'')));
+        foreach($profiles as$pk=>$p){$purl=(string)($p['url']??'');$path=trim((string)(parse_url($purl,PHP_URL_PATH)?:''),'/');$first=strtolower((string)(explode('/',$path)[0]??''));
+            $sameId=(int)($p['thirdPartyVendorId']??0)===$vendorId||strpos($purl,'s4_bsl_vendor_id='.$vendorId)!==false||preg_match('~/(?:vendors?|vendor)/'.preg_quote((string)$vendorId,'~').'(?:/|$)~i',$purl);
+            $sameIdentifier=$candidateIdentifier!==''&&$first===$candidateIdentifier;
+            if($sameId||$sameIdentifier){$d['vendors'][$key]['state']='approved';$d['vendors'][$key]['profile_key']=$pk;s4ThirdPartyExplorerSave($d);return['ok'=>true,'duplicate'=>true,'profile_key'=>$pk];}
+        }
+        $url='https://basalam.com/vendor/'.$vendorId.'?s4_bsl_vendor_id='.$vendorId;$pk=profileKey($url);$suffix=s4ThirdPartyExplorerNextSuffix($profiles,$d['config']);
+        $profiles[$pk]=['url'=>$url,'name'=>'باسلام شخص ثالث - '.trim((string)($v['title']??$vendorId)),'pages'=>0,'pagType'=>'next_selector','pagVal'=>'',
+            'selectors'=>[],'extractionEngine'=>'basalam_api','detailSelectors'=>[],'gallery'=>['enabled'=>false],'titleSuffix'=>$suffix,
+            'priceMode'=>'percent','priceVal'=>(float)($d['config']['price_percent']??20),'roundPrice'=>'1000','minPrice'=>10000,
+            'useCustomCol'=>false,'fullMode'=>false,'products'=>[],'productsOrder'=>[],'syncConfig'=>['enabled'=>true,'interval'=>86400,'lastRun'=>0],
+            'productSource'=>['mode'=>'direct'],'backendExtractWithDetail'=>true,'detailExtractMode'=>'two_stage','thirdPartyVendorId'=>$vendorId,'thirdPartyExplorer'=>true,
+            /* Empty per-profile destination overrides mean every destination currently
+               configured in loadConnections(), including destinations added later. */
+            'explorerSendAllDestinations'=>true,'createdAt'=>time(),'updatedAt'=>time()];
+        $ok=writeJsonFile(PROFILES_FILE,$profiles);if(empty($ok['ok']))return['ok'=>false,'error'=>(string)($ok['error']??'profile_write_failed')];
+        $d['vendors'][$key]['state']='approved';$d['vendors'][$key]['profile_key']=$pk;$d['vendors'][$key]['approved_at']=time();
+        $d['audit'][]=['at'=>time(),'action'=>'approve','vendor_id'=>$vendorId,'profile_key'=>$pk,'suffix'=>$suffix,'price_percent'=>(float)$profiles[$pk]['priceVal'],'all_destinations'=>true];$d['audit']=array_slice($d['audit'],-300);s4ThirdPartyExplorerSave($d);
+        return['ok'=>true,'profile_key'=>$pk,'suffix'=>$suffix,'price_percent'=>(float)$profiles[$pk]['priceVal'],'all_destinations'=>true];
+    }finally{@flock($pl,LOCK_UN);@fclose($pl);}
+}
+function s4ThirdPartyExplorerStatus():array{
+    $d=s4ThirdPartyExplorerLoad();$rank=(string)($d['config']['ranking']??'balanced');$scoreKey=$rank==='absolute'?'volume':$rank;
+    $minProducts=max(0,(int)($d['config']['min_products']??1));$minSales=max(0,(int)($d['config']['min_sales']??0));
+    $rows=array_values(array_filter($d['vendors'],fn($v)=>(int)($v['product_count']??0)>=$minProducts&&(int)($v['sales_estimate']??0)>=$minSales));
+    usort($rows,fn($a,$b)=>(float)($b['scores'][$scoreKey]??0)<=>(float)($a['scores'][$scoreKey]??0));$rows=array_slice($rows,0,200);
+    foreach($rows as&$row){$row['active_score']=(float)($row['scores'][$scoreKey]??0);$row['age_days']=(int)($row['scores']['age_days']??0);unset($row['observed_product_sales']);}unset($row);
+    $counts=['pending'=>0,'approved'=>0,'rejected'=>0];foreach($d['vendors']as$v){$s=(string)($v['state']??'pending');if(isset($counts[$s]))$counts[$s]++;}
+    return['ok'=>true,'version'=>APP_VERSION,'config'=>$d['config'],'counts'=>$counts,'candidates'=>$rows,'vendors_total'=>count($d['vendors']),
+        'pages_scanned'=>(int)$d['pages_scanned'],'products_scanned'=>(int)$d['products_scanned'],'last_run_at'=>(int)$d['last_run_at'],
+        'next_run_at'=>(int)$d['next_run_at'],'backoff_until'=>(int)$d['backoff_until'],'last_error'=>(string)$d['last_error'],'audit'=>array_slice($d['audit'],-30)];
+}
+if(isset($_GET['third_party_explorer_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerStatus(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_GET['third_party_explorer_run'])){http_response_code(405);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'POST required']);exit;}
+if(isset($_POST['third_party_explorer_save'])||isset($_POST['third_party_explorer_action'])||isset($_POST['third_party_explorer_run'])){
+    header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();
+    if(isset($_POST['third_party_explorer_run'])){echo json_encode(s4ThirdPartyExplorerTick('manual',true),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
+    $lf=@fopen(__DIR__.'/.third-party-shop-explorer.lock','c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);http_response_code(503);echo json_encode(['ok'=>false,'error'=>'explorer_lock_failed']);exit;}
+    $d=s4ThirdPartyExplorerLoad();
+    if(isset($_POST['third_party_explorer_save'])){$cfg=$d['config'];$cfg['enabled']=!empty($_POST['enabled']);$mode=(string)($_POST['mode']??'public');$cfg['mode']=in_array($mode,['public','categories','categories_keywords'],true)?$mode:'public';
+        $ranking=(string)($_POST['ranking']??'balanced');$cfg['ranking']=in_array($ranking,['balanced','efficiency','absolute'],true)?$ranking:'balanced';
+        $cfg['category_ids']=array_values(array_unique(array_filter(array_map('intval',preg_split('~[\\s,،]+~',(string)($_POST['category_ids']??''))),fn($v)=>$v>0)));
+        $cfg['keywords']=array_values(array_unique(array_filter(array_map('trim',preg_split('~[\\r\\n,،]+~',(string)($_POST['keywords']??''))))));
+        $cfg['interval_sec']=max(30,min(86400,(int)($_POST['interval_sec']??120)));$cfg['min_products']=max(0,(int)($_POST['min_products']??1));$cfg['min_sales']=max(0,(int)($_POST['min_sales']??0));
+        $cfg['price_percent']=max(-99,min(10000,(float)($_POST['price_percent']??20)));$cfg['suffix_pattern']=trim((string)($_POST['suffix_pattern']??'(کد: {n})'))?:'(کد: {n})';$cfg['auto_all_destinations']=true;
+        $d['config']=$cfg;$d['next_run_at']=0;$ok=s4ThirdPartyExplorerSave($d);@flock($lf,LOCK_UN);@fclose($lf);echo json_encode(['ok'=>$ok,'config'=>$cfg],JSON_UNESCAPED_UNICODE);exit;}
+    $vid=(int)($_POST['vendor_id']??0);$op=(string)($_POST['explorer_action']??'');
+    if($op==='approve')$out=s4ThirdPartyExplorerApprove($vid);
+    elseif($op==='reject'&&isset($d['vendors'][(string)$vid])){$d['vendors'][(string)$vid]['state']='rejected';$d['vendors'][(string)$vid]['rejected_at']=time();$d['audit'][]=['at'=>time(),'action'=>'reject','vendor_id'=>$vid];$d['audit']=array_slice($d['audit'],-300);$out=['ok'=>s4ThirdPartyExplorerSave($d),'rejected'=>$vid];}
+    else$out=['ok'=>false,'error'=>$op==='reject'?'vendor_not_found':'invalid_action'];
+    @flock($lf,LOCK_UN);@fclose($lf);echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+
 /* v10.185: Extraction engines. Browser engines are still PHP-controlled:
    Playwright = the render service's CDP/Playwright-compatible driver, Selenium =
    raw W3C WebDriver HTTP. No Node/Python dependency is required by scraper4.php. */
@@ -36966,6 +37127,11 @@ if(!s4WorkerIsActive()&&function_exists('s4HasAttachedExtractionWork')&&s4HasAtt
 if(function_exists('s4CronMaybeRunDailyAiTest')){
     $GLOBALS['_cronDailyAiTest']=s4CronMaybeRunDailyAiTest($_cronVisualKind.'_cron');
 }
+/* v10.647: one bounded public discovery page per due cron. 429 backoff and
+   its own lock keep this from increasing Basalam pressure uncontrollably. */
+if(function_exists('s4ThirdPartyExplorerTick')){
+    try{$GLOBALS['_thirdPartyExplorer']=s4ThirdPartyExplorerTick('cron');}catch(Throwable $_tpe){$GLOBALS['_thirdPartyExplorer']=['ok'=>false,'error'=>$_tpe->getMessage()];}
+}
 /* v10.643: extraction owns an independent flock, so it must not wait even to
    acquire .cron_run.lock. An older matrix/network request may legitimately
    retain that global lock for minutes; profile checkpoints still advance. */
@@ -36973,7 +37139,7 @@ if(!s4WorkerIsActive()&&function_exists('s4HasAttachedExtractionWork')&&s4HasAtt
     &&function_exists('s4RunOneAttachedExtractionSegment')){
     $_preLockExtract=s4RunOneAttachedExtractionSegment('external_cron_prelock',20);
     cronEmit(['ok'=>!empty($_preLockExtract['ok']),'profile_extraction'=>$_preLockExtract,
-        'priority'=>'profile_before_cron_lock','bypassed_cron_lock'=>true,'version'=>APP_VERSION]);exit;
+        'priority'=>'profile_before_cron_lock','bypassed_cron_lock'=>true,'third_party_explorer'=>$GLOBALS['_thirdPartyExplorer']??null,'version'=>APP_VERSION]);exit;
 }
 
 /* v8.92: «اجرای الان» مثل دکمهٔ «استخراج بک‌اند» رفتار کند.
@@ -49623,6 +49789,18 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"\$dead['resumable']=false;\$dead['resume_needed']=0")!==false
         &&strpos($selfSrc,"{v:'10." . "646'")!==false
         &&version_compare(APP_VERSION,'10.646','>='));
+    $add('10.647','کاوشگر عمومی باسلام review-first، محدود، امن و قابل توقف است',
+        count(s4ThirdPartyExplorerSeeds(['mode'=>'categories_keywords','category_ids'=>[11,12],'keywords'=>['الف','ب']]))===4
+        &&s4ThirdPartyExplorerNextSuffix([['titleSuffix'=>'(کد: 7)'],['titleSuffix'=>'سایر 99']],['suffix_pattern'=>'(کد: {n})','suffix_start'=>1])==='(کد: 8)'
+        &&(float)(s4ThirdPartyExplorerScores(25,5,time()-86400)['volume']??0)===25.0
+        &&strpos($selfSrc,"'min_products'")!==false
+        &&strpos($selfSrc,"'min_sales'")!==false
+        &&strpos($selfSrc,'observed_product_sales')!==false
+        &&strpos($selfSrc,'third_party_explorer_action')!==false
+        &&strpos($selfSrc,'s4RequireAuthenticatedMutation();')!==false
+        &&strpos($selfSrc,'id="thirdPartyExplorerSmenu"')!==false
+        &&strpos($selfSrc,"{v:'10." . "647'")!==false
+        &&version_compare(APP_VERSION,'10.647','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -91288,6 +91466,44 @@ html[data-skin="gloss"] .progress-bar{
 </div>
 </div>
 
+<!-- v10.647: review-first third-party Basalam discovery -->
+<div class="smenu" id="thirdPartyExplorerSmenu">
+<div class="smenu-hdr" style="background:linear-gradient(90deg,#7c3aed,#0f172a)" onclick="toggleSmenu(this);tpeLoad()"><h3>🧭 Third-Party Shop Explorer</h3><span class="cst off" id="tpeBadge">متوقف</span><span class="arrow">▼</span></div>
+<div class="smenu-body">
+<style>
+.tpe-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:7px}.tpe-box{background:#0b1220;border:1px solid #263449;border-radius:9px;padding:8px}.tpe-box label{display:block;color:#94a3b8;font-size:10px;margin-bottom:4px}.tpe-box input,.tpe-box select{width:100%;box-sizing:border-box;background:#111827;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px;font-size:11px}.tpe-stats{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.tpe-stat{background:#111827;border:1px solid #334155;border-radius:999px;padding:3px 8px;font-size:10px;color:#cbd5e1}.tpe-table-wrap{max-height:390px;overflow:auto;border:1px solid #263449;border-radius:8px}.tpe-table{width:100%;border-collapse:collapse;font-size:10px;white-space:nowrap}.tpe-table th{position:sticky;top:0;background:#172033;color:#c4b5fd;padding:7px;z-index:1}.tpe-table td{padding:6px;border-top:1px solid #1e293b;color:#dbeafe;text-align:center}.tpe-table td:nth-child(2){text-align:right;white-space:normal;min-width:140px}.tpe-note{font-size:10px;color:#94a3b8;line-height:1.8;margin:7px 0}.tpe-actions{display:flex;gap:5px;flex-wrap:wrap;margin:8px 0}
+</style>
+<div class="tpe-note">کشف مرحله‌ای غرفه‌های عمومی باسلام با توقف/ادامه، کنترل نرخ درخواست و صف بررسی. فروش، در صورت نبود آمار قطعی عمومی، با برچسب «تخمینی» نمایش داده می‌شود. هیچ پروفایلی پیش از تأیید شما ساخته نمی‌شود.</div>
+<div class="tpe-grid">
+<div class="tpe-box"><label>حالت کشف</label><select id="tpeMode"><option value="public">تمام بازار عمومی</option><option value="categories">دسته‌های منتخب</option><option value="categories_keywords">دسته‌ها + کلیدواژه‌ها</option></select></div>
+<div class="tpe-box"><label>فرمول رتبه‌بندی</label><select id="tpeRanking"><option value="balanced">متعادل</option><option value="efficiency">بازده فروش</option><option value="absolute">فروش مطلق</option></select></div>
+<div class="tpe-box"><label>شناسه دسته‌ها (با کاما)</label><input id="tpeCats" placeholder="123, 456"></div>
+<div class="tpe-box"><label>کلیدواژه‌ها (با کاما)</label><input id="tpeWords" placeholder="پوشاک, هدیه"></div>
+<div class="tpe-box"><label>حداقل محصولات</label><input id="tpeMinProducts" type="number" min="0" value="1"></div>
+<div class="tpe-box"><label>حداقل فروش تخمینی</label><input id="tpeMinSales" type="number" min="0" value="0"></div>
+<div class="tpe-box"><label>فاصله درخواست (ثانیه)</label><input id="tpeInterval" type="number" min="30" value="120"></div>
+<div class="tpe-box"><label>افزایش قیمت پروفایل (%)</label><input id="tpePrice" type="number" value="20"></div>
+<div class="tpe-box"><label>الگوی پسوند یکتا</label><input id="tpeSuffix" value="(کد: {n})"></div>
+<div class="tpe-box"><label>توکن مدیر (فقط نصب مستقل)</label><input id="tpeToken" type="password" autocomplete="off" placeholder="deploy token"></div>
+</div>
+<div class="tpe-actions"><button class="btn btn-green" onclick="tpeSave(true)">▶ ذخیره و شروع</button><button class="btn btn-gray" onclick="tpeSave(false)">⏸ توقف</button><button class="btn btn-cyan" onclick="tpeRun()">↻ اجرای یک گام</button><button class="btn btn-gray" onclick="tpeLoad(true)">تازه‌سازی</button></div>
+<div class="tpe-stats" id="tpeStats"></div><div id="tpeMsg" class="tpe-note"></div>
+<details style="margin:6px 0"><summary style="font-size:10px;color:#a78bfa;cursor:pointer">تاریخچهٔ ممیزی تأیید/رد</summary><div id="tpeAudit" class="tpe-note">هنوز رویدادی ثبت نشده است.</div></details>
+<div class="tpe-table-wrap"><table class="tpe-table"><thead><tr><th>رتبه</th><th>غرفه</th><th>فروش تخمینی</th><th>محصول</th><th>سن (روز)</th><th>امتیاز</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody id="tpeRows"><tr><td colspan="8">برای بارگذاری، بخش را باز کنید.</td></tr></tbody></table></div>
+</div></div>
+<script>
+const TPE_NONCE=<?php echo json_encode(function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''); ?>;
+let tpeBusy=false;
+function tpeEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function tpeForm(extra){const f=new FormData();if(TPE_NONCE)f.append('_wpnonce',TPE_NONCE);const tok=document.getElementById('tpeToken')?.value||'';if(tok)f.append('token',tok);Object.entries(extra||{}).forEach(([k,v])=>f.append(k,v));return f;}
+async function tpeReq(extra,post=false){const r=await fetch(post?'':'?third_party_explorer_status=1&_t='+Date.now(),post?{method:'POST',body:tpeForm(extra)}:{});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d;}
+function tpeSet(id,v){const e=document.getElementById(id);if(e)e.value=v??'';}
+async function tpeLoad(force=false){if(tpeBusy&&!force)return;tpeBusy=true;try{const d=await tpeReq();const c=d.config||{};tpeSet('tpeMode',c.mode);tpeSet('tpeRanking',c.ranking);tpeSet('tpeCats',(c.category_ids||[]).join(', '));tpeSet('tpeWords',(c.keywords||[]).join(', '));tpeSet('tpeMinProducts',c.min_products);tpeSet('tpeMinSales',c.min_sales);tpeSet('tpeInterval',c.interval_sec);tpeSet('tpePrice',c.price_percent);tpeSet('tpeSuffix',c.suffix_pattern);const b=document.getElementById('tpeBadge');b.textContent=c.enabled?'در حال اجرا':'متوقف';b.className='cst '+(c.enabled?'on':'off');document.getElementById('tpeStats').innerHTML=`<span class="tpe-stat">در انتظار: ${d.counts?.pending||0}</span><span class="tpe-stat">تأیید: ${d.counts?.approved||0}</span><span class="tpe-stat">رد: ${d.counts?.rejected||0}</span><span class="tpe-stat">صفحات: ${d.pages_scanned||0}</span><span class="tpe-stat">محصولات: ${d.products_scanned||0}</span>`;const rows=d.candidates||[];document.getElementById('tpeRows').innerHTML=rows.length?rows.map((v,i)=>`<tr><td>${i+1}</td><td>${tpeEsc(v.title||('Vendor '+v.vendor_id))}<br><small>#${v.vendor_id}</small></td><td>${Number(v.sales_estimate||0).toLocaleString()} <small>(تخمینی)</small></td><td>${Number(v.product_count||0).toLocaleString()}</td><td>${v.age_days??'—'}</td><td>${Number(v.active_score||0).toFixed(2)}</td><td>${tpeEsc(v.state)}</td><td>${v.state==='pending'?`<button class="btn btn-green" onclick="tpeAction('approve',${v.vendor_id})">تأیید</button> <button class="btn btn-red" onclick="tpeAction('reject',${v.vendor_id})">رد</button>`:'—'}</td></tr>`).join(''):'<tr><td colspan="8">هنوز گزینه‌ای مطابق فیلترها کشف نشده است.</td></tr>';document.getElementById('tpeMsg').textContent=d.last_error?('آخرین خطا: '+d.last_error):('آخرین اجرا: '+(d.last_run_at?new Date(d.last_run_at*1000).toLocaleString('fa-IR'):'—'));const audit=d.audit||[];document.getElementById('tpeAudit').innerHTML=audit.length?audit.slice().reverse().map(a=>`${new Date((a.at||0)*1000).toLocaleString('fa-IR')} — ${tpeEsc(a.action)} — #${a.vendor_id}${a.profile_key?' — '+tpeEsc(a.profile_key):''}`).join('<br>'):'هنوز رویدادی ثبت نشده است.';}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}finally{tpeBusy=false;}}
+async function tpeSave(enabled){try{await tpeReq({third_party_explorer_save:1,enabled:enabled?1:0,mode:document.getElementById('tpeMode').value,ranking:document.getElementById('tpeRanking').value,category_ids:document.getElementById('tpeCats').value,keywords:document.getElementById('tpeWords').value,min_products:document.getElementById('tpeMinProducts').value,min_sales:document.getElementById('tpeMinSales').value,interval_sec:document.getElementById('tpeInterval').value,price_percent:document.getElementById('tpePrice').value,suffix_pattern:document.getElementById('tpeSuffix').value},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
+async function tpeRun(){try{document.getElementById('tpeMsg').textContent='در حال دریافت یک صفحه…';await tpeReq({third_party_explorer_run:1},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
+async function tpeAction(action,id){try{await tpeReq({third_party_explorer_action:1,explorer_action:action,vendor_id:id},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
+</script>
+
 <!-- v10.470: زیرمنوی جامع «مدیریت سفارشات» (باسلام چندغرفه + ووکامرس) -->
 <div class="smenu" id="omSmenuRoot">
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#1d4ed8,#0f172a)" onclick="toggleSmenu(this);omEnsureLoaded()"><h3>📦 مدیریت سفارشات</h3><span class="cst off" id="omHdrBadge">باسلام + ووکامرس</span><span class="arrow">▼</span></div>
@@ -102345,6 +102561,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.647', t:'🧭 کاوشگر غرفه‌های شخص ثالث باسلام با صف بررسی', items:[
+    'کشف مرحله‌ای از دادهٔ عمومی باسلام در سه حالت بازار کامل، دسته‌های منتخب و دسته‌ها همراه کلیدواژه، با checkpoint مستقل، فاصلهٔ درخواست، backoff خطای 429، توقف و ادامه.',
+    'رتبه‌بندی انتخابی متعادل، بازده فروش یا فروش مطلق با فیلتر حداقل محصول/فروش؛ ارقام فروش غیرقطعی صریحاً تخمینی نمایش داده می‌شوند.',
+    'تأیید دستی یک پروفایل عادی استخراج/ارسال با افزایش قیمت پیش‌فرض ۲۰٪، مقصدهای پیکربندی‌شده و پسوند کد افزایشی یکتا می‌سازد؛ رد، جلوگیری از تکرار و تاریخچهٔ ممیزی نیز حفظ می‌شوند.'
+  ]},
   {v:'10.646', t:'🧹 عبور نگهبان از ردیف پروفایل حذف‌شده', items:[
     'اگر checkpoint به پروفایلی اشاره کند که دیگر وجود ندارد، Continue بی‌معناست؛ ردیف با دلیل روشن failed و غیرقابل‌ادامه می‌شود.',
     'ردیف یتیم دیگر هر cron را به خود اختصاص نمی‌دهد و تیک بعدی به کار معتبر بعدی می‌رسد.',
@@ -124649,6 +124870,23 @@ async function s4RuntimeHealthCheck(force=false){
   const extractBeat=()=>{
     if(window._s4ExtractFeedbackBusy)return;window._s4ExtractFeedbackBusy=true;
     const u=cronReference+'?internal_extract_feedback=1&_pulse='+Date.now();
+    fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4ExtractFeedbackBusy=false;});
+  };
+  const matrixBeat=()=>{
+    if(window._s4MatrixFeedbackBusy)return;window._s4MatrixFeedbackBusy=true;
+    const u=cronReference+'?internal_matrix_feedback=1&_pulse='+Date.now();
+    fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4MatrixFeedbackBusy=false;});
+  };
+  const wake=()=>{localBeat();cronBeat();extractBeat();cronRunBeat();setTimeout(matrixBeat,2500);};
+  setTimeout(wake,1200);setInterval(cronBeat,15000);setInterval(extractBeat,25000);setInterval(matrixBeat,30000);setInterval(cronRunBeat,30000);setInterval(localBeat,120000);
+  window.addEventListener('pageshow',wake);window.addEventListener('online',wake);
+  window.addEventListener('focus',wake);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')wake();});
+})();
+</script>
+</body>
+</html>
+e+'?internal_extract_feedback=1&_pulse='+Date.now();
     fetch(u,{method:'GET',cache:'no-store'}).catch(()=>{}).finally(()=>{window._s4ExtractFeedbackBusy=false;});
   };
   const matrixBeat=()=>{
