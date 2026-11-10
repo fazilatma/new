@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.647';
+const APP_VERSION = '10.648';
 
 
 if (!function_exists('str_starts_with')) {
@@ -26812,9 +26812,26 @@ if(isset($_GET['basalam_api_probe'])){
  * It discovers vendor IDs incrementally from public Core catalogue pages,
  * estimates comparable metrics, and never creates a profile before approval.
  * ===================================================================== */
+function s4ThirdPartyExplorerNonceSecret():string{
+    static $secret=null;if(is_string($secret)&&$secret!=='')return$secret;$path=__DIR__.'/.third-party-shop-explorer.secret';
+    $secret=trim((string)@file_get_contents($path));if(strlen($secret)>=32)return$secret;
+    try{$secret=bin2hex(random_bytes(32));}catch(Throwable $e){$secret=hash('sha256',__FILE__.'|'.php_uname().'|'.microtime(true));}
+    if(@file_put_contents($path,$secret,LOCK_EX)!==false)@chmod($path,0600);return$secret;
+}
+function s4ThirdPartyExplorerBrowserNonce(?int $bucket=null):string{
+    $secret=s4ThirdPartyExplorerNonceSecret();$bucket=$bucket??(int)floor(time()/1800);$host=strtolower((string)($_SERVER['HTTP_HOST']??''));
+    return hash_hmac('sha256','third-party-shop-explorer|'.$host.'|'.$bucket,$secret);
+}
 function s4RequireAuthenticatedMutation():void{
     $auth=function_exists('s4PhpRuntimeApplyAuth')?s4PhpRuntimeApplyAuth():['ok'=>false];
-    if(empty($auth['ok'])){http_response_code(403);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'unauthorized'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
+    /* Standalone installations authorize the Explorer UI with a short-lived,
+       server-signed nonce. The configured deploy secret never reaches the browser. */
+    $given=trim((string)($_POST['explorer_nonce']??($_SERVER['HTTP_X_S4_EXPLORER_NONCE']??'')));$signed=false;
+    if($given!==''){$bucket=(int)floor(time()/1800);foreach([$bucket,$bucket-1]as$b){$want=s4ThirdPartyExplorerBrowserNonce($b);if($want!==''&&hash_equals($want,$given)){$signed=true;break;}}}
+    $origin=(string)($_SERVER['HTTP_ORIGIN']??'');if($origin==='')$origin=(string)($_SERVER['HTTP_REFERER']??'');
+    $originHost=strtolower((string)(parse_url($origin,PHP_URL_HOST)?:''));$requestHost=strtolower(preg_replace('~:\\d+$~','',(string)($_SERVER['HTTP_HOST']??'')));
+    $browserOk=$signed&&$originHost!==''&&hash_equals($requestHost,$originHost);
+    if(empty($auth['ok'])&&!$browserOk){http_response_code(403);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'unauthorized'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
 }
 function s4ThirdPartyExplorerFile():string{return __DIR__.'/.third-party-shop-explorer.json';}
 function s4ThirdPartyExplorerDefaults():array{return[
@@ -26943,7 +26960,7 @@ function s4ThirdPartyExplorerStatus():array{
     usort($rows,fn($a,$b)=>(float)($b['scores'][$scoreKey]??0)<=>(float)($a['scores'][$scoreKey]??0));$rows=array_slice($rows,0,200);
     foreach($rows as&$row){$row['active_score']=(float)($row['scores'][$scoreKey]??0);$row['age_days']=(int)($row['scores']['age_days']??0);unset($row['observed_product_sales']);}unset($row);
     $counts=['pending'=>0,'approved'=>0,'rejected'=>0];foreach($d['vendors']as$v){$s=(string)($v['state']??'pending');if(isset($counts[$s]))$counts[$s]++;}
-    return['ok'=>true,'version'=>APP_VERSION,'config'=>$d['config'],'counts'=>$counts,'candidates'=>$rows,'vendors_total'=>count($d['vendors']),
+    return['ok'=>true,'version'=>APP_VERSION,'explorer_nonce'=>s4ThirdPartyExplorerBrowserNonce(),'config'=>$d['config'],'counts'=>$counts,'candidates'=>$rows,'vendors_total'=>count($d['vendors']),
         'pages_scanned'=>(int)$d['pages_scanned'],'products_scanned'=>(int)$d['products_scanned'],'last_run_at'=>(int)$d['last_run_at'],
         'next_run_at'=>(int)$d['next_run_at'],'backoff_until'=>(int)$d['backoff_until'],'last_error'=>(string)$d['last_error'],'audit'=>array_slice($d['audit'],-30)];
 }
@@ -49801,6 +49818,14 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'id="thirdPartyExplorerSmenu"')!==false
         &&strpos($selfSrc,"{v:'10." . "647'")!==false
         &&version_compare(APP_VERSION,'10.647','>='));
+    $add('10.648','کاوشگر بدون ورود دستی توکن، nonce کوتاه‌عمر را خودکار می‌فرستد',
+        strpos($selfSrc,'function s4ThirdPartyExplorerBrowserNonce')!==false
+        &&strpos($selfSrc,'function s4ThirdPartyExplorerNonceSecret')!==false
+        &&strpos($selfSrc,"hash_hmac('sha256','third-party-shop-explorer|")!==false
+        &&strpos($selfSrc,"f.append('explorer_nonce',TPE_BROWSER_NONCE)")!==false
+        &&strpos($selfSrc,'id="tpe'.'Token"')===false
+        &&strpos($selfSrc,"{v:'10." . "648'")!==false
+        &&version_compare(APP_VERSION,'10.648','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -91484,7 +91509,6 @@ html[data-skin="gloss"] .progress-bar{
 <div class="tpe-box"><label>فاصله درخواست (ثانیه)</label><input id="tpeInterval" type="number" min="30" value="120"></div>
 <div class="tpe-box"><label>افزایش قیمت پروفایل (%)</label><input id="tpePrice" type="number" value="20"></div>
 <div class="tpe-box"><label>الگوی پسوند یکتا</label><input id="tpeSuffix" value="(کد: {n})"></div>
-<div class="tpe-box"><label>توکن مدیر (فقط نصب مستقل)</label><input id="tpeToken" type="password" autocomplete="off" placeholder="deploy token"></div>
 </div>
 <div class="tpe-actions"><button class="btn btn-green" onclick="tpeSave(true)">▶ ذخیره و شروع</button><button class="btn btn-gray" onclick="tpeSave(false)">⏸ توقف</button><button class="btn btn-cyan" onclick="tpeRun()">↻ اجرای یک گام</button><button class="btn btn-gray" onclick="tpeLoad(true)">تازه‌سازی</button></div>
 <div class="tpe-stats" id="tpeStats"></div><div id="tpeMsg" class="tpe-note"></div>
@@ -91492,13 +91516,14 @@ html[data-skin="gloss"] .progress-bar{
 <div class="tpe-table-wrap"><table class="tpe-table"><thead><tr><th>رتبه</th><th>غرفه</th><th>فروش تخمینی</th><th>محصول</th><th>سن (روز)</th><th>امتیاز</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody id="tpeRows"><tr><td colspan="8">برای بارگذاری، بخش را باز کنید.</td></tr></tbody></table></div>
 </div></div>
 <script>
-const TPE_NONCE=<?php echo json_encode(function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''); ?>;
+const TPE_WP_NONCE=<?php echo json_encode(function_exists('wp_create_nonce')?wp_create_nonce('s4_code_update'):''); ?>;
+let TPE_BROWSER_NONCE=<?php echo json_encode(s4ThirdPartyExplorerBrowserNonce()); ?>;
 let tpeBusy=false;
 function tpeEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function tpeForm(extra){const f=new FormData();if(TPE_NONCE)f.append('_wpnonce',TPE_NONCE);const tok=document.getElementById('tpeToken')?.value||'';if(tok)f.append('token',tok);Object.entries(extra||{}).forEach(([k,v])=>f.append(k,v));return f;}
+function tpeForm(extra){const f=new FormData();if(TPE_WP_NONCE)f.append('_wpnonce',TPE_WP_NONCE);if(TPE_BROWSER_NONCE)f.append('explorer_nonce',TPE_BROWSER_NONCE);Object.entries(extra||{}).forEach(([k,v])=>f.append(k,v));return f;}
 async function tpeReq(extra,post=false){const r=await fetch(post?'':'?third_party_explorer_status=1&_t='+Date.now(),post?{method:'POST',body:tpeForm(extra)}:{});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));return d;}
 function tpeSet(id,v){const e=document.getElementById(id);if(e)e.value=v??'';}
-async function tpeLoad(force=false){if(tpeBusy&&!force)return;tpeBusy=true;try{const d=await tpeReq();const c=d.config||{};tpeSet('tpeMode',c.mode);tpeSet('tpeRanking',c.ranking);tpeSet('tpeCats',(c.category_ids||[]).join(', '));tpeSet('tpeWords',(c.keywords||[]).join(', '));tpeSet('tpeMinProducts',c.min_products);tpeSet('tpeMinSales',c.min_sales);tpeSet('tpeInterval',c.interval_sec);tpeSet('tpePrice',c.price_percent);tpeSet('tpeSuffix',c.suffix_pattern);const b=document.getElementById('tpeBadge');b.textContent=c.enabled?'در حال اجرا':'متوقف';b.className='cst '+(c.enabled?'on':'off');document.getElementById('tpeStats').innerHTML=`<span class="tpe-stat">در انتظار: ${d.counts?.pending||0}</span><span class="tpe-stat">تأیید: ${d.counts?.approved||0}</span><span class="tpe-stat">رد: ${d.counts?.rejected||0}</span><span class="tpe-stat">صفحات: ${d.pages_scanned||0}</span><span class="tpe-stat">محصولات: ${d.products_scanned||0}</span>`;const rows=d.candidates||[];document.getElementById('tpeRows').innerHTML=rows.length?rows.map((v,i)=>`<tr><td>${i+1}</td><td>${tpeEsc(v.title||('Vendor '+v.vendor_id))}<br><small>#${v.vendor_id}</small></td><td>${Number(v.sales_estimate||0).toLocaleString()} <small>(تخمینی)</small></td><td>${Number(v.product_count||0).toLocaleString()}</td><td>${v.age_days??'—'}</td><td>${Number(v.active_score||0).toFixed(2)}</td><td>${tpeEsc(v.state)}</td><td>${v.state==='pending'?`<button class="btn btn-green" onclick="tpeAction('approve',${v.vendor_id})">تأیید</button> <button class="btn btn-red" onclick="tpeAction('reject',${v.vendor_id})">رد</button>`:'—'}</td></tr>`).join(''):'<tr><td colspan="8">هنوز گزینه‌ای مطابق فیلترها کشف نشده است.</td></tr>';document.getElementById('tpeMsg').textContent=d.last_error?('آخرین خطا: '+d.last_error):('آخرین اجرا: '+(d.last_run_at?new Date(d.last_run_at*1000).toLocaleString('fa-IR'):'—'));const audit=d.audit||[];document.getElementById('tpeAudit').innerHTML=audit.length?audit.slice().reverse().map(a=>`${new Date((a.at||0)*1000).toLocaleString('fa-IR')} — ${tpeEsc(a.action)} — #${a.vendor_id}${a.profile_key?' — '+tpeEsc(a.profile_key):''}`).join('<br>'):'هنوز رویدادی ثبت نشده است.';}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}finally{tpeBusy=false;}}
+async function tpeLoad(force=false){if(tpeBusy&&!force)return;tpeBusy=true;try{const d=await tpeReq();if(d.explorer_nonce)TPE_BROWSER_NONCE=d.explorer_nonce;const c=d.config||{};tpeSet('tpeMode',c.mode);tpeSet('tpeRanking',c.ranking);tpeSet('tpeCats',(c.category_ids||[]).join(', '));tpeSet('tpeWords',(c.keywords||[]).join(', '));tpeSet('tpeMinProducts',c.min_products);tpeSet('tpeMinSales',c.min_sales);tpeSet('tpeInterval',c.interval_sec);tpeSet('tpePrice',c.price_percent);tpeSet('tpeSuffix',c.suffix_pattern);const b=document.getElementById('tpeBadge');b.textContent=c.enabled?'در حال اجرا':'متوقف';b.className='cst '+(c.enabled?'on':'off');document.getElementById('tpeStats').innerHTML=`<span class="tpe-stat">در انتظار: ${d.counts?.pending||0}</span><span class="tpe-stat">تأیید: ${d.counts?.approved||0}</span><span class="tpe-stat">رد: ${d.counts?.rejected||0}</span><span class="tpe-stat">صفحات: ${d.pages_scanned||0}</span><span class="tpe-stat">محصولات: ${d.products_scanned||0}</span>`;const rows=d.candidates||[];document.getElementById('tpeRows').innerHTML=rows.length?rows.map((v,i)=>`<tr><td>${i+1}</td><td>${tpeEsc(v.title||('Vendor '+v.vendor_id))}<br><small>#${v.vendor_id}</small></td><td>${Number(v.sales_estimate||0).toLocaleString()} <small>(تخمینی)</small></td><td>${Number(v.product_count||0).toLocaleString()}</td><td>${v.age_days??'—'}</td><td>${Number(v.active_score||0).toFixed(2)}</td><td>${tpeEsc(v.state)}</td><td>${v.state==='pending'?`<button class="btn btn-green" onclick="tpeAction('approve',${v.vendor_id})">تأیید</button> <button class="btn btn-red" onclick="tpeAction('reject',${v.vendor_id})">رد</button>`:'—'}</td></tr>`).join(''):'<tr><td colspan="8">هنوز گزینه‌ای مطابق فیلترها کشف نشده است.</td></tr>';document.getElementById('tpeMsg').textContent=d.last_error?('آخرین خطا: '+d.last_error):('آخرین اجرا: '+(d.last_run_at?new Date(d.last_run_at*1000).toLocaleString('fa-IR'):'—'));const audit=d.audit||[];document.getElementById('tpeAudit').innerHTML=audit.length?audit.slice().reverse().map(a=>`${new Date((a.at||0)*1000).toLocaleString('fa-IR')} — ${tpeEsc(a.action)} — #${a.vendor_id}${a.profile_key?' — '+tpeEsc(a.profile_key):''}`).join('<br>'):'هنوز رویدادی ثبت نشده است.';}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}finally{tpeBusy=false;}}
 async function tpeSave(enabled){try{await tpeReq({third_party_explorer_save:1,enabled:enabled?1:0,mode:document.getElementById('tpeMode').value,ranking:document.getElementById('tpeRanking').value,category_ids:document.getElementById('tpeCats').value,keywords:document.getElementById('tpeWords').value,min_products:document.getElementById('tpeMinProducts').value,min_sales:document.getElementById('tpeMinSales').value,interval_sec:document.getElementById('tpeInterval').value,price_percent:document.getElementById('tpePrice').value,suffix_pattern:document.getElementById('tpeSuffix').value},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
 async function tpeRun(){try{document.getElementById('tpeMsg').textContent='در حال دریافت یک صفحه…';await tpeReq({third_party_explorer_run:1},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
 async function tpeAction(action,id){try{await tpeReq({third_party_explorer_action:1,explorer_action:action,vendor_id:id},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
@@ -102561,6 +102586,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.648', t:'🔐 حذف نیاز به ورود دستی توکن در Shop Explorer', items:[
+    'فیلد توکن مدیر حذف شد؛ صفحه nonce کوتاه‌عمر امضاشده را خودکار دریافت و همراه عملیات شروع، توقف، اجرا، تأیید و رد ارسال می‌کند.',
+    'راز اختصاصی Explorer فقط روی سرور ساخته و نگهداری می‌شود و هرگز در HTML یا درخواست مرورگر افشا نمی‌شود؛ nonce مدیر وردپرس نیز همچنان پشتیبانی می‌شود.'
+  ]},
   {v:'10.647', t:'🧭 کاوشگر غرفه‌های شخص ثالث باسلام با صف بررسی', items:[
     'کشف مرحله‌ای از دادهٔ عمومی باسلام در سه حالت بازار کامل، دسته‌های منتخب و دسته‌ها همراه کلیدواژه، با checkpoint مستقل، فاصلهٔ درخواست، backoff خطای 429، توقف و ادامه.',
     'رتبه‌بندی انتخابی متعادل، بازده فروش یا فروش مطلق با فیلتر حداقل محصول/فروش؛ ارقام فروش غیرقطعی صریحاً تخمینی نمایش داده می‌شوند.',
