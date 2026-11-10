@@ -405,7 +405,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.683';
+const APP_VERSION = '10.684';
 
 
 if (!function_exists('str_starts_with')) {
@@ -33789,6 +33789,26 @@ function bslFanoutShops(?array $cn): array {
     }
     return $out;
 }
+/** Explicit queue requests must not be narrowed by a stale persisted picker.
+ * null means all configured/tokened shops; an array means exactly that subset. */
+function bslFanoutShopsForSelection(?array $cn,?array $vendorIds):array{
+    $cn=$cn?:loadConnections();if(!isset($cn['basalam'])||!is_array($cn['basalam']))$cn['basalam']=[];
+    $cn['basalam']['send_shop_ids']=$vendorIds===null?null:array_values(array_unique(array_filter(array_map('intval',$vendorIds),static fn($v)=>$v>0)));
+    return bslFanoutShops($cn);
+}
+/** Upgrade default-only Lane 1 rows created by older queue paths before the
+ * lane worker starts. Partially processed rows stay serial: the default shop
+ * resumes at its checkpoint while newly cloned non-default rows start at zero. */
+function bslUpgradeDefaultOnlyFastRows(array &$queue,array $cn):array{
+    $shops=bslFanoutShops($cn);if(count($shops)<=1)return['changed'=>false,'rows'=>0,'shops'=>count($shops)];$mode=bslEffectiveShopSendMode($cn);$added=[];$changed=0;
+    foreach($queue['entries']as&$row){if(!is_array($row))continue;$status=(string)($row['status']??'');if(!in_array($status,['waiting','running','done'],true)||!in_array(bslRowLane($row),['fast','legacy'],true)||!empty($row['explicit_shop_target'])||!empty($row['shop_coverage_upgraded_at']))continue;$cfg=is_array($row['config']??null)?$row['config']:[];$par=(array)($cfg['parallel_shop_vids']??$row['parallel_shop_vids']??[]);if($par||(int)($row['shop_vendor_id']??$cfg['shop_vendor_id']??0)>0||!empty($cfg['fanout']))continue;
+        if($status==='done'){if((int)($row['done_at']??0)<time()-7200||!is_file((string)($row['products_file']??'')))continue;$baseId=(string)($row['id']??('lane1_'.time()));foreach(array_slice($shops,1)as$shop){$clone=$row;$clone['id']=$baseId.'_s'.(int)$shop['vendor_id'];$clone['status']='waiting';foreach(['current','sent','updated','skipped','failed','started_at','done_at']as$zero)$clone[$zero]=0;$clone['shop_send_mode']='serial';$clone['shop_vendor_id']=(int)$shop['vendor_id'];$clone['shop_name']=(string)$shop['shop_name'];$clone['shop_is_default']=!empty($shop['is_default']);$clone['batch_id']=$baseId;$clone['config']=array_replace($cfg,['send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>(int)$shop['vendor_id'],'shop_name'=>(string)$shop['shop_name']]);$added[]=$clone;}$row['shop_coverage_upgraded_at']=time();$row['shop_coverage_upgraded_count']=count($shops);$changed++;continue;}
+        $partial=max((int)($row['current']??0),(int)($row['sent']??0),(int)($row['updated']??0))>0;$vids=array_values(array_map(static fn($s)=>(int)$s['vendor_id'],$shops));$names=array_values(array_map(static fn($s)=>(string)$s['shop_name'],$shops));
+        if($mode==='parallel'&&!$partial){$row['shop_send_mode']='parallel';$row['parallel_shop_vids']=$vids;$row['shop_name']='⚡ موازی ('.count($shops).' غرفه)';$row['config']=array_replace($cfg,['send_all_shops'=>0,'fanout'=>0,'shop_send_mode'=>'parallel','parallel_shop_vids'=>$vids,'parallel_shop_names'=>$names]);}
+        else{$baseId=(string)($row['id']??('lane1_'.time()));$first=$shops[0];$row['shop_send_mode']='serial';$row['shop_vendor_id']=(int)$first['vendor_id'];$row['shop_name']=(string)$first['shop_name'];$row['shop_is_default']=!empty($first['is_default']);$row['batch_id']=$baseId;$row['config']=array_replace($cfg,['send_all_shops'=>0,'fanout'=>1,'shop_send_mode'=>'serial','shop_vendor_id'=>(int)$first['vendor_id'],'shop_name'=>(string)$first['shop_name']]);foreach(array_slice($shops,1)as$shop){$clone=$row;$clone['id']=$baseId.'_s'.(int)$shop['vendor_id'];$clone['status']='waiting';$clone['current']=0;$clone['sent']=0;$clone['updated']=0;$clone['skipped']=0;$clone['failed']=0;$clone['started_at']=0;$clone['done_at']=0;$clone['shop_vendor_id']=(int)$shop['vendor_id'];$clone['shop_name']=(string)$shop['shop_name'];$clone['shop_is_default']=!empty($shop['is_default']);$clone['config']['shop_vendor_id']=(int)$shop['vendor_id'];$clone['config']['shop_name']=(string)$shop['shop_name'];$added[]=$clone;}}
+        $row['shop_coverage_upgraded_at']=time();$row['shop_coverage_upgraded_count']=count($shops);$changed++;
+    }unset($row);if($added)$queue['entries']=array_merge($queue['entries'],$added);return['changed'=>$changed>0,'rows'=>$changed,'added'=>count($added),'shops'=>count($shops)];
+}
 
 /* v9.68: تعدیل قیمتِ مخصوصِ هر غرفهٔ باسلام، «نسبت به غرفهٔ پیش‌فرض».
    غرفهٔ پیش‌فرض خودش می‌تواند درصد/مقدار داشته باشد (price_mode/price_val
@@ -38847,7 +38867,7 @@ if ($bslDup !== null) {
 } else {
 /* v10.73 (87): همان fan-outِ مسیرِ دستی — هر غرفهٔ فعال یک ردیفِ مستقل.
    ردیفِ اول با شناسهٔ اصلی و بقیه با پسوند _s{vendor_id}؛ همه زیرِ batch_id. */
-$bslFanout=(!empty($cn['basalam']['send_all_shops'])||is_array($cn['basalam']['send_shop_ids']??null))?bslFanoutShops($cn):[];
+$bslFanout=bslFanoutShops($cn);
 $_cronShopMode = bslEffectiveShopSendMode($cn);
 if (count($bslFanout) > 1 && $_cronShopMode === 'parallel') {
     $_cronParVids = array_values(array_map(static fn($x) => (int)$x['vendor_id'], $bslFanout));
@@ -50581,6 +50601,22 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'bulk_import_rows'=>array_values")!==false
         &&strpos($selfSrc,"{v:'10." . "683'")!==false
         &&version_compare(APP_VERSION,'10.683','>='));
+    $__cn684=['basalam'=>['token'=>'d','vendor_id'=>68401,'shop_name'=>'پیش‌فرض','send_shop_ids'=>[68401],'shop_send_mode'=>'parallel','vendors'=>[['token'=>'a','vendor_id'=>68402,'shop_name'=>'دوم'],['token'=>'b','vendor_id'=>68403,'shop_name'=>'سوم']]]];
+    $__all684=bslFanoutShopsForSelection($__cn684,null);$__selected684=bslFanoutShops($__cn684);
+    $__queue684=['entries'=>[['id'=>'q684','status'=>'waiting','lane'=>'fast','products_file'=>'fixture://684','total'=>2,'current'=>0,'sent'=>0,'updated'=>0,'config'=>[]]]];
+    $__upgrade684=bslUpgradeDefaultOnlyFastRows($__queue684,array_replace_recursive($__cn684,['basalam'=>['send_shop_ids'=>null]]));
+    $add('10.684','لین ۱ انتخاب همهٔ غرفه‌ها را به پیش‌فرض تقلیل نمی‌دهد و ردیف‌های قدیمی را ارتقا می‌دهد',
+        count($__selected684)===1
+        &&array_column($__all684,'vendor_id')===[68401,68402,68403]
+        &&!empty($__upgrade684['changed'])
+        &&(array)($__queue684['entries'][0]['parallel_shop_vids']??[])===[68401,68402,68403]
+        &&strpos($selfSrc,'$bslFanout=bslFanoutShops($cn);')!==false
+        &&strpos($selfSrc,"fd2.append('selected_shop_vids',JSON.stringify(_sv));")!==false
+        &&strpos($selfSrc,'function bslUpgradeDefaultOnlyFastRows')!==false
+        &&strpos($selfSrc,"if(\$status==='done')")!==false
+        &&strpos($selfSrc,'$__coverageRows=bslUpgradeDefaultOnlyFastRows($queue,$__selectionCn)')!==false
+        &&strpos($selfSrc,"{v:'10." . "684'")!==false
+        &&version_compare(APP_VERSION,'10.684','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -82455,16 +82491,11 @@ if($_bslLane==='detail'){
 // تا اگر تیک غرفه‌ای در مرورگر خورده ولی saveShopSelection هنوز کامل نشده یا
 // قدیمی بوده، bslQueueApplyCurrentShopSelection بلافاصله ردیف تازه را نَبُرد.
 $_selectedVidsRaw=json_decode($_POST['selected_shop_vids']??'null',true);
-if(!empty($_POST['shop_picker_sync'])&&is_array($_selectedVidsRaw)&&count($_selectedVidsRaw)>0){
-$_normSelVids=array_values(array_unique(array_filter(array_map('intval',$_selectedVidsRaw),static fn($v)=>$v>0)));
-$_curSelVids=is_array($cn['basalam']['send_shop_ids']??null)
-    ?array_values(array_unique(array_filter(array_map('intval',(array)$cn['basalam']['send_shop_ids']),static fn($v)=>$v>0))):[];
-$_s1=$_normSelVids;$_s2=$_curSelVids;sort($_s1);sort($_s2);
-if($_s1!==$_s2||!is_array($cn['basalam']['send_shop_ids']??null)){
-$cn['basalam']['send_shop_ids']=$_normSelVids;
-$cn['basalam']['send_shop_ids_at']=time();
-saveConnections($cn);
-}
+if(!empty($_POST['shop_picker_sync'])){
+$_normSelVids=is_array($_selectedVidsRaw)?array_values(array_unique(array_filter(array_map('intval',$_selectedVidsRaw),static fn($v)=>$v>0))):null;
+$_currentRaw=$cn['basalam']['send_shop_ids']??null;$_curSelVids=is_array($_currentRaw)?array_values(array_unique(array_filter(array_map('intval',$_currentRaw),static fn($v)=>$v>0))):null;
+$_s1=$_normSelVids;$_s2=$_curSelVids;if(is_array($_s1))sort($_s1);if(is_array($_s2))sort($_s2);
+if($_s1!==$_s2){$cn['basalam']['send_shop_ids']=$_normSelVids;$cn['basalam']['send_shop_ids_at']=time();saveConnections($cn);}
 }
 $qFile=__DIR__.'/bsl_queue_products_'.$queueId.'.json';
 if((!file_exists($qFile)||!empty($_POST['from_profile']))&&$_bslResolvedKey!==''&&isset($__pf[$_bslResolvedKey])){
@@ -82597,13 +82628,9 @@ if(!$_anyProdCat){@unlink($qFile);echo json_encode(['ok'=>false,'error'=>'ابت
 }
 $_selectedVids=$_selectedVidsRaw;
 if(is_array($_selectedVids)&&count($_selectedVids)===0){@unlink($qFile);echo json_encode(['ok'=>false,'error'=>'حداقل یک غرفه را انتخاب کنید'],JSON_UNESCAPED_UNICODE);exit;}
-if(is_array($_selectedVids)&&count($_selectedVids)>0){
-    $fanoutShops=array_values(array_filter(bslAllShops($cn),function($sh)use($_selectedVids){
-        return in_array((int)($sh['vendor_id']??0),$_selectedVids,true);
-    }));
-} else {
-    $fanoutShops=!empty($_POST['send_all_shops'])?bslFanoutShops($cn):[];
-}
+if(is_array($_selectedVids)&&count($_selectedVids)>0)$fanoutShops=bslFanoutShopsForSelection($cn,$_selectedVids);
+elseif(!empty($_POST['send_all_shops']))$fanoutShops=bslFanoutShopsForSelection($cn,null);
+else $fanoutShops=bslFanoutShops($cn);
 if(is_array($_selectedVids)&&count($_selectedVids)>0&&count($fanoutShops)===0){
     echo json_encode(['ok'=>false,'error'=>'غرفهٔ انتخابی، در تنظیمات پیدا نشد'],JSON_UNESCAPED_UNICODE);exit;
 }
@@ -82707,6 +82734,7 @@ foreach($queue['entries'] as &$e){
     }
 }
 unset($e);
+$__laneCoverageUpgrade=in_array($__requestedNextLane,['fast','legacy'],true)?bslUpgradeDefaultOnlyFastRows($queue,loadConnections()):['changed'=>false];
 $nextIdx=-1;
 $laneOrder=[$__requestedNextLane];
 foreach($laneOrder as $wantLane){
@@ -82736,7 +82764,7 @@ if($nextIdx>=0){
         ['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1','lane'=>$nextLane]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
     queueBackendUnlock($__laneProbe);
     echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'lane'=>$nextLane,'total'=>$nextEntry['total'],'worker_pid'=>$nextPid,
-        'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'reclaimed_stale_pid'=>$__reclaimedLanePid,'msg'=>'شروع فرآیند بعدی همین لین از صف'],JSON_UNESCAPED_UNICODE);
+        'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'shop_coverage_upgrade'=>$__laneCoverageUpgrade,'reclaimed_stale_pid'=>$__reclaimedLanePid,'msg'=>'شروع فرآیند بعدی همین لین از صف'],JSON_UNESCAPED_UNICODE);
 }else{
     bslWriteQueue($queue);echo json_encode(['ok'=>true,'next_id'=>null,'lane'=>$__requestedNextLane,'msg'=>'صف این لین خالی است'],JSON_UNESCAPED_UNICODE);
 }
@@ -83453,8 +83481,8 @@ $bslShopStats=[]; $bslDefaultVid=0; $bslDefaultShopName='';
 $queue=bslReadQueue();
 /* v10.416: shop selection is live configuration, not a historical queue
    snapshot. Deselecting a shop removes its waiting/stale rows before claim. */
-$__selectionCn=loadConnections();$__disabledRows=bslQueueApplyCurrentShopSelection($queue,$__selectionCn);
-if($__disabledRows)bslWriteQueue($queue);
+$__selectionCn=loadConnections();$__coverageRows=bslUpgradeDefaultOnlyFastRows($queue,$__selectionCn);$__disabledRows=bslQueueApplyCurrentShopSelection($queue,$__selectionCn);
+if($__disabledRows||!empty($__coverageRows['changed']))bslWriteQueue($queue);
 
 $progress=readProgress($bslProgressFile);
 $runningRows=count(array_filter((array)($queue['entries']??[]),function($row)use($_bslLane){return is_array($row)&&($row['status']??'')==='running'&&bslRowLane($row)===$_bslLane;}));
@@ -103606,6 +103634,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.684', t:'🏪 پوشش واقعی همهٔ غرفه‌ها در لین ۱', items:[
+    'مسیر دوره‌ای لین ۱ دیگر نبودن send_shop_ids را به ارسال تک‌غرفه‌ای پیش‌فرض تبدیل نمی‌کند؛ null اکنون در همهٔ مسیرها صریحاً به معنی همهٔ غرفه‌های معتبر و دارای توکن است.',
+    'درخواست مستقیم مرورگر انتخاب «همه» را همراه shop_picker_sync به سرور می‌فرستد و سرور مقدار null را نیز پایدار می‌کند؛ یک انتخاب ذخیره‌شدهٔ قدیمی دیگر درخواست صریح همهٔ غرفه‌ها را محدود نمی‌کند.',
+    'صف‌های waiting یا checkpointهای بدون worker که توسط نسخه‌های قبلی فقط برای غرفهٔ پیش‌فرض ساخته شده‌اند، پیش از شروع لین ۱ به پوشش موازی یا سری همهٔ غرفه‌های انتخابی ارتقا می‌یابند.',
+    'ردیف نیمه‌انجام‌شده برای جلوگیری از تکرار در غرفهٔ پیش‌فرض به‌صورت سری ادامه می‌یابد و برای غرفه‌های جاافتاده ردیف‌های کامل از ابتدای snapshot ساخته می‌شود.'
+  ]},
   {v:'10.683', t:'📥 افزودن دسته‌جمعی غرفه‌های شخص ثالث از لینک', items:[
     'در زیرمنوی غرفه‌های شخص ثالث، لینک‌های باسلام با پیست مستقیم یا آپلود فایل TXT، CSV و TSV تا سقف ۲۰۰ ورودی دریافت، تکرارزدایی و همزمان شناسایی می‌شوند.',
     'نتیجه فوراً در جدول بازبینی مستقل با عنوان پروفایل پیشنهادی، شناسه غرفه، کد رزروشده، پسوند، ضریب تعدیل و وضعیت تکراری/غرفه خودی نمایش داده می‌شود.',
@@ -120750,10 +120784,8 @@ function queueBslSend(ps,catId){
         const _sv=bslGetSelectedVids();
         fd2.append('send_all_shops',_sv===null||_sv.length>1?'1':'0');
         fd2.append('shop_send_mode',typeof bslGetShopSendMode==='function'?bslGetShopSendMode():'serial');
-        if(_sv!==null){
-            fd2.append('selected_shop_vids',JSON.stringify(_sv));
-            fd2.append('shop_picker_sync','1');
-        }
+        fd2.append('selected_shop_vids',JSON.stringify(_sv));
+        fd2.append('shop_picker_sync','1');
         return fd2;
     }
     function uploadChunksAndAddBsl(){
