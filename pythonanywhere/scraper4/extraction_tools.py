@@ -58,6 +58,7 @@ def register_extraction_tools(app,db,settings):
         if not profile: abort(404)
         engine=data.get('engine',engines.profile_engine(profile))
         if not isinstance(engine,str) or engine not in engines.ENGINES: raise ValueError('موتور انتخابی معتبر نیست.')
+        requested_engine=engine
         engine=engines.source_api(profile['url']) or engine
         digest=hashlib.sha256(json.dumps([profile['url'],profile['selectors'],profile['settings'],profile['pagination']],sort_keys=True).encode()).hexdigest()
         signer=URLSafeTimedSerializer(settings.secret_key,salt='s4-start-five-page-probe')
@@ -70,7 +71,7 @@ def register_extraction_tools(app,db,settings):
         if not _GATE.acquire(False): return jsonify(ok=False,error='آزمایش دیگری در این پردازش در حال اجراست.'),429
         try:
             report={'profile_id':profile['id'],'name':profile['name'] or profile['key'],'engine':engine,'tested_at':utc_now(),
-                    'fingerprint':digest,'products_changed':False,'queue_changed':False,'scope':'first_listing_page' if state['page']==1 else 'listing_page','page':state['page'],'next':None}
+                    'requested_engine':requested_engine,'engine_policy':'source_api_only' if engines.source_api(profile['url']) else 'selected_engine','fingerprint':digest,'products_changed':False,'queue_changed':False,'scope':'first_listing_page' if state['page']==1 else 'listing_page','page':state['page'],'next':None}
             try:
                 result=engines.extract(state['url'],profile['selectors'],engine,engines.for_installation(settings,db),timeout=8,probe=True)
                 rows=list(result['products'].values())

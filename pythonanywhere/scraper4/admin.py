@@ -134,6 +134,14 @@ def register_admin(app, db, settings):
     def update_status():
         return jsonify(ok=True, **updates.status(db, settings))
 
+    @bp.route('/api/updates/branches',methods=['GET','POST'])
+    def update_branches():
+        from .services.update_branches import read,save
+        if request.args:raise ValueError('پارامتر query پذیرفته نمی‌شود.')
+        cfg=save(db,settings,request.get_json()) if request.method=='POST' else read(db)
+        return jsonify(ok=True,repository=updates.REPO,config=cfg,
+                       note='فقط فهرست محلی منبع آپدیت؛ بدون ایجاد/حذف/تغییر شاخه در GitHub. وجود شاخه هنگام بررسی نسخه سنجیده می‌شود؛ ذخیره هیچ نصب یا صفی اجرا نمی‌کند. انتشار امضاشدهٔ عامل مستقل و روی شاخهٔ ثابت باقی می‌ماند.')
+
     @bp.post('/api/updates/config')
     def update_config():
         data = request.get_json() or {}

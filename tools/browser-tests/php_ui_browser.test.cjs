@@ -356,3 +356,17 @@ for(const route of ['/','/php-ui'])test('support report and gallery operation wo
  if(route==='/php-ui'){await page.frames().find(f=>f.url().endsWith('/php-ui/frame')).evaluate(()=>galleryTest());await page.locator('#php-tools[open]').waitFor();}
  const before=await(await page.request.get(origin+'/__test__/extract-state')).json();await page.locator('#shared-php-profile').selectOption('1');const response=page.waitForResponse(r=>r.url().endsWith('/api/extraction/gallery-preview'));await page.locator('#shared-php-gallery').click();const value=await(await response).json();assert.equal(value.count,1);assert.deepEqual(value.images,['https://example.com/gallery.jpg']);assert.deepEqual(await(await page.request.get(origin+'/__test__/extract-state')).json(),before);assert.deepEqual(errors,[]);
 });
+
+for(const route of ['/','/php-ui'])test('version code branch list can add rename delete select and persist without updating in '+route,{timeout:60000},async t=>{
+ const {page,origin}=await setup(t,'',true),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());await page.goto(origin+route);
+ if(route==='/php-ui')await page.frameLocator('#php-original-ui').locator('html[data-s4-ready="1"]').waitFor();
+ await page.evaluate(()=>S4Menu.open('version'));await page.locator('#update-branch-add').waitFor({state:'visible'});
+ const before=await(await page.request.get(origin+'/api/updates/status')).json();const original=before.branch;
+ await page.locator('#update-branch-name').fill('test/preview');await page.locator('#update-branch-add').click();assert.equal(await page.locator('#update-branch-list').inputValue(),'test/preview');
+ assert.equal((await(await page.request.get(origin+'/api/updates/status')).json()).branch,original);
+ await page.locator('#update-branch-name').fill('test/renamed');await page.locator('#update-branch-rename').click();assert.equal(await page.locator('#update-branch-list').inputValue(),'test/renamed');
+ await page.locator('#update-branch-name').fill('test/remove');await page.locator('#update-branch-add').click();await page.locator('#update-branch-delete').click();assert.equal(await page.locator('#update-branch-list option[value="test/remove"]').count(),0);
+ await page.locator('#update-branch-list').selectOption('test/renamed');const saved=page.waitForResponse(r=>r.url().endsWith('/api/updates/branches')&&r.request().method()==='POST');await page.locator('#update-branch-save').click();assert.equal((await saved).status(),200);
+ const after=await(await page.request.get(origin+'/api/updates/status')).json();assert.equal(after.branch,'test/renamed');assert.deepEqual(after.operation,before.operation);assert.deepEqual(after.config,before.config);
+ await page.reload();await page.evaluate(()=>S4Menu.open('version'));await page.waitForFunction(()=>document.getElementById('update-branch-list').value==='test/renamed');assert.deepEqual(errors,[]);
+});

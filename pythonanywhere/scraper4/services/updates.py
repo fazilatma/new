@@ -43,10 +43,19 @@ def update_config(db):
     return {'enabled': True, 'interval_seconds': 3600, **db.checkpoint_read('updates:config')}
 
 
+def branch_config(db):
+    from .update_branches import read
+    return read(db)
+
+
+def selected_branch(db):
+    return branch_config(db)['selected']
+
+
 def status(db, settings):
     state = db.checkpoint_read('updates:state')
     return {'current': read_release(settings.base_dir).get('commit'),
-            'repository': REPO, 'branch': REF, 'config': update_config(db),
+            'repository': REPO, 'branch': selected_branch(db), 'branches': branch_config(db), 'config': update_config(db),
             'state': state, 'operation': db.checkpoint_read('maintenance:request')}
 
 
@@ -60,6 +69,10 @@ def request_operation(db, action):
         old = json.loads(row[0]) if row else {}
         if old.get('status') in ('pending', 'running'):
             raise ValueError('A maintenance operation is already queued or running')
+        if action in ('check','update'):
+            row=conn.execute("SELECT state FROM task_checkpoints WHERE task='updates:branches'").fetchone()
+            from .update_branches import validate
+            value['branch']=validate(json.loads(row[0]))['selected'] if row else REF
         now = utc_now()
         conn.execute('''INSERT INTO task_checkpoints (task,state,created_at,updated_at) VALUES (?,?,?,?)
             ON CONFLICT(task) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at''',
@@ -67,22 +80,26 @@ def request_operation(db, action):
     return value
 
 
-def latest_commit():
-    url = f'https://api.github.com/repos/{REPO}/commits/' + requests.utils.quote(REF, safe='')
+def latest_commit(branch=REF):
+    from .update_branches import branch_name
+    branch=branch_name(branch)
+    url = f'https://api.github.com/repos/{REPO}/branches/' + requests.utils.quote(branch, safe='')
     try:
         response = requests.get(url, timeout=(10, 30), headers={'Accept': 'application/vnd.github+json'})
         response.raise_for_status()
-        sha = response.json()['sha']
-    except (requests.RequestException, ValueError, KeyError):
+        sha = response.json()['commit']['sha']
+    except (requests.RequestException, ValueError, KeyError, TypeError):
         raise ValueError('GitHub version check failed (network/rate limit/private repository)') from None
     if not isinstance(sha, str) or not SHA.fullmatch(sha):
         raise ValueError('Invalid GitHub commit response')
     return sha
 
 
-def check(db, settings):
-    commit = latest_commit()
-    result = {'latest': commit, 'checked_at': utc_now(), 'checked_epoch': time.time(),
+def check(db, settings, branch=None):
+    from .update_branches import branch_name
+    branch=branch_name(branch or selected_branch(db))
+    commit = latest_commit() if branch==REF else latest_commit(branch)
+    result = {'branch': branch, 'latest': commit, 'checked_at': utc_now(), 'checked_epoch': time.time(),
               'available': commit != read_release(settings.base_dir).get('commit'), 'error': ''}
     db.checkpoint_write('updates:state', result)
     return result
@@ -326,7 +343,7 @@ def maintain(db, settings):
         db.checkpoint_write('maintenance:request', request)
     try:
         if action in ('check', 'update', 'auto'):
-            result = check(db, settings)
+            result = check(db, settings, request.get('branch') if explicit else None)
             if action != 'check' and result['available']:
                 result.update(apply_update(db, settings, result['latest']))
                 result['available'] = False

@@ -12,10 +12,12 @@ def register_deploy(app, db, settings):
         value = {'enabled': True, **db.checkpoint_read('deploy:config')}
         if request.method == 'GET':
             trusted = webdeploy.authority()
+            from .services import updates
+            branch_matches=updates.selected_branch(db)==updates.REF
             return jsonify(ok=True, config=value, host=trusted['host'],
-                           ready=bool(db.get_config('pythonanywhere').get('token')) and
+                           ready=branch_matches and bool(db.get_config('pythonanywhere').get('token')) and
                                  db.get_config('pythonanywhere').get('domain') == trusted['host'],
-                           mode='signed_code_only', code_updates_require_task=False)
+                           mode='signed_code_only', code_updates_require_task=False, branch=updates.REF, selected_update_branch=updates.selected_branch(db), branch_matches=branch_matches)
         if not session.get('authenticated') or request.environ.get('s4.bearer'):
             abort(403)
         data = request.get_json()

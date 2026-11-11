@@ -281,6 +281,8 @@ def deploy_code(db, settings, proof):
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return {'ok': False, 'busy': True, 'error': 'A worker or updater is active; retry this proof'}, 409
+        if updates.selected_branch(db)!=updates.REF:
+            return {'ok':False,'error':'Selected update branch differs from the fixed signed-agent branch; use the maintenance updater or select the agent branch explicitly'},409
         # Bounded retention: only expired request records are removed.
         with db.connect() as conn:
             rows = conn.execute("SELECT task,state FROM task_checkpoints WHERE task LIKE 'agent-deploy:%'").fetchall()

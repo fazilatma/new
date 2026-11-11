@@ -264,3 +264,12 @@ npm test --prefix tools/browser-tests
 - `GET /api/operations/coverage`:۲۴خانوادهٔ بازبینی‌شده با status/دامنه/کار باقی‌مانده، counts=8connected/10partial/6pending؛ completion_percentage=null و exhaustive=false در توضیح دامنه، نه شمارش کل handlerهای PHP.
 - `GET /api/support/report[?download=1]`: مدیر مرورگری/owner-open، گزارش امنِ runtime/deploy/update/extraction/coverage؛ snapshot خواندنی، بدون dump تنظیمات/پروفایل/raw console/errors/proof/nonce/credentials، بدون شبکهٔ مبدأ یا صف. HEAD نیز فقط خواندنی است. دانلود attachment JSON؛ پارامتر path/command دلخواه رد می‌شود.
 - `POST /api/extraction/gallery-preview`: نشست/CSRF فعلی یا owner-open؛ `{profile_id:int,product_id?:int}`، محصول ذخیره‌شدهٔ متعلق به همان پروفایل. URL/body دلخواه، GET و شناسهٔ محصولِ پروفایل دیگر پذیرفته نیست. یک fetch محدود، تصاویر URL فقط، حداکثر۳۰، API-only برای سه سایت. هیچ ذخیرهٔ محصول/صف یا دانلود bytes تصویر ندارد. خطای مبدأ به گزارش امن network_error/HTTP تبدیل می‌شود، نه متن requests. همهٔ gallery modes/edit/proxy PHP ادعا نمی‌شوند.
+
+## شاخه‌های updater و شفافیت موتور — 1.29.0
+
+- `GET /api/updates/branches`: `{ok,repository,config:{branches:[name],selected:name,revision:int},note}`، بدون GitHub request یا نصب.
+- `POST /api/updates/branches`: همان config، مجموعهٔ دقیق سه فیلد، احراز/CSRF جاری یا owner-open.۱تا۳۰نام یکتا،۱تا۱۶۰نویسهٔ Git ساده؛ selected داخل فهرست. CAS revision، worker lock، maintenance marker و pending/running guard. ذخیره شاخه‌های GitHub را تغییر نمی‌دهد؛ query/command/path/repo دلخواه رد می‌شود. تغییر منبع latest قدیمی را پاک می‌کند؛ interval/enabled مستقل است.
+- `GET /api/updates/status` و بخش updates در `/api/system/status`: branch انتخابی و branches/revision؛ state.branch منبع بررسی و operation.branch منبع pin‌شدهٔ درخواست است.
+- check/apply/CLI/auto: resolve دقیق `api.github.com/repos/fazilatma/new/branches/<encoded-name>` سپس دانلود SHA معتبر از همان مخزن و مسیرهای امن قبلی؛ tag/SHA به‌جای نام شاخه پذیرفتهٔ lookup نیست. ایجاد/حذف واقعی remote branch، shell/git و repo دلخواه وجود ندارد.
+- `/api/deploy/config`: branch ثابت عامل، selected_update_branch و branch_matches؛ ready در انتخاب متفاوت false. `/api/deploy/run` زیر worker lock برای منبع متفاوت409می‌دهد، حتی با proof معتبر. هیچ شاخهٔ دیگری از مسیر امضاشده منتشر نمی‌شود.
+- `/api/extraction/probe`: فیلدهای افزودهٔ گزارش `requested_engine`, `engine_policy` (`source_api_only` یا `selected_engine`). engine موتور مؤثر است؛ برای اسنپ‌شاپ/دیجی‌کالا/باسلام همهٔ انتخاب‌ها API هستند، نه چند مسیر شبکهٔ مستقل.

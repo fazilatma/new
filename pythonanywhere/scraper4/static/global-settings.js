@@ -40,7 +40,7 @@ async function systemPoll() {
     const update = data.updates;
     const operation = update.operation || {};
     systemState.textContent = JSON.stringify({running:data.runtime, domain:data.platform.domain, platform:data.platform.provisioning,
-      auto_update:update.config, current:update.current, latest:update.state.latest,
+      auto_update:update.config, update_branch:update.branch, checked_branch:update.state.branch, current:update.current, latest:update.state.latest,
       update_available:update.state.available, error:update.state.error,
       operation:operation}, null, 2);
     document.querySelector('#auto-update').checked = update.config.enabled;

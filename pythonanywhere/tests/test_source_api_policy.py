@@ -97,3 +97,10 @@ def test_snapp_transport_tls_bound_body_no_redirect_or_token_leak(settings,monke
     assert 'PRIVATE-GUEST' not in str(err.value)
     response.status_code=200;response.iter_content.return_value=[b'{"data":{"items":[]}}']
     assert snappshop_api.request_json('search/v1','POST',settings,time.monotonic()+5,{},'PRIVATE-GUEST')['data']['items']==[]
+
+
+def test_probe_explains_requested_engine_is_not_effective_transport(settings,api):
+    app=create_app(replace(settings,access_mode='open',password=''));db=app.extensions['s4_db']
+    p=db.upsert_profile('snapp-policy','https://snappshop.ir/category/mobile')
+    r=app.test_client().post('/api/extraction/probe',json={'profile_id':p['id'],'engine':'jina'}).json['report']
+    assert r['requested_engine']=='jina' and r['engine']=='snappshop_api' and r['engine_policy']=='source_api_only'
