@@ -398,6 +398,7 @@ const BACKUP_CFG_FILE  = __DIR__ . '/.backup-config.json';
 const BACKUP_LOG_FILE  = __DIR__ . '/.backup-log.json';
 const BACKUP_DIR       = __DIR__ . '/_backups';
 const ORDERS_MGR_NOTES_FILE = __DIR__ . '/orders_mgr_notes.json';
+const PROCUREMENT_STATE_FILE = __DIR__ . '/procurement_center.json'; // v10.686: source purchase tasks and policy
 const TASKS_RESUME_ALL_STATE_FILE = __DIR__ . '/tasks_resume_all_state.json';
 const TASKS_STOP_ALL_CLEAR_FILE = __DIR__ . '/tasks_stop_all_clear.json'; // v10.495: deferred safe checkpoint cleanup
 const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.508: durable stale-row tombstone
@@ -405,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.685';
+const APP_VERSION = '10.686';
 
 
 if (!function_exists('str_starts_with')) {
@@ -35977,7 +35978,7 @@ function backupDataFiles(): array {
               'autoreply_rules.json','autoreply_state.json','autoreply_log.json',
               'digest_state.json','cron_last_run.json','last_notification_check.json',
               'ai_providers.json','ai_votes.json','ai_key_state.json',
-              'category_attempts.json','auto_jobs.json'];
+              'category_attempts.json','auto_jobs.json','procurement_center.json'];
     $out = [];
     foreach ($names as $n) { $p = __DIR__ . '/' . $n; if (is_file($p)) $out[] = $n; }
     return $out;
@@ -36132,6 +36133,7 @@ function backupSectionMap(): array {
             'desc'  => 'کارهای زمان‌بندی‌شده و نشانه‌های زمانیِ اجرا',
             'subs'  => [
                 'auto_jobs'  => ['title' => 'کارهای زمان‌بندی‌شده', 'desc' => 'تعریفِ کارهای خودکارِ ایجنتی', 'files' => ['auto_jobs.json']],
+                'procurement' => ['title' => 'مرکز تأمین سفارش', 'desc' => 'سیاست‌ها، تطبیق‌ها و شناسه‌های خرید منبع؛ ممکن است شامل نشانی گیرنده باشد', 'files' => ['procurement_center.json'], 'secret' => true, 'off' => true],
                 'auto_stamp' => [
                     'title' => 'نشانه‌های زمانیِ اجرا',
                     'desc'  => 'آخرین اجرای کران، آخرین بررسیِ اعلان و خلاصهٔ روزانه',
@@ -50654,6 +50656,29 @@ if (isset($_GET['selftest'])) {
         &&strpos($__text685,'رنگ: قرمز، آبی')!==false
         &&strpos($selfSrc,"{v:'10." . "685'")!==false
         &&version_compare(APP_VERSION,'10.685','>='));
+    $__pcDefaults686=s4ProcurementDefaults();$__pcStats686=s4ProcurementStats([
+        ['status'=>'unmatched'],['status'=>'matched'],['status'=>'approved'],['status'=>'ordered']]);
+    $__pcLinks686=s4ProcurementSearchLinks('گوشی تست');
+    $__pcVariant686=s4ProcurementChooseVariant(['variations'=>[
+        ['variation_id'=>1,'attributes'=>['رنگ'=>'قرمز','سایز'=>'S'],'price'=>100,'stock'=>2],
+        ['variation_id'=>2,'attributes'=>['رنگ'=>'آبی','سایز'=>'M'],'price'=>120,'stock'=>1],
+    ]],['variant'=>'رنگ: آبی · سایز: M']);
+    $add('10.686','مرکز تأمین، تطبیق چندمنبعی، جستجوی AI و تأیید امن خرید فعال است',
+        defined('PROCUREMENT_STATE_FILE')
+        &&($__pcDefaults686['settings']['approval_required']??false)===true
+        &&($__pcDefaults686['settings']['transfer_address']??true)===false
+        &&($__pcStats686['total']??0)===4&&($__pcStats686['ordered']??0)===1
+        &&s4ProcurementPlatform(['link'=>'https://basalam.com/p/686'])==='basalam'
+        &&s4ProcurementPlatform(['link'=>'https://www.digikala.com/product/dkp-686'])==='digikala'
+        &&strpos($__pcLinks686['snappshop']??'','snappshop.ir')!==false
+        &&(int)($__pcVariant686['variation_id']??0)===2
+        &&(int)($__pcVariant686['price']??0)===120
+        &&s4ProcurementTaskId('woo:686',0)===s4ProcurementTaskId('woo:686',0)
+        &&s4ProcurementTaskId('woo:686',0)!==s4ProcurementTaskId('woo:686',1)
+        &&strpos($selfSrc,"pcAction('ai_match'")!==false
+        &&strpos($selfSrc,'id="pcPanel"')!==false
+        &&strpos($selfSrc,"{v:'10." . "686'")!==false
+        &&version_compare(APP_VERSION,'10.686','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -74977,6 +75002,59 @@ if (isset($_GET['bsl_notify_selected'])) {
  *  v10.470: سامانهٔ یکپارچهٔ مدیریت سفارشات (باسلام چندغرفه + ووکامرس)
  * ===================================================================== */
 
+/** v10.686: Safe procurement orchestration. It never fabricates a buyer API:
+ * matching and approval are automatic, while checkout remains a reviewed hand-off
+ * until an explicitly supported and authorised buyer connector exists. */
+function s4ProcurementDefaults():array{return['schema'=>1,'settings'=>['auto_generate'=>false,'approval_required'=>true,'ai_matching'=>true,'transfer_address'=>false,'max_price_increase_pct'=>8,'min_margin_pct'=>10],'tasks'=>[],'audit'=>[]];}
+function s4ProcurementLoad():array{$d=is_file(PROCUREMENT_STATE_FILE)?json_decode((string)@file_get_contents(PROCUREMENT_STATE_FILE),true):[];$base=s4ProcurementDefaults();if(!is_array($d))$d=[];$d=array_replace_recursive($base,$d);$d['tasks']=is_array($d['tasks']??null)?$d['tasks']:[];$d['audit']=is_array($d['audit']??null)?$d['audit']:[];return$d;}
+function s4ProcurementSave(array $d):bool{$d['schema']=1;$d['tasks']=array_slice((array)($d['tasks']??[]),-5000,null,true);$d['audit']=array_slice((array)($d['audit']??[]),-500);return writeJsonFile(PROCUREMENT_STATE_FILE,$d)['ok']??false;}
+function s4ProcurementNorm(string $v):string{$v=normalize_text(strip_tags($v));$v=mb_strtolower($v,'UTF-8');$v=preg_replace('~[^\p{L}\p{N}]+~u',' ',$v)??$v;return trim(preg_replace('~\s+~u',' ',$v)??$v);}
+function s4ProcurementPlatform(array $p):string{$u=strtolower((string)($p['link']??$p['url']??''));if(strpos($u,'basalam.com')!==false||!empty($p['basalam_product_id']))return'basalam';if(strpos($u,'digikala.com')!==false)return'digikala';if(strpos($u,'snapp')!==false)return'snappshop';return'other';}
+function s4ProcurementCandidate(string $profileKey,string $productKey,array $p,float $score,string $reason):array{$url=(string)($p['link']??$p['url']??'');$price=(int)preg_replace('/\D+/','',(string)($p['price_num']??$p['price']??0));$vars=[];foreach(array_slice(s4StructuredVariationCombinations($p),0,20)as$v)$vars[]=['variation_id'=>(int)($v['variation_id']??$v['id']??0),'attributes'=>(array)($v['attributes']??[]),'price'=>(int)($v['price']??0),'stock'=>(int)($v['stock']??0),'in_stock'=>!empty($v['in_stock']),'sku'=>(string)($v['sku']??'')];return['profile_key'=>$profileKey,'product_key'=>$productKey,'title'=>(string)($p['title']??$p['name']??''),'sku'=>(string)($p['sku']??''),'url'=>$url,'platform'=>s4ProcurementPlatform($p),'source_product_id'=>(int)($p['basalam_product_id']??$p['source_id']??0),'price'=>$price,'stock'=>max(0,(int)($p['stock']??$p['inventory']??0)),'variations'=>$vars,'score'=>round(max(0,min(1,$score)),4),'reason'=>$reason,'image'=>(string)($p['image']??'')];}
+function s4ProcurementChooseVariant(array $candidate,array $item):?array{$wanted=s4ProcurementNorm((string)($item['variant']??''));if($wanted==='')return null;$best=null;$bestScore=0;foreach((array)($candidate['variations']??[])as$v){$parts=[];foreach((array)($v['attributes']??[])as$k=>$x)$parts[]=$k.' '.s4VariationScalarText($x);$text=s4ProcurementNorm(implode(' ',$parts));if($text==='')continue;$wa=array_unique(explode(' ',$wanted));$va=array_unique(explode(' ',$text));$score=count($wa)?count(array_intersect($wa,$va))/count($wa):0;if($score>$bestScore){$bestScore=$score;$best=$v;}}if(!$best||$bestScore<.5)return null;$best['match_score']=round($bestScore,3);$best['label']=implode(' · ',array_map(fn($k,$v)=>$k.': '.s4VariationScalarText($v),array_keys((array)$best['attributes']),array_values((array)$best['attributes'])));return$best;}
+function s4ProcurementProfileProduct(string $profileKey,string $productKey):?array{$profile=bslLoadSingleProfileSnapshot($profileKey);if(!$profile)return null;foreach((array)($profile['products']??[])as$key=>$p)if(is_array($p)){$_k=is_string($key)?$key:productKey($p);if($_k===$productKey)return$p;}return null;}
+function s4ProcurementCandidates(array $item,string $channel='',int $limit=8):array{
+    static $catalogProfiles=null;
+    $title=s4ProcurementNorm((string)($item['title']??''));$sku=s4ProcurementNorm((string)($item['sku']??''));$remoteId=(int)($item['product_id']??0);$out=[];$seen=[];
+    if($remoteId>0&&in_array($channel,['woo','bsl'],true)){$ledger=remoteMapLoad();foreach((array)($ledger[$channel]??[])as$mapKey=>$meta){if((int)($meta['id']??0)!==$remoteId)continue;$pk=preg_replace('~#v\d+$~','',(string)$mapKey);$profile=(string)($meta['profile']??'');$p=$profile!==''?s4ProcurementProfileProduct($profile,$pk):null;if($p){$c=s4ProcurementCandidate($profile,$pk,$p,1,'شناسهٔ نگاشت‌شدهٔ محصول مقصد');$out[]=$c;$seen[$profile.'|'.$pk]=true;break;}}unset($ledger);}
+    if($catalogProfiles===null)$catalogProfiles=loadProfiles();$profiles=$catalogProfiles;$scanned=0;foreach($profiles as$profileKey=>$profile){if(!is_array($profile))continue;foreach((array)($profile['products']??[])as$key=>$p){if(!is_array($p)||$scanned++>=30000)break 2;$pk=is_string($key)?$key:productKey($p);$sig=(string)$profileKey.'|'.$pk;if(isset($seen[$sig]))continue;$pt=s4ProcurementNorm((string)($p['title']??$p['name']??''));$ps=s4ProcurementNorm((string)($p['sku']??''));$score=0;$why='شباهت عنوان';if($sku!==''&&$ps!==''&&$sku===$ps){$score=.98;$why='SKU یکسان';}elseif($title!==''&&$pt!==''){$pct=0;similar_text($title,$pt,$pct);$ta=array_values(array_unique(explode(' ',$title)));$tb=array_values(array_unique(explode(' ',$pt)));$union=array_unique(array_merge($ta,$tb));$jac=$union?count(array_intersect($ta,$tb))/count($union):0;$score=max($pct/100,$jac);if(strpos($pt,$title)!==false||strpos($title,$pt)!==false)$score=max($score,.78);}if($score<.42)continue;$out[]=s4ProcurementCandidate((string)$profileKey,$pk,$p,$score,$why);$seen[$sig]=true;}}
+    unset($profiles);usort($out,fn($a,$b)=>(float)$b['score']<=>(float)$a['score']?:((int)$a['price']<=>(int)$b['price']));return array_slice($out,0,max(1,min(20,$limit)));
+}
+function s4ProcurementRefreshSource(array &$task):array{$m=(array)($task['match']??[]);if(($m['platform']??'')!=='basalam')return['ok'=>false,'error'=>'بازخوانی خودکار قیمت فعلاً فقط برای منبع باسلام دارای API عمومی فعال است'];$pid=(int)($m['source_product_id']??0);if($pid<=0&&preg_match('~/(?:p|product)/(\d+)~',(string)($m['url']??''),$mm))$pid=(int)$mm[1];if($pid<=0)return['ok'=>false,'error'=>'شناسه محصول منبع باسلام پیدا نشد'];$r=basalamApiFetchJson('https://core.basalam.com/v4/products/'.$pid,15);if(empty($r['ok'])||!is_array($r['body']??null))return['ok'=>false,'error'=>(string)($r['error']??'خواندن محصول منبع باسلام ناموفق بود')];$p=basalamApiProductMap($r['body']);$fresh=s4ProcurementCandidate((string)($m['profile_key']??''),(string)($m['product_key']??''),$p,(float)($m['score']??1),'بازخوانی زنده از باسلام');$variant=s4ProcurementChooseVariant($fresh,(array)($task['item']??[]));if($variant&&(int)($variant['price']??0)>0)$fresh['price']=(int)$variant['price'];$task['match']=$fresh;$task['source_variant']=$variant;$task['source_checked_at']=time();return['ok'=>true,'match'=>$fresh,'source_variant'=>$variant];}
+function s4ProcurementSearchLinks(string $title):array{$q=rawurlencode(trim($title));return['basalam'=>'https://basalam.com/search?q='.$q,'digikala'=>'https://www.digikala.com/search/?q='.$q,'snappshop'=>'https://snappshop.ir/search?q='.$q];}
+function s4ProcurementTaskId(string $uid,int $index):string{return'pc_'.substr(hash('sha256',$uid.'|'.$index),0,20);}
+function s4ProcurementOrderUid(array $order):string{$uid=trim((string)($order['uid']??''));if($uid!=='')return$uid;return(string)($order['channel']??'order').':'.(string)($order['order_id']??$order['parcel_id']??$order['display_number']??'unknown');}
+function s4ProcurementBuildTask(array $order,array $item,int $index):array{
+    $uid=s4ProcurementOrderUid($order);$id=s4ProcurementTaskId($uid,$index);
+    $c=s4ProcurementCandidates($item,(string)($order['channel']??''));$best=$c[0]??null;$sourceVariant=$best?s4ProcurementChooseVariant($best,$item):null;
+    if($best&&$sourceVariant&&(int)($sourceVariant['price']??0)>0)$best['price']=(int)$sourceVariant['price'];
+    $settings=s4ProcurementLoad()['settings'];$address=!empty($settings['transfer_address'])?['customer'=>(string)($order['customer']??''),'phone'=>(string)($order['phone']??''),'province'=>(string)($order['province']??''),'city'=>(string)($order['city']??''),'address'=>(string)($order['address']??''),'postal_code'=>(string)($order['postal_code']??'')]:[];
+    return['id'=>$id,'order_uid'=>$uid,'order_channel'=>(string)($order['channel']??''),'order_number'=>(string)($order['display_number']??$order['order_id']??$order['parcel_id']??''),'item_index'=>$index,
+        'item'=>['title'=>(string)($item['title']??''),'variant'=>(string)($item['variant']??''),'sku'=>(string)($item['sku']??''),'qty'=>max(1,(int)($item['qty']??1)),'sale_unit_price'=>max(0,(int)($item['unit_price']??0)),'image'=>(string)($item['image']??'')],
+        'address'=>$address,'candidates'=>$c,'match'=>$best,'source_variant'=>$sourceVariant,'initial_source_price'=>(int)($best['price']??0),'status'=>$best?'matched':'unmatched','approved_at'=>0,'source_order_id'=>'','created_at'=>time(),'updated_at'=>time(),'search_links'=>s4ProcurementSearchLinks((string)($item['title']??''))];
+}
+function s4ProcurementSyncOrder(array $order,bool $onlyUnsent=false):array{if($onlyUnsent&&empty($order['unsent']))return['created'=>0,'existing'=>0];$lock=@fopen(PROCUREMENT_STATE_FILE.'.lock','c');if($lock)@flock($lock,LOCK_EX);try{$state=s4ProcurementLoad();$created=0;$existing=0;$dirty=false;foreach(array_values((array)($order['items']??[]))as$i=>$item){if(!is_array($item))continue;$id=s4ProcurementTaskId(s4ProcurementOrderUid($order),$i);if(isset($state['tasks'][$id])){if(!empty($state['settings']['transfer_address'])&&empty($state['tasks'][$id]['address'])){$state['tasks'][$id]['address']=['customer'=>(string)($order['customer']??''),'phone'=>(string)($order['phone']??''),'province'=>(string)($order['province']??''),'city'=>(string)($order['city']??''),'address'=>(string)($order['address']??''),'postal_code'=>(string)($order['postal_code']??'')];$dirty=true;}$existing++;continue;}$state['tasks'][$id]=s4ProcurementBuildTask($order,$item,$i);$created++;$dirty=true;}if($created)$state['audit'][]=['at'=>time(),'action'=>'order_synced','order'=>(string)($order['uid']??''),'created'=>$created];if($dirty)s4ProcurementSave($state);return['created'=>$created,'existing'=>$existing];}finally{if($lock){@flock($lock,LOCK_UN);@fclose($lock);}}}
+function s4ProcurementStats(array $tasks):array{$s=['total'=>count($tasks),'unmatched'=>0,'matched'=>0,'approved'=>0,'ordered'=>0,'cancelled'=>0];foreach($tasks as$t){$k=(string)($t['status']??'unmatched');if(isset($s[$k]))$s[$k]++;}return$s;}
+function s4ProcurementAiMatch(array $task):array{$c=(array)($task['candidates']??[]);$summary=[];foreach(array_slice($c,0,10)as$i=>$x)$summary[]=['index'=>$i,'title'=>$x['title']??'','platform'=>$x['platform']??'','price'=>$x['price']??0,'score'=>$x['score']??0,'url'=>$x['url']??'','variants'=>array_slice(array_map(fn($v)=>implode(' / ',array_map('s4VariationScalarText',(array)($v['attributes']??[]))),(array)($x['variations']??[])),0,8)];$prompt='برای قلم سفارش زیر بهترین محصول منبع را انتخاب کن. تطابق مدل/تنوع مهم‌تر از شباهت عمومی است. فقط JSON با candidate_index (عدد یا -1)، confidence بین 0 و 1، reason و search_query برگردان. قلم: '.json_encode($task['item']??[],JSON_UNESCAPED_UNICODE).' گزینه‌ها: '.json_encode($summary,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);$r=aiActiveChat(['messages'=>[['role'=>'system','content'=>'شما دستیار دقیق تطبیق خرید و تأمین کالا هستید. حدس قطعی نزنید.'],['role'=>'user','content'=>$prompt]],'temperature'=>0.1,'max_tokens'=>500]);if(empty($r['ok']))return['ok'=>false,'error'=>(string)($r['error']??'هوش مصنوعی در دسترس نیست')];$txt=(string)($r['text']??aiExtractAnswer($r['body']??[]));if(preg_match('~\{.*\}~su',$txt,$m))$txt=$m[0];$j=json_decode($txt,true);if(!is_array($j))return['ok'=>false,'error'=>'پاسخ هوش مصنوعی JSON معتبر نبود','raw'=>mb_substr($txt,0,500)];$idx=(int)($j['candidate_index']??-1);return['ok'=>true,'candidate'=>isset($c[$idx])?$c[$idx]:null,'confidence'=>max(0,min(1,(float)($j['confidence']??0))),'reason'=>(string)($j['reason']??''),'search_query'=>(string)($j['search_query']??($task['item']['title']??'')),'provider'=>(string)($r['provider_name']??''),'model'=>(string)($r['model_name']??'')];}
+
+if(isset($_GET['procurement_api'])||isset($_POST['procurement_api'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');$act=(string)($_POST['procurement_api']??$_GET['procurement_api']??'list');$state=s4ProcurementLoad();
+    if($act==='list'){$tasks=array_values($state['tasks']);usort($tasks,fn($a,$b)=>(int)($b['updated_at']??0)<=>(int)($a['updated_at']??0));$filter=(string)($_GET['status']??'all');if($filter!=='all')$tasks=array_values(array_filter($tasks,fn($t)=>(string)($t['status']??'')===$filter));echo json_encode(['ok'=>true,'tasks'=>$tasks,'stats'=>s4ProcurementStats($state['tasks']),'settings'=>$state['settings'],'audit'=>array_slice(array_reverse($state['audit']),0,30),'version'=>APP_VERSION],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+    s4RequireAuthenticatedMutation();
+    if($act==='sync_order'){$order=json_decode((string)($_POST['order']??''),true);if(!is_array($order)){echo json_encode(['ok'=>false,'error'=>'سفارش نامعتبر است'],JSON_UNESCAPED_UNICODE);exit;}$res=s4ProcurementSyncOrder($order,false);echo json_encode(['ok'=>true]+$res,JSON_UNESCAPED_UNICODE);exit;}
+    $pcLock=@fopen(PROCUREMENT_STATE_FILE.'.lock','c');if($pcLock)@flock($pcLock,LOCK_EX);$state=s4ProcurementLoad();
+    if($act==='save_settings'){$cfg=(array)($state['settings']??[]);foreach(['auto_generate','approval_required','ai_matching','transfer_address']as$k)$cfg[$k]=!empty($_POST[$k]);$cfg['max_price_increase_pct']=max(0,min(100,(float)($_POST['max_price_increase_pct']??8)));$cfg['min_margin_pct']=max(0,min(100,(float)($_POST['min_margin_pct']??10)));$state['settings']=$cfg;if(empty($cfg['transfer_address']))foreach($state['tasks']as&$pcTask)$pcTask['address']=[];unset($pcTask);$state['audit'][]=['at'=>time(),'action'=>'settings_saved'];$ok=s4ProcurementSave($state);echo json_encode(['ok'=>$ok,'settings'=>$cfg],JSON_UNESCAPED_UNICODE);exit;}
+    $id=trim((string)($_POST['task_id']??''));if($id===''||!isset($state['tasks'][$id])){echo json_encode(['ok'=>false,'error'=>'درخواست تأمین یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}$task=&$state['tasks'][$id];
+    if($act==='ai_match'){if(empty($state['settings']['ai_matching'])){echo json_encode(['ok'=>false,'error'=>'تطبیق هوش مصنوعی در سیاست‌ها خاموش است'],JSON_UNESCAPED_UNICODE);exit;}$res=s4ProcurementAiMatch($task);if(!empty($res['ok'])){$task['ai']=$res;if(is_array($res['candidate']??null)){$task['match']=$res['candidate'];$task['source_variant']=s4ProcurementChooseVariant($task['match'],(array)$task['item']);if((int)($task['source_variant']['price']??0)>0)$task['match']['price']=(int)$task['source_variant']['price'];if(empty($task['initial_source_price']))$task['initial_source_price']=(int)($task['match']['price']??0);$task['status']='matched';}$task['search_links']=s4ProcurementSearchLinks((string)($res['search_query']??$task['item']['title']??''));$task['updated_at']=time();$state['audit'][]=['at'=>time(),'action'=>'ai_match','task_id'=>$id,'confidence'=>$res['confidence']??0];s4ProcurementSave($state);}echo json_encode($res,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
+    if($act==='refresh_source'){$res=s4ProcurementRefreshSource($task);if(empty($res['ok'])){echo json_encode($res,JSON_UNESCAPED_UNICODE);exit;}$task['updated_at']=time();$state['audit'][]=['at'=>time(),'action'=>'refresh_source','task_id'=>$id];$ok=s4ProcurementSave($state);echo json_encode(['ok'=>$ok,'task'=>$task],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
+    if($act==='select_match'){$idx=(int)($_POST['candidate_index']??-1);if(!isset($task['candidates'][$idx])){echo json_encode(['ok'=>false,'error'=>'گزینهٔ منبع نامعتبر است'],JSON_UNESCAPED_UNICODE);exit;}$task['match']=$task['candidates'][$idx];$task['source_variant']=s4ProcurementChooseVariant($task['match'],(array)$task['item']);if((int)($task['source_variant']['price']??0)>0)$task['match']['price']=(int)$task['source_variant']['price'];if(empty($task['initial_source_price']))$task['initial_source_price']=(int)($task['match']['price']??0);$task['status']='matched';}
+    elseif($act==='manual_match'){$url=trim((string)($_POST['url']??''));$title=trim((string)($_POST['title']??''));if($url===''||!filter_var($url,FILTER_VALIDATE_URL)){echo json_encode(['ok'=>false,'error'=>'لینک معتبر محصول منبع الزامی است'],JSON_UNESCAPED_UNICODE);exit;}$task['match']=['title'=>$title!==''?$title:(string)$task['item']['title'],'url'=>$url,'platform'=>s4ProcurementPlatform(['link'=>$url]),'price'=>max(0,(int)($_POST['price']??0)),'stock'=>max(0,(int)($_POST['stock']??0)),'score'=>1,'reason'=>'انتخاب دستی'];if(empty($task['initial_source_price']))$task['initial_source_price']=(int)($task['match']['price']??0);$task['status']='matched';}
+    elseif($act==='approve'){if(empty($task['match'])){echo json_encode(['ok'=>false,'error'=>'ابتدا محصول منبع را تطبیق دهید'],JSON_UNESCAPED_UNICODE);exit;}if(($task['match']['platform']??'')==='basalam'){$fresh=s4ProcurementRefreshSource($task);if(empty($fresh['ok'])){echo json_encode(['ok'=>false,'error'=>'تأیید متوقف شد: '.($fresh['error']??'بازخوانی منبع ناموفق')],JSON_UNESCAPED_UNICODE);exit;}}$sale=max(0,(int)($task['item']['sale_unit_price']??0));$cost=max(0,(int)($task['match']['price']??0));$initial=max(0,(int)($task['initial_source_price']??0));$rise=$initial>0?(($cost-$initial)/$initial*100):0;if($initial>0&&$rise>(float)$state['settings']['max_price_increase_pct']){echo json_encode(['ok'=>false,'error'=>'افزایش قیمت منبع '.round($rise,1).'٪ بیشتر از حد مجاز است','rise_pct'=>$rise],JSON_UNESCAPED_UNICODE);exit;}$margin=$sale>0?(($sale-$cost)/$sale*100):0;if($cost>0&&$sale>0&&$margin<(float)$state['settings']['min_margin_pct']){echo json_encode(['ok'=>false,'error'=>'حاشیه سود '.round($margin,1).'٪ کمتر از حد مجاز است','margin_pct'=>$margin],JSON_UNESCAPED_UNICODE);exit;}$task['status']='approved';$task['approved_at']=time();}
+    elseif($act==='mark_ordered'){if(($task['status']??'')==='ordered'){echo json_encode(['ok'=>false,'error'=>'این درخواست قبلاً با شماره سفارش منبع ثبت شده است'],JSON_UNESCAPED_UNICODE);exit;}if(!empty($state['settings']['approval_required'])&&($task['status']??'')!=='approved'){echo json_encode(['ok'=>false,'error'=>'ابتدا خرید را تأیید کنید'],JSON_UNESCAPED_UNICODE);exit;}$sid=trim((string)($_POST['source_order_id']??''));if($sid===''){echo json_encode(['ok'=>false,'error'=>'شماره سفارش منبع الزامی است'],JSON_UNESCAPED_UNICODE);exit;}$task['source_order_id']=$sid;$task['status']='ordered';$task['ordered_at']=time();}
+    elseif($act==='cancel'){$task['status']='cancelled';}
+    else{echo json_encode(['ok'=>false,'error'=>'عملیات ناشناخته'],JSON_UNESCAPED_UNICODE);exit;}
+    $task['updated_at']=time();$state['audit'][]=['at'=>time(),'action'=>$act,'task_id'=>$id];$ok=s4ProcurementSave($state);echo json_encode(['ok'=>$ok,'task'=>$task],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
+}
+
 function s4OrderMgrNotesLoad(): array {
     if (!is_file(ORDERS_MGR_NOTES_FILE)) return [];
     $lfp = @fopen(ORDERS_MGR_NOTES_FILE . '.lock', 'c');
@@ -75477,6 +75555,8 @@ if (isset($_GET['orders_mgr_api']) || isset($_POST['orders_mgr_api'])) {
             });
         }
 
+        $procCfg=s4ProcurementLoad()['settings']??[];
+        if(!empty($procCfg['auto_generate']))foreach($rowsOm as$rw)if(!empty($rw['unsent']))s4ProcurementSyncOrder($rw,true);
         $sumToman = 0;
         foreach ($rowsOm as $rw) $sumToman += (int)($rw['amount'] ?? 0);
         $shopsMeta = array_map(fn($s) => [
@@ -92622,6 +92702,10 @@ async function tpeAction(action,id){try{await tpeReq({third_party_explorer_actio
 .om-it-row{display:flex;align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid #1e293b;font-size:11px}
 .om-it-row:last-child{border-bottom:0}
 .om-it-img{width:38px;height:38px;border-radius:7px;object-fit:cover;background:#1e293b;flex:0 0 38px;border:1px solid #334155}
+.pc-shell{background:radial-gradient(circle at top right,#164e6344,transparent 35%),#08111f;border:1px solid #155e75;border-radius:13px;padding:11px;box-shadow:0 10px 35px #02061799}
+.pc-hero{display:flex;justify-content:space-between;align-items:center;gap:9px;flex-wrap:wrap;padding:10px;background:linear-gradient(135deg,#0e749055,#6d28d933);border:1px solid #0e7490;border-radius:11px;margin-bottom:10px}.pc-hero h4{margin:0;color:#cffafe;font-size:14px}.pc-hero p{margin:3px 0 0;color:#94a3b8;font-size:10px;line-height:1.7}
+.pc-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:6px;margin-bottom:9px}.pc-stat{background:#0f172a;border:1px solid #263449;border-radius:9px;padding:7px;text-align:center}.pc-stat b{display:block;color:#f8fafc;font-size:14px}.pc-stat small{color:#64748b;font-size:9px}
+.pc-task{background:#0f172a;border:1px solid #263449;border-radius:11px;padding:9px;margin-bottom:8px}.pc-task:hover{border-color:#0891b2}.pc-pill{font-size:9px;padding:2px 7px;border-radius:999px;border:1px solid #475569;color:#cbd5e1}.pc-match{background:#082f49;border:1px solid #0e7490;border-radius:8px;padding:7px;margin:7px 0;font-size:10.5px}.pc-links a{color:#7dd3fc;text-decoration:none;margin-left:7px;font-size:10px}.pc-settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:7px;background:#0b1324;border:1px solid #334155;border-radius:10px;padding:9px;margin-bottom:9px}.pc-settings label{font-size:10px;color:#cbd5e1;display:flex;align-items:center;gap:5px}.pc-settings input[type=number]{width:70px;background:#020617;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:4px}
 </style>
 
 <!-- زیرمنوهای کانال فروش -->
@@ -92629,10 +92713,11 @@ async function tpeAction(action,id){try{await tpeReq({third_party_explorer_actio
   <button type="button" class="om-subbtn active" id="omTab_all" onclick="omSwitchChannel('all')">🌐 همهٔ سفارشات <span class="om-cnt" id="omCnt_all">۰</span></button>
   <button type="button" class="om-subbtn" id="omTab_bsl" onclick="omSwitchChannel('bsl')">🛍 باسلام <span class="om-cnt" id="omCnt_bsl">۰</span></button>
   <button type="button" class="om-subbtn" id="omTab_woo" onclick="omSwitchChannel('woo')">🟣 ووکامرس <span class="om-cnt" id="omCnt_woo">۰</span></button>
+  <button type="button" class="om-subbtn" id="omTab_proc" onclick="pcOpen()">🧭 مرکز تأمین <span class="om-cnt" id="omCnt_proc">۰</span></button>
 </div>
 
 <!-- نوار شاخص‌های کلیدی -->
-<div class="om-kpis">
+<div class="om-kpis" id="omKpis">
   <div class="om-kpi"><span>کل نمایشی</span><b id="omKpiTotal">۰</b></div>
   <div class="om-kpi"><span>منتظر ارسال</span><b id="omKpiUnsent" style="color:#fbbf24">۰</b></div>
   <div class="om-kpi"><span>باسلام / ووکامرس</span><b id="omKpiSplit" style="font-size:11.5px;color:#67e8f9">۰ / ۰</b></div>
@@ -92640,7 +92725,7 @@ async function tpeAction(action,id){try{await tpeReq({third_party_explorer_actio
 </div>
 
 <!-- نوار ابزار جستجو، فیلتر و نمای گسترده -->
-<div class="om-toolbar">
+<div class="om-toolbar" id="omToolbar">
   <input type="text" id="omSearchInp" placeholder="🔎 شماره سفارش، مشتری، موبایل، شهر، کالا، رهگیری..." style="flex:1 1 170px;min-width:140px" onkeydown="if(event.key==='Enter'){event.preventDefault();omReload(true);}">
   <select id="omShopSel" onchange="omReload(true)" style="flex:0 1 145px" title="انتخاب غرفه باسلام">
     <option value="0">همهٔ غرفه‌های باسلام</option>
@@ -92654,6 +92739,27 @@ async function tpeAction(action,id){try{await tpeReq({third_party_explorer_actio
 </div>
 
 <div id="omWarnBar" class="hidden" style="background:#451a0366;border:1px solid #b45309;color:#fde68a;border-radius:8px;padding:6px 9px;font-size:10.5px;line-height:1.7;margin-bottom:8px"></div>
+
+<div id="pcPanel" class="pc-shell hidden">
+  <div class="pc-hero"><div><h4>🧭 مرکز هوشمند تأمین و خرید منبع</h4><p>تطبیق محصول مبدأ، کنترل سود و موجودی، تأیید انسانی و رهگیری خرید — بدون ثبت پرداخت یا سفارش تکراری ناخواسته.</p></div><div style="display:flex;gap:5px"><button class="btn btn-cyan" onclick="pcLoad()">🔄 بروزرسانی</button><button class="btn btn-purple" onclick="pcSyncActiveOrder()">＋ سفارش باز</button></div></div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:6px;margin-bottom:9px">
+    <div class="pc-stat" style="text-align:right"><b style="font-size:11px;color:#6ee7b7">🛍 باسلام</b><small>تطبیق شناسه و تنوع + تحویل امن به صفحه خرید؛ Buyer API رسمی هنوز تنظیم نشده</small></div>
+    <div class="pc-stat" style="text-align:right"><b style="font-size:11px;color:#f87171">🔴 دیجی‌کالا</b><small>جستجو و تطبیق فعال؛ سفارش API پس از ارائه دسترسی رسمی خریدار فعال می‌شود</small></div>
+    <div class="pc-stat" style="text-align:right"><b style="font-size:11px;color:#fb923c">🟠 اسنپ‌شاپ</b><small>جستجو و تطبیق فعال؛ سفارش API پس از ارائه دسترسی رسمی خریدار فعال می‌شود</small></div>
+  </div>
+  <div class="pc-stats" id="pcStats"></div>
+  <div class="pc-settings">
+    <label><input type="checkbox" id="pcAuto"> ساخت خودکار برای سفارش‌های جدید</label>
+    <label><input type="checkbox" id="pcApproval"> تأیید قبل از خرید</label>
+    <label><input type="checkbox" id="pcAi"> تطبیق با هوش مصنوعی</label>
+    <label title="اطلاعات مشتری فقط در فایل محلی تأمین ذخیره می‌شود"><input type="checkbox" id="pcAddress"> انتقال نشانی گیرنده</label>
+    <label>حداقل سود٪ <input type="number" id="pcMargin" min="0" max="100"></label>
+    <label>حداکثر رشد قیمت٪ <input type="number" id="pcRise" min="0" max="100"></label>
+    <button class="btn btn-green" onclick="pcSaveSettings()">ذخیره سیاست‌ها</button>
+  </div>
+  <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><select id="pcFilter" onchange="pcLoad()" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:7px;padding:5px"><option value="all">همه درخواست‌ها</option><option value="unmatched">بدون تطبیق</option><option value="matched">تطبیق‌شده</option><option value="approved">تأییدشده</option><option value="ordered">خرید ثبت‌شده</option><option value="cancelled">لغوشده</option></select><span id="pcMsg" style="color:#94a3b8;font-size:10px"></span></div>
+  <div id="pcTasks"><div style="padding:20px;text-align:center;color:#64748b">در حال بارگذاری…</div></div>
+</div>
 
 <!-- پنل بازشوی جزئیات و عملیات روی سفارش انتخاب‌شده -->
 <div id="omDetailWrap" class="hidden"></div>
@@ -103671,6 +103777,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.686', t:'🧭 مرکز هوشمند تأمین و تطبیق سفارش', items:[
+    'زیرمنوی جدید «مرکز تأمین» در مدیریت سفارشات، هر قلم سفارش باسلام یا ووکامرس را به درخواست خرید منبع مستقل و ضدتکرار تبدیل می‌کند.',
+    'تطبیق ابتدا از شناسهٔ واقعی دفترچهٔ ارسال، سپس SKU و شباهت عنوان در همهٔ پروفایل‌ها ــ شامل غرفه‌های شخص ثالث و «باسلام -پرفروش ها» ــ استفاده می‌کند.',
+    'برای اقلام غیرباسلامی، گزینهٔ «جستجو با AI» کاندیداها را با توجه به مدل/تنوع ارزیابی و عبارت و لینک جستجوی باسلام، دیجی‌کالا و اسنپ‌شاپ تولید می‌کند؛ انتخاب لینک دستی نیز وجود دارد.',
+    'کنترل حداقل سود، سقف افزایش قیمت منبع، تأیید انسانی، انتقال اختیاری نشانی، ثبت شماره سفارش منبع، لغو و گزارش وضعیت اضافه شد؛ بدون Buyer API رسمی هیچ پرداخت یا سفارش بیرونی جعل نمی‌شود.',
+    'وضعیت مرکز تأمین ماندگار، قفل‌شده و در بکاپ گزینشیِ حساس قرار دارد؛ ذخیره نشانی به‌طور پیش‌فرض خاموش است.'
+  ]},
   {v:'10.685', t:'🧩 بازسازی صحیح تنوع‌های مبدأ باسلام', items:[
     'ردیف‌های تو‌در‌توی variants باسلام اکنون به گروه‌های ویژگی و ترکیب‌های واقعی با نام و مقدار معنادار تبدیل می‌شوند و دیگر متن PHP یعنی Array وارد گزینه‌ها نمی‌شود.',
     'قیمت، موجودی، وضعیت موجودبودن و SKU هر ترکیب در ماتریس حفظ و در payload ساخت/ویرایش باسلام و تنوع‌های ووکامرس استفاده می‌شود.',
@@ -113568,6 +113681,7 @@ function omPopulateShops(shops){
 }
 
 function omSwitchChannel(ch){
+  pcShow(false);
   if(!['all','bsl','woo'].includes(ch))ch='all';
   omState.channel=ch;
   omState.page=1;
@@ -113816,6 +113930,7 @@ function omRenderDetail(o,fetchingMore){
   if(fetchingMore)h+='<span style="font-size:10px;color:#38bdf8">⏳ تکمیل اطلاعات...</span>';
   h+='</div>';
   h+='<div style="display:flex;gap:5px;align-items:center">';
+  h+='<button type="button" class="btn btn-purple" style="font-size:10.5px;padding:4px 8px" onclick="pcSyncActiveOrder()">🧭 ساخت درخواست تأمین</button>';
   h+='<button type="button" class="btn btn-gray" style="font-size:10.5px;padding:4px 8px" onclick="omPrintOrder(omState.activeOrder)">🖨 چاپ برگه ارسال</button>';
   h+='<button type="button" class="btn btn-gray" style="font-size:11px;padding:3px 9px" onclick="omCloseDetail()">✕ بستن</button>';
   h+='</div></div>';
@@ -114085,6 +114200,28 @@ function omPrintOrder(o){
     +'</body></html>';
   win.document.open();win.document.write(doc);win.document.close();
 }
+
+/* ===== v10.686: Procurement Center ===== */
+let pcState={tasks:[],settings:{},stats:{}};
+function pcShow(on){['omKpis','omToolbar','omListWrap','omPagerWrap'].forEach(id=>{const e=document.getElementById(id);if(e)e.classList.toggle('hidden',!!on);});['omWarnBar','omDetailWrap'].forEach(id=>{const e=document.getElementById(id);if(e&&on)e.classList.add('hidden');});const p=document.getElementById('pcPanel');if(p)p.classList.toggle('hidden',!on);const b=document.getElementById('omTab_proc');if(b)b.classList.toggle('active',!!on);if(on)['all','bsl','woo'].forEach(k=>document.getElementById('omTab_'+k)?.classList.remove('active'));}
+function pcOpen(){pcShow(true);pcLoad();}
+function pcPost(data){const fd=new FormData();Object.entries(data).forEach(([k,v])=>fd.append(k,typeof v==='object'?JSON.stringify(v):String(v)));return fetch('',{method:'POST',body:fd}).then(async r=>{let d={};try{d=await r.json();}catch(_){throw new Error('پاسخ نامعتبر سرور');}if(!d.ok)throw Object.assign(new Error(d.error||'عملیات ناموفق'),{data:d});return d;});}
+function pcStatusLabel(s){return({unmatched:'نیازمند تطبیق',matched:'تطبیق‌شده',approved:'تأیید خرید',ordered:'خرید ثبت‌شده',cancelled:'لغوشده'})[s]||s;}
+function pcPlatform(p){return({basalam:'باسلام',digikala:'دیجی‌کالا',snappshop:'اسنپ‌شاپ',other:'سایر'})[p]||p||'نامشخص';}
+function pcLoad(){const box=document.getElementById('pcTasks'),msg=document.getElementById('pcMsg'),f=(document.getElementById('pcFilter')||{}).value||'all';if(box)box.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc">⏳ در حال خواندن مرکز تأمین…</div>';fetch('?procurement_api=list&status='+encodeURIComponent(f)+'&_t='+Date.now()).then(r=>r.json()).then(d=>{if(!d.ok)throw new Error(d.error||'خطا');pcState=d;pcHydrateSettings(d.settings||{});pcRenderStats(d.stats||{});pcRenderTasks(d.tasks||[]);if(msg)msg.textContent='آخرین بروزرسانی: '+new Date().toLocaleTimeString('fa-IR');const c=document.getElementById('omCnt_proc');if(c)c.textContent=toFa((d.stats||{}).total||0);}).catch(e=>{if(box)box.innerHTML='<div style="color:#fca5a5;padding:15px">'+esc(e.message)+'</div>';});}
+function pcHydrateSettings(c){[['pcAuto','auto_generate'],['pcApproval','approval_required'],['pcAi','ai_matching'],['pcAddress','transfer_address']].forEach(([id,k])=>{const e=document.getElementById(id);if(e)e.checked=!!c[k];});const m=document.getElementById('pcMargin'),r=document.getElementById('pcRise');if(m)m.value=c.min_margin_pct??10;if(r)r.value=c.max_price_increase_pct??8;}
+function pcRenderStats(s){const e=document.getElementById('pcStats');if(!e)return;e.innerHTML=[['کل',s.total,'#e2e8f0'],['بدون تطبیق',s.unmatched,'#fbbf24'],['تطبیق‌شده',s.matched,'#67e8f9'],['تأییدشده',s.approved,'#c4b5fd'],['خریدشده',s.ordered,'#4ade80']].map(x=>'<div class="pc-stat"><b style="color:'+x[2]+'">'+toFa(x[1]||0)+'</b><small>'+x[0]+'</small></div>').join('');}
+function pcRenderTasks(tasks){const e=document.getElementById('pcTasks');if(!e)return;if(!tasks.length){e.innerHTML='<div style="padding:28px;text-align:center;color:#64748b;border:1px dashed #334155;border-radius:10px">درخواستی وجود ندارد. یک سفارش را باز کنید و «ساخت درخواست تأمین» را بزنید.</div>';return;}e.innerHTML=tasks.map(t=>{const it=t.item||{},m=t.match||null,c=t.candidates||[],links=t.search_links||{};let h='<div class="pc-task"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div style="display:flex;gap:8px;align-items:center">'+(it.image?'<img src="'+esc(it.image)+'" style="width:44px;height:44px;object-fit:cover;border-radius:8px">':'<span style="font-size:24px">📦</span>')+'<div><b style="color:#f8fafc">'+esc(it.title||'کالا')+'</b>'+(it.variant?'<div style="font-size:9.5px;color:#a5b4fc">'+esc(it.variant)+'</div>':'')+'<div style="font-size:9px;color:#64748b">سفارش #'+esc(t.order_number||'')+' · تعداد '+toFa(it.qty||1)+' · فروش '+omMoney(it.sale_unit_price||0)+'</div></div></div><span class="pc-pill">'+esc(pcStatusLabel(t.status))+'</span></div>';
+if(m)h+='<div class="pc-match"><div style="display:flex;justify-content:space-between;gap:7px;flex-wrap:wrap"><span>✅ <b>'+esc(m.title||'محصول منبع')+'</b> · '+esc(pcPlatform(m.platform))+'</span><span style="color:#4ade80">'+omMoney(m.price||0)+'</span></div><div style="font-size:9px;color:#94a3b8">'+esc(m.reason||'')+(m.stock!==undefined?' · موجودی '+toFa(m.stock):'')+(t.source_variant?.label?' · تنوع مبدأ: '+esc(t.source_variant.label):'')+'</div>'+(m.url?'<a href="'+esc(m.url)+'" target="_blank" rel="noopener" style="color:#7dd3fc">باز کردن محصول منبع ↗</a>':'')+'</div>';
+if(c.length&&t.status!=='ordered'&&t.status!=='cancelled'){h+='<details style="margin:6px 0"><summary style="cursor:pointer;color:#93c5fd;font-size:10px">'+toFa(c.length)+' گزینهٔ تطبیق محلی</summary><div style="padding:5px">'+c.map((x,i)=>'<div style="display:flex;justify-content:space-between;gap:5px;border-bottom:1px solid #1e293b;padding:4px"><span>'+esc(x.title)+' <small style="color:#64748b">'+Math.round((x.score||0)*100)+'٪ · '+esc(pcPlatform(x.platform))+'</small></span><button class="btn btn-gray" style="font-size:9px;padding:2px 6px" onclick="pcAction(\'select_match\',\''+esc(t.id)+'\',{candidate_index:'+i+'})">انتخاب</button></div>').join('')+'</div></details>';}
+h+='<div class="pc-links">جستجوی سریع: '+Object.entries(links).map(([k,u])=>'<a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(pcPlatform(k))+' ↗</a>').join('')+'</div><div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">';
+if(!['ordered','cancelled'].includes(t.status)){h+='<button class="btn btn-purple" onclick="pcAi(\''+esc(t.id)+'\')">✨ جستجو با AI</button><button class="btn btn-gray" onclick="pcManual(\''+esc(t.id)+'\')">🔗 لینک دستی</button>';if(m&&m.platform==='basalam')h+='<button class="btn btn-cyan" onclick="pcAction(\'refresh_source\',\''+esc(t.id)+'\')">↻ قیمت و موجودی زنده</button>';}if(t.status==='matched')h+='<button class="btn btn-green" onclick="pcAction(\'approve\',\''+esc(t.id)+'\')">✓ تأیید خرید</button>';if(t.status==='approved')h+='<button class="btn btn-cyan" onclick="pcMarkOrdered(\''+esc(t.id)+'\')">🧾 ثبت شماره خرید منبع</button>';if(t.status==='ordered')h+='<span style="color:#4ade80;font-size:10px">شماره سفارش منبع: <b>'+esc(t.source_order_id||'—')+'</b></span>';if(!['ordered','cancelled'].includes(t.status))h+='<button class="btn btn-red" onclick="pcAction(\'cancel\',\''+esc(t.id)+'\')">لغو</button>';h+='</div></div>';return h;}).join('');}
+function pcSaveSettings(){pcPost({procurement_api:'save_settings',auto_generate:document.getElementById('pcAuto').checked?1:0,approval_required:document.getElementById('pcApproval').checked?1:0,ai_matching:document.getElementById('pcAi').checked?1:0,transfer_address:document.getElementById('pcAddress').checked?1:0,min_margin_pct:document.getElementById('pcMargin').value,max_price_increase_pct:document.getElementById('pcRise').value}).then(()=>{showToast('✓ سیاست‌های تأمین ذخیره شد');pcLoad();}).catch(e=>showToast(e.message,1));}
+function pcSyncActiveOrder(){const o=omState.activeOrder;if(!o){showToast('ابتدا جزئیات یک سفارش را باز کنید',1);return;}pcPost({procurement_api:'sync_order',order:o}).then(d=>{showToast('✓ '+toFa(d.created||0)+' درخواست ساخته شد');pcOpen();}).catch(e=>showToast(e.message,1));}
+function pcAction(act,id,extra={}){pcPost(Object.assign({procurement_api:act,task_id:id},extra)).then(()=>{showToast('✓ انجام شد');pcLoad();}).catch(e=>showToast(e.message,1));}
+function pcAi(id){const msg=document.getElementById('pcMsg');if(msg)msg.textContent='✨ هوش مصنوعی در حال ارزیابی تطبیق و عبارت جستجو است…';pcAction('ai_match',id);}
+function pcManual(id){const url=prompt('لینک محصول منبع در باسلام، دیجی‌کالا، اسنپ‌شاپ یا فروشگاه دیگر:');if(!url)return;const title=prompt('عنوان محصول منبع (اختیاری):')||'';const price=prompt('قیمت خرید به تومان (اختیاری):','0')||'0';pcAction('manual_match',id,{url,title,price,stock:0});}
+function pcMarkOrdered(id){const n=prompt('شماره سفارش ثبت‌شده در فروشگاه منبع:');if(!n)return;pcAction('mark_ordered',id,{source_order_id:n});}
 
 /* ===== v9.16: بکاپ و بازیابی ===== */
 function bkSet(msg,color){const s=$('bkStatus');if(s){s.innerHTML=msg;s.style.color=color||'#94a3b8';}}
