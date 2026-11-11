@@ -51,3 +51,13 @@ curl -fsSL 'https://raw.githubusercontent.com/fazilatma/new/arena/f3d5d2a0-new/t
 آزمایش داخل آن هستند. رمز، کوکی، CSRF، URL خصوصی و امضای ادامهٔ probe در فایل نیستند.
 پس از اجرای موفق، سلامت **HTTP خارجی** باید جداگانه با نسخه و commit دقیق بررسی
 شود؛ موفقیت CLI/Reload به‌تنهایی استقرار زندهٔ نسخهٔ جدید را ثابت نمی‌کند.
+
+## خطای کلی Maintenance failed در نصب قدیمی، بدون کپی کنسول
+
+`tools/diagnose_update.py` یک preflight مالک‌محور و مستقل از نسخهٔ نصب‌شده است. آن را با Python محیط **همان نصب موجود** اجرا کنید؛ نیازی به نصب نسخهٔ جدید برای تشخیص نیست. `.env` و DB موجود لازم‌اند؛ ابزار برای HTTP عمومی register نمی‌شود. مسیر پیش‌فرض `/home/<owner>/scraper4-python/pythonanywhere` و گزینهٔ مالک‌محور `--app-dir` دارد.
+
+کارهایش: قفل مشترک worker، رد maintenance marker یا درخواست pending/running، resolve شاخهٔ نصب از updater موجود، یک دانلود/بازکردن بستهٔ ثابت (حداکثر8MiB و45ثانیه)، مقایسهٔ requirements بدون pip، compile و validation مطابق updater با DB موقت، کپی آزمایشی کد/SQLite در scratch زیر releases، و بررسی مجوز نوشتن فایل‌های مدیریت‌شده. scratchها پاک می‌شوند. نصب/جایگزینی کد، Reload، rollback، پاک‌کردن marker، ادامهٔ صف، تغییر token یا probe مبدأ انجام نمی‌دهد. تغییر requirements گزارش می‌شود و import/install آن اجرا نمی‌شود. این پیش‌بررسی **تست نصب یا Reload نیست**؛ موفقیت آن به معنی رفع خرابی یا فعال‌شدن نسخه نیست.
+
+نام stage شکست، دستهٔ امن خطا (permission/disk_quota/archive/validation/...)، errno و شماره‌خط فایل‌های ازپیش‌مجاز ثبت می‌شود؛ هیچ raw exception/traceback/source/locals/URL/credential خروجی نمی‌شود. تنها نوشتن پایدار DB، فیلد `state.diagnostic` در checkpoint `updates:state` است که با transaction با فیلدهای قبلی merge می‌شود. این گزارش از `/api/updates/status` نسخهٔ قدیمی نیز خوانده می‌شود؛ مالک لازم نیست خروجی کنسول را کپی کند. تغییر محصول/پروفایل/صف/تنظیم زمان‌بندی یا وضع عملیات ندارد. خطای نوشتن گزارش نیز فقط دستهٔ امن در کنسول می‌دهد؛ در آن حالت عکس خروجی امن کافی است.
+
+در بررسی زندهٔ این مرحله، نسخه1.25فعال و selftest سالم بود؛ عملیات update آخر failed، latest برابر `fbc593e85b9d5f4ff3774261775ba63255ce7250` ثبت شده بود. پس lookup نسخه انجام شده، اما مرحلهٔ دقیق شکست از پیام generic قابل تعیین نیست. ابزار باید **روی میزبان مالک** اجرا شود؛ تست‌های محلی/fixture اثبات اجرای preflight میزبان نیستند. به‌جای تکرار کورکورانهٔ استقرار/آپدیت، پس از اجرای ابزار گزارش خواندنی را بررسی کنید.
