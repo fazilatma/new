@@ -406,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.711';
+const APP_VERSION = '10.712';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -51229,6 +51229,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'direct_digikala_count'=>\$direct".'DkCount')!==false
         &&strpos($selfSrc,"{v:'10." . "711'")!==false
         &&version_compare(APP_VERSION,'10.711','>='));
+    $add('10.712','سازگاری کامل fallback صفحهٔ جستجوی دیجی‌کالا با امضای رسمی parse_list_by_engine و نسخهٔ زنده',
+        strpos($selfSrc,"parse_list_by_engine((string)(\$page['html']")!==false
+        &&strpos($selfSrc,"{v:'10." . "712'")!==false
+        &&version_compare(APP_VERSION,'10.712','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -104915,6 +104919,8 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.712', t:'✅ هم‌ترازی fallback صفحهٔ جستجوی دیجی‌کالا با موتور استخراج عمومی',
+    items:['امضای فراخوانی parse_list_by_engine در fallback صفحهٔ جستجوی دیجی‌کالا با آزمون 10.704 هم‌تراز و با یکپارچه‌سازی 10.711 تثبیت شد.']},
   {v:'10.711', t:'🔍 یکپارچه‌سازی کامل جستجوی دیجی‌کالا مثل باسلام و اسنپ‌شاپ + رفع مشکل پاک کردن تکست‌باکس‌ها در موبایل', items:[
     'دکمهٔ اضافی جداگانه حذف شد و جستجوی دیجی‌کالا به‌طور یکپارچه دقیقاً مثل باسلام و اسنپ‌شاپ هم در جستجوی عمیق («همه» / «دیجی‌کالا») و هم در «بررسی همه پروفایل‌ها» (در صورت انتخاب همه یا دیجی‌کالا) اجرا می‌شود.',
     'جستجوی دیجی‌کالا به fallback کالاهای موجود (has_selling_stock=1)، استخراج Jina/HTML و لینک‌های dkp-، امتیازدهی تطابق کلمات در عنوان‌های بلند، و مرتب‌سازی بر اساس تطابق وقتی قیمت فروش خالی است مجهز شد.',
