@@ -406,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.695';
+const APP_VERSION = '10.696';
 
 
 if (!function_exists('str_starts_with')) {
@@ -27049,15 +27049,25 @@ function s4BasalamBestSellerSalesScore(array $product,string $metric):?float{
 /* v10.695: one product score uses every meaningful signal we possess. Raw
    sales fields remain independently filterable, but no selected field controls
    this score. Components are capped and exposed so the ranking is auditable. */
+function s4BasalamBestSellerScoreWeights():array{return[
+    ['rank'=>1,'key'=>'exact_sales','label'=>'فروش دقیق','weight'=>35],
+    ['rank'=>2,'key'=>'weekly_sales','label'=>'فروش هفتگی / روند تازه','weight'=>25],
+    ['rank'=>3,'key'=>'indexed_sales','label'=>'فروش فهرست‌شده','weight'=>15],
+    ['rank'=>4,'key'=>'availability','label'=>'موجود بودن و مقدار موجودی','weight'=>10],
+    ['rank'=>5,'key'=>'verification_confidence','label'=>'اعتبار و تازگی تأیید فروش','weight'=>7],
+    ['rank'=>6,'key'=>'content_quality','label'=>'کامل بودن اطلاعات محصول','weight'=>5],
+    ['rank'=>7,'key'=>'price_validity','label'=>'معتبر بودن قیمت','weight'=>3],
+];}
 function s4BasalamBestSellerCompositeScore(array $product,bool $withComponents=false){
-    $metric=function(string $name,float $weight)use($product):float{$raw=s4BasalamBestSellerSalesScore($product,$name);return $raw===null?0.0:$weight*min(1.0,max(0.0,$raw)/120.0);};
-    $exact=$metric('exact_sales',30.0);$indexed=$metric('indexed_sales',15.0);$weekly=$metric('weekly_sales',20.0);
-    $stock=max(0,(int)($product['stock']??$product['inventory']??0));$available=(!array_key_exists('in_stock',$product)||!empty($product['in_stock']))&&$stock>0;$availability=$available?3.0+7.0*min(1.0,log10(1+$stock)/4.0):0.0;
-    $price=(int)($product['price_num']??0);$priceQuality=$price>0?5.0:0.0;
+    $weights=[];foreach(s4BasalamBestSellerScoreWeights()as$weightRow)$weights[$weightRow['key']]=(float)$weightRow['weight'];
+    $metric=function(string $name)use($product,$weights):float{$raw=s4BasalamBestSellerSalesScore($product,$name);return $raw===null?0.0:$weights[$name]*min(1.0,max(0.0,$raw)/120.0);};
+    $exact=$metric('exact_sales');$indexed=$metric('indexed_sales');$weekly=$metric('weekly_sales');
+    $stock=max(0,(int)($product['stock']??$product['inventory']??0));$available=(!array_key_exists('in_stock',$product)||!empty($product['in_stock']))&&$stock>0;$availability=$available?$weights['availability']*(0.3+0.7*min(1.0,log10(1+$stock)/4.0)):0.0;
+    $price=(int)($product['price_num']??0);$priceQuality=$price>0?$weights['price_validity']:0.0;
     $title=trim((string)($product['title']??''));$identity=($title!==''?1.0:0.0)+(trim((string)($product['vendor_name']??''))!==''?1.0:0.0)+(trim((string)($product['category']??''))!==''?1.0:0.0);
     $images=array_values(array_filter((array)($product['images']??[])));$hasImage=trim((string)($product['image']??''))!==''||$images;$hasDescription=trim((string)($product['longDesc']??$product['description']??$product['shortDesc']??''))!=='';$hasBrandOrTags=trim((string)($product['brand']??''))!==''||!empty($product['tags']);$hasWeight=(float)($product['weight']??$product['packaged_weight']??0)>0;
-    $content=$identity+($hasImage?2.0:0.0)+($hasDescription?2.0:0.0)+(count($images)>1?2.0:0.0)+(!empty($product['specs'])?2.0:0.0)+(!empty($product['variations'])?1.0:0.0)+($hasBrandOrTags?1.0:0.0)+(trim((string)($product['sku']??''))!==''?1.0:0.0)+($hasWeight?1.0:0.0);
-    $verified=array_key_exists('sales_count_exact',$product)&&$product['sales_count_exact']!==null;$verifiedAt=(int)($product['sales_verified_at']??0);$confidence=$verified?3.0:0.0;if($verifiedAt>0){$age=max(0,time()-$verifiedAt);$confidence+=2.0*max(0.0,1.0-min(1.0,$age/(30*86400)));}
+    $contentRaw=$identity+($hasImage?2.0:0.0)+($hasDescription?2.0:0.0)+(count($images)>1?2.0:0.0)+(!empty($product['specs'])?2.0:0.0)+(!empty($product['variations'])?1.0:0.0)+($hasBrandOrTags?1.0:0.0)+(trim((string)($product['sku']??''))!==''?1.0:0.0)+($hasWeight?1.0:0.0);$content=$weights['content_quality']*min(1.0,$contentRaw/15.0);
+    $verified=array_key_exists('sales_count_exact',$product)&&$product['sales_count_exact']!==null;$verifiedAt=(int)($product['sales_verified_at']??0);$confidence=$verified?$weights['verification_confidence']*0.6:0.0;if($verifiedAt>0){$age=max(0,time()-$verifiedAt);$confidence+=$weights['verification_confidence']*0.4*max(0.0,1.0-min(1.0,$age/(30*86400)));}
     $components=['exact_sales'=>$exact,'indexed_sales'=>$indexed,'weekly_sales'=>$weekly,'availability'=>$availability,'price_validity'=>$priceQuality,'content_quality'=>$content,'verification_confidence'=>$confidence];$score=array_sum($components);
     foreach($components as&$value)$value=round($value,2);unset($value);return$withComponents?['score'=>round($score,2),'components'=>$components]:$score;
 }
@@ -27151,7 +27161,7 @@ function s4BasalamBestSellersStatus(int $page=1,int $pageSize=50,array $filters=
     $page=max(1,$page);$pageSize=max(10,min(100,$pageSize));$profiles=loadProfiles();$profile=is_array($profiles[$d['profile_key']]??null)?$profiles[$d['profile_key']]:[];$pcfg=s4BasalamBestSellersProfileConfig($profiles);$d['enabled']=!empty($pcfg['enabled']);$d['interval_sec']=(int)$pcfg['interval_sec'];$d['profile_settings']=['periodic_enabled'=>!empty($pcfg['enabled']),'interval_sec'=>(int)$pcfg['interval_sec'],'target'=>(string)$pcfg['target'],'pages'=>(int)$pcfg['pages'],'with_detail'=>!empty($pcfg['with_detail']),'detail_mode'=>(string)$pcfg['detail_mode'],'engine'=>(string)$pcfg['engine'],'title_suffix'=>(string)($profile['titleSuffix']??''),'price_mode'=>(string)($profile['priceMode']??'none'),'price_value'=>(float)($profile['priceVal']??0),'round_price'=>(string)($profile['roundPrice']??'0'),'basalam_category_id'=>(int)($profile['bslCategoryId']??0),'sync_config'=>(array)($profile['syncConfig']??[])];
     $catalog=s4BasalamBestSellersCatalogLoad($profile);$allTotal=count($catalog);$d['catalog_count']=$allTotal;$d['saved_count']=count(s4BasalamBestSellersFilterProducts($catalog,(array)$d['profile_filter']));$normalizedFilters=s4BasalamBestSellersNormalizeFilters($filters);$products=array_values(s4BasalamBestSellersFilterProducts($catalog,$normalizedFilters));
     $total=count($products);$pages=max(1,(int)ceil($total/$pageSize));$page=min($page,$pages);$rows=array_slice($products,($page-1)*$pageSize,$pageSize);foreach($rows as&$row){$row['sales_scores']=['exact_sales'=>($x=s4BasalamBestSellerSalesScore($row,'exact_sales'))===null?null:round($x,2),'indexed_sales'=>round((float)s4BasalamBestSellerSalesScore($row,'indexed_sales'),2),'weekly_sales'=>round((float)s4BasalamBestSellerSalesScore($row,'weekly_sales'),2)];$composite=s4BasalamBestSellerCompositeScore($row,true);$row['composite_score']=$composite['score'];$row['score_components']=$composite['components'];$row['active_sales_metric']='all_product_signals';$row['active_sales_score']=$composite['score'];}unset($row);
-    $d['table']=['page'=>$page,'page_size'=>$pageSize,'pages'=>$pages,'total'=>$total,'all_total'=>$allTotal,'rows'=>$rows,'filters'=>$normalizedFilters,'applied_filter'=>s4BasalamBestSellersNormalizeFilters((array)($d['profile_filter']??[]))];return$d;
+    $d['score_weights']=s4BasalamBestSellerScoreWeights();$d['table']=['page'=>$page,'page_size'=>$pageSize,'pages'=>$pages,'total'=>$total,'all_total'=>$allTotal,'rows'=>$rows,'filters'=>$normalizedFilters,'applied_filter'=>s4BasalamBestSellersNormalizeFilters((array)($d['profile_filter']??[]))];return$d;
 }
 function s4SettingsMenuClicksFile():string{return __DIR__.'/.settings-menu-clicks.json';}
 function s4SettingsMenuClicksLoad():array{$d=json_decode((string)@file_get_contents(s4SettingsMenuClicksFile()),true);return is_array($d)?$d:[];}
@@ -50788,6 +50798,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'verification_confidence'")!==false
         &&strpos($selfSrc,'امتیاز جامع همهٔ پارامترها')!==false
         &&version_compare(APP_VERSION,'10.695','>='));
+    $add('10.696','وزن اجزای امتیاز پرفروش‌ها بر اساس اهمیت تجاری رتبه‌بندی و شفاف شده است',
+        array_sum(array_column(s4BasalamBestSellerScoreWeights(),'weight'))===100
+        &&s4BasalamBestSellerScoreWeights()[0]['key']==='exact_sales'
+        &&s4BasalamBestSellerScoreWeights()[1]['key']==='weekly_sales'
+        &&strpos($selfSrc,"score_weights']=s4BasalamBestSellerScoreWeights()")!==false
+        &&strpos($selfSrc,'فروش دقیق ۳۵٪')!==false
+        &&version_compare(APP_VERSION,'10.696','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -92684,6 +92701,7 @@ html[data-skin="gloss"] .progress-bar{
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#b45309,#0f172a)" onclick="toggleSmenu(this);bbsLoad()"><h3>🏆 پرفروش‌ترین محصولات باسلام</h3><span class="cst on" id="bbsBadge">فعال</span><span class="arrow">▼</span></div>
 <div class="smenu-body">
 <div style="font-size:10.5px;color:#cbd5e1;line-height:1.9">زمان‌بندی استخراج، مقصد ارسال، جزئیات، تعداد صفحات و سایر سیاست‌ها از تنظیمات همین پروفایل در تب‌های شروع و تنظیمات خوانده می‌شوند؛ فقط موتور استخراج آن اختصاصی پرفروش‌های باسلام است. همهٔ محصولات کشف‌شده در کاتالوگ مستقل و کامل نگهداری می‌شوند. امتیاز جامع هر محصول از فروش دقیق، فروش فهرست، فروش هفتگی، موجودی، اعتبار قیمت، کامل‌بودن محتوا و تازگی تأیید ساخته می‌شود و به معیار فروش انتخابی وابسته نیست. فیلتر، امتیازدهی و مرتب‌سازی روی کل کاتالوگ انجام می‌شود و فقط بهترین تعداد تعیین‌شده در پروفایل <b>باسلام -پرفروش ها</b> نمایش و ذخیره می‌شود؛ بنابراین صفحه‌بندی در انتخاب برندگان دخالت ندارد.</div>
+<div style="font-size:10.5px;color:#bae6fd;line-height:1.9;margin-top:5px"><b>رتبه و وزن امتیاز (از ۱۰۰):</b> ۱) فروش دقیق ۳۵٪ · ۲) فروش هفتگی ۲۵٪ · ۳) فروش فهرست‌شده ۱۵٪ · ۴) موجودی ۱۰٪ · ۵) اعتبار و تازگی تأیید ۷٪ · ۶) کامل‌بودن اطلاعات ۵٪ · ۷) معتبر بودن قیمت ۳٪</div>
 <div class="tpe-actions"><button type="button" class="btn btn-cyan" onclick="bbsRun()">↻ اجرای گام بعدی</button><button type="button" class="btn btn-gray" onclick="bbsLoad()">تازه‌سازی وضعیت</button></div>
 <div class="tpe-stats" id="bbsStats"><span class="tpe-stat">در انتظار بارگذاری…</span></div>
 <div id="bbsMsg" class="tpe-note"></div>
@@ -103925,6 +103943,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.696', t:'⚖️ وزن‌دهی اهمیت‌محور امتیاز پرفروش‌ها', items:[
+    'امتیاز ۱۰۰ نمره‌ای بر اساس اهمیت تجاری وزن‌دهی شد: فروش دقیق ۳۵، فروش هفتگی ۲۵، فروش فهرست‌شده ۱۵، موجودی ۱۰، اعتبار و تازگی تأیید ۷، کامل‌بودن اطلاعات ۵ و اعتبار قیمت ۳ نمره.',
+    'رتبه و وزن‌ها مستقیماً در بخش پرفروش‌های باسلام نمایش داده می‌شوند و پاسخ وضعیت نیز score_weights را برای ممیزی رابط و API برمی‌گرداند.',
+    'ریز کیفیت محتوا شامل عنوان، غرفه، دسته، تصویر، توضیح، گالری، مشخصات، تنوع، برند/برچسب، SKU و وزن است و در سهم ۵ نمره‌ای خودش نرمال می‌شود.'
+  ]},
   {v:'10.695', t:'🧮 امتیاز جامع محصول در پرفروش‌های باسلام', items:[
     'امتیاز محصول دیگر از معیار فروش انتخاب‌شده ساخته نمی‌شود؛ فروش دقیق، فروش فهرست، فروش هفتگی، موجودی، معتبر بودن قیمت، کامل بودن عنوان/غرفه/دسته/تصویر/توضیح/گالری/مشخصات/تنوع/برند/برچسب/SKU/وزن و تازگی تأیید فروش هم‌زمان در امتیاز دخالت دارند.',
     'اجزای امتیاز برای هر ردیف در پاسخ وضعیت برگردانده می‌شوند و با نگه‌داشتن نشانگر روی امتیاز جدول قابل مشاهده‌اند؛ معیار فروش انتخابی فقط برای فیلتر حداقل فروش باقی مانده است.',
