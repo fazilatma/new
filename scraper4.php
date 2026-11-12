@@ -406,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.712';
+const APP_VERSION = '10.713';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -4937,6 +4937,8 @@ if (!$allowDelete && is_file(PROFILES_FILE)) {
 }
 $ok = writeJsonFile(PROFILES_FILE, $profiles)['ok'];
 if ($ok) {
+    $GLOBALS['_s4BbsProfilesGen'] = ((int)($GLOBALS['_s4BbsProfilesGen'] ?? 0)) + 1;
+    $GLOBALS['_s4BbsWriteSeq'] = ((int)($GLOBALS['_s4BbsWriteSeq'] ?? 0)) + 1;
     $bk = PROFILES_FILE . '.bak';
     if ($profiles !== []) s4AtomicCopyVerified(PROFILES_FILE, $bk);
     elseif ($allowDelete && is_file($bk)) @unlink($bk);
@@ -27052,6 +27054,34 @@ function s4ThirdPartyExplorerPublicSales(array $body):?int{
    and exact-sales verification remain unbounded in the durable catalogue; only
    the globally filtered and ranked managed-profile projection is capped. */
 function s4BasalamBestSellersFile():string{return __DIR__.'/.basalam-bestsellers.json';}
+function s4BasalamBestSellersStatusCacheFile():string{return __DIR__.'/.basalam-bestsellers-cache.json';}
+function s4BasalamBestSellersIndexCacheFile():string{return __DIR__.'/.basalam-bestsellers-index.json';}
+function s4BasalamBestSellersAtomicWriteJson(string $file,array $data):bool{
+    $tmp=$file.'.tmp.'.getmypid().'.'.mt_rand(1000,9999);
+    $json=json_encode($data,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    if(!is_string($json)||$json===''||@file_put_contents($tmp,$json,LOCK_EX)!==strlen($json)){@unlink($tmp);return false;}
+    if(@rename($tmp,$file))return true;@unlink($tmp);return false;
+}
+function s4BasalamBestSellersFileStamp(string $file):array{
+    clearstatcache(true,$file);
+    if(!is_file($file))return['exists'=>0,'size'=>0,'mtime'=>0,'inode'=>0];
+    return['exists'=>1,'size'=>(int)@filesize($file),'mtime'=>(int)@filemtime($file),'inode'=>function_exists('fileinode')?(int)@fileinode($file):0];
+}
+function s4BasalamBestSellersSourceStamp():array{
+    return[
+        'state'=>s4BasalamBestSellersFileStamp(s4BasalamBestSellersFile()),
+        'catalog'=>s4BasalamBestSellersFileStamp(s4BasalamBestSellersCatalogFile()),
+        'profiles'=>s4BasalamBestSellersFileStamp(PROFILES_FILE),
+    ];
+}
+function s4BasalamBestSellersStampEqual(array $a,array $b):bool{
+    foreach(['exists','size','mtime','inode']as$k){if((int)($a[$k]??-1)!==(int)($b[$k]??-2))return false;}
+    return true;
+}
+function s4BasalamBestSellersAllStampsEqual(array $a,array $b):bool{
+    foreach(['state','catalog','profiles']as$part){if(!is_array($a[$part]??null)||!is_array($b[$part]??null)||!s4BasalamBestSellersStampEqual($a[$part],$b[$part]))return false;}
+    return true;
+}
 function s4BasalamBestSellersProfileUrl():string{return 'https://basalam.com/s/products?sort=sales&s4_profile=best-sellers';}
 function s4BasalamBestSellersProfileKey():string{return profileKey(s4BasalamBestSellersProfileUrl());}
 function s4BasalamBestSellersProfileConfig(?array $profiles=null):array{$profiles=$profiles??loadProfiles();$pk=s4BasalamBestSellersProfileKey();$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];$sync=is_array($profile['syncConfig']??null)?$profile['syncConfig']:[];return['profile_key'=>$pk,'profile'=>$profile,'enabled'=>!empty($sync['enabled']),'interval_sec'=>max(0,(int)($sync['interval']??3600)),'target'=>(string)($sync['target']??'woo'),'pages'=>max(1,min(500,(int)($profile['pages']??10))),'with_detail'=>array_key_exists('backendExtractWithDetail',$profile)?!empty($profile['backendExtractWithDetail']):true,'detail_mode'=>(string)($profile['detailExtractMode']??'two_stage'),'sync_config'=>$sync,'engine'=>'basalam_best_sellers'];}
@@ -27085,15 +27115,22 @@ function s4BasalamBestSellersDefaults():array{return[
     'pages_scanned'=>0,'products_discovered'=>0,'products_verified'=>0,'products_enriched'=>0,'saved_count'=>0,'catalog_count'=>0,
     'last_run_at'=>0,'next_run_at'=>0,'backoff_until'=>0,'backoff_attempts'=>0,'last_error'=>'','last_action'=>'waiting'];}
 function s4BasalamBestSellersLoad():array{
-    $d=json_decode((string)@file_get_contents(s4BasalamBestSellersFile()),true);if(!is_array($d))$d=[];$d=array_replace(s4BasalamBestSellersDefaults(),$d);
+    static $memo=['gen'=>-1,'stamp'=>[],'data'=>null];
+    $file=s4BasalamBestSellersFile();
+    $stamp=s4BasalamBestSellersFileStamp($file);
+    $gen=(int)($GLOBALS['_s4BbsStateGen']??0);
+    if($memo['data']!==null&&$memo['gen']===$gen&&s4BasalamBestSellersStampEqual($memo['stamp'],$stamp))return$memo['data'];
+    $d=json_decode((string)@file_get_contents($file),true);if(!is_array($d))$d=[];$d=array_replace(s4BasalamBestSellersDefaults(),$d);
     if(!is_array($d['partition']??null))$d['partition']=[];$d['partition']=array_replace(['category_id'=>0,'keyword'=>'','min_price'=>0,'max_price'=>0],$d['partition']);
     foreach(['verify_queue','detail_queue','known_ids','partition_categories','price_subpartitions']as$k)if(!is_array($d[$k]??null))$d[$k]=[];
     if(!is_array($d['profile_filter']??null))$d['profile_filter']=s4BasalamBestSellersDefaults()['profile_filter'];
-    $d['page_size']=max(1,min(50,(int)$d['page_size']));$d['interval_sec']=max(1,min(86400,(int)$d['interval_sec']));return$d;
+    $d['page_size']=max(1,min(50,(int)$d['page_size']));$d['interval_sec']=max(1,min(86400,(int)$d['interval_sec']));
+    $memo=['gen'=>$gen,'stamp'=>$stamp,'data'=>$d];
+    return$d;
 }
 function s4BasalamBestSellersSave(array $d):bool{
     $tmp=s4BasalamBestSellersFile().'.tmp.'.getmypid();$j=json_encode($d,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
-    if(!is_string($j)||@file_put_contents($tmp,$j,LOCK_EX)===false){@unlink($tmp);return false;}if(@rename($tmp,s4BasalamBestSellersFile()))return true;@unlink($tmp);return false;
+    if(!is_string($j)||@file_put_contents($tmp,$j,LOCK_EX)===false){@unlink($tmp);return false;}if(@rename($tmp,s4BasalamBestSellersFile())){$GLOBALS['_s4BbsStateGen']=((int)($GLOBALS['_s4BbsStateGen']??0))+1;$GLOBALS['_s4BbsWriteSeq']=((int)($GLOBALS['_s4BbsWriteSeq']??0))+1;return true;}@unlink($tmp);return false;
 }
 function s4BasalamBestSellersBackoff(array &$d,int $now):void{$attempt=max(1,min(7,(int)($d['backoff_attempts']??0)+1));$d['backoff_attempts']=$attempt;$d['backoff_until']=$now+min(3600,60*(2**($attempt-1)));}
 function s4BasalamBestSellerImage(array $row):string{
@@ -27118,12 +27155,18 @@ function s4BasalamBestSellersProductMap(array $raw):array{
 }
 function s4BasalamBestSellersCatalogFile():string{return __DIR__.'/.basalam-bestsellers-products.json';}
 function s4BasalamBestSellersCatalogLoad(?array $fallbackProfile=null):array{
-    $raw=json_decode((string)@file_get_contents(s4BasalamBestSellersCatalogFile()),true);$map=is_array($raw)?s4BasalamBestSellersProductMap($raw):[];
-    if(!$map&&is_array($fallbackProfile))$map=s4BasalamBestSellersProductMap(is_array($fallbackProfile['products']??null)?$fallbackProfile['products']:[]);return$map;
+    static $memo=['gen'=>-1,'stamp'=>[],'map'=>null];
+    $file=s4BasalamBestSellersCatalogFile();
+    $stamp=s4BasalamBestSellersFileStamp($file);
+    $gen=(int)($GLOBALS['_s4BbsCatalogGen']??0);
+    if(!empty($stamp['exists'])&&$memo['map']!==null&&$memo['gen']===$gen&&s4BasalamBestSellersStampEqual($memo['stamp'],$stamp))return$memo['map'];
+    $raw=$stamp['exists']?json_decode((string)@file_get_contents($file),true):null;$map=is_array($raw)?s4BasalamBestSellersProductMap($raw):[];
+    if($map){$memo=['gen'=>$gen,'stamp'=>$stamp,'map'=>$map];return$map;}
+    if(is_array($fallbackProfile))$map=s4BasalamBestSellersProductMap(is_array($fallbackProfile['products']??null)?$fallbackProfile['products']:[]);return$map;
 }
 function s4BasalamBestSellersCatalogSave(array $products):bool{
     $rows=[];foreach($products as$key=>$p)if(is_array($p))$rows[]=[$key,$p];$file=s4BasalamBestSellersCatalogFile();$tmp=$file.'.tmp.'.getmypid();$json=json_encode($rows,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
-    if(!is_string($json)||@file_put_contents($tmp,$json,LOCK_EX)===false){@unlink($tmp);return false;}if(@rename($tmp,$file))return true;@unlink($tmp);return false;
+    if(!is_string($json)||@file_put_contents($tmp,$json,LOCK_EX)===false){@unlink($tmp);return false;}if(@rename($tmp,$file)){$GLOBALS['_s4BbsCatalogGen']=((int)($GLOBALS['_s4BbsCatalogGen']??0))+1;$GLOBALS['_s4BbsWriteSeq']=((int)($GLOBALS['_s4BbsWriteSeq']??0))+1;return true;}@unlink($tmp);return false;
 }
 function s4BasalamBestSellersNormalizeFilters(array $filters):array{
     $exact=(string)($filters['exact']??'all');if(!in_array($exact,['all','verified','pending'],true))$exact='all';$stock=(string)($filters['stock']??'all');if(!in_array($stock,['all','in_stock','low_stock'],true))$stock='all';
@@ -27169,7 +27212,24 @@ function s4BasalamBestSellerCompositeScore(array $product,bool $withComponents=f
 }
 function s4BasalamBestSellersFilterProducts(array $products,array $filters):array{
     $f=s4BasalamBestSellersNormalizeFilters($filters);$products=array_filter($products,function($p)use($f){if(array_key_exists('in_stock',$p)&&$p['in_stock']===false)return false;$status=(int)($p['status']??2976);if($status>0&&!in_array($status,[1,2976],true))return false;$hasExact=array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']!==null;if($f['exact']==='verified'&&!$hasExact)return false;if($f['exact']==='pending'&&$hasExact)return false;if(s4BasalamBestSellerSalesMetricValue($p,$f['sales_metric'])<$f['min_sales'])return false;$stock=(int)($p['stock']??$p['inventory']??0);if($f['stock']==='in_stock'&&$stock<=0)return false;if($f['stock']==='low_stock'&&($stock<=0||$stock>10))return false;$cat=mb_strtolower((string)($p['category']??$p['category_id']??''));$vendor=mb_strtolower((string)($p['vendor_name']??$p['vendor_id']??''));if($f['category']!==''&&mb_strpos($cat,$f['category'])===false)return false;if($f['vendor']!==''&&mb_strpos($vendor,$f['vendor'])===false)return false;if($f['q']!==''){$hay=mb_strtolower(implode(' ',[(string)($p['title']??''),$cat,$vendor,(string)($p['basalam_product_id']??'')]));if(mb_strpos($hay,$f['q'])===false)return false;}return true;});
-    uasort($products,function($a,$b)use($f){$field=function($p)use($f){$sort=$f['sort'];if($sort==='exact_sales')return array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']!==null?(int)$p['sales_count_exact']:-1;if($sort==='indexed_sales')return s4BasalamBestSellerSalesMetricValue($p,'indexed_sales');if($sort==='weekly_sales')return s4BasalamBestSellerSalesMetricValue($p,'weekly_sales');if($sort==='composite_score')return s4BasalamBestSellerCompositeScore($p);if($sort==='price')return(int)($p['price_num']??0);if($sort==='stock')return(int)($p['stock']??0);if($sort==='vendor')return mb_strtolower((string)($p['vendor_name']??''));if($sort==='category')return mb_strtolower((string)($p['category']??''));return mb_strtolower((string)($p['title']??''));};$av=$field($a);$bv=$field($b);$cmp=is_string($av)?strcmp($av,$bv):($av<=>$bv);if($cmp===0)$cmp=(int)($a['basalam_product_id']??0)<=>(int)($b['basalam_product_id']??0);return$f['dir']==='asc'?$cmp:-$cmp;});
+    if(count($products)>1){
+        $sort=$f['sort'];$useStr=in_array($sort,['vendor','category','title'],true);$sortKeys=[];$pids=[];
+        foreach($products as$k=>$p){
+            $pids[$k]=(int)($p['basalam_product_id']??0);
+            if($sort==='exact_sales')$sortKeys[$k]=array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']!==null?(int)$p['sales_count_exact']:-1;
+            elseif($sort==='indexed_sales')$sortKeys[$k]=s4BasalamBestSellerSalesMetricValue($p,'indexed_sales');
+            elseif($sort==='weekly_sales')$sortKeys[$k]=s4BasalamBestSellerSalesMetricValue($p,'weekly_sales');
+            elseif($sort==='composite_score')$sortKeys[$k]=isset($p['_bbs_composite_score'])?(float)$p['_bbs_composite_score']:s4BasalamBestSellerCompositeScore($p);
+            elseif($sort==='price')$sortKeys[$k]=(int)($p['price_num']??0);
+            elseif($sort==='stock')$sortKeys[$k]=(int)($p['stock']??0);
+            elseif($sort==='vendor')$sortKeys[$k]=mb_strtolower((string)($p['vendor_name']??''));
+            elseif($sort==='category')$sortKeys[$k]=mb_strtolower((string)($p['category']??''));
+            else $sortKeys[$k]=mb_strtolower((string)($p['title']??''));
+        }
+        $keys=array_keys($products);$asc=($f['dir']==='asc');
+        usort($keys,static function($ka,$kb)use($sortKeys,$pids,$useStr,$asc){$av=$sortKeys[$ka];$bv=$sortKeys[$kb];$cmp=$useStr?strcmp((string)$av,(string)$bv):($av<=>$bv);if($cmp===0)$cmp=$pids[$ka]<=>$pids[$kb];return$asc?$cmp:-$cmp;});
+        $sorted=[];foreach($keys as$k)$sorted[$k]=$products[$k];$products=$sorted;
+    }
     /* The limit is deliberately last: every discovered product participates in
        filtering, scoring and sorting before one deterministic global top-N is cut. */
     return array_slice($products,0,$f['max_products'],true);
@@ -27185,9 +27245,18 @@ function s4BasalamBestSellersWriteProfile(array &$profiles,array $catalog,array 
  * extraction may legitimately own the global profiles lock for hours, so all
  * readers of this managed profile overlay the current catalogue immediately. */
 function s4BasalamBestSellersOverlayProfile(array $profile):array{
+    static $memo=['gen'=>'','cstamp'=>[],'sstamp'=>[],'rows'=>null,'order'=>null,'filter'=>null,'count'=>0];
     if(($profile['source']??'')!=='basalam_best_sellers'&&empty($profile['best_sellers_managed']))return$profile;
-    $catalog=s4BasalamBestSellersCatalogLoad($profile);$d=s4BasalamBestSellersLoad();$active=s4BasalamBestSellersFilterProducts($catalog,(array)$d['profile_filter']);$rows=[];foreach($active as$key=>$p)$rows[]=[$key,$p];
-    $profile['products']=$rows;$profile['productsOrder']=array_keys($active);$profile['best_sellers_managed']=true;$profile['best_sellers_filter']=s4BasalamBestSellersNormalizeFilters((array)$d['profile_filter']);$profile['catalog_count']=count($catalog);return$profile;
+    $cstamp=s4BasalamBestSellersFileStamp(s4BasalamBestSellersCatalogFile());
+    $sstamp=s4BasalamBestSellersFileStamp(s4BasalamBestSellersFile());
+    $gen=((int)($GLOBALS['_s4BbsCatalogGen']??0)).':'.((int)($GLOBALS['_s4BbsStateGen']??0));
+    if(!empty($cstamp['exists'])&&$memo['rows']!==null&&$memo['gen']===$gen&&s4BasalamBestSellersStampEqual($memo['cstamp'],$cstamp)&&s4BasalamBestSellersStampEqual($memo['sstamp'],$sstamp)){
+        $profile['products']=$memo['rows'];$profile['productsOrder']=$memo['order'];$profile['best_sellers_managed']=true;$profile['best_sellers_filter']=$memo['filter'];$profile['catalog_count']=$memo['count'];return$profile;
+    }
+    $catalog=s4BasalamBestSellersCatalogLoad($profile);$d=s4BasalamBestSellersLoad();$normFilter=s4BasalamBestSellersNormalizeFilters((array)$d['profile_filter']);$active=s4BasalamBestSellersFilterProducts($catalog,$normFilter);$rows=[];foreach($active as$key=>$p)$rows[]=[$key,$p];
+    $order=array_keys($active);$cnt=count($catalog);
+    if(!empty($cstamp['exists']))$memo=['gen'=>$gen,'cstamp'=>$cstamp,'sstamp'=>$sstamp,'rows'=>$rows,'order'=>$order,'filter'=>$normFilter,'count'=>$cnt];
+    $profile['products']=$rows;$profile['productsOrder']=$order;$profile['best_sellers_managed']=true;$profile['best_sellers_filter']=$normFilter;$profile['catalog_count']=$cnt;return$profile;
 }
 function s4BasalamBestSellersMergeProducts(array $incoming):array{
     $profiles=loadProfiles();$pk=s4BasalamBestSellersProfileKey();$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];$products=s4BasalamBestSellersCatalogLoad($profile);$d=s4BasalamBestSellersLoad();
@@ -27200,8 +27269,8 @@ function s4BasalamBestSellersMergeProducts(array $incoming):array{
 function s4BasalamBestSellersApplyFilter(array $filters):array{
     $filters=s4BasalamBestSellersNormalizeFilters($filters);$stateLock=@fopen(__DIR__.'/.basalam-bestsellers.lock','c');if(!$stateLock||!@flock($stateLock,LOCK_EX)){if($stateLock)@fclose($stateLock);return['ok'=>false,'error'=>'collector_lock_failed'];}
     try{$profiles=loadProfiles();$pk=s4BasalamBestSellersProfileKey();$profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];$catalog=s4BasalamBestSellersCatalogLoad($profile);if(!s4BasalamBestSellersCatalogSave($catalog))return['ok'=>false,'error'=>'catalog_save_failed'];$d=s4BasalamBestSellersLoad();$d['profile_filter']=$filters;$d['saved_count']=count(s4BasalamBestSellersFilterProducts($catalog,$filters));$d['catalog_count']=count($catalog);$d['last_action']='applied filtered result to managed profile';s4BasalamBestSellersSave($d);
-        $lf=@fopen(PROFILES_FILE.'.extract.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);return['ok'=>true,'filter'=>$filters,'active_count'=>$d['saved_count'],'catalog_count'=>$d['catalog_count'],'profile_key'=>$pk,'profile_deferred'=>true];}
-        try{$profiles=loadProfiles();$counts=s4BasalamBestSellersWriteProfile($profiles,$catalog,$filters);if(!saveProfiles($profiles))return['ok'=>false,'error'=>'profile_save_failed'];return['ok'=>true,'filter'=>$filters,'profile_deferred'=>false]+$counts;}finally{@flock($lf,LOCK_UN);@fclose($lf);}
+        $lf=@fopen(PROFILES_FILE.'.extract.lock','c');if(!$lf||!@flock($lf,LOCK_EX|LOCK_NB)){if($lf)@fclose($lf);s4BasalamBestSellersWarmCache($catalog,$d,$profile,$filters);return['ok'=>true,'filter'=>$filters,'active_count'=>$d['saved_count'],'catalog_count'=>$d['catalog_count'],'profile_key'=>$pk,'profile_deferred'=>true];}
+        try{$profiles=loadProfiles();$counts=s4BasalamBestSellersWriteProfile($profiles,$catalog,$filters);if(!saveProfiles($profiles))return['ok'=>false,'error'=>'profile_save_failed'];$profileAfter=is_array($profiles[$pk]??null)?$profiles[$pk]:$profile;s4BasalamBestSellersWarmCache($catalog,$d,$profileAfter,$filters);return['ok'=>true,'filter'=>$filters,'profile_deferred'=>false]+$counts;}finally{@flock($lf,LOCK_UN);@fclose($lf);}
     }finally{@flock($stateLock,LOCK_UN);@fclose($stateLock);}
 }
 function s4BasalamBestSellersTick(string $source='cron',bool $force=false):array{
@@ -27268,7 +27337,9 @@ function s4BasalamBestSellersTick(string $source='cron',bool $force=false):array
             }
         }
         /* known_ids is only a compact checkpoint/dedup index; it is not a limit. */
-        $d['last_action']='verified '.(!empty($verification['product_id'])?'product '.$verification['product_id']:'none').' and discovered '.count($fresh).' products at offset '.$offset;$d['last_error']='';s4BasalamBestSellersSave($d);return['ok'=>true,'source'=>$source,'action'=>'verify_and_discover','verification'=>$verification,'enrichment'=>$enrichment,'detail_pending'=>count($d['detail_queue']),'rows'=>count($fresh),'offset'=>$d['offset'],'reported_total'=>$total,'verify_pending'=>count($d['verify_queue']),'saved_count'=>$d['saved_count']];
+        $d['last_action']='verified '.(!empty($verification['product_id'])?'product '.$verification['product_id']:'none').' and discovered '.count($fresh).' products at offset '.$offset;$d['last_error']='';s4BasalamBestSellersSave($d);
+        if($source==='manual')s4BasalamBestSellersWarmCache(null,$d);
+        return['ok'=>true,'source'=>$source,'action'=>'verify_and_discover','verification'=>$verification,'enrichment'=>$enrichment,'detail_pending'=>count($d['detail_queue']),'rows'=>count($fresh),'offset'=>$d['offset'],'reported_total'=>$total,'verify_pending'=>count($d['verify_queue']),'saved_count'=>$d['saved_count']];
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
 /* The ordinary profile scheduler owns due timing and invokes this bounded,
@@ -27276,15 +27347,228 @@ function s4BasalamBestSellersTick(string $source='cron',bool $force=false):array
    maximum discovery checkpoints requested for this extraction cycle. */
 function s4BasalamBestSellersProfileExtract(string $source='periodic_sync'):array{
     $cfg=s4BasalamBestSellersProfileConfig();$wanted=max(1,(int)$cfg['pages']);$done=0;$rows=0;$last=[];$started=microtime(true);
-    while($done<$wanted){$last=s4BasalamBestSellersTick($source,true);if(empty($last['ok']))return['ok'=>false,'error'=>(string)($last['error']??'best_sellers_extract_failed'),'retryable'=>(int)($last['code']??0)===429,'retry_reason'=>(int)($last['code']??0)===429?'basalam_429':'best_sellers_extract_failed','collector'=>$last,'extracted'=>$rows,'new'=>$rows,'specialized_engine'=>'basalam_best_sellers'];if(!empty($last['skipped']))return['ok'=>true,'extracted'=>$rows,'new'=>$rows,'price_changed'=>0,'removed'=>0,'pages_done'=>$done,'pages_total'=>$wanted,'ran_out'=>true,'resume_needed'=>true,'retryable'=>true,'retry_reason'=>'best_sellers_'.(string)$last['skipped'],'specialized_engine'=>'basalam_best_sellers','collector'=>$last];$done++;$rows+=(int)($last['rows']??0);if(microtime(true)-$started>=45)break;}
-    return['ok'=>true,'extracted'=>$rows,'new'=>$rows,'price_changed'=>0,'removed'=>0,'pages_done'=>$done,'pages_total'=>$wanted,'ran_out'=>$done<$wanted,'resume_needed'=>$done<$wanted,'specialized_engine'=>'basalam_best_sellers','collector'=>$last];
+    try{
+        while($done<$wanted){$last=s4BasalamBestSellersTick($source,true);if(empty($last['ok']))return['ok'=>false,'error'=>(string)($last['error']??'best_sellers_extract_failed'),'retryable'=>(int)($last['code']??0)===429,'retry_reason'=>(int)($last['code']??0)===429?'basalam_429':'best_sellers_extract_failed','collector'=>$last,'extracted'=>$rows,'new'=>$rows,'specialized_engine'=>'basalam_best_sellers'];if(!empty($last['skipped']))return['ok'=>true,'extracted'=>$rows,'new'=>$rows,'price_changed'=>0,'removed'=>0,'pages_done'=>$done,'pages_total'=>$wanted,'ran_out'=>true,'resume_needed'=>true,'retryable'=>true,'retry_reason'=>'best_sellers_'.(string)$last['skipped'],'specialized_engine'=>'basalam_best_sellers','collector'=>$last];$done++;$rows+=(int)($last['rows']??0);if(microtime(true)-$started>=45)break;}
+        return['ok'=>true,'extracted'=>$rows,'new'=>$rows,'price_changed'=>0,'removed'=>0,'pages_done'=>$done,'pages_total'=>$wanted,'ran_out'=>$done<$wanted,'resume_needed'=>$done<$wanted,'specialized_engine'=>'basalam_best_sellers','collector'=>$last];
+    }finally{if($done>0)s4BasalamBestSellersWarmCache();}
 }
-function s4BasalamBestSellersStatus(int $page=1,int $pageSize=50,array $filters=[]):array{
-    $d=s4BasalamBestSellersLoad();$d['verify_pending']=count((array)$d['verify_queue']);$d['detail_pending']=count((array)$d['detail_queue']);$d['partition_categories_count']=count((array)($d['partition_categories']??[]));$d['price_subpartitions_pending']=count((array)($d['price_subpartitions']??[]));unset($d['known_ids'],$d['verify_queue'],$d['detail_queue']);$d['ok']=true;$d['profile_title']='باسلام -پرفروش ها';$d['profile_key']=s4BasalamBestSellersProfileKey();$d['version']=APP_VERSION;
-    $page=max(1,$page);$pageSize=max(10,min(100,$pageSize));$profiles=loadProfiles();$profile=is_array($profiles[$d['profile_key']]??null)?$profiles[$d['profile_key']]:[];$pcfg=s4BasalamBestSellersProfileConfig($profiles);$d['enabled']=!empty($pcfg['enabled']);$d['interval_sec']=(int)$pcfg['interval_sec'];$d['updated_at']=(int)($profile['updatedAt']??0);$d['settings_updated_at']=s4ProfileSettingsTimestamp($profile);$d['profile_settings']=['periodic_enabled'=>!empty($pcfg['enabled']),'interval_sec'=>(int)$pcfg['interval_sec'],'target'=>(string)$pcfg['target'],'pages'=>(int)$pcfg['pages'],'with_detail'=>!empty($pcfg['with_detail']),'detail_mode'=>(string)$pcfg['detail_mode'],'engine'=>(string)$pcfg['engine'],'title_suffix'=>(string)($profile['titleSuffix']??''),'price_mode'=>(string)($profile['priceMode']??'none'),'price_value'=>(float)($profile['priceVal']??0),'round_price'=>(string)($profile['roundPrice']??'0'),'basalam_category_id'=>(int)($profile['bslCategoryId']??0),'sync_config'=>(array)($profile['syncConfig']??[])];
-    $catalog=s4BasalamBestSellersCatalogLoad($profile);$allTotal=count($catalog);$d['catalog_count']=$allTotal;$d['saved_count']=count(s4BasalamBestSellersFilterProducts($catalog,(array)$d['profile_filter']));$normalizedFilters=s4BasalamBestSellersNormalizeFilters($filters);$products=array_values(s4BasalamBestSellersFilterProducts($catalog,$normalizedFilters));
-    $total=count($products);$pages=max(1,(int)ceil($total/$pageSize));$page=min($page,$pages);$rows=array_slice($products,($page-1)*$pageSize,$pageSize);foreach($rows as&$row){$row['sales_scores']=['exact_sales'=>($x=s4BasalamBestSellerSalesScore($row,'exact_sales'))===null?null:round($x,2),'indexed_sales'=>round((float)s4BasalamBestSellerSalesScore($row,'indexed_sales'),2),'weekly_sales'=>round((float)s4BasalamBestSellerSalesScore($row,'weekly_sales'),2)];$composite=s4BasalamBestSellerCompositeScore($row,true);$row['composite_score']=$composite['score'];$row['score_components']=$composite['components'];$row['active_sales_metric']='all_product_signals';$row['active_sales_score']=$composite['score'];}unset($row);
-    $d['score_weights']=s4BasalamBestSellerScoreWeights();$d['table']=['page'=>$page,'page_size'=>$pageSize,'pages'=>$pages,'total'=>$total,'all_total'=>$allTotal,'rows'=>$rows,'filters'=>$normalizedFilters,'applied_filter'=>s4BasalamBestSellersNormalizeFilters((array)($d['profile_filter']??[]))];return$d;
+function s4BasalamBestSellersCompactItem(array $p):array{
+    $composite=s4BasalamBestSellerCompositeScore($p,true);
+    $salesScores=['exact_sales'=>($x=s4BasalamBestSellerSalesScore($p,'exact_sales'))===null?null:round($x,2),'indexed_sales'=>round((float)s4BasalamBestSellerSalesScore($p,'indexed_sales'),2),'weekly_sales'=>round((float)s4BasalamBestSellerSalesScore($p,'weekly_sales'),2)];
+    $stock=(int)($p['stock']??$p['inventory']??0);
+    return[
+        'title'=>(string)($p['title']??''),
+        'link'=>(string)($p['link']??''),
+        'image'=>(string)($p['image']??''),
+        'price'=>(string)($p['price']??''),
+        'price_num'=>(int)($p['price_num']??0),
+        'source'=>(string)($p['source']??'basalam_best_sellers'),
+        'source_id'=>(int)($p['source_id']??$p['basalam_product_id']??0),
+        'basalam_product_id'=>(int)($p['basalam_product_id']??0),
+        'vendor_id'=>(int)($p['vendor_id']??0),
+        'vendor_name'=>(string)($p['vendor_name']??''),
+        'category_id'=>(int)($p['category_id']??0),
+        'category'=>(string)($p['category']??''),
+        'stock'=>$stock,
+        'inventory'=>$stock,
+        'in_stock'=>array_key_exists('in_stock',$p)?(bool)$p['in_stock']:($stock>0),
+        'status'=>(int)($p['status']??2976),
+        'sales_count'=>(int)($p['sales_count']??0),
+        'sales_count_indexed'=>(int)($p['sales_count_indexed']??0),
+        'sales_count_exact'=>array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']!==null?(int)$p['sales_count_exact']:null,
+        'sales_verified_at'=>(int)($p['sales_verified_at']??0),
+        'sales_count_week'=>(int)($p['sales_count_week']??0),
+        '_bbs_composite_score'=>$composite['score'],
+        '_bbs_score_components'=>$composite['components'],
+        '_bbs_sales_scores'=>$salesScores,
+    ];
+}
+function s4BasalamBestSellersFormatTableRow(array $row):array{
+    if(isset($row['_bbs_sales_scores'])&&isset($row['_bbs_composite_score'])&&isset($row['_bbs_score_components'])){
+        $row['sales_scores']=$row['_bbs_sales_scores'];
+        $row['composite_score']=$row['_bbs_composite_score'];
+        $row['score_components']=$row['_bbs_score_components'];
+        unset($row['_bbs_sales_scores'],$row['_bbs_composite_score'],$row['_bbs_score_components']);
+    }else{
+        $row['sales_scores']=['exact_sales'=>($x=s4BasalamBestSellerSalesScore($row,'exact_sales'))===null?null:round($x,2),'indexed_sales'=>round((float)s4BasalamBestSellerSalesScore($row,'indexed_sales'),2),'weekly_sales'=>round((float)s4BasalamBestSellerSalesScore($row,'weekly_sales'),2)];
+        $composite=s4BasalamBestSellerCompositeScore($row,true);
+        $row['composite_score']=$composite['score'];
+        $row['score_components']=$composite['components'];
+    }
+    $row['active_sales_metric']='all_product_signals';
+    $row['active_sales_score']=$row['composite_score'];
+    return$row;
+}
+function s4BasalamBestSellersIndexLoadOrBuild(array $catalogStamp,?array $fallbackProfile=null,?array $preloadedCatalog=null):array{
+    static $memo=['gen'=>-1,'stamp'=>[],'items'=>null,'all_total'=>0,'built_at'=>0];
+    $now=time();
+    $gen=(int)($GLOBALS['_s4BbsCatalogGen']??0);
+    if($preloadedCatalog===null&&!empty($catalogStamp['exists'])){
+        if($memo['items']!==null&&$memo['gen']===$gen&&s4BasalamBestSellersStampEqual($memo['stamp'],$catalogStamp)&&($now-(int)$memo['built_at'])<3600){
+            return[$memo['items'],(int)$memo['all_total'],true];
+        }
+        $idxFile=s4BasalamBestSellersIndexCacheFile();
+        if(is_file($idxFile)){
+            $idx=json_decode((string)@file_get_contents($idxFile),true);
+            if(is_array($idx)&&(int)($idx['schema']??0)===1&&is_array($idx['catalog_stamp']??null)&&is_array($idx['items']??null)&&s4BasalamBestSellersStampEqual($idx['catalog_stamp'],$catalogStamp)&&($now-(int)($idx['built_at']??0))<3600){
+                $pid=(int)($idx['built_pid']??0);$seq=(int)($idx['built_seq']??0);
+                if($pid!==getmypid()||$seq>=(int)($GLOBALS['_s4BbsWriteSeq']??0)){
+                    $allTotal=(int)($idx['all_total']??count($idx['items']));
+                    $memo=['gen'=>$gen,'stamp'=>$catalogStamp,'items'=>$idx['items'],'all_total'=>$allTotal,'built_at'=>(int)($idx['built_at']??$now)];
+                    return[$idx['items'],$allTotal,true];
+                }
+            }
+        }
+    }
+    $catalog=$preloadedCatalog??s4BasalamBestSellersCatalogLoad($fallbackProfile);
+    $allTotal=count($catalog);
+    $items=[];
+    foreach($catalog as$key=>$p){
+        if(!is_array($p))continue;
+        if(array_key_exists('in_stock',$p)&&$p['in_stock']===false)continue;
+        $st=(int)($p['status']??2976);
+        if($st>0&&!in_array($st,[1,2976],true))continue;
+        $items[$key]=s4BasalamBestSellersCompactItem($p);
+    }
+    if(!empty($catalogStamp['exists'])){
+        $payload=['schema'=>1,'built_at'=>$now,'built_pid'=>getmypid(),'built_seq'=>(int)($GLOBALS['_s4BbsWriteSeq']??0),'catalog_stamp'=>$catalogStamp,'all_total'=>$allTotal,'items'=>$items];
+        s4BasalamBestSellersAtomicWriteJson(s4BasalamBestSellersIndexCacheFile(),$payload);
+        $memo=['gen'=>$gen,'stamp'=>$catalogStamp,'items'=>$items,'all_total'=>$allTotal,'built_at'=>$now];
+    }
+    return[$items,$allTotal,false];
+}
+function s4BasalamBestSellersStatusCacheRead():?array{
+    static $memo=['gen'=>-1,'stamp'=>[],'data'=>null];
+    $file=s4BasalamBestSellersStatusCacheFile();
+    $stamp=s4BasalamBestSellersFileStamp($file);
+    if(empty($stamp['exists']))return null;
+    $gen=(int)($GLOBALS['_s4BbsStatusCacheGen']??0);
+    if($memo['data']!==null&&$memo['gen']===$gen&&s4BasalamBestSellersStampEqual($memo['stamp'],$stamp))return$memo['data'];
+    $d=json_decode((string)@file_get_contents($file),true);
+    if(!is_array($d)||(int)($d['schema']??0)!==2||!is_array($d['meta']??null)||!is_array($d['queries']??null))return null;
+    $memo=['gen'=>$gen,'stamp'=>$stamp,'data'=>$d];
+    return$d;
+}
+function s4BasalamBestSellersStatusCacheWrite(array $cache):bool{
+    if(!s4BasalamBestSellersAtomicWriteJson(s4BasalamBestSellersStatusCacheFile(),$cache))return false;
+    $GLOBALS['_s4BbsStatusCacheGen']=((int)($GLOBALS['_s4BbsStatusCacheGen']??0))+1;
+    return true;
+}
+function s4BasalamBestSellersStatusCacheUsableInProc(array $cache):bool{
+    $pid=(int)($cache['built_pid']??0);
+    if($pid!==getmypid())return true;
+    return (int)($cache['built_seq']??0)>=(int)($GLOBALS['_s4BbsWriteSeq']??0);
+}
+function s4BasalamBestSellersWarmCache(?array $catalog=null,?array $d=null,?array $profile=null,?array $filters=null):void{
+    try{
+        if($catalog===null&&!is_file(s4BasalamBestSellersCatalogFile())&&!is_file(s4BasalamBestSellersFile()))return;
+        $d=$d??s4BasalamBestSellersLoad();
+        $f=$filters??(array)($d['profile_filter']??[]);
+        s4BasalamBestSellersComputeAndCacheStatus(1,50,s4BasalamBestSellersNormalizeFilters($f),['force_fresh'=>true],$catalog,$d,$profile);
+    }catch(Throwable $_bbsWarmErr){}
+}
+function s4BasalamBestSellersComputeAndCacheStatus(int $page,int $pageSize,array $normalizedFilters,array $opts=[],?array $preloadedCatalog=null,?array $preloadedD=null,?array $preloadedProfile=null):array{
+    $now=time();
+    $stamp=s4BasalamBestSellersSourceStamp();
+    $cache=s4BasalamBestSellersStatusCacheRead();
+    $d=$preloadedD??s4BasalamBestSellersLoad();
+    $d['verify_pending']=count((array)$d['verify_queue']);$d['detail_pending']=count((array)$d['detail_queue']);$d['partition_categories_count']=count((array)($d['partition_categories']??[]));$d['price_subpartitions_pending']=count((array)($d['price_subpartitions']??[]));unset($d['known_ids'],$d['verify_queue'],$d['detail_queue']);$d['ok']=true;$d['profile_title']='باسلام -پرفروش ها';$d['profile_key']=s4BasalamBestSellersProfileKey();$d['version']=APP_VERSION;
+    $profile=[];
+    if($preloadedProfile!==null){
+        $profile=$preloadedProfile;
+        $pcfg=s4BasalamBestSellersProfileConfig([$d['profile_key']=>$profile]);
+        $d['enabled']=!empty($pcfg['enabled']);$d['interval_sec']=(int)$pcfg['interval_sec'];$d['updated_at']=(int)($profile['updatedAt']??0);$d['settings_updated_at']=s4ProfileSettingsTimestamp($profile);
+        $d['profile_settings']=['periodic_enabled'=>!empty($pcfg['enabled']),'interval_sec'=>(int)$pcfg['interval_sec'],'target'=>(string)$pcfg['target'],'pages'=>(int)$pcfg['pages'],'with_detail'=>!empty($pcfg['with_detail']),'detail_mode'=>(string)$pcfg['detail_mode'],'engine'=>(string)$pcfg['engine'],'title_suffix'=>(string)($profile['titleSuffix']??''),'price_mode'=>(string)($profile['priceMode']??'none'),'price_value'=>(float)($profile['priceVal']??0),'round_price'=>(string)($profile['roundPrice']??'0'),'basalam_category_id'=>(int)($profile['bslCategoryId']??0),'sync_config'=>(array)($profile['syncConfig']??[])];
+    }elseif(empty($opts['force_fresh'])&&!empty($stamp['catalog']['exists'])&&is_array($cache)&&s4BasalamBestSellersStatusCacheUsableInProc($cache)&&!empty($cache['meta']['profile_settings'])&&is_array($cache['stamp']['profiles']??null)&&s4BasalamBestSellersStampEqual($cache['stamp']['profiles'],$stamp['profiles'])){
+        $d['enabled']=!empty($cache['meta']['enabled']);$d['interval_sec']=(int)($cache['meta']['interval_sec']??3600);$d['updated_at']=(int)($cache['meta']['updated_at']??0);$d['settings_updated_at']=(int)($cache['meta']['settings_updated_at']??0);
+        $d['profile_settings']=(array)$cache['meta']['profile_settings'];
+    }else{
+        $profiles=loadProfiles();$profile=is_array($profiles[$d['profile_key']]??null)?$profiles[$d['profile_key']]:[];$pcfg=s4BasalamBestSellersProfileConfig($profiles);unset($profiles);
+        $d['enabled']=!empty($pcfg['enabled']);$d['interval_sec']=(int)$pcfg['interval_sec'];$d['updated_at']=(int)($profile['updatedAt']??0);$d['settings_updated_at']=s4ProfileSettingsTimestamp($profile);
+        $d['profile_settings']=['periodic_enabled'=>!empty($pcfg['enabled']),'interval_sec'=>(int)$pcfg['interval_sec'],'target'=>(string)$pcfg['target'],'pages'=>(int)$pcfg['pages'],'with_detail'=>!empty($pcfg['with_detail']),'detail_mode'=>(string)$pcfg['detail_mode'],'engine'=>(string)$pcfg['engine'],'title_suffix'=>(string)($profile['titleSuffix']??''),'price_mode'=>(string)($profile['priceMode']??'none'),'price_value'=>(float)($profile['priceVal']??0),'round_price'=>(string)($profile['roundPrice']??'0'),'basalam_category_id'=>(int)($profile['bslCategoryId']??0),'sync_config'=>(array)($profile['syncConfig']??[])];
+    }
+    [$indexItems,$allTotal]=$preloadedCatalog!==null
+        ? s4BasalamBestSellersIndexLoadOrBuild($stamp['catalog'],$profile,$preloadedCatalog)
+        : s4BasalamBestSellersIndexLoadOrBuild($stamp['catalog'],$profile);
+    $d['catalog_count']=$allTotal;
+    $appliedFilter=s4BasalamBestSellersNormalizeFilters((array)($d['profile_filter']??[]));
+    $filterHash=md5(json_encode($normalizedFilters,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+    $appliedHash=md5(json_encode($appliedFilter,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+    $products=array_values(s4BasalamBestSellersFilterProducts($indexItems,$normalizedFilters));
+    if($filterHash===$appliedHash){
+        $d['saved_count']=count($products);
+    }elseif(empty($opts['force_fresh'])&&is_array($cache)&&s4BasalamBestSellersStatusCacheUsableInProc($cache)&&isset($cache['meta']['saved_count'])&&is_array($cache['stamp']['state']??null)&&is_array($cache['stamp']['catalog']??null)&&s4BasalamBestSellersStampEqual($cache['stamp']['state'],$stamp['state'])&&s4BasalamBestSellersStampEqual($cache['stamp']['catalog'],$stamp['catalog'])){
+        $d['saved_count']=(int)$cache['meta']['saved_count'];
+    }else{
+        $d['saved_count']=count(s4BasalamBestSellersFilterProducts($indexItems,$appliedFilter));
+    }
+    $total=count($products);$pages=max(1,(int)ceil($total/$pageSize));$page=min($page,$pages);
+    $rows=array_map('s4BasalamBestSellersFormatTableRow',array_slice($products,($page-1)*$pageSize,$pageSize));
+    $d['score_weights']=s4BasalamBestSellerScoreWeights();
+    $pagesToCache=[$page=>$rows];
+    $preloadLimit=min($pages,3);
+    for($pp=1;$pp<=$preloadLimit;$pp++){
+        if(!isset($pagesToCache[$pp])){
+            $pagesToCache[$pp]=array_map('s4BasalamBestSellersFormatTableRow',array_slice($products,($pp-1)*$pageSize,$pageSize));
+        }
+    }
+    $keepQueries=[];
+    if(is_array($cache)&&s4BasalamBestSellersStatusCacheUsableInProc($cache)&&is_array($cache['stamp']['state']??null)&&is_array($cache['stamp']['catalog']??null)&&s4BasalamBestSellersStampEqual($cache['stamp']['state'],$stamp['state'])&&s4BasalamBestSellersStampEqual($cache['stamp']['catalog'],$stamp['catalog'])){
+        $keepQueries=(array)($cache['queries']??[]);
+    }
+    $existingPages=is_array($keepQueries[$filterHash]['pages_data']??null)?$keepQueries[$filterHash]['pages_data']:[];
+    foreach($pagesToCache as$pgNum=>$pgRows)$existingPages[$pgNum.':'.$pageSize]=$pgRows;
+    if(count($existingPages)>12)$existingPages=array_slice($existingPages,-12,null,true);
+    $keepQueries[$filterHash]=['filters'=>$normalizedFilters,'total'=>$total,'pages'=>$pages,'page_size'=>$pageSize,'updated_at'=>$now,'pages_data'=>$existingPages];
+    if(count($keepQueries)>4){
+        uasort($keepQueries,static fn($a,$b)=>((int)($b['updated_at']??0))<=>((int)($a['updated_at']??0)));
+        $keepQueries=array_slice($keepQueries,0,4,true);
+    }
+    $metaToSave=$d;$metaToSave['applied_filter']=$appliedFilter;
+    s4BasalamBestSellersStatusCacheWrite(['schema'=>2,'built_at'=>$now,'built_pid'=>getmypid(),'built_seq'=>(int)($GLOBALS['_s4BbsWriteSeq']??0),'stamp'=>$stamp,'meta'=>$metaToSave,'queries'=>$keepQueries]);
+    $d['table']=['page'=>$page,'page_size'=>$pageSize,'pages'=>$pages,'total'=>$total,'all_total'=>$allTotal,'rows'=>$rows,'filters'=>$normalizedFilters,'applied_filter'=>$appliedFilter];
+    $d['from_cache']=false;$d['cache_state']='rebuilt';$d['cache_built_at']=$now;$d['needs_refresh']=false;
+    return$d;
+}
+function s4BasalamBestSellersStatus(int $page=1,int $pageSize=50,array $filters=[],array $opts=[]):array{
+    $page=max(1,$page);$pageSize=max(10,min(100,$pageSize));
+    $forceFresh=!empty($opts['force_fresh']);
+    $preferCache=!empty($opts['prefer_cache'])&&!$forceFresh;
+    $useApplied=!empty($opts['use_applied_filters']);
+    $now=time();
+    $stamp=s4BasalamBestSellersSourceStamp();
+    $cache=s4BasalamBestSellersStatusCacheRead();
+    $cacheUsable=$cache!==null&&s4BasalamBestSellersStatusCacheUsableInProc($cache);
+    $cacheFresh=$cacheUsable&&s4BasalamBestSellersAllStampsEqual((array)($cache['stamp']??[]),$stamp)&&($now-(int)($cache['built_at']??0))<3600;
+    $cacheStale=$cacheUsable&&!$cacheFresh&&$preferCache&&($now-(int)($cache['built_at']??0))<1800;
+    if($useApplied){
+        if(!$forceFresh&&($cacheFresh||$cacheStale)&&!empty($cache['meta']['applied_filter'])){
+            $filters=(array)$cache['meta']['applied_filter'];
+        }else{
+            $dState=s4BasalamBestSellersLoad();
+            $filters=(array)($dState['profile_filter']??[]);
+        }
+    }
+    $normalizedFilters=s4BasalamBestSellersNormalizeFilters($filters);
+    $filterHash=md5(json_encode($normalizedFilters,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+    $pageKey=$page.':'.$pageSize;
+    if(!$forceFresh&&($cacheFresh||$cacheStale)&&isset($cache['queries'][$filterHash]['pages_data'][$pageKey])){
+        $qEntry=$cache['queries'][$filterHash];
+        $res=$cache['meta'];
+        $appliedFilter=is_array($res['applied_filter']??null)?$res['applied_filter']:$normalizedFilters;
+        unset($res['applied_filter']);
+        $pages=max(1,(int)($qEntry['pages']??1));
+        $total=max(0,(int)($qEntry['total']??0));
+        $allTotal=max(0,(int)($res['catalog_count']??0));
+        $rows=(array)$qEntry['pages_data'][$pageKey];
+        $res['table']=['page'=>min($page,$pages),'page_size'=>$pageSize,'pages'=>$pages,'total'=>$total,'all_total'=>$allTotal,'rows'=>$rows,'filters'=>$normalizedFilters,'applied_filter'=>$appliedFilter];
+        $res['from_cache']=true;
+        $res['cache_state']=$cacheFresh?'fresh':'stale';
+        $res['cache_built_at']=(int)($cache['built_at']??$now);
+        $res['needs_refresh']=!$cacheFresh;
+        return$res;
+    }
+    return s4BasalamBestSellersComputeAndCacheStatus($page,$pageSize,$normalizedFilters,$opts);
 }
 function s4SettingsMenuClicksFile():string{return __DIR__.'/.settings-menu-clicks.json';}
 function s4SettingsMenuClicksLoad():array{$d=json_decode((string)@file_get_contents(s4SettingsMenuClicksFile()),true);return is_array($d)?$d:[];}
@@ -27500,7 +27784,7 @@ function s4ThirdPartyExplorerSalesDiagnostic(int $vendorId):array{
 if(isset($_GET['third_party_explorer_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerProbe(false),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_sales_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerSalesDiagnostic((int)$_GET['third_party_explorer_sales_test']),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerStatus(),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
-if(isset($_GET['basalam_best_sellers_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4BasalamBestSellersStatus((int)($_GET['page']??1),(int)($_GET['page_size']??50),['q'=>(string)($_GET['q']??''),'category'=>(string)($_GET['category']??''),'vendor'=>(string)($_GET['vendor']??''),'exact'=>(string)($_GET['exact']??'all'),'sales_metric'=>(string)($_GET['sales_metric']??'exact_sales'),'min_sales'=>(int)($_GET['min_sales']??0),'max_products'=>(int)($_GET['max_products']??10000),'stock'=>(string)($_GET['stock']??'all'),'sort'=>(string)($_GET['sort']??'exact_sales'),'dir'=>(string)($_GET['dir']??'desc')]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_GET['basalam_best_sellers_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4BasalamBestSellersStatus((int)($_GET['page']??1),(int)($_GET['page_size']??50),['q'=>(string)($_GET['q']??''),'category'=>(string)($_GET['category']??''),'vendor'=>(string)($_GET['vendor']??''),'exact'=>(string)($_GET['exact']??'all'),'sales_metric'=>(string)($_GET['sales_metric']??'exact_sales'),'min_sales'=>(int)($_GET['min_sales']??0),'max_products'=>(int)($_GET['max_products']??10000),'stock'=>(string)($_GET['stock']??'all'),'sort'=>(string)($_GET['sort']??'exact_sales'),'dir'=>(string)($_GET['dir']??'desc')],['prefer_cache'=>!empty($_GET['prefer_cache']),'force_fresh'=>!empty($_GET['fresh']),'use_applied_filters'=>!empty($_GET['use_applied_filters'])]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['settings_menu_clicks'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(['ok'=>true,'items'=>s4SettingsMenuClicksLoad()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_POST['settings_menu_click'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();echo json_encode(s4SettingsMenuClickRecord((string)($_POST['menu_key']??''),(string)($_POST['menu_label']??'')),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
 if(isset($_GET['third_party_explorer_run'])||isset($_GET['basalam_best_sellers_run'])){http_response_code(405);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'POST required']);exit;}
@@ -51233,6 +51517,37 @@ if (isset($_GET['selftest'])) {
         strpos($selfSrc,"parse_list_by_engine((string)(\$page['html']")!==false
         &&strpos($selfSrc,"{v:'10." . "712'")!==false
         &&version_compare(APP_VERSION,'10.712','>='));
+    $__bbsSeq513=(int)($GLOBALS['_s4BbsWriteSeq']??0);
+    $__bbsCompact513=s4BasalamBestSellersCompactItem(['title'=>'عسل طبیعی','basalam_product_id'=>777,'price'=>'150,000 تومان','price_num'=>150000,'stock'=>8,'in_stock'=>true,'sales_count'=>20,'sales_count_indexed'=>20,'sales_count_exact'=>25,'sales_count_week'=>5,'longDesc'=>'heavy field excluded','specs'=>['a'=>1]]);
+    $__bbsFormatted513=s4BasalamBestSellersFormatTableRow($__bbsCompact513);
+    $add('10.713','کش چندلایه و ایندکس فشردهٔ سرور و کش مرورگر (SWR) در بخش پرفروش‌های باسلام برای حذف انتظار طولانی',
+        function_exists('s4BasalamBestSellersStatusCacheRead')
+        &&function_exists('s4BasalamBestSellersStatusCacheWrite')
+        &&function_exists('s4BasalamBestSellersStatusCacheUsableInProc')
+        &&function_exists('s4BasalamBestSellersIndexLoadOrBuild')
+        &&function_exists('s4BasalamBestSellersCompactItem')
+        &&function_exists('s4BasalamBestSellersFormatTableRow')
+        &&function_exists('s4BasalamBestSellersWarmCache')
+        &&function_exists('s4BasalamBestSellersComputeAndCacheStatus')
+        &&!isset($__bbsCompact513['longDesc'],$__bbsCompact513['specs'])
+        &&isset($__bbsCompact513['_bbs_composite_score'],$__bbsCompact513['_bbs_score_components'],$__bbsCompact513['_bbs_sales_scores'])
+        &&isset($__bbsFormatted513['composite_score'],$__bbsFormatted513['score_components'],$__bbsFormatted513['sales_scores'])
+        &&!isset($__bbsFormatted513['_bbs_composite_score'])
+        &&s4BasalamBestSellersStampEqual(['exists'=>1,'size'=>100,'mtime'=>123,'inode'=>456],['exists'=>1,'size'=>100,'mtime'=>123,'inode'=>456])===true
+        &&s4BasalamBestSellersStampEqual(['exists'=>1,'size'=>100,'mtime'=>123,'inode'=>456],['exists'=>1,'size'=>101,'mtime'=>123,'inode'=>456])===false
+        &&s4BasalamBestSellersStatusCacheUsableInProc(['built_pid'=>getmypid()+999999,'built_seq'=>-1])===true
+        &&s4BasalamBestSellersStatusCacheUsableInProc(['built_pid'=>getmypid(),'built_seq'=>$__bbsSeq513-1])===false
+        &&s4BasalamBestSellersStatusCacheUsableInProc(['built_pid'=>getmypid(),'built_seq'=>$__bbsSeq513])===true
+        &&strpos($selfSrc,"BBS_LS_"."CACHE_KEY='s4_bbs_status_cache_v1'")!==false
+        &&strpos($selfSrc,"function "."bbsInitFromCache()")!==false
+        &&strpos($selfSrc,"function "."bbsReadClientCache(")!==false
+        &&strpos($selfSrc,"function "."bbsWriteClientCache(")!==false
+        &&strpos($selfSrc,"function "."bbsClearClientCache(")!==false
+        &&strpos($selfSrc,"this.classList."."contains('open'))bbsLoad()")!==false
+        &&strpos($selfSrc,"prefer_"."cache")!==false
+        &&strpos($selfSrc,"use_applied_"."filters")!==false
+        &&strpos($selfSrc,"{v:'10." . "713'")!==false
+        &&version_compare(APP_VERSION,'10.713','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -93541,11 +93856,11 @@ let s4uaUsers=[];function s4uaEsc(x){return String(x??'').replace(/[&<>"']/g,c=>
 
 <!-- v10.665: persistent marketplace best-seller collection -->
 <div class="smenu" id="basalamBestSellersSmenu">
-<div class="smenu-hdr" style="background:linear-gradient(90deg,#b45309,#0f172a)" onclick="toggleSmenu(this);bbsLoad()"><h3>🏆 پرفروش‌ترین محصولات باسلام</h3><span class="cst on" id="bbsBadge">فعال</span><span class="arrow">▼</span></div>
+<div class="smenu-hdr" style="background:linear-gradient(90deg,#b45309,#0f172a)" onclick="toggleSmenu(this);if(this.classList.contains('open'))bbsLoad()"><h3>🏆 پرفروش‌ترین محصولات باسلام</h3><span class="cst on" id="bbsBadge">فعال</span><span class="arrow">▼</span></div>
 <div class="smenu-body">
 <style>.bbs-fold{border:1px solid #334155;border-radius:10px;margin:8px 0;background:rgba(15,23,42,.55);overflow:hidden}.bbs-fold>summary{cursor:pointer;list-style:none;padding:10px 12px;font-weight:800;color:#e2e8f0;background:linear-gradient(90deg,rgba(180,83,9,.26),rgba(15,23,42,.2));user-select:none}.bbs-fold>summary::-webkit-details-marker{display:none}.bbs-fold>summary:after{content:'◀';float:left;color:#fbbf24;transition:transform .2s}.bbs-fold[open]>summary:after{transform:rotate(-90deg)}.bbs-fold-body{padding:9px 11px}</style>
 <details class="bbs-fold" id="bbsStatusFold" open><summary>📊 وضعیت و عملیات جمع‌آوری</summary><div class="bbs-fold-body">
-<div class="tpe-actions"><button type="button" class="btn btn-cyan" onclick="bbsRun()">↻ اجرای گام بعدی</button><button type="button" class="btn btn-gray" onclick="bbsLoad()">تازه‌سازی وضعیت</button></div>
+<div class="tpe-actions"><button type="button" class="btn btn-cyan" onclick="bbsRun()">↻ اجرای گام بعدی</button><button type="button" class="btn btn-gray" onclick="bbsLoad(bbsCurrentPage,{forceFresh:true})">تازه‌سازی وضعیت</button></div>
 <div class="tpe-stats" id="bbsStats"><span class="tpe-stat">در انتظار بارگذاری…</span></div>
 <div id="bbsMsg" class="tpe-note"></div>
 </div></details>
@@ -93622,7 +93937,9 @@ function tpeImportToggleAll(checked){document.querySelectorAll('.tpeImportPick')
 function tpeImportClear(){tpeImportData=[];tpeImportHydrated=true;const text=document.getElementById('tpeImportText'),file=document.getElementById('tpeImportFile'),msg=document.getElementById('tpeImportMsg'),sum=document.getElementById('tpeImportSummary');if(text)text.value='';if(file)file.value='';if(msg)msg.textContent='';if(sum)sum.textContent='هنوز فهرستی تبدیل نشده است';tpeImportRender();}
 async function tpeImportResolve(){const btn=document.getElementById('tpeImportResolveBtn'),msg=document.getElementById('tpeImportMsg'),file=document.getElementById('tpeImportFile')?.files?.[0],text=document.getElementById('tpeImportText')?.value||'';if(!text.trim()&&!file){msg.textContent='لینک‌ها را پیست کنید یا یک فایل انتخاب کنید.';return;}tpeImportHydrated=true;btn.disabled=true;msg.textContent='در حال شناسایی همزمان غرفه‌ها و رزرو کدهای یکتا…';try{const form=tpeForm({third_party_explorer_import:1,shop_links:text,price_percent:document.getElementById('tpePrice').value,suffix_pattern:document.getElementById('tpeSuffix').value});if(file)form.append('shop_list_file',file,file.name);const r=await fetch('',{method:'POST',body:form}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));tpeImportData=d.rows||[];tpeImportRender();document.getElementById('tpeImportSummary').textContent=`${Number(d.resolved||0).toLocaleString()} شناسایی · ${Number(d.failed||0).toLocaleString()} خطا`;msg.textContent=`جدول آماده شد. تعدیل ${Number(d.config?.price_percent||0).toLocaleString()}٪ و الگوی «${d.config?.suffix_pattern||''}» هنگام ساخت پروفایل اعمال می‌شود.`;}catch(e){msg.textContent='خطا در تبدیل فهرست: '+e.message;}finally{btn.disabled=false;}}
 async function tpeImportCreateProfiles(){const ids=[...document.querySelectorAll('.tpeImportPick:checked')].map(x=>Number(x.value)).filter(Boolean).slice(0,200),btn=document.getElementById('tpeImportCreateBtn'),msg=document.getElementById('tpeImportMsg');if(!ids.length)return;btn.disabled=true;msg.textContent='در حال ایجاد پروفایل‌ها با تنظیمات مشترک…';try{const d=await tpeReq({third_party_explorer_action:1,explorer_action:'approve_bulk',vendor_ids:JSON.stringify(ids)},true),done=new Map((d.results||[]).map(x=>[Number(x.vendor_id),x]));tpeImportData=tpeImportData.map(row=>{const result=done.get(Number(row.vendor_id));return result?.ok?{...row,selectable:false,state:result.duplicate?'duplicate':'approved',profile_key:result.profile_key||row.profile_key}:row;});tpeImportRender();msg.textContent=`${Number(d.created||0).toLocaleString()} پروفایل ساخته شد؛ ${Number(d.duplicates||0).toLocaleString()} مورد از قبل وجود داشت.`;await tpeLoad(true);}catch(e){msg.textContent='خطا در ایجاد پروفایل‌ها: '+e.message;}finally{tpeImportSelectionChanged();}}
-let bbsCurrentPage=1,bbsTotalPages=1,bbsFilterTimer=null,bbsFiltersHydrated=false;
+const BBS_LS_CACHE_KEY='s4_bbs_status_cache_v1';
+let bbsCurrentPage=1,bbsTotalPages=1,bbsFilterTimer=null,bbsFiltersHydrated=false,bbsFetchCtrl=null,bbsLoadSeq=0,bbsBgTimer=null;
+const bbsMemCache=new Map();
 function bslExcelMsg(text,bad=false){const e=document.getElementById('bslExcelStatus');if(e){e.textContent=text;e.style.color=bad?'#fca5a5':'#86efac';}const b=document.getElementById('bbsMsg');if(b&&String(text).includes('Excel'))b.textContent=text;}
 async function bslExcelExport(scope='profile'){
   const profile=scope==='best_sellers_filtered'?'https://basalam.com/s/products?sort=sales&s4_profile=best-sellers':(currentProfileKey||currentProfileUrl||(($('url')||{}).value||''));if(!profile){bslExcelMsg('ابتدا یک پروفایل را انتخاب کنید.',true);return;}
@@ -93632,14 +93949,22 @@ async function bslExcelExport(scope='profile'){
 async function bslExcelReconcile(){const input=document.getElementById('bslExcelResultFile'),file=input?.files?.[0];if(!file){bslExcelMsg('فایل نتیجهٔ CSV/Excel پنل باسلام را انتخاب کنید.',true);return;}const vendor=parseInt((document.getElementById('bslExcelVendor')||{}).value)||0;bslExcelMsg('در حال تطبیق شناسه‌های واقعی باسلام…');try{const f=tpeForm({basalam_excel_reconcile:1,vendor_id:vendor});f.append('result_file',file,file.name);const r=await fetch('',{method:'POST',body:f}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));bslExcelMsg(`${Number(d.recorded||0).toLocaleString()} شناسه در دفترچهٔ غرفه #${Number(d.vendor_id||vendor).toLocaleString()} ثبت شد${d.unmatched_count?'؛ '+Number(d.unmatched_count).toLocaleString()+' ردیف تطبیق نشد':''}.`);bslExcelLoadStatus();}catch(e){bslExcelMsg('خطای ثبت نتیجه: '+e.message,true);}}
 async function bslExcelLoadStatus(){try{const r=await fetch('?basalam_excel_status=1&_t='+Date.now(),{cache:'no-store'}),d=await r.json(),rows=d.exports||[];if(!rows.length){bslExcelMsg('هنوز خروجی Excel ثبت نشده است.');return;}const x=rows[0];bslExcelMsg(`آخرین Excel${x.shop_name?' · '+x.shop_name+' (#'+x.vendor_id+')':''}: ${Number(x.count||0).toLocaleString()} محصول · ${Number(x.imported||0).toLocaleString()} ثبت‌شده · ${Number(x.pending||0).toLocaleString()} در انتظار نتیجه · ${Number(x.batches||1).toLocaleString()} فایل`);}catch(e){bslExcelMsg('خطا در خواندن وضعیت Excel',true);}}
 function bbsVal(id,fallback=''){const e=document.getElementById(id);return e?e.value:fallback;}
-function bbsQueryParams(page){const p=new URLSearchParams({basalam_best_sellers_status:'1',page:String(page),page_size:'50',q:bbsVal('bbsQuery'),category:bbsVal('bbsCategory'),vendor:bbsVal('bbsVendor'),exact:bbsVal('bbsExact','all'),sales_metric:bbsVal('bbsSalesMetric','exact_sales'),min_sales:bbsVal('bbsMinSales','0'),max_products:bbsVal('bbsMaxProducts','10000'),stock:bbsVal('bbsStock','all'),sort:bbsVal('bbsSort','exact_sales'),dir:bbsVal('bbsDir','desc'),_t:String(Date.now())});return p.toString();}
 function bbsFilterValues(){return{q:bbsVal('bbsQuery'),category:bbsVal('bbsCategory'),vendor:bbsVal('bbsVendor'),exact:bbsVal('bbsExact','all'),sales_metric:bbsVal('bbsSalesMetric','exact_sales'),min_sales:bbsVal('bbsMinSales','0'),max_products:bbsVal('bbsMaxProducts','10000'),stock:bbsVal('bbsStock','all'),sort:bbsVal('bbsSort','exact_sales'),dir:bbsVal('bbsDir','desc')};}
-async function bbsApplyFilters(){const msg=document.getElementById('bbsMsg');if(msg)msg.textContent='در حال اعمال نتیجهٔ فیلترشده به محصولات پروفایل…';try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_apply_filter:1,...bbsFilterValues()})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));if(d.profile_key&&typeof currentProfileKey==='string'&&currentProfileKey===d.profile_key&&Number(d.updated_at||0)>0){currentProfileUpdatedAt=Math.max(currentProfileUpdatedAt||0,Number(d.updated_at||0));}await bbsLoad(1);if(msg)msg.textContent=`${Number(d.active_count||0).toLocaleString()} محصول برترِ سراسری مستقیماً در پروفایل «باسلام -پرفروش ها» ذخیره شد.`;}catch(e){if(msg)msg.textContent='خطا در اعمال فیلتر به پروفایل: '+e.message;}}
+function bbsFilterSig(){return JSON.stringify(bbsFilterValues());}
+function bbsApplyFilterValuesToDom(af){if(!af||typeof af!=='object')return;[['bbsQuery',af.q??''],['bbsCategory',af.category??''],['bbsVendor',af.vendor??''],['bbsExact',af.exact??'all'],['bbsSalesMetric',af.sales_metric??'exact_sales'],['bbsMinSales',af.min_sales??0],['bbsMaxProducts',af.max_products??10000],['bbsStock',af.stock??'all'],['bbsSort',af.sort??'exact_sales'],['bbsDir',af.dir??'desc']].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.value=v;});}
+function bbsQueryParams(page,opts={}){const p=new URLSearchParams({basalam_best_sellers_status:'1',page:String(page),page_size:'50',...bbsFilterValues(),_t:String(Date.now())});if(opts.preferCache)p.set('prefer_cache','1');if(opts.forceFresh)p.set('fresh','1');if(opts.useApplied)p.set('use_applied_filters','1');return p.toString();}
+function bbsClearClientCache(){bbsMemCache.clear();try{localStorage.removeItem(BBS_LS_CACHE_KEY);}catch(e){}}
+function bbsReadClientCache(page,sig){const key=String(page)+'|'+sig;if(bbsMemCache.has(key))return bbsMemCache.get(key);try{const raw=localStorage.getItem(BBS_LS_CACHE_KEY);if(!raw)return null;const store=JSON.parse(raw);if(!store||typeof store!=='object')return null;const entry=(store.entries&&store.entries[key])||(sig==='__applied__'&&store.latestKey?store.entries?.[store.latestKey]:null);if(!entry||!entry.data||(Date.now()-Number(entry.at||0))>7*86400*1000)return null;return entry;}catch(e){return null;}}
+function bbsWriteClientCache(page,sig,d){const key=String(page)+'|'+sig,entry={at:Date.now(),data:d};if(bbsMemCache.size>=30){const oldest=bbsMemCache.keys().next().value;if(oldest!==undefined)bbsMemCache.delete(oldest);}bbsMemCache.set(key,entry);try{let store={entries:{},latestKey:key};try{const prev=JSON.parse(localStorage.getItem(BBS_LS_CACHE_KEY)||'{}');if(prev&&typeof prev==='object'&&prev.entries&&typeof prev.entries==='object')store.entries=prev.entries;}catch(e){}store.entries[key]=entry;store.latestKey=key;const keys=Object.keys(store.entries);if(keys.length>3){keys.sort((a,b)=>Number(store.entries[b]?.at||0)-Number(store.entries[a]?.at||0));const kept={};keys.slice(0,3).forEach(k=>kept[k]=store.entries[k]);store.entries=kept;}try{localStorage.setItem(BBS_LS_CACHE_KEY,JSON.stringify(store));}catch(e){try{localStorage.setItem(BBS_LS_CACHE_KEY,JSON.stringify({latestKey:key,entries:{[key]:entry}}));}catch(e2){}}}catch(e){}}
+function bbsRenderData(d,opts={}){if(!d||typeof d!=='object')return;const badge=document.getElementById('bbsBadge');if(badge)badge.textContent=d.enabled?'فعال':'متوقف';const stats=document.getElementById('bbsStats');if(stats)stats.innerHTML=`<span class="tpe-stat">فعال در پروفایل: ${Number(d.saved_count||0).toLocaleString()}</span><span class="tpe-stat">کل کاتالوگ: ${Number(d.catalog_count||0).toLocaleString()}</span><span class="tpe-stat">کشف‌شده: ${Number(d.products_discovered||0).toLocaleString()}</span><span class="tpe-stat">جزئیات کامل: ${Number(d.products_enriched||0).toLocaleString()}</span><span class="tpe-stat">صف جزئیات: ${Number(d.detail_pending||0).toLocaleString()}</span><span class="tpe-stat">فروش دقیق: ${Number(d.products_verified||0).toLocaleString()}</span><span class="tpe-stat">صف تأیید: ${Number(d.verify_pending||0).toLocaleString()}</span><span class="tpe-stat">صفحات: ${Number(d.pages_scanned||0).toLocaleString()}</span><span class="tpe-stat">نقطه ادامه: ${Number(d.offset||0).toLocaleString()}</span><span class="tpe-stat">سقف گزارش بیرونی: ${Number(d.reported_total||0).toLocaleString()}</span><span class="tpe-stat">دسته‌های پارتیشن: ${Number(d.partition_categories_count||0).toLocaleString()}</span><span class="tpe-stat">پارتیشن جاری: ${d.partition?.category_id?("دسته #"+d.partition.category_id):"سراسری"}${d.partition?.min_price||d.partition?.max_price?(" ("+Number(Math.round((d.partition.min_price||0)/10)).toLocaleString()+" تا "+(d.partition.max_price?Number(Math.round(d.partition.max_price/10)).toLocaleString():"∞")+" ت)"):""}</span><span class="tpe-stat">استخراج دوره‌ای: ${d.profile_settings?.periodic_enabled?'روشن':'خاموش'}</span><span class="tpe-stat">بازه: ${Number(d.profile_settings?.interval_sec||0).toLocaleString()} ثانیه</span><span class="tpe-stat">مقصد: ${tpeEsc(d.profile_settings?.target||'none')}</span><span class="tpe-stat">موتور: ${tpeEsc(d.profile_settings?.engine||'—')}</span><span class="tpe-stat">پسوند: ${tpeEsc(d.profile_settings?.title_suffix||'ندارد')}</span><span class="tpe-stat">تعدیل: ${tpeEsc(d.profile_settings?.price_mode||'none')} ${Number(d.profile_settings?.price_value||0).toLocaleString()}${Number(d.profile_settings?.round_price||0)>0?(' (گرد '+Number(d.profile_settings.round_price).toLocaleString()+')'):''}</span>`;const t=d.table||{},rows=t.rows||[];bbsCurrentPage=Number(t.page||1);bbsTotalPages=Number(t.pages||1);const tbody=document.getElementById('bbsRows');if(tbody)tbody.innerHTML=rows.length?rows.map((p,i)=>{const rank=(bbsCurrentPage-1)*Number(t.page_size||50)+i+1,exact=p.sales_count_exact;return `<tr><td>${rank.toLocaleString()}</td><td>${p.image?`<img src="${tpeEsc(p.image)}" loading="lazy" style="width:42px;height:42px;object-fit:cover;border-radius:6px">`:'—'}</td><td><a href="${tpeEsc(p.link||'#')}" target="_blank" rel="noopener" style="color:#7dd3fc">${tpeEsc(p.title||'—')}</a></td><td>${exact===null||exact===undefined?'در انتظار':Number(exact).toLocaleString()}</td><td>${Number(p.sales_count_indexed||0).toLocaleString()}</td><td>${Number(p.sales_count_week||0).toLocaleString()}</td><td title="فروش دقیق ${Number(p.score_components?.exact_sales||0).toFixed(1)} + فهرست ${Number(p.score_components?.indexed_sales||0).toFixed(1)} + هفتگی ${Number(p.score_components?.weekly_sales||0).toFixed(1)} + موجودی ${Number(p.score_components?.availability||0).toFixed(1)} + قیمت ${Number(p.score_components?.price_validity||0).toFixed(1)} + کیفیت محتوا ${Number(p.score_components?.content_quality||0).toFixed(1)} + اطمینان ${Number(p.score_components?.verification_confidence||0).toFixed(1)}">${Number(p.composite_score||0).toLocaleString(undefined,{maximumFractionDigits:2})}</td><td>${tpeEsc(p.price||'—')}</td><td>${Number(p.stock||0).toLocaleString()}</td><td>${tpeEsc(p.vendor_name||p.vendor_id||'—')}</td><td>${tpeEsc(p.category||p.category_id||'—')}</td></tr>`;}).join(''):'<tr><td colspan="11">هنوز محصولی ذخیره نشده است.</td></tr>';const pageLbl=document.getElementById('bbsPageLabel');if(pageLbl)pageLbl.textContent=`صفحه ${bbsCurrentPage.toLocaleString()} از ${bbsTotalPages.toLocaleString()}`;const cntLbl=document.getElementById('bbsFilteredCount');if(cntLbl)cntLbl.textContent=`${Number(t.total||0).toLocaleString()} محصول برتر از ${Number(t.all_total||0).toLocaleString()} محصول کاتالوگ`;const prevBtn=document.getElementById('bbsPrev'),nextBtn=document.getElementById('bbsNext');if(prevBtn)prevBtn.disabled=bbsCurrentPage<=1;if(nextBtn)nextBtn.disabled=bbsCurrentPage>=bbsTotalPages;const msg=document.getElementById('bbsMsg');if(msg){const base=(d.last_error?'آخرین خطا: '+d.last_error:'آخرین کار: '+(d.last_action||'—'))+' • پروفایل: '+d.profile_title;if(opts.fromClientCache){const ageSec=Math.max(0,Math.round((Date.now()-(opts.cachedAt||Date.now()))/1000));msg.textContent=base+' • کش مرورگر'+(ageSec>2?' ('+ageSec.toLocaleString()+' ثانیه پیش)':'')+(opts.pendingSync?' · در حال همگام‌سازی…':'');}else{const note=d.cache_state==='stale'&&d.needs_refresh?' • کش سرور (در حال بروزرسانی…)':(d.from_cache?' • کش سرور':'');msg.textContent=base+note;}}}
+async function bbsApplyFilters(){const msg=document.getElementById('bbsMsg');bbsFiltersHydrated=true;bbsClearClientCache();if(msg)msg.textContent='در حال اعمال نتیجهٔ فیلترشده به محصولات پروفایل…';try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_apply_filter:1,...bbsFilterValues()})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));if(d.profile_key&&typeof currentProfileKey==='string'&&currentProfileKey===d.profile_key&&Number(d.updated_at||0)>0){currentProfileUpdatedAt=Math.max(currentProfileUpdatedAt||0,Number(d.updated_at||0));}await bbsLoad(1,{explicitFilters:true});if(msg)msg.textContent=`${Number(d.active_count||0).toLocaleString()} محصول برترِ سراسری مستقیماً در پروفایل «باسلام -پرفروش ها» ذخیره شد.`;}catch(e){if(msg)msg.textContent='خطا در اعمال فیلتر به پروفایل: '+e.message;}}
 function bbsFiltersChanged(immediate=false){clearTimeout(bbsFilterTimer);bbsCurrentPage=1;bbsFilterTimer=setTimeout(()=>bbsApplyFilters(),immediate?0:500);}
-function bbsResetFilters(){[['bbsQuery',''],['bbsCategory',''],['bbsVendor',''],['bbsExact','all'],['bbsSalesMetric','exact_sales'],['bbsMinSales','0'],['bbsMaxProducts','10000'],['bbsStock','all'],['bbsSort','exact_sales'],['bbsDir','desc']].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.value=v;});bbsFiltersChanged(true);}
-async function bbsLoad(page=bbsCurrentPage){const msg=document.getElementById('bbsMsg');try{page=Math.max(1,Number(page)||1);const r=await fetch('?'+bbsQueryParams(page),{cache:'no-store'}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));if(!bbsFiltersHydrated){const af=d.table?.applied_filter||{};[['bbsQuery',af.q??''],['bbsCategory',af.category??''],['bbsVendor',af.vendor??''],['bbsExact',af.exact??'all'],['bbsSalesMetric',af.sales_metric??'exact_sales'],['bbsMinSales',af.min_sales??0],['bbsMaxProducts',af.max_products??10000],['bbsStock',af.stock??'all'],['bbsSort',af.sort??'exact_sales'],['bbsDir',af.dir??'desc']].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.value=v;});bbsFiltersHydrated=true;return bbsLoad(1);}document.getElementById('bbsBadge').textContent=d.enabled?'فعال':'متوقف';document.getElementById('bbsStats').innerHTML=`<span class="tpe-stat">فعال در پروفایل: ${Number(d.saved_count||0).toLocaleString()}</span><span class="tpe-stat">کل کاتالوگ: ${Number(d.catalog_count||0).toLocaleString()}</span><span class="tpe-stat">کشف‌شده: ${Number(d.products_discovered||0).toLocaleString()}</span><span class="tpe-stat">جزئیات کامل: ${Number(d.products_enriched||0).toLocaleString()}</span><span class="tpe-stat">صف جزئیات: ${Number(d.detail_pending||0).toLocaleString()}</span><span class="tpe-stat">فروش دقیق: ${Number(d.products_verified||0).toLocaleString()}</span><span class="tpe-stat">صف تأیید: ${Number(d.verify_pending||0).toLocaleString()}</span><span class="tpe-stat">صفحات: ${Number(d.pages_scanned||0).toLocaleString()}</span><span class="tpe-stat">نقطه ادامه: ${Number(d.offset||0).toLocaleString()}</span><span class="tpe-stat">سقف گزارش بیرونی: ${Number(d.reported_total||0).toLocaleString()}</span><span class="tpe-stat">دسته‌های پارتیشن: ${Number(d.partition_categories_count||0).toLocaleString()}</span><span class="tpe-stat">پارتیشن جاری: ${d.partition?.category_id?("دسته #"+d.partition.category_id):"سراسری"}${d.partition?.min_price||d.partition?.max_price?(" ("+Number(Math.round((d.partition.min_price||0)/10)).toLocaleString()+" تا "+(d.partition.max_price?Number(Math.round(d.partition.max_price/10)).toLocaleString():"∞")+" ت)"):""}</span><span class="tpe-stat">استخراج دوره‌ای: ${d.profile_settings?.periodic_enabled?'روشن':'خاموش'}</span><span class="tpe-stat">بازه: ${Number(d.profile_settings?.interval_sec||0).toLocaleString()} ثانیه</span><span class="tpe-stat">مقصد: ${tpeEsc(d.profile_settings?.target||'none')}</span><span class="tpe-stat">موتور: ${tpeEsc(d.profile_settings?.engine||'—')}</span><span class="tpe-stat">پسوند: ${tpeEsc(d.profile_settings?.title_suffix||'ندارد')}</span><span class="tpe-stat">تعدیل: ${tpeEsc(d.profile_settings?.price_mode||'none')} ${Number(d.profile_settings?.price_value||0).toLocaleString()}${Number(d.profile_settings?.round_price||0)>0?(' (گرد '+Number(d.profile_settings.round_price).toLocaleString()+')'):''}</span>`;const t=d.table||{},rows=t.rows||[];bbsCurrentPage=Number(t.page||1);bbsTotalPages=Number(t.pages||1);document.getElementById('bbsRows').innerHTML=rows.length?rows.map((p,i)=>{const rank=(bbsCurrentPage-1)*Number(t.page_size||50)+i+1,exact=p.sales_count_exact;return `<tr><td>${rank.toLocaleString()}</td><td>${p.image?`<img src="${tpeEsc(p.image)}" loading="lazy" style="width:42px;height:42px;object-fit:cover;border-radius:6px">`:'—'}</td><td><a href="${tpeEsc(p.link||'#')}" target="_blank" rel="noopener" style="color:#7dd3fc">${tpeEsc(p.title||'—')}</a></td><td>${exact===null||exact===undefined?'در انتظار':Number(exact).toLocaleString()}</td><td>${Number(p.sales_count_indexed||0).toLocaleString()}</td><td>${Number(p.sales_count_week||0).toLocaleString()}</td><td title="فروش دقیق ${Number(p.score_components?.exact_sales||0).toFixed(1)} + فهرست ${Number(p.score_components?.indexed_sales||0).toFixed(1)} + هفتگی ${Number(p.score_components?.weekly_sales||0).toFixed(1)} + موجودی ${Number(p.score_components?.availability||0).toFixed(1)} + قیمت ${Number(p.score_components?.price_validity||0).toFixed(1)} + کیفیت محتوا ${Number(p.score_components?.content_quality||0).toFixed(1)} + اطمینان ${Number(p.score_components?.verification_confidence||0).toFixed(1)}">${Number(p.composite_score||0).toLocaleString(undefined,{maximumFractionDigits:2})}</td><td>${tpeEsc(p.price||'—')}</td><td>${Number(p.stock||0).toLocaleString()}</td><td>${tpeEsc(p.vendor_name||p.vendor_id||'—')}</td><td>${tpeEsc(p.category||p.category_id||'—')}</td></tr>`;}).join(''):'<tr><td colspan="11">هنوز محصولی ذخیره نشده است.</td></tr>';document.getElementById('bbsPageLabel').textContent=`صفحه ${bbsCurrentPage.toLocaleString()} از ${bbsTotalPages.toLocaleString()}`;document.getElementById('bbsFilteredCount').textContent=`${Number(t.total||0).toLocaleString()} محصول برتر از ${Number(t.all_total||0).toLocaleString()} محصول کاتالوگ`;document.getElementById('bbsPrev').disabled=bbsCurrentPage<=1;document.getElementById('bbsNext').disabled=bbsCurrentPage>=bbsTotalPages;msg.textContent=(d.last_error?'آخرین خطا: '+d.last_error:'آخرین کار: '+(d.last_action||'—'))+' • پروفایل: '+d.profile_title;}catch(e){msg.textContent='خطا: '+e.message;}}
-function bbsPageMove(delta){bbsLoad(Math.max(1,Math.min(bbsTotalPages,bbsCurrentPage+delta)));}
-async function bbsRun(){const msg=document.getElementById('bbsMsg');msg.textContent='در حال اجرای یک گام محدود…';try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_run:1})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));await bbsLoad();}catch(e){msg.textContent='خطا: '+e.message;}}
+function bbsResetFilters(){bbsApplyFilterValuesToDom({q:'',category:'',vendor:'',exact:'all',sales_metric:'exact_sales',min_sales:0,max_products:10000,stock:'all',sort:'exact_sales',dir:'desc'});bbsFiltersChanged(true);}
+async function bbsLoad(page=bbsCurrentPage,opts={}){const msg=document.getElementById('bbsMsg');page=Math.max(1,Number(page)||1);const forceFresh=!!opts.forceFresh,background=!!opts.background;const useApplied=!bbsFiltersHydrated&&!opts.explicitFilters;const sig=useApplied?'__applied__':bbsFilterSig();if(!forceFresh&&!background){const hit=bbsReadClientCache(page,sig);if(hit&&hit.data){if(useApplied&&hit.data.table?.applied_filter)bbsApplyFilterValuesToDom(hit.data.table.applied_filter);bbsRenderData(hit.data,{fromClientCache:true,cachedAt:hit.at,pendingSync:true});}else if(msg){const stats=document.getElementById('bbsStats');msg.textContent=stats&&stats.textContent.includes('در انتظار بارگذاری')?'در حال دریافت از کش سرور…':'در حال بارگذاری صفحه…';}}else if(!background&&msg){msg.textContent='در حال بروزرسانی وضعیت…';}if(!background&&bbsBgTimer){clearTimeout(bbsBgTimer);bbsBgTimer=null;}if(bbsFetchCtrl){try{bbsFetchCtrl.abort();}catch(e){}}const seq=++bbsLoadSeq;const ctrl=typeof AbortController!=='undefined'?new AbortController():null;bbsFetchCtrl=ctrl;try{const r=await fetch('?'+bbsQueryParams(page,{preferCache:!forceFresh,forceFresh,useApplied}),{cache:'no-store',signal:ctrl?ctrl.signal:undefined}),d=await r.json();if(seq!==bbsLoadSeq)return;if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));if(useApplied){bbsApplyFilterValuesToDom(d.table?.applied_filter||{});bbsFiltersHydrated=true;}const resolvedPage=Number(d.table?.page||page),finalSig=bbsFilterSig();bbsWriteClientCache(resolvedPage,finalSig,d);if(useApplied)bbsWriteClientCache(resolvedPage,'__applied__',d);bbsRenderData(d,{fromClientCache:false});if(!forceFresh&&d.cache_state==='stale'&&d.needs_refresh){bbsBgTimer=setTimeout(()=>bbsLoad(resolvedPage,{forceFresh:true,background:true,explicitFilters:true}),60);}}catch(e){if(e&&e.name==='AbortError')return;if(!background&&msg)msg.textContent='خطا: '+e.message;}finally{if(bbsFetchCtrl===ctrl)bbsFetchCtrl=null;}}
+function bbsInitFromCache(){const hit=bbsReadClientCache(1,'__applied__');if(!hit||!hit.data)return;if(hit.data.table?.applied_filter)bbsApplyFilterValuesToDom(hit.data.table.applied_filter);bbsRenderData(hit.data,{fromClientCache:true,cachedAt:hit.at,pendingSync:false});}
+bbsInitFromCache();
+function bbsPageMove(delta){bbsLoad(Math.max(1,Math.min(bbsTotalPages,bbsCurrentPage+delta)),{explicitFilters:true});}
+async function bbsRun(){const msg=document.getElementById('bbsMsg');msg.textContent='در حال اجرای یک گام محدود…';bbsClearClientCache();try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_run:1})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));await bbsLoad(bbsCurrentPage,{explicitFilters:true});}catch(e){msg.textContent='خطا: '+e.message;}}
 let s4MenuClickCounts={};
 function s4MenuKey(menu,index){const hdr=menu.querySelector(':scope > .smenu-hdr'),label=(hdr?.querySelector('h3')?.textContent||hdr?.textContent||'menu').trim().replace(/\s+/g,' ');if(!menu.dataset.s4MenuKey)menu.dataset.s4MenuKey=menu.id||('menu-'+index+'-'+label.slice(0,80));if(!menu.dataset.s4OriginalOrder)menu.dataset.s4OriginalOrder=String(index);return{key:menu.dataset.s4MenuKey,label};}
 function s4ApplyMenuClickOrder(){const root=document.querySelector('#settingsPanel > .settings-panel-body');if(!root)return;const menus=[...root.querySelectorAll(':scope > .smenu')];menus.forEach((m,i)=>s4MenuKey(m,i));menus.sort((a,b)=>Number(s4MenuClickCounts[b.dataset.s4MenuKey]?.count||0)-Number(s4MenuClickCounts[a.dataset.s4MenuKey]?.count||0)||Number(a.dataset.s4OriginalOrder)-Number(b.dataset.s4OriginalOrder));menus.forEach(m=>root.appendChild(m));}
@@ -100599,7 +100924,8 @@ function saveProfileSilent(forceProducts) {
                 currentProfileUrl=data.url;profileFormReady=true;profileStaleAutosaveStopped=false;
                 rememberProfile(data.url, d.key);
                 if(d.matrix_refresh_pending)requestProfileMatrixRefresh();else if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
-                if(typeof bbsFiltersHydrated!=='undefined'&&bbsFiltersHydrated&&typeof bbsLoad==='function')try{bbsLoad(bbsCurrentPage);}catch(e){}
+                if(typeof bbsClearClientCache==='function')try{bbsClearClientCache();}catch(e){}
+                if(typeof bbsFiltersHydrated!=='undefined'&&bbsFiltersHydrated&&typeof bbsLoad==='function')try{bbsLoad(bbsCurrentPage,{forceFresh:true,explicitFilters:true});}catch(e){}
                 const existingIdx = profiles.findIndex(p => p && (p.key === d.key || (!hasActiveKey && p.url === data.url)));
                 const oldEntry=existingIdx>=0?profiles[existingIdx]:{};
                 const pCount = (typeof d.product_count === 'number') ? d.product_count : (oldEntry.productCount || products.size || 0);
@@ -100683,7 +101009,8 @@ function saveProfile() {
                 profileFormReady=true;
                 rememberProfile(data.url,d.key);
                 if(d.matrix_refresh_pending)requestProfileMatrixRefresh();else if(d.matrix_repriced&&d.matrix_repriced.changed)try{syncMatrixLoad(window._smPage||1,true)}catch(e){}
-                if(typeof bbsFiltersHydrated!=='undefined'&&bbsFiltersHydrated&&typeof bbsLoad==='function')try{bbsLoad(bbsCurrentPage);}catch(e){}
+                if(typeof bbsClearClientCache==='function')try{bbsClearClientCache();}catch(e){}
+                if(typeof bbsFiltersHydrated!=='undefined'&&bbsFiltersHydrated&&typeof bbsLoad==='function')try{bbsLoad(bbsCurrentPage,{forceFresh:true,explicitFilters:true});}catch(e){}
                 const existingIdx = profiles.findIndex(p => p && (p.key === d.key || (!hasActiveKey && p.url === data.url)));
                 const oldP = existingIdx >= 0 ? profiles[existingIdx] : {};
                 const pCount = (typeof d.product_count === 'number') ? d.product_count : (oldP.productCount || products.size || 0);
@@ -104919,6 +105246,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.713', t:'⚡ کش چندلایه سرور و مرورگر برای بارگذاری فوری بخش «پرفروش‌های باسلام»', items:[
+    'کش مرورگر (localStorage + حافظهٔ نشست) اضافه شد تا هنگام باز کردن پنل «پرفروش‌های باسلام» آمارها و جدول فوراً بدون توقف روی «در انتظار بارگذاری…» نمایش داده شوند و هنگام بستن آکاردئون درخواست اضافه ارسال نشود.',
+    'بارگذاری دوگانهٔ اولیه در اولین بازشدن پنل با پارامتر هم‌زمانی use_applied_filters=1 و لغو درخواست‌های منقضی با AbortController حذف شد و در پاسخ‌های stale سرور (SWR) بروزرسانی بی‌صدا در پس‌زمینه انجام می‌شود.',
+    'ایندکس فشردهٔ سرور (.basalam-bestsellers-index.json) با پیش‌محاسبهٔ امتیاز جامع و کش وضعیت چندصفحه‌ای (.basalam-bestsellers-cache.json) با پیش‌کش ۳ صفحهٔ اول، دور زدن خواندن تکراری profiles.json هنگام ثبات مهر فایل، و گرم‌کردن خودکار کش هنگام اعمال فیلتر و استخراج اضافه شد.'
+  ]},
   {v:'10.712', t:'✅ هم‌ترازی fallback صفحهٔ جستجوی دیجی‌کالا با موتور استخراج عمومی',
     items:['امضای فراخوانی parse_list_by_engine در fallback صفحهٔ جستجوی دیجی‌کالا با آزمون 10.704 هم‌تراز و با یکپارچه‌سازی 10.711 تثبیت شد.']},
   {v:'10.711', t:'🔍 یکپارچه‌سازی کامل جستجوی دیجی‌کالا مثل باسلام و اسنپ‌شاپ + رفع مشکل پاک کردن تکست‌باکس‌ها در موبایل', items:[
