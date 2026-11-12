@@ -27763,7 +27763,7 @@ function s4ThirdPartyExplorerProfileCodes(array $profiles,array $cfg=[]):array{
     $used=[];foreach($profiles as$p)if(is_array($p)){
         $suf=(string)($p['titleSuffix']??'');$nm=(string)($p['name']??'');
         foreach([$suf,$nm]as$text)foreach(s4ThirdPartyExplorerCodesInText($text,$cfg)as$n)$used[$n]=true;
-        if(trim($suf)!==''&&preg_match('~(?:^|\\(|#|\\s|-)([0-9۰-۹٠-٩]{1,5})\\)?\\s*$~u',trim($suf),$sm)){$sn=(int)s4ThirdPartyExplorerLatinDigits((string)$sm[1]);if($sn>0&&$sn<=99999)$used[$sn]=true;}
+        if(trim($suf)!==''&&preg_match('~^\\(?([0-9۰-۹٠-٩]{1,5})\\)?$~u',trim($suf),$sm)){$sn=(int)s4ThirdPartyExplorerLatinDigits((string)$sm[1]);if($sn>0&&$sn<=99999)$used[$sn]=true;}
     }return$used;
 }
 function s4ThirdPartyExplorerFormatSuffix(array $cfg,int $code):string{
@@ -51868,12 +51868,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"price_"."subpartitions")!==false
         &&strpos($selfSrc,"{v:'10."."714'")!==false
         &&version_compare(APP_VERSION,'10.714','>='));
-    $__tpeCodes515=s4ThirdPartyExplorerProfileCodes([['titleSuffix'=>'۱۳','name'=>'تست'],['titleSuffix'=>'(کد:9)','name'=>'دیگر']]);
-    $add('10.715','تشخیص کدهای عددی خالص در titleSuffix پروفایل‌های موجود برای ادامهٔ شماره‌گذاری بدون گپ',
+    $__tpeCodes515=s4ThirdPartyExplorerProfileCodes([['titleSuffix'=>'۱۳','name'=>'تست'],['titleSuffix'=>'(کد:9)','name'=>'دیگر'],['titleSuffix'=>'سایر 99','name'=>'بدون کد']]);
+    $add('10.715','تشخیص کدهای عددی خالص در titleSuffix پروفایل‌های موجود برای ادامهٔ شماره‌گذاری بدون گپ و حفظ تمایز عنوان‌های عادی',
         isset($__tpeCodes515[13],$__tpeCodes515[9])
+        &&!isset($__tpeCodes515[99])
         &&s4ThirdPartyExplorerNextBaseCode([['titleSuffix'=>'۱۳']],['suffix_start'=>1])===14
-        &&strpos($selfSrc,"{v:'10."."715'")!==false
-        &&version_compare(APP_VERSION,'10.715','>='));
+        &&strpos($selfSrc,"{v:'10."."716'")!==false
+        &&version_compare(APP_VERSION,'10.716','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -105611,6 +105612,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.716', t:'🔢 دقت کامل تشخیص پسوند عددی خالص بدون تداخل با اعداد داخل متن عنوان', items:[
+    'تشخیص عدد خالص در titleSuffix (مانند «۱۳» یا «(۱۳)») دقیق شد تا علاوه بر حذف گپ شماره‌گذاری غرفه‌ها، اعداد داخل متن‌های عادی (مانند «سایر ۹۹») اشتباهاً کد پروفایل محسوب نشوند.'
+  ]},
   {v:'10.715', t:'🔢 پشتیبانی از پسوندهای عددی خالص در شماره‌گذاری پیوستهٔ کاوشگر غرفه‌ها', items:[
     'تشخیص آخرین کد استفاده‌شده در titleSuffix پروفایل‌های موجود اکنون علاوه بر الگوی «(کد:N)»، پسوندهای عددی خالص (مانند «۱۳») را هم می‌شناسد تا ردیف اول جدول بدون گپ روی شمارهٔ بعدی (مثلاً ۱۴) قرار بگیرد.'
   ]},
@@ -128335,5 +128339,7 @@ at,25000);setInterval(matrixBeat,30000);setInterval(cronRunBeat,30000);setInterv
 </body>
 </html>
 script>
+</body>
+</html>
 </body>
 </html>
