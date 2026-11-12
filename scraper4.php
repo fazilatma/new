@@ -406,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.688';
+const APP_VERSION = '10.689';
 
 
 if (!function_exists('str_starts_with')) {
@@ -50703,6 +50703,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$evaluation=s4ProcurementAutoRevalidate')!==false
         &&strpos($selfSrc,"source_price_rise_pct")!==false
         &&version_compare(APP_VERSION,'10.688','>='));
+    $add('10.689','درخواست‌های مرورگر مرکز تأمین nonce احراز هویت را همراه POST می‌فرستند',
+        strpos($selfSrc,"function pcPost(data){const fd=new FormData();if(typeof TPE_WP_NONCE")!==false
+        &&strpos($selfSrc,"fd.append('explorer_nonce',TPE_BROWSER_NONCE)")!==false
+        &&strpos($selfSrc,"s4RequireAuthenticatedMutation();")!==false
+        &&version_compare(APP_VERSION,'10.689','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -103817,6 +103822,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.689', t:'🔐 رفع خطای Unauthorized مرکز تأمین', items:[
+    'درخواست‌های POST مرکز تأمین اکنون nonce کوتاه‌عمر امضاشدهٔ همان صفحه و nonce مدیر وردپرس را به‌طور خودکار ارسال می‌کنند.',
+    'ارزیابی سود و ارسال سفارش از کارت باسلام بدون حذف یا تضعیف کنترل احراز هویت انجام می‌شود.'
+  ]},
   {v:'10.688', t:'🛡️ بازاعتبارسنجی زندهٔ تأمین خودکار', items:[
     'پیش از تأیید خودکار، قیمت و موجودی دقیق محصول/تنوع از API عمومی باسلام دوباره خوانده می‌شود؛ شکست بازخوانی یا ناموجودی، ارسال خودکار را متوقف می‌کند.',
     'سقف مجاز افزایش قیمت منبع و حداقل سود خالص با قیمت زنده دوباره کنترل می‌شوند و زمان بررسی و درصد افزایش در درخواست تأمین ثبت می‌شود.',
@@ -114258,7 +114267,7 @@ function omPrintOrder(o){
 let pcState={tasks:[],settings:{},stats:{}},pcEvalOrder=null;
 function pcShow(on){['omKpis','omToolbar','omListWrap','omPagerWrap'].forEach(id=>{const e=document.getElementById(id);if(e)e.classList.toggle('hidden',!!on);});['omWarnBar','omDetailWrap'].forEach(id=>{const e=document.getElementById(id);if(e&&on)e.classList.add('hidden');});const p=document.getElementById('pcPanel');if(p)p.classList.toggle('hidden',!on);const b=document.getElementById('omTab_proc');if(b)b.classList.toggle('active',!!on);if(on)['all','bsl','woo'].forEach(k=>document.getElementById('omTab_'+k)?.classList.remove('active'));}
 function pcOpen(){pcShow(true);pcLoad();}
-function pcPost(data){const fd=new FormData();Object.entries(data).forEach(([k,v])=>fd.append(k,typeof v==='object'?JSON.stringify(v):String(v)));return fetch('',{method:'POST',body:fd}).then(async r=>{let d={};try{d=await r.json();}catch(_){throw new Error('پاسخ نامعتبر سرور');}if(!d.ok)throw Object.assign(new Error(d.error||'عملیات ناموفق'),{data:d});return d;});}
+function pcPost(data){const fd=new FormData();if(typeof TPE_WP_NONCE!=='undefined'&&TPE_WP_NONCE)fd.append('_wpnonce',TPE_WP_NONCE);if(typeof TPE_BROWSER_NONCE!=='undefined'&&TPE_BROWSER_NONCE)fd.append('explorer_nonce',TPE_BROWSER_NONCE);Object.entries(data).forEach(([k,v])=>fd.append(k,typeof v==='object'?JSON.stringify(v):String(v)));return fetch('',{method:'POST',body:fd}).then(async r=>{let d={};try{d=await r.json();}catch(_){throw new Error('پاسخ نامعتبر سرور');}if(!d.ok)throw Object.assign(new Error(d.error||'عملیات ناموفق'),{data:d});return d;});}
 function pcStatusLabel(s){return({unmatched:'نیازمند تطبیق',matched:'تطبیق‌شده',approved:'تأیید خرید',ordered:'خرید ثبت‌شده',cancelled:'لغوشده'})[s]||s;}
 function pcPlatform(p){return({basalam:'باسلام',digikala:'دیجی‌کالا',snappshop:'اسنپ‌شاپ',other:'سایر'})[p]||p||'نامشخص';}
 function pcLoad(){const box=document.getElementById('pcTasks'),msg=document.getElementById('pcMsg'),f=(document.getElementById('pcFilter')||{}).value||'all';if(box)box.innerHTML='<div style="padding:20px;text-align:center;color:#7dd3fc">⏳ در حال خواندن مرکز تأمین…</div>';fetch('?procurement_api=list&status='+encodeURIComponent(f)+'&_t='+Date.now()).then(r=>r.json()).then(d=>{if(!d.ok)throw new Error(d.error||'خطا');pcState=d;pcHydrateSettings(d.settings||{});pcRenderStats(d.stats||{});pcRenderTasks(d.tasks||[]);if(msg)msg.textContent='آخرین بروزرسانی: '+new Date().toLocaleTimeString('fa-IR');const c=document.getElementById('omCnt_proc');if(c)c.textContent=toFa((d.stats||{}).total||0);}).catch(e=>{if(box)box.innerHTML='<div style="color:#fca5a5;padding:15px">'+esc(e.message)+'</div>';});}
