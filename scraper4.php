@@ -27760,7 +27760,11 @@ function s4ThirdPartyExplorerCodesInText(string $text,array $cfg=[]):array{
     return array_values(array_unique(array_filter($out,fn($n)=>$n>0)));
 }
 function s4ThirdPartyExplorerProfileCodes(array $profiles,array $cfg=[]):array{
-    $used=[];foreach($profiles as$p)if(is_array($p))foreach([(string)($p['titleSuffix']??''),(string)($p['name']??'')]as$text)foreach(s4ThirdPartyExplorerCodesInText($text,$cfg)as$n)$used[$n]=true;return$used;
+    $used=[];foreach($profiles as$p)if(is_array($p)){
+        $suf=(string)($p['titleSuffix']??'');$nm=(string)($p['name']??'');
+        foreach([$suf,$nm]as$text)foreach(s4ThirdPartyExplorerCodesInText($text,$cfg)as$n)$used[$n]=true;
+        if(trim($suf)!==''&&preg_match('~(?:^|\\(|#|\\s|-)([0-9۰-۹٠-٩]{1,5})\\)?\\s*$~u',trim($suf),$sm)){$sn=(int)s4ThirdPartyExplorerLatinDigits((string)$sm[1]);if($sn>0&&$sn<=99999)$used[$sn]=true;}
+    }return$used;
 }
 function s4ThirdPartyExplorerFormatSuffix(array $cfg,int $code):string{
     $pattern=trim((string)($cfg['suffix_pattern']??'(کد:{n})'));if($pattern===''||$pattern==='(کد: {n})')$pattern='(کد:{n})';if(strpos($pattern,'{n}')===false)$pattern.='{n}';return str_replace('{n}',(string)$code,$pattern);
@@ -51822,17 +51826,20 @@ if (isset($_GET['selftest'])) {
         &&version_compare(APP_VERSION,'10.713','>='));
     $__tpeSeq514=(int)($GLOBALS['_s4TpeWriteSeq']??0);
     $__tpeProfs514=[
-        'p1'=>['name'=>'غرفه تستی ۱۲','url'=>'https://basalam.com/shop_old1'],
-        'p2'=>['name'=>'غرفه دیگر ۱۳','url'=>'https://basalam.com/shop_old2'],
+        'p1'=>['name'=>'غرفه تستی (کد:۱۲)','titleSuffix'=>'(کد:12)','url'=>'https://basalam.com/shop_old1'],
+        'p2'=>['name'=>'غرفه دیگر ۱۳','titleSuffix'=>'۱۳','url'=>'https://basalam.com/shop_old2'],
     ];
-    $__tpeCfg514=['suffix_start'=>1,'suffix_pattern'=>'{n}','ranking'=>'sales','min_products'=>0,'min_sales'=>0];
-    $__tpeVends514=[
-        '901'=>['vendor_id'=>901,'title'=>'رتبه سوم','url'=>'https://basalam.com/v901','state'=>'pending','product_count'=>50,'sales_estimate'=>100,'active_score'=>20,'scores'=>['sales'=>100,'active'=>20,'potential'=>10]],
-        '902'=>['vendor_id'=>902,'title'=>'رتبه اول','url'=>'https://basalam.com/v902','state'=>'pending','product_count'=>50,'sales_estimate'=>900,'active_score'=>90,'scores'=>['sales'=>900,'active'=>90,'potential'=>10]],
-        '903'=>['vendor_id'=>903,'title'=>'تاییدشده میانی','url'=>'https://basalam.com/v903','state'=>'approved','assigned_code'=>5,'assigned_suffix'=>'5','proposed_profile_name'=>'قبلی ۵','product_count'=>50,'sales_estimate'=>500,'active_score'=>50,'scores'=>['sales'=>500,'active'=>50,'potential'=>10]],
-        '904'=>['vendor_id'=>904,'title'=>'رتبه دوم','url'=>'https://basalam.com/v904','state'=>'pending','product_count'=>50,'sales_estimate'=>300,'active_score'=>40,'scores'=>['sales'=>300,'active'=>40,'potential'=>10]],
+    $__tpeCfg514=['suffix_start'=>1,'suffix_pattern'=>'(کد:{n})','ranking'=>'sales','min_products'=>0,'min_sales'=>0];
+    $__tpeD514=[
+        'config'=>$__tpeCfg514,
+        'vendors'=>[
+            '901'=>['vendor_id'=>901,'title'=>'رتبه سوم','url'=>'https://basalam.com/v901','state'=>'pending','product_count'=>50,'sales_estimate'=>100,'active_score'=>20,'scores'=>['sales'=>100,'active'=>20,'potential'=>10]],
+            '902'=>['vendor_id'=>902,'title'=>'رتبه اول','url'=>'https://basalam.com/v902','state'=>'pending','product_count'=>50,'sales_estimate'=>900,'active_score'=>90,'scores'=>['sales'=>900,'active'=>90,'potential'=>10]],
+            '903'=>['vendor_id'=>903,'title'=>'تاییدشده میانی','url'=>'https://basalam.com/v903','state'=>'approved','assigned_code'=>5,'assigned_suffix'=>'(کد:5)','proposed_profile_name'=>'قبلی ۵','product_count'=>50,'sales_estimate'=>500,'active_score'=>50,'scores'=>['sales'=>500,'active'=>50,'potential'=>10]],
+            '904'=>['vendor_id'=>904,'title'=>'رتبه دوم','url'=>'https://basalam.com/v904','state'=>'pending','product_count'=>50,'sales_estimate'=>300,'active_score'=>40,'scores'=>['sales'=>300,'active'=>40,'potential'=>10]],
+        ],
     ];
-    $__tpeAssigned514=s4ThirdPartyExplorerAssignMissingCodes($__tpeVends514,$__tpeCfg514,$__tpeProfs514);
+    $__tpeChanged514=s4ThirdPartyExplorerAssignMissingCodes($__tpeD514,$__tpeProfs514);
     $__bbsDefs514=s4BasalamBestSellersDefaults();
     $add('10.714','کش SWR کاوشگر غرفه‌ها، کددهی ترتیبی از آخرین کد ذخیره‌شده، اجرای استخراج بک‌اند برای پرفروش‌های باسلام و رفع سقف ۱۰ هزار با پارتیشن قیمتی',
         function_exists('s4ThirdPartyExplorerStatusCacheRead')
@@ -51844,10 +51851,11 @@ if (isset($_GET['selftest'])) {
         &&s4ThirdPartyExplorerStatusCacheUsableInProc(['built_pid'=>getmypid()+999999,'built_seq'=>-1])===true
         &&s4ThirdPartyExplorerStatusCacheUsableInProc(['built_pid'=>getmypid(),'built_seq'=>$__tpeSeq514-1])===false
         &&s4ThirdPartyExplorerStatusCacheUsableInProc(['built_pid'=>getmypid(),'built_seq'=>$__tpeSeq514])===true
-        &&(int)($__tpeAssigned514['902']['assigned_code']??0)===14
-        &&(int)($__tpeAssigned514['904']['assigned_code']??0)===15
-        &&(int)($__tpeAssigned514['901']['assigned_code']??0)===16
-        &&(int)($__tpeAssigned514['903']['assigned_code']??0)===5
+        &&$__tpeChanged514===true
+        &&(int)($__tpeD514['vendors']['902']['assigned_code']??0)===14
+        &&(int)($__tpeD514['vendors']['904']['assigned_code']??0)===15
+        &&(int)($__tpeD514['vendors']['901']['assigned_code']??0)===16
+        &&(int)($__tpeD514['vendors']['903']['assigned_code']??0)===5
         &&(int)($__bbsDefs514['page_size']??0)===50
         &&strpos($selfSrc,"TPE_LS_"."CACHE_KEY='s4_tpe_status_cache_v1'")!==false
         &&strpos($selfSrc,"function "."tpeInitFromCache()")!==false
