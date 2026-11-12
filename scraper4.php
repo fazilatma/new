@@ -406,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.692';
+const APP_VERSION = '10.693';
 
 
 if (!function_exists('str_starts_with')) {
@@ -1477,18 +1477,19 @@ function s4RunParallelExtractJob(string $jobId): array {
 function s4WorkerClaimJob(): ?array {
     if(s4SettingsPriorityActive())return null;
     $ret = s4WorkerQueueMutate(function (&$q) {
-        $now = time();$pick=-1;$pickRank=PHP_INT_MAX;
+        $now = time();$pick=-1;$pickRank=PHP_INT_MAX;$pickClass='';
         $parallelExtract=s4ParallelExtractSupported()&&(extractTaskConcurrency()>=1||s4WorkerParallelExtractRunning()>0);
-        /* Long matrix checkpoints recycle many times. Give queued extraction
-           and manual synchronization one turn before another matrix segment,
-           otherwise “Start extraction” can remain pending for hours. FIFO is
-           preserved inside each rank. */
+        /* v10.693: strict alternation prevents both starvation directions. A
+           matrix build/fix may wait for at most one serialized manual job, and
+           manual work gets one turn between recycled matrix segments. Parallel
+           extraction remains in its independent bounded pool. */
+        $lastClass=(string)($q['scheduler_last_class']??'');
         foreach($q['entries'] as $i=>$e){
             if(!is_array($e)||(string)($e['status']??'')!=='pending'||(int)($e['retry_after']??0)>$now)continue;
-            $type=(string)($e['type']??'');
-            if($parallelExtract&&$type==='backend_extract')continue;
-            $rank=$type==='manual_sync'?0:($type==='backend_extract'?(!empty($e['payload']['resume'])?1:0):2);
-            if($rank<$pickRank){$pick=$i;$pickRank=$rank;if($rank===0)break;}
+            $type=(string)($e['type']??'');if($parallelExtract&&$type==='backend_extract')continue;
+            $class=in_array($type,['matrix_build','matrix_fix'],true)?'matrix':'manual';
+            $rank=$lastClass==='matrix'?($class==='manual'?0:1):($class==='matrix'?0:1);
+            if($rank<$pickRank){$pick=$i;$pickRank=$rank;$pickClass=$class;if($rank===0)break;}
         }
         if($pick<0)return ['ok'=>true,'job'=>null];
         $e=&$q['entries'][$pick];
@@ -1497,7 +1498,7 @@ function s4WorkerClaimJob(): ?array {
         $e['updated_at'] = $now;
         $e['attempts'] = (int)($e['attempts'] ?? 0) + 1;
         $e['worker_pid'] = (int)@getmypid();
-        $job = $e;unset($e);
+        $job = $e;$q['scheduler_last_class']=$pickClass;$q['scheduler_last_at']=$now;unset($e);
         return ['ok' => true, 'job' => $job];
     });
     return is_array($ret['job'] ?? null) ? $ret['job'] : null;
@@ -1587,10 +1588,13 @@ function s4WorkerRequeueForRecycle(string $jobId): bool {
             $e['attempts']=max(0,(int)($e['attempts']??0)-1);
             $e['recycles']=(int)($e['recycles']??0)+1;unset($e['done_at']);
             unset($q['entries'][$i]);$q['entries']=array_values($q['entries']);$q['entries'][]=$e;
-            return ['ok'=>true,'requeued'=>true];
+            return ['ok'=>true,'requeued'=>true,'type'=>(string)($e['type']??'')];
         }
         return ['ok'=>false,'error'=>'job_not_found'];});
-    return !empty($ret['requeued']);
+    if(empty($ret['requeued']))return false;
+    if((string)($ret['type']??'')==='matrix_fix')matrixFixProgress(['running'=>false,'done'=>false,'queued'=>true,'worker'=>true,'runner_pid'=>0,'phase'=>'در صف فعال worker — حداکثر پس از یک کار دیگر ادامه می‌یابد','log_add'=>['🔁 checkpoint اصلاح در صف فعال است؛ زمان‌بند عادلانه حداکثر پس از یک کار دیگر آن را ادامه می‌دهد']]);
+    elseif((string)($ret['type']??'')==='matrix_build')matrixProgress(['running'=>false,'done'=>false,'queued'=>true,'worker'=>true,'runner_pid'=>0,'phase'=>'در صف فعال worker — حداکثر پس از یک کار دیگر ادامه می‌یابد','log_add'=>['🔁 checkpoint ساخت جدول در صف فعال است؛ زمان‌بند عادلانه حداکثر پس از یک کار دیگر آن را ادامه می‌دهد']]);
+    return true;
 }
 /** Retry transient extraction contention without marking the durable job failed. */
 function s4WorkerRequeueForRetry(string $jobId,string $reason='extract_lock_busy',int $delay=10):bool{
@@ -2134,10 +2138,11 @@ function s4WorkerRunMatrixChild(array $payload): array {
             $decoded['ok']=true;$decoded['resume_needed']=true;$decoded['scheduler_wait']=true;
             $decoded['execution_mode']=$driver['mode'];return $decoded;
         }
-        $retryAfter=max(0,min(120,(int)($decoded['retry_after']??0)));
-        if($retryAfter>0){
-            s4WorkerStateWrite(['phase'=>'rate_wait','job_type'=>'matrix_build','job_segment'=>$segments,
-                'heartbeat'=>time(),'retry_after'=>$retryAfter]);sleep($retryAfter);
+        $retryAfter=max(0,min(900,(int)($decoded['retry_after']??0)));
+        if($retryAfter>0){$waited=0;while($waited<$retryAfter&&!matrixStopRequested()){$step=min(15,$retryAfter-$waited);
+                s4WorkerStateWrite(['phase'=>'matrix_rate_wait','job_type'=>'matrix_build','job_segment'=>$segments,'heartbeat'=>time(),'retry_after'=>$retryAfter-$waited]);
+                matrixProgress(['running'=>true,'done'=>false,'yielded'=>true,'queued'=>false,'phase'=>'مکث کنترل‌شده پس از محدودیت باسلام','rate_limit_remaining'=>$retryAfter-$waited,'_touch_work_heartbeat'=>true]);
+                sleep($step);$waited+=$step;}
         }
         /* pulse خارجی تازه: بدون وقفه و با child بعدی؛ در fallback فقط pause تنظیمی. */
         unset($decoded,$out,$part,$raw);$pauseUs=matrixExecutionPauseUs(250000);if($pauseUs>0)usleep($pauseUs);
@@ -2580,6 +2585,7 @@ function s4WorkerJobIsCancelled(string $jobId): bool {
         if(is_array($entry)&&(string)($entry['id']??'')===$jobId)return(string)($entry['status']??'')==='cancelled';
     return false;
 }
+function s4WorkerMatrixPending():bool{foreach((array)(s4WorkerLoadQueue()['entries']??[])as$e)if(is_array($e)&&in_array((string)($e['type']??''),['matrix_build','matrix_fix'],true)&&in_array((string)($e['status']??''),['pending','paused'],true)&&(int)($e['retry_after']??0)<=time())return true;return false;}
 function s4WorkerRunJob(array $job): array {
     $jobId=(string)($job['id']??'');
     if(s4WorkerJobIsCancelled($jobId))return ['ok'=>false,'cancelled'=>true,'error'=>'job_cancelled_before_start'];
@@ -2600,6 +2606,7 @@ function s4WorkerRunJob(array $job): array {
             $msLast['worker_segments'] = $msSeg;
             if (!empty($msLast['retryable'])) { $msLast['retry_delay'] = 10; break; }
             if (empty($msLast['ok']) || empty($msLast['resume_needed'])) break;
+            if(s4WorkerMatrixPending()){$msLast['daemon_recycle']=true;$msLast['preempted_for_matrix']=true;break;}
             if (function_exists('s4DiskCodeMeta') && ((string)(s4DiskCodeMeta()['version'] ?? APP_VERSION) !== APP_VERSION)) {
                 $msLast['daemon_recycle'] = true;
                 break;
@@ -44862,9 +44869,12 @@ function matrixBuild(array $opts = []): array {
             $why = $bslErr ?: ('برداشت غرفهٔ ' . $sname . ' موقتاً ناقص ماند');
             $httpNote=$reason==='http'?(' · صفحه '.(int)($shopMeta['failed_page']??0).' · HTTP '.(int)($shopMeta['http_code']??0)
                 .(((string)($shopMeta['http_error']??''))!==''?(' · '.(string)$shopMeta['http_error']):'')):'';
-            matrixProgress(['log_add'=>['↻ '.$why.' ('.$reason.$httpNote.') — ادامه از checkpoint در تیک بعدی']]);
-            return $yieldMatrix('bsl_fetch', $reason==='http'?15:0);
+            $httpCode=(int)($shopMeta['http_code']??0);$prevRate=matrixProgressRead(false);$rateAttempt=$httpCode===429?min(7,(int)($prevRate['rate_limit_attempts']??0)+1):0;$retryDelay=$httpCode===429?min(900,15*(2**max(0,$rateAttempt-1))):($reason==='http'?30:0);
+            matrixProgress(['rate_limit_attempts'=>$rateAttempt,'rate_limit_until'=>$retryDelay>0?time()+$retryDelay:0,
+                'log_add'=>['↻ '.$why.' ('.$reason.$httpNote.') — checkpoint محفوظ؛ ادامهٔ خودکار پس از '.(int)$retryDelay.' ثانیه']]);
+            return $yieldMatrix('bsl_fetch',$retryDelay);
         }
+        matrixProgress(['rate_limit_attempts'=>0,'rate_limit_until'=>0,'rate_limit_remaining'=>0]);
         /* Product rows stay in the reconciliation matrix only; no catalog copy is written. */
         $seen = [];
         foreach ($remote as $br) {
@@ -50730,6 +50740,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'onclick="perDeepBasalam()"')!==false
         &&strpos($selfSrc,'function pcDeepBasalamOrder()')!==false
         &&version_compare(APP_VERSION,'10.692','>='));
+    $add('10.693','ساخت و اصلاح مغایرت هرگز پشت همگام‌سازی‌های تکراری بدون فعالیت نمی‌ماند',
+        strpos($selfSrc,"scheduler_last_class")!==false
+        &&strpos($selfSrc,"حداکثر پس از یک کار دیگر ادامه می‌یابد")!==false
+        &&strpos($selfSrc,"matrix_rate_wait")!==false
+        &&strpos($selfSrc,"rate_limit_attempts")!==false
+        &&strpos($selfSrc,"min(900,15*(2**")!==false
+        &&version_compare(APP_VERSION,'10.693','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -103867,6 +103884,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.693', t:'🫀 جلوگیری قطعی از بی‌فعالیت ماندن مغایرت‌گیری', items:[
+    'زمان‌بند worker میان checkpointهای ساخت/اصلاح مغایرت و کارهای دستی به‌صورت سخت یکی‌درمیان عمل می‌کند؛ مغایرت حداکثر پس از یک کار سری دیگر دوباره اجرا می‌شود و پشت retryهای همگام‌سازی گرسنه نمی‌ماند.',
+    'هنگام تحویل checkpoint، وضعیت رابط صریحاً «در صف فعال worker» ثبت می‌شود و دیگر حالت مبهم running بدون پیشرفت نشان داده نمی‌شود.',
+    'خطای 429 باسلام با backoff تصاعدی ۱۵ تا ۹۰۰ ثانیه مدیریت می‌شود؛ در زمان انتظار heartbeat هر ۱۵ ثانیه تازه می‌شود تا نگهبان آن را مرده نداند و پس از پایان مکث خودکار ادامه دهد.'
+  ]},
   {v:'10.692', t:'🔬 بررسی عمیق محصول در کل باسلام', items:[
     'در پنجرهٔ ارزیابی سفارش باسلام و زیرمنوی بررسی واجد شرایط، دکمهٔ مستقل «بررسی عمیق کل باسلام» اضافه شد.',
     'جستجو تا ۱۵۰ نتیجهٔ عمومی باسلام را بررسی، بهترین تطابق‌ها را رتبه‌بندی و جزئیات زندهٔ حداکثر ۱۲ محصول شامل قیمت، موجودی و تنوع‌ها را از Core API واکشی می‌کند.',
