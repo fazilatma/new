@@ -406,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.714';
+const APP_VERSION = '10.715';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -51868,6 +51868,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"price_"."subpartitions")!==false
         &&strpos($selfSrc,"{v:'10."."714'")!==false
         &&version_compare(APP_VERSION,'10.714','>='));
+    $__tpeCodes515=s4ThirdPartyExplorerProfileCodes([['titleSuffix'=>'۱۳','name'=>'تست'],['titleSuffix'=>'(کد:9)','name'=>'دیگر']]);
+    $add('10.715','تشخیص کدهای عددی خالص در titleSuffix پروفایل‌های موجود برای ادامهٔ شماره‌گذاری بدون گپ',
+        isset($__tpeCodes515[13],$__tpeCodes515[9])
+        &&s4ThirdPartyExplorerNextBaseCode([['titleSuffix'=>'۱۳']],['suffix_start'=>1])===14
+        &&strpos($selfSrc,"{v:'10."."715'")!==false
+        &&version_compare(APP_VERSION,'10.715','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -105605,6 +105611,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.715', t:'🔢 پشتیبانی از پسوندهای عددی خالص در شماره‌گذاری پیوستهٔ کاوشگر غرفه‌ها', items:[
+    'تشخیص آخرین کد استفاده‌شده در titleSuffix پروفایل‌های موجود اکنون علاوه بر الگوی «(کد:N)»، پسوندهای عددی خالص (مانند «۱۳») را هم می‌شناسد تا ردیف اول جدول بدون گپ روی شمارهٔ بعدی (مثلاً ۱۴) قرار بگیرد.'
+  ]},
   {v:'10.714', t:'🧭 کش فوری کاوشگر غرفه‌ها، شماره‌گذاری ترتیبی جدول از آخرین کد پروفایل، اجرای استخراج بک‌اند «پرفروش‌ها» و پارتیشن‌بندی قیمتی بالای ۱۰ هزار', items:[
     'کش چندلایه سرور (.third-party-shop-explorer-cache.json) و کش مرورگر (SWR روی localStorage + AbortController) به بخش Third-Party Shop Explorer اضافه شد؛ بازکردن آکاردئون فوراً نمایش داده می‌شود و با بسته‌شدن آن درخواست اضافه‌ای نمی‌رود.',
     'کددهی غرفه‌های تازه (مثلاً شماره ۱۳ ← ۱۴، ۱۵، ۱۶) از روی آخرین کد ذخیره‌شده در پروفایل‌ها و دقیقاً هم‌تراز با ردیف ۱، ۲، ۳ رتبهٔ جدول بدون گم‌شدن اعداد هنگام فیلتر یا مرتب‌سازی یکپارچه شد.',
