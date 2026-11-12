@@ -406,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.697';
+const APP_VERSION = '10.698';
 
 
 if (!function_exists('str_starts_with')) {
@@ -50812,6 +50812,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function bbsSet'.'Sort')===false
         &&strpos($selfSrc,'onclick="bbsSet'.'Sort')===false
         &&version_compare(APP_VERSION,'10.697','>='));
+    $add('10.698','بخش پرفروش‌های باسلام به پنل‌های کشویی وضعیت، امتیاز، فیلتر و جدول تقسیم شده است',
+        substr_count($selfSrc,'class="bbs-fold"')===4
+        &&strpos($selfSrc,'id="bbsStatusFold"')!==false
+        &&strpos($selfSrc,'id="bbsScoreFold"')!==false
+        &&strpos($selfSrc,'id="bbsFiltersFold"')!==false
+        &&strpos($selfSrc,'id="bbsTableFold"')!==false
+        &&version_compare(APP_VERSION,'10.698','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -92707,11 +92714,17 @@ html[data-skin="gloss"] .progress-bar{
 <div class="smenu" id="basalamBestSellersSmenu">
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#b45309,#0f172a)" onclick="toggleSmenu(this);bbsLoad()"><h3>🏆 پرفروش‌ترین محصولات باسلام</h3><span class="cst on" id="bbsBadge">فعال</span><span class="arrow">▼</span></div>
 <div class="smenu-body">
-<div style="font-size:10.5px;color:#cbd5e1;line-height:1.9">زمان‌بندی استخراج، مقصد ارسال، جزئیات، تعداد صفحات و سایر سیاست‌ها از تنظیمات همین پروفایل در تب‌های شروع و تنظیمات خوانده می‌شوند؛ فقط موتور استخراج آن اختصاصی پرفروش‌های باسلام است. همهٔ محصولات کشف‌شده در کاتالوگ مستقل و کامل نگهداری می‌شوند. امتیاز جامع هر محصول از فروش دقیق، فروش فهرست، فروش هفتگی، موجودی، اعتبار قیمت، کامل‌بودن محتوا و تازگی تأیید ساخته می‌شود و به معیار فروش انتخابی وابسته نیست. فیلتر، امتیازدهی و مرتب‌سازی روی کل کاتالوگ انجام می‌شود و فقط بهترین تعداد تعیین‌شده در پروفایل <b>باسلام -پرفروش ها</b> نمایش و ذخیره می‌شود؛ بنابراین صفحه‌بندی در انتخاب برندگان دخالت ندارد.</div>
-<div style="font-size:10.5px;color:#bae6fd;line-height:1.9;margin-top:5px"><b>رتبه و وزن امتیاز (از ۱۰۰):</b> ۱) فروش دقیق ۳۵٪ · ۲) فروش هفتگی ۲۵٪ · ۳) فروش فهرست‌شده ۱۵٪ · ۴) موجودی ۱۰٪ · ۵) اعتبار و تازگی تأیید ۷٪ · ۶) کامل‌بودن اطلاعات ۵٪ · ۷) معتبر بودن قیمت ۳٪</div>
+<style>.bbs-fold{border:1px solid #334155;border-radius:10px;margin:8px 0;background:rgba(15,23,42,.55);overflow:hidden}.bbs-fold>summary{cursor:pointer;list-style:none;padding:10px 12px;font-weight:800;color:#e2e8f0;background:linear-gradient(90deg,rgba(180,83,9,.26),rgba(15,23,42,.2));user-select:none}.bbs-fold>summary::-webkit-details-marker{display:none}.bbs-fold>summary:after{content:'◀';float:left;color:#fbbf24;transition:transform .2s}.bbs-fold[open]>summary:after{transform:rotate(-90deg)}.bbs-fold-body{padding:9px 11px}</style>
+<details class="bbs-fold" id="bbsStatusFold" open><summary>📊 وضعیت و عملیات جمع‌آوری</summary><div class="bbs-fold-body">
 <div class="tpe-actions"><button type="button" class="btn btn-cyan" onclick="bbsRun()">↻ اجرای گام بعدی</button><button type="button" class="btn btn-gray" onclick="bbsLoad()">تازه‌سازی وضعیت</button></div>
 <div class="tpe-stats" id="bbsStats"><span class="tpe-stat">در انتظار بارگذاری…</span></div>
 <div id="bbsMsg" class="tpe-note"></div>
+</div></details>
+<details class="bbs-fold" id="bbsScoreFold"><summary>⚖️ راهنمای امتیاز و وزن پارامترها</summary><div class="bbs-fold-body">
+<div style="font-size:10.5px;color:#cbd5e1;line-height:1.9">زمان‌بندی استخراج، مقصد ارسال، جزئیات، تعداد صفحات و سایر سیاست‌ها از تنظیمات همین پروفایل در تب‌های شروع و تنظیمات خوانده می‌شوند؛ فقط موتور استخراج آن اختصاصی پرفروش‌های باسلام است. همهٔ محصولات کشف‌شده در کاتالوگ مستقل و کامل نگهداری می‌شوند. امتیاز جامع هر محصول از فروش دقیق، فروش فهرست، فروش هفتگی، موجودی، اعتبار قیمت، کامل‌بودن محتوا و تازگی تأیید ساخته می‌شود و به معیار فروش انتخابی وابسته نیست. فیلتر، امتیازدهی و مرتب‌سازی روی کل کاتالوگ انجام می‌شود و فقط بهترین تعداد تعیین‌شده در پروفایل <b>باسلام -پرفروش ها</b> نمایش و ذخیره می‌شود؛ بنابراین صفحه‌بندی در انتخاب برندگان دخالت ندارد.</div>
+<div style="font-size:10.5px;color:#bae6fd;line-height:1.9;margin-top:5px"><b>رتبه و وزن امتیاز (از ۱۰۰):</b> ۱) فروش دقیق ۳۵٪ · ۲) فروش هفتگی ۲۵٪ · ۳) فروش فهرست‌شده ۱۵٪ · ۴) موجودی ۱۰٪ · ۵) اعتبار و تازگی تأیید ۷٪ · ۶) کامل‌بودن اطلاعات ۵٪ · ۷) معتبر بودن قیمت ۳٪</div>
+</div></details>
+<details class="bbs-fold" id="bbsFiltersFold" open><summary>🔎 فیلترها و مرتب‌سازی</summary><div class="bbs-fold-body">
 <div class="tpe-grid" id="bbsFilters" style="margin:8px 0">
 <div class="tpe-box"><label>جست‌وجوی عنوان، شناسه، غرفه یا دسته</label><input id="bbsQuery" placeholder="عبارت جست‌وجو…" oninput="bbsFiltersChanged()"></div>
 <div class="tpe-box"><label>دسته</label><input id="bbsCategory" placeholder="مثلاً عسل" oninput="bbsFiltersChanged()"></div>
@@ -92725,8 +92738,11 @@ html[data-skin="gloss"] .progress-bar{
 <div class="tpe-box" style="border-color:#0891b2;background:rgba(8,145,178,.08)"><label>ترتیب نمایش</label><select id="bbsDir" aria-label="جهت مرتب‌سازی پرفروش‌های باسلام" onchange="bbsFiltersChanged(true)"><option value="desc">بیشترین به کمترین / نزولی</option><option value="asc">کمترین به بیشترین / صعودی</option></select><small style="display:block;color:#67e8f9;margin-top:4px">جهت مرتب‌سازی را از این فهرست کشویی انتخاب کنید.</small></div>
 </div>
 <div class="tpe-actions"><button type="button" class="btn btn-gray" onclick="bbsResetFilters()">پاک‌کردن فیلترها</button><label class="tpe-stat" style="color:#bbf7d0"><input id="bbsExcelAllShops" type="checkbox" checked> همهٔ غرفه‌های انتخاب‌شده</label><button type="button" class="btn btn-green" onclick="bslExcelExport('best_sellers_filtered')">⬇ Excel باسلام از نتیجهٔ فیلترشده</button><span class="tpe-stat" id="bbsFilteredCount">۰ نتیجه</span><span class="tpe-stat">هر تغییر فیلتر مستقیماً محصولات پروفایل را بروزرسانی می‌کند</span></div>
+</div></details>
+<details class="bbs-fold" id="bbsTableFold" open><summary>📦 جدول محصولات پرفروش</summary><div class="bbs-fold-body">
 <div class="tpe-table-wrap" style="max-height:58vh;overflow:auto"><table class="tpe-table" id="bbsTable"><thead><tr><th>رتبه</th><th>تصویر</th><th>محصول</th><th>فروش دقیق</th><th>فروش فهرست</th><th>فروش هفته</th><th>امتیاز جامع</th><th>قیمت</th><th>موجودی</th><th>غرفه</th><th>دسته</th></tr></thead><tbody id="bbsRows"><tr><td colspan="11">برای نمایش جدول، این بخش را باز کنید.</td></tr></tbody></table></div>
 <div class="tpe-actions" style="justify-content:center"><button type="button" class="btn btn-gray" id="bbsPrev" onclick="bbsPageMove(-1)">صفحهٔ قبل</button><span class="tpe-stat" id="bbsPageLabel">صفحه ۱ از ۱</span><button type="button" class="btn btn-gray" id="bbsNext" onclick="bbsPageMove(1)">صفحهٔ بعد</button></div>
+</div></details>
 </div></div>
 
 <!-- v10.647: review-first third-party Basalam discovery -->
@@ -103949,6 +103965,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.698', t:'🗂 پنل‌های کشویی پرفروش‌های باسلام', items:[
+    'محتوای بخش پرفروش‌ها در چهار پنل باز و بسته‌شونده مرتب شد: وضعیت و عملیات، راهنمای امتیاز و وزن‌ها، فیلترها و مرتب‌سازی، و جدول محصولات.',
+    'پنل راهنمای امتیاز در ابتدا بسته است تا فضای صفحه را نگیرد؛ وضعیت، فیلترها و جدول باز هستند و هرکدام مستقل جمع یا باز می‌شوند.',
+    'تمام شناسه‌ها، فیلترها، خروجی Excel، صفحه‌بندی، تازه‌سازی و اجرای جمع‌آور بدون تغییر حفظ شده‌اند.'
+  ]},
   {v:'10.697', t:'🔽 مرتب‌سازی کشویی پرفروش‌های باسلام', items:[
     'مرتب‌سازی جدول پرفروش‌ها اکنون از دو فهرست کشویی روشن و برجسته انجام می‌شود: انتخاب معیار و انتخاب ترتیب صعودی/نزولی.',
     'معیارها در دو گروه «امتیاز و فروش» و «مشخصات محصول» مرتب شده‌اند تا انتخاب امتیاز جامع، فروش‌ها، قیمت، موجودی، عنوان، غرفه یا دسته سریع باشد.',
