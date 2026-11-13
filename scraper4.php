@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.730';
+const APP_VERSION = '10.731';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -21117,8 +21117,8 @@ function vc_defaults(): array {
     return [
         'check_on_load'   => false,
         'repo'            => 'fazilatma/new',
-        'branch'          => 'arena/ae9391a9-new',
-        'branches'        => ['arena/ae9391a9-new'],
+        'branch'          => 'arena/821be8f1-new',
+        'branches'        => ['arena/821be8f1-new'],
         'pinned_branch'   => '',
         'pinned_at'       => 0,
         'pinned_max_unix' => 0,
@@ -21135,14 +21135,23 @@ function vc_defaults(): array {
 /** Update branches are compared by their exact configured names. */
 function vc_is_allowed_update_branch(string $branch,array $configured):bool{
     $branch=trim($branch);
-    $fixed=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/ae9391a9-new';
+    $fixed=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/821be8f1-new';
     return $branch!==''&&($branch===$fixed||in_array($branch,vc_normalize_branches($configured),true));
 }
 /** Migrate the previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
     $keepLegacy='arena/e868e86a-new';
     $prevSession='arena/01a0ebf7-new';
-    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/ae9391a9-new';
+    /* v10.731: transfer the source session without discarding custom branches. */
+    $sourceSession='arena/ae9391a9-new';
+    $sourceBefore=$c;
+    if(($c['branch']??'')===$sourceSession)$c['branch']=S4_CODE_UPDATE_BRANCH;
+    if(($c['pinned_branch']??'')===$sourceSession){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
+    if($c!==$sourceBefore){
+        $c['branches']=vc_normalize_branches(array_merge([S4_CODE_UPDATE_BRANCH],(array)($c['branches']??[])));
+        return ['config'=>$c,'changed'=>true];
+    }
+    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/821be8f1-new';
     $branches=vc_normalize_branches((array)($c['branches']??[]));
     $pin=trim((string)($c['pinned_branch']??''));
     $curBranch=trim((string)($c['branch']??''));
@@ -21190,7 +21199,7 @@ function vc_load(): array {
     $rawBranches=array_key_exists('branches',$j)&&is_array($j['branches'])
         ? $j['branches'] : [(string)($c['branch']??'')];
     $c['branches']=vc_normalize_branches($rawBranches);
-    if(!$c['branches'])$c['branches']=[defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/ae9391a9-new'];
+    if(!$c['branches'])$c['branches']=[defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/821be8f1-new'];
     if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0];
     $pin=trim((string)($c['pinned_branch']??''));
     if($pin!==''&&!in_array($pin,$c['branches'],true)){
@@ -21346,7 +21355,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/ae9391a9-new';
+const S4_CODE_UPDATE_BRANCH='arena/821be8f1-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -41763,6 +41772,11 @@ if (isset($_GET['notif_health'])) {
     $out['last_notif_found'] = is_array($stH['last_notif_found'] ?? null) ? $stH['last_notif_found'] : null;
     $out['last_notif_pending'] = (int)($stH['last_notif_pending'] ?? 0); /* v10.47 (۶۱) */
 
+    $out['queued_chats'] = count((array)($stH['chat_outbox'] ?? []));
+    $out['last_notif_errors'] = array_values((array)($stH['last_notif_errors'] ?? []));
+    $add('chat_outbox', $out['queued_chats'] === 0,
+         $out['queued_chats'] === 0 ? 'صف ارسال پیام‌ها خالی است'
+             : $out['queued_chats'] . ' اعلان گفتگو منتظر ارسال مجدد؛ خطا و مقصد پیام‌رسان را بررسی کنید');
     $out['healthy'] = empty($out['problems']);
     echo json_encode($out, JSON_UNESCAPED_UNICODE);
     exit;
@@ -51503,7 +51517,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"isset(\$_GET['tasks_stop_all_status'])")!==false
         &&strpos($selfSrc,"fetch('?tasks_stop_all_status=1&_v='")!==false
         &&strpos($selfSrc,"['auto_resume_all_cron']=false")!==false
-        &&S4_CODE_UPDATE_BRANCH==='arena/ae9391a9-new'
+        &&S4_CODE_UPDATE_BRANCH==='arena/821be8f1-new'
         &&strpos($selfSrc,"{v:'10." . "501'")!==false&&version_compare(APP_VERSION,'10.501','>='));
     $add('10.502','پاسخ غیر JSON نصب‌کننده با HTTP، نوع محتوا و پیش‌نمایش امن گزارش می‌شود',
         strpos($selfSrc,'function vcParseInstallerReply(response, source)')!==false
@@ -52380,7 +52394,7 @@ if (isset($_GET['selftest'])) {
         &&notifMessengerChatId($__notifCfg628,'order')==='orders'
         &&notifMessengerChatId($__notifCfg628,'site_visit')==='visits'
         &&notifMessengerChatId(['chat_id'=>'legacy','chat_ids'=>[]],'order')==='legacy'
-        &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
+        &&strpos($selfSrc,"function notifDrainChatOutbox(")!==false
         &&strpos($selfSrc,"{v:'10." . "628'")!==false
         &&version_compare(APP_VERSION,'10.628','>='));
     $__notifCfg629=['chat_id'=>'common','all_same'=>false,'chat_ids'=>['conversations'=>'talk','orders'=>'orders','visits'=>'visits']];
@@ -53871,11 +53885,11 @@ if (isset($_GET['selftest'])) {
     $__migCfg729=(array)($__mig729['config']??[]);
     $add('10.729','رفع کش قدیمی در سرویس‌ورکر، فعال‌سازی رفرش خودکار و ضدکش در فضای کاری غیرادمین، و هم‌راستاسازی شاخهٔ آپدیتر',
         !empty($__mig729['changed'])
-        &&($__migCfg729['branch']??'')==='arena/ae9391a9-new'
-        &&in_array('arena/ae9391a9-new',(array)($__migCfg729['branches']??[]),true)
+        &&($__migCfg729['branch']??'')==='arena/821be8f1-new'
+        &&in_array('arena/821be8f1-new',(array)($__migCfg729['branches']??[]),true)
         &&in_array('arena/01a0ebf7-new',(array)($__migCfg729['branches']??[]),true)
         &&($__migCfg729['pinned_branch']??'')===''
-        &&S4_CODE_UPDATE_BRANCH==='arena/ae9391a9-new'
+        &&S4_CODE_UPDATE_BRANCH==='arena/821be8f1-new'
         &&strpos($selfSrc,"Cache-Control: no-store, no-cache, must-revalidate, max-age=0")!==false
         &&strpos($selfSrc,"watchMemberCodeVersion")!==false
         &&strpos($selfSrc,"code_auto_update=1")!==false
@@ -53927,9 +53941,22 @@ if (isset($_GET['selftest'])) {
         &&strpos($__longConv730[0],'پیام شماره 14')!==false
         &&s4FormatTehranChatTime('2026-11-12T08:05:00Z',strtotime('2026-11-12T12:00:00Z'))==='11:35'
         &&strpos($selfSrc,"function s4NotifFormatConversationMessage(")!==false
-        &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
+        &&strpos($selfSrc,"function notifDrainChatOutbox(")!==false
         &&strpos($selfSrc,"{v:'10."."730'")!==false
         &&version_compare(APP_VERSION,'10.730','>='));
+    $__mig731=vc_migrate_legacy_branch_config(['branch'=>'arena/ae9391a9-new','branches'=>['arena/ae9391a9-new'],'pinned_branch'=>'arena/ae9391a9-new']);
+    $add('10.731','صف پایدار اعلان گفتگو، رسید مستقل پیام‌رسان، گزارش خطای واقعی و انتقال شاخهٔ آپدیتر',
+        msgrResponseAccepted(200,'{"ok":true,"result":{"message_id":1}}')
+        &&!msgrResponseAccepted(200,'{"ok":false,"description":"Forbidden"}')
+        &&!msgrResponseAccepted(200,'<html>proxy error</html>')
+        &&!msgrResponseAccepted(200,'{}')
+        &&msgrResponseAccepted(200,'{"status":"OK","data":{"message_id":"1"}}')
+        &&count(notifDeliveryErrors(['telegram'=>'fail','telegram_err'=>'test']))===1
+        &&($__mig731['config']['branch']??'')===S4_CODE_UPDATE_BRANCH
+        &&($__mig731['config']['pinned_branch']??'')===''
+        &&strpos($selfSrc,'function notifDrainChatOutbox(')!==false
+        &&strpos($selfSrc,"{v:'10."."731'")!==false
+        &&version_compare(APP_VERSION,'10.731','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -68076,9 +68103,9 @@ function notifLoadState(): array {
     return is_array($d) ? $d : [];
 }
 
-function notifSaveState(array $st): void {
+function notifSaveState(array $st): bool {
     $lfp = @fopen(NOTIF_STATE_FILE . '.lock', 'c');
-    if ($lfp) @flock($lfp, LOCK_EX);
+    if (!$lfp || !@flock($lfp, LOCK_EX)) { if ($lfp) @fclose($lfp); return false; }
     try {
         if (empty($st['items']) && is_file(NOTIF_STATE_FILE) && @filesize(NOTIF_STATE_FILE) > 64) {
             $prev = json_decode((string)@file_get_contents(NOTIF_STATE_FILE), true);
@@ -68087,17 +68114,11 @@ function notifSaveState(array $st): void {
             }
         }
         $json = json_encode($st, JSON_UNESCAPED_UNICODE);
-        if ($json !== false) {
-            $tmp = NOTIF_STATE_FILE . '.tmp.' . (int)@getmypid();
-            if (@file_put_contents($tmp, $json, LOCK_EX) !== false) {
-                if (!@rename($tmp, NOTIF_STATE_FILE)) {
-                    @file_put_contents(NOTIF_STATE_FILE, $json, LOCK_EX);
-                    @unlink($tmp);
-                }
-            } else {
-                @file_put_contents(NOTIF_STATE_FILE, $json, LOCK_EX);
-            }
-        }
+        if ($json === false) return false;
+        $tmp = NOTIF_STATE_FILE . '.tmp.' . (int)@getmypid();
+        if (@file_put_contents($tmp, $json, LOCK_EX) !== strlen($json)) { @unlink($tmp); return false; }
+        if (!@rename($tmp, NOTIF_STATE_FILE)) { @unlink($tmp); return false; }
+        return true;
     } finally {
         if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
     }
@@ -68713,9 +68734,9 @@ function notifRecordAutoSent(string $coreMsg, ?string $feed): void {
     }
 }
 
-function notifSend(array $cn, string $msg, ?string $feed = null, array $media = [], ?string $route = null): array {
+function notifSend(array $cn, string $msg, ?string $feed = null, array $media = [], ?string $route = null, bool $deduplicate = true): array {
     $_coreMsgForDedup = $msg;
-    if (notifShouldSuppressAutoDuplicate($cn, $_coreMsgForDedup, $feed)) {
+    if ($deduplicate && notifShouldSuppressAutoDuplicate($cn, $_coreMsgForDedup, $feed)) {
         return ['suppressed_duplicate' => 'sent_before'];
     }
     /* Add exactly the saved textbox text; no website URL, instance ID, or version. */
@@ -68733,7 +68754,7 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
     if ($sendBaleh)  { $rb = bslSendToBaleh($bt, $bc, $msg, $wantPreview); $out['baleh'] = $rb['ok'] ? 'sent' : 'fail'; if (!$rb['ok'] && $rb['error'] !== '') $out['baleh_err'] = $rb['error']; if ($rb['ok'] && ($rb['message_id'] ?? '') !== '') { $out['baleh_msg_id'] = $rb['message_id']; msgrSaveMsg('bale', $rb['message_id'], 0, 0); } }   // v10.79 (93)
     if ($sendRubika)  { $rr = bslSendToRubika($rt, $rc, $msg); $out['rubika'] = $rr['ok'] ? 'sent' : 'fail'; if (!$rr['ok'] && $rr['error'] !== '') $out['rubika_err'] = $rr['error']; if ($rr['ok'] && ($rr['message_id'] ?? '') !== '') { $out['rubika_msg_id'] = $rr['message_id']; msgrSaveMsg('rubika', $rr['message_id'], 0, 0); } }
     if ($sendTelegram)  { $tr = bslSendToTelegram($tt, $tc, $msg, $wantPreview); $out['telegram'] = $tr['ok'] ? 'sent' : 'fail'; if (!$tr['ok'] && $tr['error'] !== '') $out['telegram_err'] = $tr['error']; if ($tr['ok'] && ($tr['message_id'] ?? '') !== '') { $out['telegram_msg_id'] = $tr['message_id']; msgrSaveMsg('telegram', $tr['message_id'], 0, 0); } }
-    if (in_array('sent', [$out['baleh'] ?? '', $out['rubika'] ?? '', $out['telegram'] ?? ''], true)) {
+    if ($deduplicate && in_array('sent', [$out['baleh'] ?? '', $out['rubika'] ?? '', $out['telegram'] ?? ''], true)) {
         notifRecordAutoSent($_coreMsgForDedup, $feed);
     }
     /* v10.109: فوروارد چندرسانه‌ای (عکس/ویدیو/گیف/فایل/لینک) بعد از متن */
@@ -68758,7 +68779,15 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
         if ($mediaSent > 0) $out['media_sent'] = $mediaSent;
         if ($mediaFail > 0) $out['media_fail'] = $mediaFail;
     }
-    if (!$out) $out['none'] = 'no_messenger';
+    foreach (['baleh', 'rubika', 'telegram'] as $channel) {
+        $mc = (array)($cn[$channel] ?? []);
+        if (!filter_var($mc['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN)) continue;
+        if (trim((string)($mc['token'] ?? '')) === '' || notifMessengerChatId($mc, $destinationClass) === '') {
+            $out[$channel] = 'fail';
+            $out[$channel . '_err'] = trim((string)($mc['token'] ?? '')) === '' ? 'توکن پیام‌رسان تنظیم نشده' : 'Chat ID مسیر اعلان تنظیم نشده';
+        }
+    }
+    if (!$out) { $out['none'] = 'no_messenger'; $out['none_err'] = 'هیچ پیام‌رسان فعالی برای این مسیر وجود ندارد'; }
     if ($feed !== null) liveFeedPush($feed, $msg);   /* v10.66 (۸۰) */
     /* v10.72 (86): Web Push — در کنارِ پیام‌رسان، به دستگاهِ کاربر.
        رویدادها چه «لحظه‌ای» (درخواستِ مرورگر) باشند چه «کران‌جاب» —
@@ -71569,6 +71598,104 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
  * جبران می‌شود تا بلافاصله بعد از به‌روزرسانی سیلی پیام «تغییر وضعیت»
  * فرستاده نشود.
  */
+/** v10.731: delivery errors must reach the cron/test health report. */
+function notifDeliveryErrors(array $delivery): array {
+    $errors = [];
+    foreach (['baleh', 'rubika', 'telegram', 'none'] as $channel) {
+        if (isset($delivery[$channel]) && !in_array($delivery[$channel], ['sent', 'already_sent'], true)) {
+            $errors[] = $channel . ': ' . (string)($delivery[$channel . '_err'] ?? $delivery[$channel]);
+        }
+    }
+    if (!empty($delivery['media_fail'])) $errors[] = 'ارسال برخی پیوست‌های پیام ناموفق بود';
+    return $errors;
+}
+
+/**
+ * Durable, per-destination text acknowledgements. Called under NOTIF_SCAN_LOCK_FILE.
+ * Payloads survive API list pagination, disabled reminders, and worker timeouts.
+ * At-least-once: a crash after remote acceptance but before the local ACK may replay
+ * that one chunk. Media remain best-effort and do not cause successful text to replay.
+ */
+function notifDrainChatOutbox(array $cn, array &$st, array $ids): array {
+    $errors = []; $sent = [];
+    foreach ($ids as $id) {
+        if (!is_array($st['chat_outbox'][$id] ?? null)) continue;
+        $job = $st['chat_outbox'][$id];
+        $nc = (array)($job['nc'] ?? []);
+        $route = (string)($job['route'] ?? 'chat_customer');
+        $shopRoute = bslChatRouteForShop($cn, (int)($nc['vendor_id'] ?? 0));
+        $digest = notifEventOn((array)($cn['notif_events'] ?? []), 'chat_digest_single');
+        if ($digest && (!empty($shopRoute['customer']) || !empty($shopRoute['admin']) || !bslAnyChatRouteOn($cn))) {
+            $shopRoute = ['customer' => true, 'admin' => true];
+        }
+        if (empty($shopRoute[$route === 'chat_vendor' ? 'admin' : 'customer'])) {
+            $errors[] = 'مسیر اعلان غرفه خاموش است؛ پیام در صف باقی ماند';
+            continue;
+        }
+        $complete = true; $enabled = 0;
+        foreach (['baleh', 'rubika', 'telegram'] as $channel) {
+            $cfg = (array)($cn[$channel] ?? []);
+            if (!filter_var($cfg['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN)) continue;
+            $enabled++;
+            $dest = notifMessengerChatId($cfg, $route);
+            if (!notifMessengerReady($cn, $channel) || $dest === '') {
+                $complete = false;
+                $errors[] = $channel . ': توکن یا Chat ID مسیر گفتگو تنظیم نشده؛ پیام در صف باقی ماند';
+                continue;
+            }
+            // Never persist a raw token in notification state.
+            $target = hash('sha256', $channel . '|' . (string)$cfg['token'] . '|' . $dest);
+            $one = $cn;
+            foreach (['baleh', 'rubika', 'telegram'] as $other) $one[$other]['enabled'] = ($other === $channel);
+            foreach ((array)($job['chunks'] ?? []) as $index => $text) {
+                if (!empty($st['chat_outbox'][$id]['acked'][$target][$index])) continue;
+                try {
+                    // The outbox owns deduplication. Content-only dedup would suppress
+                    // failed channels after another channel received the same message.
+                    $delivery = notifSend($one, (string)$text, null, [], $route, false);
+                } catch (Throwable $e) {
+                    $delivery = [$channel => 'fail', $channel . '_err' => 'خطای داخلی ارسال پیام'];
+                }
+                $sent = array_merge($sent, $delivery);
+                $errors = array_merge($errors, notifDeliveryErrors($delivery));
+                if (($delivery[$channel] ?? '') !== 'sent') { $complete = false; break; }
+                $msgId = (string)($delivery[$channel . '_msg_id'] ?? '');
+                if ($msgId !== '') msgrSaveMsg($channel === 'baleh' ? 'bale' : $channel, $msgId,
+                    (int)($nc['chat_id'] ?? 0), (int)($nc['shop'] ?? 1), (string)($nc['who'] ?? ''));
+                $st['chat_outbox'][$id]['acked'][$target][$index] = time();
+                if (!notifSaveState($st)) {
+                    $errors[] = 'ذخیره رسید ارسال ناموفق؛ احتمال ارسال مجدد در بررسی بعدی';
+                    return ['sent' => $sent, 'errors' => array_values(array_unique($errors))];
+                }
+                if ($index === 0) {
+                    foreach ((array)($job['media'] ?? []) as $media) {
+                        try { $mr = bslSendMediaToMessenger($channel, (string)$cfg['token'], $dest, (array)$media); }
+                        catch (Throwable $e) { $mr = ['ok' => false]; }
+                        if (empty($mr['ok'])) $errors[] = $channel . ': ارسال پیوست ناموفق بود (متن ارسال شد)';
+                    }
+                }
+            }
+        }
+        if ($enabled === 0) {
+            $complete = false;
+            $errors[] = 'هیچ پیام‌رسان فعالی وجود ندارد؛ پیام‌ها در صف باقی ماندند';
+        }
+        if ($complete) {
+            $chatKey = (string)($job['chat_key'] ?? '');
+            if (isset($st['items'][$chatKey]) && (string)($st['items'][$chatKey]['sig'] ?? '') === (string)($job['sig'] ?? '')) {
+                // Reminder time starts at successful delivery, not the failed attempt.
+                $st['items'][$chatKey]['last'] = time();
+            }
+            unset($st['chat_outbox'][$id]);
+            if (!notifSaveState($st)) {
+                $errors[] = 'ذخیره وضعیت صف اعلان ناموفق';
+                break;
+            }
+        }
+    }
+    return ['sent' => $sent, 'errors' => array_values(array_unique($errors))];
+}
+
 function notifCheckChats(array $cn, bool $test = false, bool $send = true): array {
     $shops = array_values(array_filter(bslAllShops($cn),
         fn($s) => trim((string)($s['token'] ?? '')) !== ''));
@@ -71587,6 +71714,17 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
     $productCustomerBucket = [];
     $individualBucket = [];
     $testPreviewEntries = [];
+    $attemptedOutbox = [];
+    if (!$test && $send) {
+        $attemptedOutbox = array_keys((array)($st['chat_outbox'] ?? []));
+        $retry = notifDrainChatOutbox($cn, $st, $attemptedOutbox);
+        $errors = array_merge($errors, $retry['errors']);
+        $sentTo = $retry['sent'];
+    }
+    $queuedSignatures = [];
+    foreach ((array)($st['chat_outbox'] ?? []) as $queued) {
+        $queuedSignatures[(string)($queued['chat_key'] ?? '') . '|' . (string)($queued['sig'] ?? '')] = true;
+    }
 
     foreach ($shops as $sh) {
         $tk = trim((string)$sh['token']); $vid = (int)$sh['vendor_id'];
@@ -71737,6 +71875,8 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
         $suffix = $multi ? ' — ' . $name : '';
         $shopFound = 0; $shopRemind = 0;
         foreach ($norm as $f) {
+            // Do not enqueue another reminder for an event still awaiting delivery.
+            if (isset($queuedSignatures[$f['key'] . '|' . $f['sig']])) continue;
             $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now, (int)$f['ts'], $since);
             if ($why === '') continue;
             $n = (int)($st['items'][$f['key']]['n'] ?? 1);
@@ -71759,6 +71899,8 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             }
 
             $bucketItem = [
+                'chat_key' => $f['key'], 'sig' => $f['sig'],
+                'delivery_id' => sha1($f['key'] . '|' . $f['sig'] . '|' . $why . '|' . $n),
                 'nc' => $f['nc'],
                 'shop_name' => $name,
                 'msgs' => $body,
@@ -71810,60 +71952,50 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                 $lines[] = $rawSample;
             }
             if ($samples) { $lines[] = '━━━ نمونه:'; $lines[] = mb_substr((string)$samples[0], 0, 900); }
-            $sentTo = notifSend($cn, implode("\n", $lines));
+            $sentTo = notifSend($cn, implode("\n", $lines), null, [], 'chat_customer');
+            $errors = array_merge($errors, notifDeliveryErrors($sentTo));
         }
-        return ['ok' => true, 'found' => $testFound, 'total_seen' => $totalSeen, 'pending' => $pendingNow, /* v10.47 (۶۱) */
+        return ['ok' => !$errors, 'error' => implode('؛ ', $errors), 'found' => $testFound, 'total_seen' => $totalSeen, 'pending' => $pendingNow, /* v10.47 (۶۱) */
                 'sent' => $sentTo, 'sample' => $samples[0] ?? '',
                 'shops' => $shopRows, 'errors' => $errors];
     }
 
-    if ($send && ($singleDigestBucket || $productCustomerBucket || $individualBucket)) {
-        /* Commit all chat signatures before slow messenger/media calls to prevent replay after timeout. */
-        notifSaveState($st);
-    }
-
-    $sendPerConversation = static function (array $bucket, string $mode) use ($cn, $send, &$samples, &$sentTo): void {
-        if (!$bucket) return;
+    /* v10.731: persist immutable payloads WITH the scan signatures, before sending.
+       A timeout can no longer consume a chat event without leaving retry work. */
+    foreach ([[$singleDigestBucket, 'single_digest'], [$productCustomerBucket, 'product_customer'], [$individualBucket, 'individual']] as [$bucket, $mode]) {
         foreach ($bucket as $conv) {
-            $chunks = s4NotifFormatConversationMessage($conv, ['mode' => $mode]);
-            $convMedia = bslChatCollectMedia($conv['nc'], (array)$conv['msgs']);
-            $routeCls = !empty($conv['is_admin']) ? 'chat_vendor' : 'chat_customer';
-            foreach ($chunks as $cIdx => $chunkText) {
-                $samples[] = $chunkText;
-                if (!$send) continue;
-                $chunkMedia = ($cIdx === 0) ? array_slice($convMedia, 0, 5) : [];
-                $sentTo = notifSend($cn, $chunkText, null, $chunkMedia, $routeCls);
-                $_ncCh85 = (int)($conv['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($conv['nc']['shop'] ?? 1); $_ncWh85 = (string)($conv['nc']['who'] ?? '');
-                foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
-                    if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
-                }
-            }
-        }
-    };
-
-    $sendPerConversation($singleDigestBucket, 'single_digest');
-    $sendPerConversation($productCustomerBucket, 'product_customer');
-
-    foreach ($individualBucket as $f) {
-        $msg = !empty($f['is_admin'])
-            ? bslChatAdminMessengerMsg($f['nc'], (string)$f['shop_name'])
-            : bslChatCustomerMessengerMsg($f['nc'], (string)$f['shop_name'], (array)$f['msgs'], (string)$f['why'], (int)$f['remind_n']);
-        $samples[] = $msg;
-        if ($send) {
-            $_media109 = bslChatCollectMedia($f['nc'], (array)$f['msgs']);
-            $sentTo = notifSend($cn, $msg, null, $_media109, !empty($f['is_admin']) ? 'chat_vendor' : 'chat_customer');
-            $_ncCh85 = (int)($f['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($f['nc']['shop'] ?? 1); $_ncWh85 = (string)($f['nc']['who'] ?? '');
-            foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
-                if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
-            }
+            $chunks = $mode === 'individual'
+                ? [!empty($conv['is_admin'])
+                    ? bslChatAdminMessengerMsg($conv['nc'], (string)$conv['shop_name'])
+                    : bslChatCustomerMessengerMsg($conv['nc'], (string)$conv['shop_name'], (array)$conv['msgs'], (string)$conv['why'], (int)$conv['remind_n'])]
+                : s4NotifFormatConversationMessage($conv, ['mode' => $mode]);
+            if (!$chunks) $chunks = [bslChatCustomerMessengerMsg($conv['nc'], (string)$conv['shop_name'], (array)$conv['msgs'])];
+            foreach ($chunks as $chunk) $samples[] = $chunk;
+            if (!$send) continue;
+            $st['chat_outbox'][$conv['delivery_id']] = [
+                'chat_key' => $conv['chat_key'], 'sig' => $conv['sig'],
+                'created_at' => $now, 'nc' => $conv['nc'], 'chunks' => $chunks,
+                'media' => array_slice(bslChatCollectMedia($conv['nc'], (array)$conv['msgs']), 0, 5),
+                'route' => !empty($conv['is_admin']) ? 'chat_vendor' : 'chat_customer',
+                'acked' => [],
+            ];
         }
     }
-
-    notifPrune($st, $now);
-    notifSaveState($st);
-    return ['ok' => true, 'found' => $found, 'reminded' => $reminded, 'pending' => $pendingNow, /* v10.47 (۶۱) */
+    if ($send) {
+        notifPrune($st, $now);
+        if (!notifSaveState($st)) {
+            $errors[] = 'ذخیره صف اعلان پیام‌ها ناموفق؛ دسترسی نوشتن و فضای دیسک را بررسی کنید';
+        } else {
+            $newIds = array_values(array_diff(array_keys((array)($st['chat_outbox'] ?? [])), $attemptedOutbox));
+            $delivery = notifDrainChatOutbox($cn, $st, $newIds);
+            $errors = array_merge($errors, $delivery['errors']);
+            if ($delivery['sent']) $sentTo = $delivery['sent'];
+        }
+    }
+    return ['ok' => !$errors, 'found' => $found, 'reminded' => $reminded, 'pending' => $pendingNow,
             'total_seen' => $totalSeen, 'sent' => $sentTo, 'sample' => $samples[0] ?? '',
-            'shops' => $shopRows, 'errors' => $errors];
+            'queued' => count((array)($st['chat_outbox'] ?? [])),
+            'shops' => $shopRows, 'errors' => array_values(array_unique($errors))];
 }
 
 /**
@@ -79276,6 +79408,7 @@ function bslCheckNotifications(array $cn): array {
         $pending += (int)($r['pending'] ?? 0);
         if ($found['chats'] > 0) $out['chats'] = $found['chats'];
         if (!empty($r['errors'])) $errors = array_merge($errors, (array)$r['errors']);
+        $out['queued_chats'] = (int)($r['queued'] ?? 0);
     }
     if ($wantProd) {
         $r = notifCheckProducts($cn);
@@ -85089,6 +85222,16 @@ function msgrBodyCorrupted(int $code, string $resp): bool {
     IP ثابت ← (اگر هنوز نرسید) proxy.phpِ خودِ سایت.
     v10.81 (95): هر تلاش در لاگِ ارسال ثبت می‌شود و خطایِ نهایی
     فهرستِ تلاش‌ها را دارد. برمی‌گرداند {ok, code, error, via}. */
+/** v10.731: an HTTP-200 error or an HTML proxy page is not a delivered message. */
+function msgrResponseAccepted(int $code, string $response): bool {
+    if ($code < 200 || $code >= 300) return false;
+    $body = json_decode($response, true);
+    if (!is_array($body)) return false;
+    if (array_key_exists('ok', $body)) return $body['ok'] === true;
+    if (isset($body['status'])) return strtoupper((string)$body['status']) === 'OK';
+    if (!empty($body['error']) || !empty($body['error_code'])) return false;
+    return !empty($body['message_id']) || !empty($body['result']['message_id']) || !empty($body['data']['message_id']);
+}
 function msgrSend(string $url, string $postJson): array {
     try {
     $host = (string)(parse_url($url, PHP_URL_HOST) ?? '');
@@ -85165,19 +85308,19 @@ function msgrSend(string $url, string $postJson): array {
             $code = $c3; $resp = $r3; $err = $e3;
         }
     }
-    msgrSendLog($host, ['via' => $via, 'code' => $code, 'ok' => ($code >= 200 && $code < 300),
+    msgrSendLog($host, ['via' => $via, 'code' => $code, 'ok' => msgrResponseAccepted($code, $resp),
         'attempts' => implode(' | ', $attempts), 'resp' => mb_substr((string)$resp, 0, 300)]);
-    if ($code >= 200 && $code < 300) {
+    if (msgrResponseAccepted($code, $resp)) {
         /* v10.85 (99): شناسهٔ پیام برای رجیستری webhook */
         $_jR85 = json_decode((string)$resp, true);
-        $_mId85 = is_array($_jR85) ? (string)(($_jR85['result']['message_id'] ?? ($_jR85['message_id'] ?? ($_jR85['result']['id'] ?? '')))) : '';
+        $_mId85 = is_array($_jR85) ? (string)(($_jR85['result']['message_id'] ?? ($_jR85['message_id'] ?? ($_jR85['data']['message_id'] ?? ($_jR85['result']['id'] ?? ''))))) : '';
         return ['ok' => true, 'code' => $code, 'error' => '', 'via' => $via, 'message_id' => $_mId85];
     }
     $j = json_decode($resp, true);
     $detail = '';
-    if (is_array($j)) $detail = (string)($j['description'] ?? ($j['error'] ?? ($j['message'] ?? ($j['detail'] ?? ''))));
+    if (is_array($j)) $detail = (string)($j['description'] ?? ($j['error'] ?? ($j['message'] ?? ($j['detail'] ?? ($j['status'] ?? '')))));
     if ($detail === '' && is_array($j) && isset($j['error_code'])) $detail = 'error_code=' . $j['error_code'];
-    if ($detail === '') $detail = mb_substr($resp, 0, 200);
+    if ($detail === '') $detail = $code >= 200 && $code < 300 ? 'پاسخ نامعتبر پیام‌رسان؛ تأیید ارسال دریافت نشد' : mb_substr($resp, 0, 200);
     $e = $err !== '' ? 'خطای شبکه: ' . $err : ($detail !== '' ? $detail : 'پاسخی نیامد');
     $tr = count($attempts) > 1 ? ' — تلاش‌ها: ' . mb_substr(implode(' | ', $attempts), 0, 400) : '';
     /* v10.82 (96): راهنمایِ خطای Cloudflare روی مسیرِ غیرمستقیم */
@@ -113999,6 +114142,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.731', t:'📨 رفع گم‌شدن اعلان پیام‌ها، صف ارسال پایدار و گزارش خطای واقعی پیام‌رسان', items:[
+    'ثبت اتمیک متن اعلان و امضای گفتگو در chat_outbox پیش از ارسال؛ خطای شبکه، قطع پردازه یا غیرفعال بودن یادآوری دیگر پیام آماده‌شده را حذف نمی‌کند و صف پیش از دریافت دوبارهٔ فهرست گفتگوها تلاش می‌شود.',
+    'ثبت رسید جداگانه برای هر پیام‌رسان، مقصد و بخش پیام؛ شکست یک پیام‌رسان باعث ارسال تکراری به مقصد موفق یا سرکوب اشتباه تلاش مجدد نمی‌شود. پیوست‌ها همچنان best-effort هستند؛ قطع پردازه بین پذیرش API و ذخیره رسید ممکن است همان بخش را تکرار کند.',
+    'تشخیص خطای API داخل پاسخ HTTP 200 و پاسخ HTML واسط، اصلاح مقصد تست پیام‌ها به Chat ID گفتگو، نمایش خطاهای ارسال و تعداد پیام‌های صف در سلامت اعلان و گزارش کران، و جلوگیری از مصرف وضعیت در پیش‌نمایش بدون ارسال.',
+    'انتقال پروژه از arena/ae9391a9-new به arena/821be8f1-new، تنظیم آپدیتر scraper4 و deploy.php برای شاخهٔ این نشست و مهاجرت pin قدیمی. افزودن تست‌های آفلاین تحویل پیام و راهنمای عیب‌یابی.'
+  ]},
   {v:'10.730', t:'💬 ادغام پیام‌های ارسالی و دریافتی هر غرفه‌دار و هر مشتری منحصربه‌فرد در یک مکالمه', items:[
     'اصلاح مفهوم و رفتار «ادغام پیام» (chat_digest_single / #notifChatDigestSingle و پیام‌های محصولی): هر گفتگوی یکتای (غرفه‌دار ←→ مشتری منحصربه‌فرد) پیام مستقل خودش را دارد و مشتری‌های مختلف یا غرفه‌های مختلف دیگر هرگز داخل یک پیام قاطی نمی‌شوند.',
     'افزودن s4NotifFormatConversationMessage() و ارتقای s4NotifFormatChatBlock(): هنگام روشن بودن ادغام مکالمه، تا ۱۴ پیام اخیر ارسالی غرفه‌دار و دریافتی همان مشتری (به همراه ساعت تهران، نقل‌قول پاسخ و علامت‌گذاری آخرین پیام) به ترتیب زمانی از قدیم به جدید کنار هم می‌آیند و در صورت طولانی شدن گفتگو، پیام‌های قدیمی‌تر کوتاه می‌شوند تا جدیدترین پیام‌ها همیشه حفظ شوند.',
@@ -120523,6 +120672,7 @@ function renderNotifHealth(){
     }else{
       bits.push('هنوز دورِ بررسی‌ای ثبت نشده — منتظرِ اجرای بعدیِ کران‌جاب');
     }
+    if(d.queued_chats>0)bits.push('در صف ارسال مجدد: '+toFa(d.queued_chats));
     if(d.healthy){
       line.style.color='#4ade80';
       line.innerHTML='🩺 <b>همه چیز درست است</b> — '+esc(bits.join(' · '));

@@ -26,6 +26,7 @@
  *     AES-256-GCM در GET حمل می‌شوند تا اسرار نیز وارد URL/log نشوند.
  *   • v3.6: منع cache شدن HTML/JS پنل تا تب قدیمی دوباره POST مسدودشده نفرستد.
  *   • v3.7: cache-busting مسیر API/raw تا self-updater نسخهٔ کهنهٔ CDN را نگیرد.
+ *   • v3.8: انتقال شاخهٔ پیش‌فرض و self-updater به arena/821be8f1-new.
  *
  * نصب: فایل را روی هاست بگذارید و یک‌بار باز کنید (راه‌اندازیِ اولیه).
  */
@@ -38,8 +39,8 @@ if(PHP_SAPI!=='cli'&&!headers_sent()){
     header('Expires: 0');
 }
 
-const DEPLOY_VERSION = '3.7';
-const DEPLOY_BUILD   = '1405-08-09';
+const DEPLOY_VERSION = '3.8';
+const DEPLOY_BUILD   = '2026-11-13';
 const CONFIG_FILE    = __DIR__ . '/.deploy-config.json';
 const BACKUP_DIR     = __DIR__ . '/_backups';
 const LOG_FILE       = __DIR__ . '/.deploy-log.json';
@@ -47,7 +48,7 @@ const MIN_BYTES      = 64;
 const KEEP_BACKUPS   = 20;
 const KEEP_LOGS      = 100;
 const DEPLOY_SELF_REPO   = 'fazilatma/new';
-const DEPLOY_SELF_BRANCH = 'arena/ae9391a9-new';
+const DEPLOY_SELF_BRANCH = 'arena/821be8f1-new';
 const DEPLOY_SELF_PATH   = 'deploy.php';
 
 // ==================================================================
@@ -73,7 +74,7 @@ function cfg_default(): array {
         'password_hash' => '',
         'api_token'     => '',
         'repo'          => 'fazilatma/new',
-        'branch'        => 'arena/ae9391a9-new',
+        'branch'        => 'arena/821be8f1-new',
         'github_token'  => '',
         'jobs'          => [],
         'created'       => time(),
@@ -327,6 +328,7 @@ function wb_secret_files(): array {
         '.deploy-config.json',   // هش رمز پنل و توکن API
         '.versioncheck.json',    // ممکن است توکن گیت‌هاب داشته باشد
         '.deploy-log.json',
+        'last_notification_check.json', // v3.8: queued private conversation payloads
         '.htaccess',
     ];
 }
@@ -339,6 +341,7 @@ function wb_skip_dirs(): array {
 function wb_is_secret(string $rel): bool {
     $base = basename($rel);
     if (in_array($base, wb_secret_files(), true)) return true;
+    if (strpos($base, 'last_notification_check.json.') === 0) return true;
     // فایل‌های موقت صف/وضعیت هم داده‌های کاری‌اند، نه کد
     if (preg_match('~^(bsl|woo|extract)_(queue|products_temp|progress|stop_signal)~', $base)) return true;
     if (preg_match('~^bsl_queue_products_.*\.json$~', $base)) return true;

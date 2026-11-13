@@ -5,6 +5,12 @@
 
 ---
 
+## Scraper4 10.731 — messenger delivery repair
+
+Chat notifications now use a persistent retry queue with per-destination acknowledgements.
+See [release notes](CHANGELOG.md) and [notification troubleshooting](docs/notification-delivery.md).
+The active update branch is `arena/821be8f1-new`.
+
 ## 🛰 حالتِ سروریِ scraper4 (همیشه زنده — دو حالتِ قابل تنظیم)
 
 فایل `scraper4.php` (اپلیکیشن اسکرپر، نسخهٔ 10.403) علاوه بر هاستِ اشتراکی، می‌تواند
