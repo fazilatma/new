@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.723';
+const APP_VERSION = '10.724';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -36770,7 +36770,7 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
 
     $round  = (int)($opts['round'] ?? 0);
     $profile= is_array($opts['profile'] ?? null) ? $opts['profile'] : null;
-    $forcedPrice = max(0, (int)($opts['forced_price_toman'] ?? 0));
+    $forcedPrice = max(0, (int)($opts['forced_price_toman'] ?? ($p['forced_price_toman'] ?? 0)));
     // قیمتِ این غرفه: لایهٔ پروفایل (اگر قیمتِ خام بود) + لایهٔ خودِ غرفه
     $rawP  = (string)($p['price'] ?? ($p['orig_price'] ?? ''));
     if ($forcedPrice > 0) {
@@ -36807,9 +36807,15 @@ function bslUpsertToShop(array $p, array $shop, array $opts): array {
     // v10.20 (۳۳الف): دفترچهٔ نگاشتِ همین غرفه، نه شناسهٔ غرفهٔ پیش‌فرض
     $__mk = bslShopMapKey((string)($p['key'] ?? ''), $shop);
     $doDeep = !array_key_exists('find_deep_scan', $opts) || !empty($opts['find_deep_scan']);
-    $existing = is_array($opts['existing_override'] ?? null)
-        ? $opts['existing_override']
-        : (!empty($opts['skip_find_existing']) ? null : bslFindExisting($tk, $vid, $title, $__mk, $doDeep));
+    $existing = is_array($opts['existing_override'] ?? null) ? $opts['existing_override'] : null;
+    if (!$existing && empty($opts['skip_find_existing'])) {
+        $__targetBslPid = (int)($p['bsl_target_product_id'] ?? 0);
+        $__targetBslVid = (int)($p['bsl_target_vendor_id'] ?? 0);
+        if ($__targetBslPid > 0 && ($__targetBslVid <= 0 || $__targetBslVid === $vid) && function_exists('bslGetProductRow')) {
+            $existing = bslGetProductRow($tk, $vid, $__targetBslPid, 2);
+        }
+        if (!$existing) $existing = bslFindExisting($tk, $vid, $title, $__mk, $doDeep);
+    }
     if (!$existing && $rawTitle !== $title && empty($opts['skip_find_existing']) && !array_key_exists('existing_override',$opts)) {
         $existing = bslFindExisting($tk, $vid, $rawTitle, $__mk, $doDeep);
     }
@@ -53571,6 +53577,46 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'id="notifOrderCancelMsgTemplate"')!==false
         &&strpos($selfSrc,"{v:'10."."723'")!==false
         &&version_compare(APP_VERSION,'10.723','>='));
+    $__ownVids724=s4UrgentOwnVendorIds(['basalam'=>['vendor_id'=>501,'vendors'=>[['vendor_id'=>502]]]] );
+    $__platSnp724=s4UrgentDetectPreferredPlatforms(['title'=>'ساعت هوشمند اسنپ شاپ snp-12345','url'=>'https://snappshop.ir/product/snp-12345']);
+    $__platBsl724=s4UrgentDetectPreferredPlatforms(['title'=>'ادکلن مردانه دیور ساواج ۱۰۰ میل']);
+    $__rows724=[
+        // غرفه خودمان با قیمت غیرواقعی بسیار کم -> باید فیلتر شود
+        ['source_platform'=>'basalam','eligible'=>true,'cost_unit'=>1000,'stock'=>10,'recommended_price'=>1500,'profit'=>['net_profit_unit'=>900000],'candidate'=>['platform'=>'basalam','vendor_id'=>501,'source_product_id'=>9001,'title'=>'ادکلن مردانه دیور ساواج ۱۰۰ میل','score'=>1.0,'exact_match'=>true,'price'=>1000,'stock'=>10]],
+        // رقیب واجد شرایط با سود کمتر
+        ['source_platform'=>'basalam','eligible'=>true,'cost_unit'=>320000,'stock'=>4,'recommended_price'=>450000,'profit'=>['net_profit_unit'=>50000],'candidate'=>['platform'=>'basalam','vendor_id'=>888,'source_product_id'=>7002,'title'=>'ادکلن مردانه دیور ساواج ۱۰۰ میل','score'=>0.95,'exact_match'=>true,'price'=>320000,'stock'=>4]],
+        // رقیب واجد شرایط با سود بیشتر (در سفارش باید این برنده شود)
+        ['source_platform'=>'snappshop','eligible'=>true,'cost_unit'=>280000,'stock'=>3,'recommended_price'=>395000,'profit'=>['net_profit_unit'=>90000],'candidate'=>['platform'=>'snappshop','vendor_id'=>0,'source_product_id'=>8003,'title'=>'ادکلن مردانه دیور ساواج ۱۰۰ میل','score'=>0.94,'exact_match'=>true,'price'=>280000,'stock'=>3,'url'=>'https://snappshop.ir/p/8003']],
+    ];
+    $__bestOrd724=s4UrgentSelectBestProcurementRow($__rows724,['own_vendor_ids'=>$__ownVids724,'own_product_id'=>9001,'sale_unit'=>500000]);
+    $__bestChat724=s4UrgentSelectBestProcurementRow($__rows724,['own_vendor_ids'=>$__ownVids724,'own_product_id'=>9001,'sale_unit'=>0]);
+    $__bestOos724=s4UrgentSelectBestProcurementRow([
+        ['source_platform'=>'snappshop','eligible'=>false,'cost_unit'=>0,'stock'=>0,'candidate'=>['platform'=>'snappshop','title'=>'کرم مرطوب کننده نیوآ','score'=>0.88,'price'=>0,'stock'=>0]],
+        ['source_platform'=>'basalam','eligible'=>false,'cost_unit'=>50000,'stock'=>5,'candidate'=>['platform'=>'basalam','title'=>'محصول نامرتبط','score'=>0.30,'price'=>50000,'stock'=>5]],
+    ],['own_vendor_ids'=>$__ownVids724,'sale_unit'=>0]);
+    $__prep724=s4UrgentBuildProcurementQueueItem(['source_platform'=>'snappshop','platform_label'=>'اسنپ‌شاپ','cost_unit'=>280000,'recommended_price'=>395000,'target_price_toman'=>395000,'in_stock'=>true,'stock'=>3,'own_product_id'=>9001,'own_vendor_id'=>501,'own_title'=>'ادکلن مردانه دیور ساواج','supplier_url'=>'https://snappshop.ir/p/8003','candidate'=>['title'=>'ادکلن دیور','platform'=>'snappshop'],'variations'=>[['attributes'=>['حجم'=>'100ml'],'price'=>280000,'recommended_price'=>395000,'in_stock'=>true,'stock'=>3]]],['product_id'=>9001,'vendor_id'=>501],[]);
+    $__eval724=['ok'=>true,'eligible'=>false,'rows'=>[['index'=>0,'item'=>['title'=>'ادکلن دیور','qty'=>1,'unit_price'=>500000],'qty'=>1,'sale_unit'=>500000,'cost_unit'=>0,'commission_unit'=>75000,'fixed_cost_unit'=>0,'eligible'=>false,'reasons'=>['پروفایل پیدا نشد']]],'summary'=>[]];
+    s4UrgentMergeProcurementRowIntoEval($__eval724,0,['source_platform'=>'snappshop','platform_label'=>'اسنپ‌شاپ','cost_unit'=>280000,'recommended_price'=>395000,'in_stock'=>true,'supplier_url'=>'https://snappshop.ir/p/8003','candidate'=>['url'=>'https://snappshop.ir/p/8003','price'=>280000,'stock'=>3]],['bsl_commission_pct'=>15,'min_margin_pct'=>10,'min_net_profit_toman'=>10000]);
+    $add('10.724','انتخاب خودکار بهترین گزینه از «بررسی واجد شرایط بودن سفارش» و آپدیت باسلام برای محصولات باسلامی/اسنپ‌شاپی خارج از پروفایل',
+        !empty($__ownVids724[501])&&!empty($__ownVids724[502])
+        &&($__platSnp724['primary']??'')==='snappshop'
+        &&($__platBsl724['primary']??'')==='basalam_snappshop'
+        &&((int)($__bestOrd724['candidate']['source_product_id']??0))===8003
+        &&((int)($__bestChat724['candidate']['source_product_id']??0))===8003
+        &&((int)($__bestOos724['_selection_tier']??0))===1
+        &&((int)($__prep724['forced_price_toman']??0))===395000
+        &&((int)($__prep724['bsl_target_product_id']??0))===9001
+        &&($__prep724['_profile_key']??'')==='__procurement__snappshop'
+        &&count((array)($__prep724['variation_combinations']??[]))===1
+        &&!empty($__eval724['eligible'])
+        &&((int)($__eval724['rows'][0]['cost_unit']??0))===280000
+        &&((int)($__eval724['summary']['net_profit']??0))===145000
+        &&strpos($selfSrc,"'basalam_snappshop'")!==false
+        &&strpos($selfSrc,'forced_price_toman')!==false
+        &&strpos($selfSrc,'bsl_target_product_id')!==false
+        &&strpos($selfSrc,'procurement_best')!==false
+        &&strpos($selfSrc,"{v:'10."."724'")!==false
+        &&version_compare(APP_VERSION,'10.724','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -70326,7 +70372,15 @@ function autoReplyRun(array $cn, bool $dry = false, bool $ignoreGrace = false): 
             $row['skip'] = 'پیام متنی نیست (' . $mt . ')'; $out['items'][] = $row; $out['skipped']++; continue;
         }
         if (!$dry && $hasProdInLm && function_exists('s4UrgentHandleChatInquiry')) {
-            s4UrgentHandleChatInquiry($tk, (int)($cn['basalam']['vendor_id'] ?? 0), $nc, $c, [], $cn);
+            $__urgRes = s4UrgentHandleChatInquiry($tk, (int)($cn['basalam']['vendor_id'] ?? 0), $nc, $c, [], $cn);
+            if (!empty($__urgRes['ok']) && !empty($__urgRes['live_product_meta']) && is_array($__urgRes['live_product_meta'])) {
+                $__lp = $__urgRes['live_product_meta'];
+                if ((int)($__lp['price'] ?? 0) > 0) $effProd['price'] = (int)$__lp['price'];
+                if (array_key_exists('in_stock', $__lp)) $effProd['in_stock'] = !empty($__lp['in_stock']);
+                if (trim((string)($__lp['title'] ?? '')) !== '' && trim((string)($effProd['title'] ?? '')) === '') {
+                    $effProd['title'] = trim((string)$__lp['title']);
+                }
+            }
         }
 
         // تأخیر ادب — به ادمین فرصت بده خودش جواب دهد
@@ -79082,7 +79136,7 @@ function s4ProcurementDigikalaDirectProduct(string $dkId,int $timeout=18):?array
     return ['title'=>mb_substr($title,0,240),'price'=>$sell>0?(number_format($sell).' تومان'):'','price_num'=>$sell,'oldPrice'=>'','link'=>$link,'image'=>$img,'sku'=>'dkp-'.$dkId,'source_id'=>(int)$dkId,'stock'=>$inStk?max(1,$bestStock):0,'in_stock'=>$inStk,'vendor_name'=>$seller,'shop_name'=>$seller,'variations'=>$vars,'_direct_dkp_hit'=>true,'_prefetched_dv'=>['variations'=>$vars,'price'=>$bestPrice,'stock'=>$bestStock,'vendor_name'=>$bestSeller]];
 }
 function s4ProcurementDirectSiteSearch(array $item,array $settings,string $platform,int $limit=12):array{$platform=in_array($platform,['digikala','snappshop'],true)?$platform:'';$exactTitle=!empty($item['exact_title']);$allowAround=$exactTitle&&!empty($item['exact_title_around']);$rawTitle=trim((string)($item['title']??''));$query=$exactTitle?s4ProcurementCleanTitleForExact($rawTitle):trim(stripProductCode($rawTitle));if($query==='')$query=$rawTitle;if($platform===''||$query==='')return['ok'=>false,'platform'=>$platform,'results'=>[],'errors'=>['عبارت جستجو یا پلتفرم معتبر نیست']];$products=[];$errors=[];$api='';$via='';$sourceType='direct_site_api';if($platform==='digikala'){$dkIds=[];if(preg_match_all('~dkp-(\d+)~i',$rawTitle.' '.(string)($item['sku']??''),$dkMatches))$dkIds=array_values(array_unique($dkMatches[1]));foreach(array_slice($dkIds,0,3)as$dkId){$directP=s4ProcurementDigikalaDirectProduct($dkId,18);if($directP){$dkK=productKey($directP);if($dkK!=='')$products[$dkK]=$directP;$api='https://api.digikala.com/v2/product/'.$dkId.'/';$via='direct-dkp';}}$isPureDkUrl=preg_match('~^https?://(?:www\.)?digikala\.com/~i',$rawTitle)===1&&!empty($products);$searchUrl='https://www.digikala.com/search/?q='.rawurlencode($query);if(!$isPureDkUrl){$endpoint='v1/search/?q='.rawurlencode($query).'&page=1';$res=digikalaApiHttpRequest($endpoint,22);$api=(string)($res['api_url']??'https://api.digikala.com/'.$endpoint);$via=(string)($res['via']??'');if(!empty($res['ok'])&&is_array($res['data']??null)){$meta=[];$p1=digikalaProductsFromApiPayload($res['data'],$searchUrl,1,$meta);foreach($p1 as$pk=>$pv)if(!isset($products[$pk]))$products[$pk]=$pv;$dkTotalPages=max(1,(int)($meta['total_pages']??1));$dkWantPages=min($dkTotalPages,($exactTitle||$limit>12)?3:2);for($dkPage=2;$dkPage<=$dkWantPages&&count($products)<45;$dkPage++){if(!$exactTitle&&count($products)>=$limit*2)break;$pExtra=digikalaApiHttpRequest('v1/search/?q='.rawurlencode($query).'&page='.$dkPage,18);if(empty($pExtra['ok'])||!is_array($pExtra['data']??null))break;$mExtra=[];$rowsExtra=digikalaProductsFromApiPayload($pExtra['data'],$searchUrl.'&page='.$dkPage,$dkPage,$mExtra);if($rowsExtra){foreach($rowsExtra as$pk=>$pv)if(!isset($products[$pk]))$products[$pk]=$pv;}elseif(empty($mExtra['raw_rows_count']))break;}}if(!$products){$pStock=digikalaApiHttpRequest('v1/search/?q='.rawurlencode($query).'&has_selling_stock=1&page=1',18);if(!empty($pStock['ok'])&&is_array($pStock['data']??null)){$mStock=[];$rowsStock=digikalaProductsFromApiPayload($pStock['data'],$searchUrl.'&has_selling_stock=1',1,$mStock);foreach($rowsStock as$pk=>$pv)if(!isset($products[$pk]))$products[$pk]=$pv;if($products){$api=(string)($pStock['api_url']??$api);$via=(string)($pStock['via']??$via);}}}if(!$products){$page=fetch_html_smart($searchUrl,22);if(!empty($page['ok'])){$used='';$pHtml=(string)($page['html']??'');$pUrl=(string)($page['url']??$searchUrl);$products=parse_list_by_engine((string)($page['html']??''),(string)($page['url']??$searchUrl),[],'auto',$used);if(empty($products)&&function_exists('digikalaProductsFromReaderText'))$products=digikalaProductsFromReaderText($pHtml,$pUrl);if(empty($products)&&preg_match_all('~/product/dkp-(\d+)~i',$pHtml,$htmlDkpM)){foreach(array_slice(array_values(array_unique($htmlDkpM[1])),0,6)as$hDkId){$hDp=s4ProcurementDigikalaDirectProduct($hDkId,10);if($hDp){$hK=productKey($hDp);if($hK!=='')$products[$hK]=$hDp;}}}$api=$searchUrl;$via=(string)($page['mode']??'official-html');$sourceType='direct_site_html';}if(!$products)$errors[]='جستجوی مستقیم سایت دیجی‌کالا: '.(string)($page['error']??$res['error']??'پاسخی دریافت نشد');}}}else{$searchUrl='https://snappshop.ir/search?q='.rawurlencode($query);$route=snappshopParseTargetRoute($searchUrl);$payload=snappshopBuildLandingPayload($route);$res=snappshopApiHttpRequest('POST','search/v1',$payload,22);$api=(string)($res['api_url']??'https://apix.snappshop.ir/search/v1');$via=(string)($res['via']??'');if(!empty($res['ok'])&&is_array($res['data']??null)){$meta=[];$products=snappshopProductsFromApiPayload($res['data'],$searchUrl,1,$meta);}else$errors[]='جستجوی مستقیم API اسنپ‌شاپ: '.(string)($res['error']??'پاسخی دریافت نشد');}$want=s4ProcurementNorm($query);$sale=max(0,(int)($item['unit_price']??$item['sale_unit_price']??0));$qty=max(1,(int)($item['qty']??1));$explicitCommission=max(0,(int)($item['commission']??0));$commPct=(float)($settings['bsl_commission_pct']??15);$targetMargin=s4ProcurementItemTargetMargin($item,$settings);$inq=s4ProcurementItemInquiryShipping($item,$settings);$inquiryMode=$inq['inquiry_mode'];$shippingTotal=(int)$inq['shipping_cost_total'];$shippingUnit=(int)$inq['shipping_cost_unit'];$commission=$explicitCommission>0?$explicitCommission:(int)round($sale*($commPct/100));$fixed=max(0,(int)($settings['fixed_cost_per_item']??0));$out=[];$scanList=$exactTitle?array_values($products):array_slice(array_values($products),0,40);foreach($scanList as$p){if(!is_array($p))continue;$candRawTitle=(string)($p['title']??$p['name']??'');$reason='نتیجهٔ جستجوی مستقیم سایت';if(!empty($p['_direct_dkp_hit'])){$score=1.0;$reason='تطابق مستقیم شناسهٔ دیجی‌کالا';}elseif($exactTitle){$em=s4ProcurementTitleExactMatch($query,$candRawTitle,true,$allowAround);if(empty($em['matched']))continue;$score=(float)$em['score'];$p['_exact_match']=true;$p['_exact_match_mode']=(string)$em['mode'];$reason=$em['mode']==='exact'?'تطابق دقیق عنوان در جستجوی سایت':'تطابق دقیق عنوان با کلمات پیرامون در سایت';}else{$title=s4ProcurementNorm($candRawTitle);$pct=0;similar_text($want,$title,$pct);$wa=array_unique(array_filter(explode(' ',$want)));$pa=array_unique(array_filter(explode(' ',$title)));$union=array_unique(array_merge($wa,$pa));$jac=$union?count(array_intersect($wa,$pa))/count($union):0;$tokenRecall=$wa?count(array_intersect($wa,$pa))/count($wa):0;$score=max($pct/100,$jac);if(strpos($title,$want)!==false||strpos($want,$title)!==false)$score=max($score,.86);elseif($tokenRecall>=0.5)$score=max($score,0.45+0.35*$tokenRecall);if($score<.18)continue;}$explicitOut=(array_key_exists('in_stock',$p)&&!$p['in_stock'])||strpos(mb_strtolower((string)($p['stock']??''),'UTF-8'),'ناموجود')!==false;$p['stock']=$explicitOut?0:max(1,(int)($p['stock']??0));$p['vendor_name']=(string)($p['vendor_name']??$p['shop_name']??($platform==='digikala'?'دیجی‌کالا':'اسنپ‌شاپ'));$p['shop_name']=$p['vendor_name'];$key=productKey($p);$c=s4ProcurementCandidate('@'.$platform,$key,$p,$score,$reason);$cost=max(0,(int)($c['price']??0));$rowShipTotal=$cost>0?$shippingTotal:0;$rowShipUnit=$cost>0?$shippingUnit:0;$effCost=$cost>0?($cost+$rowShipUnit):0;$profit=s4ProcurementProfitMetrics($sale,$cost,$commission,$fixed,$qty,$settings,$explicitCommission,$targetMargin,$rowShipTotal);$stock=max(0,(int)($c['stock']??0));$ev=s4ProcurementEnrichVariations((array)($c['variations']??[]),$sale,$commission,$fixed,$qty,$settings,$cost,$explicitCommission,$targetMargin,$shippingTotal);$c['variations']=$ev['variations'];$c['price_min']=$ev['price_min'];$c['price_max']=$ev['price_max'];$c['price_varies']=$ev['price_varies'];$c['recommended_price_min']=$ev['recommended_price_min'];$c['recommended_price_max']=$ev['recommended_price_max'];$out[]=['ok'=>true,'profile_key'=>'@'.$platform,'profile_name'=>(string)$c['shop_name'],'supplier_url'=>(string)$c['url'],'source_platform'=>$platform,'source_type'=>$sourceType,'api'=>$api,'api_via'=>$via,'searched_live'=>true,'candidate'=>$c,'sale_unit'=>$sale,'cost_unit'=>$cost,'shipping_cost_total'=>$rowShipTotal,'shipping_cost_unit'=>$rowShipUnit,'effective_cost_unit'=>$effCost,'qty'=>$qty,'inquiry_mode'=>$inquiryMode,'commission_unit'=>$commission,'explicit_commission_unit'=>$explicitCommission,'commission_pct'=>$commPct,'fixed_cost_unit'=>$fixed,'profit'=>$profit,'recommended_price'=>(int)($profit['recommended_price']??0),'recommended_margin_pct'=>(float)($profit['recommended_margin_pct']??$targetMargin),'recommended_net_profit_unit'=>(int)($profit['recommended_net_profit_unit']??0),'recommended_commission_pct'=>(float)($profit['recommended_commission_pct']??$commPct),'recommended_price_min'=>$ev['recommended_price_min'],'recommended_price_max'=>$ev['recommended_price_max'],'eligible'=>$cost>0&&$stock>0&&!empty($profit['eligible_profit']),'stock'=>$stock,'variations'=>$ev['variations'],'price_min'=>$ev['price_min'],'price_max'=>$ev['price_max'],'price_varies'=>$ev['price_varies'],'live_detail'=>false,'_raw_product'=>$p];}usort($out,fn($a,$b)=>(int)!empty($b['eligible'])<=>(int)!empty($a['eligible'])?:(float)($b['candidate']['score']??0)<=>(float)($a['candidate']['score']??0)?:(int)($a['cost_unit']??PHP_INT_MAX)<=>(int)($b['cost_unit']??PHP_INT_MAX));$out=array_slice($out,0,max(1,min(20,$limit)));$detailStart=microtime(true);$detailsChecked=0;$detailCap=($platform==='digikala'&&$limit>=20)?12:8;foreach($out as$idx=>&$dRow){$rawP=(array)($dRow['_raw_product']??[]);unset($dRow['_raw_product']);if($idx<$detailCap&&(microtime(true)-$detailStart)<16.0){$dv=is_array($rawP['_prefetched_dv']??null)?$rawP['_prefetched_dv']:s4ProcurementFetchDirectVariants($platform,$rawP,8);if(!empty($dv['variations'])){$detailsChecked++;$dRow['live_detail']=true;$c=$dRow['candidate'];if(!empty($dv['vendor_name'])&&in_array((string)($c['vendor_name']??''),['','دیجی‌کالا','اسنپ‌شاپ'],true)){$c['vendor_name']=(string)$dv['vendor_name'];$c['shop_name']=(string)$dv['vendor_name'];}$ev=s4ProcurementEnrichVariations((array)$dv['variations'],$sale,$commission,$fixed,$qty,$settings,(int)($c['price']??0),$explicitCommission,$targetMargin,$shippingTotal);$c['variations']=$ev['variations'];$c['price_min']=$ev['price_min'];$c['price_max']=$ev['price_max'];$c['price_varies']=$ev['price_varies'];$c['recommended_price_min']=$ev['recommended_price_min'];$c['recommended_price_max']=$ev['recommended_price_max'];$variant=s4ProcurementChooseVariant($c,$item);if($variant&&(int)($variant['price']??0)>0){$c['price']=(int)$variant['price'];$c['selected_variant']=$variant;$dRow['stock']=!empty($variant['in_stock'])?max(1,(int)($variant['stock']??$dRow['stock'])):(int)($variant['stock']??$dRow['stock']);}elseif($variant===null&&(int)($dv['stock']??0)===0&&(int)($dv['price']??0)===0){$dRow['stock']=0;$c['stock']=0;}elseif((int)$c['price']<=0&&$ev['price_min']>0){$c['price']=$ev['price_min'];if(!empty($dv['stock']))$dRow['stock']=(int)$dv['stock'];}elseif($variant===null&&(int)($dv['price']??0)>0&&(int)($dv['price']??0)<(int)$c['price']){$c['price']=(int)$dv['price'];if(!empty($dv['vendor_name'])){$c['vendor_name']=(string)$dv['vendor_name'];$c['shop_name']=(string)$dv['vendor_name'];}}$cost=max(0,(int)$c['price']);if($cost>0){$ev=s4ProcurementEnrichVariations((array)$dv['variations'],$sale,$commission,$fixed,$qty,$settings,$cost,$explicitCommission,$targetMargin,$shippingTotal);$c['variations']=$ev['variations'];$c['recommended_price_min']=$ev['recommended_price_min'];$c['recommended_price_max']=$ev['recommended_price_max'];}$rowShipTotal=$cost>0?$shippingTotal:0;$rowShipUnit=$cost>0?$shippingUnit:0;$effCost=$cost>0?($cost+$rowShipUnit):0;$profit=s4ProcurementProfitMetrics($sale,$cost,$commission,$fixed,$qty,$settings,$explicitCommission,$targetMargin,$rowShipTotal);$dRow['candidate']=$c;$dRow['cost_unit']=$cost;$dRow['shipping_cost_total']=$rowShipTotal;$dRow['shipping_cost_unit']=$rowShipUnit;$dRow['effective_cost_unit']=$effCost;$dRow['qty']=$qty;$dRow['inquiry_mode']=$inquiryMode;$dRow['profit']=$profit;$dRow['recommended_price']=(int)($profit['recommended_price']??0);$dRow['recommended_margin_pct']=(float)($profit['recommended_margin_pct']??$targetMargin);$dRow['recommended_net_profit_unit']=(int)($profit['recommended_net_profit_unit']??0);$dRow['recommended_commission_pct']=(float)($profit['recommended_commission_pct']??$commPct);$dRow['recommended_price_min']=$ev['recommended_price_min'];$dRow['recommended_price_max']=$ev['recommended_price_max'];$dRow['eligible']=$cost>0&&(int)$dRow['stock']>0&&!empty($profit['eligible_profit']);$dRow['variations']=$ev['variations'];$dRow['price_min']=$ev['price_min'];$dRow['price_max']=$ev['price_max'];$dRow['price_varies']=$ev['price_varies'];}}}unset($dRow);return['ok'=>!empty($out),'platform'=>$platform,'source_type'=>$sourceType,'api'=>$api,'api_via'=>$via,'exact_title'=>$exactTitle,'exact_title_around'=>$allowAround,'recommended_target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingTotal,'shipping_cost_unit'=>$shippingUnit,'qty'=>$qty,'profit_rules'=>['min_margin_pct'=>(float)($settings['min_margin_pct']??10),'min_net_profit_toman'=>(int)($settings['min_net_profit_toman']??0)],'catalog_rows'=>count($products),'details_checked'=>max($detailsChecked,count($out)),'eligible_count'=>count(array_filter($out,fn($x)=>!empty($x['eligible']))),'results'=>$out,'errors'=>$errors,'checked_at'=>time()];}
-function s4ProcurementDeepPlatformSearch(array $item,array $settings=[],string $platform='all'):array{$platform=in_array($platform,['all','basalam','digikala','snappshop'],true)?$platform:'all';$exactTitle=!empty($item['exact_title']);$allowAround=$exactTitle&&!empty($item['exact_title_around']);$targetMargin=s4ProcurementItemTargetMargin($item,$settings);$inq=s4ProcurementItemInquiryShipping($item,$settings);$inquiryMode=$inq['inquiry_mode'];$shippingTotal=(int)$inq['shipping_cost_total'];$shippingUnit=(int)$inq['shipping_cost_unit'];$qty=(int)$inq['qty'];$sources=$platform==='all'?['basalam','digikala','snappshop']:[$platform];$results=[];$errors=[];$checked=0;$catalog=0;$sourceStatus=[];foreach($sources as$source){if($source==='basalam'){$r=s4ProcurementBasalamDeepSearch($item,$settings,$exactTitle?5:3,$exactTitle?20:12);$sourceStatus[$source]=['source_type'=>'direct_catalog','ok'=>!empty($r['ok']),'count'=>count((array)($r['results']??[]))];}else{$siteLimit=($source==='digikala'&&$platform==='digikala')?20:($exactTitle?20:12);$r=s4ProcurementDirectSiteSearch($item,$settings,$source,$siteLimit);$sourceStatus[$source]=['source_type'=>(string)($r['source_type']??'direct_site_api'),'ok'=>!empty($r['ok']),'count'=>count((array)($r['results']??[])),'api'=>(string)($r['api']??''),'via'=>(string)($r['api_via']??'')];if(empty($r['results'])){$probe=$item;$probe['platform_filter']=$source;$fallback=s4ProcurementResearchItem($probe,$settings,true,12);$matchedFallback=array_values(array_filter((array)($fallback['results']??[]),fn($x)=>is_array($x)&&!empty($x['candidate'])));if($matchedFallback){$r['results']=$matchedFallback;$r['catalog_rows']=(int)($fallback['profiles_checked']??0);$r['details_checked']=(int)($fallback['profiles_checked']??0);$r['eligible_count']=(int)($fallback['eligible_profiles']??0);$sourceStatus[$source]['fallback']='configured_profiles';}else$errors[]='جستجوی مستقیم '.($source==='digikala'?'دیجی‌کالا':'اسنپ‌شاپ').' نتیجه نداد و پروفایل پشتیبان قابل استفاده‌ای نیز نبود';}}$catalog+=(int)($r['catalog_rows']??0);$checked+=(int)($r['details_checked']??0);foreach((array)($r['results']??[])as$row)if(is_array($row)){$row['source_platform']=$source;$results[]=$row;}$errors=array_merge($errors,(array)($r['errors']??[]));}$hasSalePrice=max(0,(int)($item['unit_price']??$item['sale_unit_price']??0))>0;usort($results,function($a,$b)use($hasSalePrice){$c=(int)!empty($b['eligible'])<=>(int)!empty($a['eligible'])?:(int)!empty($b['candidate'])<=>(int)!empty($a['candidate']);if($c!==0)return $c;if($hasSalePrice)return (int)($b['profit']['net_profit_unit']??PHP_INT_MIN)<=>(int)($a['profit']['net_profit_unit']??PHP_INT_MIN)?:(float)($b['candidate']['score']??0)<=>(float)($a['candidate']['score']??0);return ((int)($b['stock']??0)>0?1:0)<=>((int)($a['stock']??0)>0?1:0)?:(round((float)($b['candidate']['score']??0),2)<=>round((float)($a['candidate']['score']??0),2))?:((int)($a['cost_unit']??PHP_INT_MAX)<=>(int)($b['cost_unit']??PHP_INT_MAX));});return['ok'=>true,'platform'=>$platform,'exact_title'=>$exactTitle,'exact_title_around'=>$allowAround,'recommended_target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingTotal,'shipping_cost_unit'=>$shippingUnit,'qty'=>$qty,'profit_rules'=>['min_margin_pct'=>(float)($settings['min_margin_pct']??10),'min_net_profit_toman'=>(int)($settings['min_net_profit_toman']??0)],'source_status'=>$sourceStatus,'catalog_rows'=>$catalog,'details_checked'=>$checked,'eligible_count'=>count(array_filter($results,fn($x)=>!empty($x['eligible']))),'results'=>$results,'errors'=>array_values(array_unique(array_filter($errors))),'checked_at'=>time(),'version'=>APP_VERSION];}
+function s4ProcurementDeepPlatformSearch(array $item,array $settings=[],string $platform='all'):array{$platform=in_array($platform,['all','basalam','digikala','snappshop','basalam_snappshop'],true)?$platform:'all';$exactTitle=!empty($item['exact_title']);$allowAround=$exactTitle&&!empty($item['exact_title_around']);$targetMargin=s4ProcurementItemTargetMargin($item,$settings);$inq=s4ProcurementItemInquiryShipping($item,$settings);$inquiryMode=$inq['inquiry_mode'];$shippingTotal=(int)$inq['shipping_cost_total'];$shippingUnit=(int)$inq['shipping_cost_unit'];$qty=(int)$inq['qty'];$sources=$platform==='all'?['basalam','digikala','snappshop']:($platform==='basalam_snappshop'?['basalam','snappshop']:[$platform]);$results=[];$errors=[];$checked=0;$catalog=0;$sourceStatus=[];foreach($sources as$source){if($source==='basalam'){$r=s4ProcurementBasalamDeepSearch($item,$settings,$exactTitle?5:3,$exactTitle?20:12);$sourceStatus[$source]=['source_type'=>'direct_catalog','ok'=>!empty($r['ok']),'count'=>count((array)($r['results']??[]))];}else{$siteLimit=($source==='digikala'&&$platform==='digikala')?20:($exactTitle?20:12);$r=s4ProcurementDirectSiteSearch($item,$settings,$source,$siteLimit);$sourceStatus[$source]=['source_type'=>(string)($r['source_type']??'direct_site_api'),'ok'=>!empty($r['ok']),'count'=>count((array)($r['results']??[])),'api'=>(string)($r['api']??''),'via'=>(string)($r['api_via']??'')];if(empty($r['results'])){$probe=$item;$probe['platform_filter']=$source;$fallback=s4ProcurementResearchItem($probe,$settings,true,12);$matchedFallback=array_values(array_filter((array)($fallback['results']??[]),fn($x)=>is_array($x)&&!empty($x['candidate'])));if($matchedFallback){$r['results']=$matchedFallback;$r['catalog_rows']=(int)($fallback['profiles_checked']??0);$r['details_checked']=(int)($fallback['profiles_checked']??0);$r['eligible_count']=(int)($fallback['eligible_profiles']??0);$sourceStatus[$source]['fallback']='configured_profiles';}else$errors[]='جستجوی مستقیم '.($source==='digikala'?'دیجی‌کالا':'اسنپ‌شاپ').' نتیجه نداد و پروفایل پشتیبان قابل استفاده‌ای نیز نبود';}}$catalog+=(int)($r['catalog_rows']??0);$checked+=(int)($r['details_checked']??0);foreach((array)($r['results']??[])as$row)if(is_array($row)){$row['source_platform']=$source;$results[]=$row;}$errors=array_merge($errors,(array)($r['errors']??[]));}$hasSalePrice=max(0,(int)($item['unit_price']??$item['sale_unit_price']??0))>0;usort($results,function($a,$b)use($hasSalePrice){$c=(int)!empty($b['eligible'])<=>(int)!empty($a['eligible'])?:(int)!empty($b['candidate'])<=>(int)!empty($a['candidate']);if($c!==0)return $c;if($hasSalePrice)return (int)($b['profit']['net_profit_unit']??PHP_INT_MIN)<=>(int)($a['profit']['net_profit_unit']??PHP_INT_MIN)?:(float)($b['candidate']['score']??0)<=>(float)($a['candidate']['score']??0);return ((int)($b['stock']??0)>0?1:0)<=>((int)($a['stock']??0)>0?1:0)?:(round((float)($b['candidate']['score']??0),2)<=>round((float)($a['candidate']['score']??0),2))?:((int)($a['cost_unit']??PHP_INT_MAX)<=>(int)($b['cost_unit']??PHP_INT_MAX));});return['ok'=>true,'platform'=>$platform,'exact_title'=>$exactTitle,'exact_title_around'=>$allowAround,'recommended_target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingTotal,'shipping_cost_unit'=>$shippingUnit,'qty'=>$qty,'profit_rules'=>['min_margin_pct'=>(float)($settings['min_margin_pct']??10),'min_net_profit_toman'=>(int)($settings['min_net_profit_toman']??0)],'source_status'=>$sourceStatus,'catalog_rows'=>$catalog,'details_checked'=>$checked,'eligible_count'=>count(array_filter($results,fn($x)=>!empty($x['eligible']))),'results'=>$results,'errors'=>array_values(array_unique(array_filter($errors))),'checked_at'=>time(),'version'=>APP_VERSION];}
 function s4ProcurementResearchItem(array $item,array $settings=[],bool $live=true,int $limit=30):array{$profiles=loadProfiles();$platformFilter=(string)($item['platform_filter']??'all');if(!in_array($platformFilter,['all','basalam','digikala','snappshop'],true))$platformFilter='all';$codes=array_fill_keys(s4ProcurementCodesInText((string)($item['title']??'').' '.(string)($item['sku']??'')),true);$targets=[];foreach($profiles as$key=>$profile){if(!is_array($profile))continue;$profilePlatform=s4ProcurementProfilePlatform($profile);if($platformFilter!=='all'&&$profilePlatform!==$platformFilter)continue;$pc=s4ProcurementCodesInText((string)($profile['titleSuffix']??''));$codeHit=false;foreach($pc as$c)if(isset($codes[$c])){$codeHit=true;break;}if($codes&&!$codeHit)continue;$targets[(string)$key]=$profile;if(count($targets)>=max(1,min(100,$limit)))break;}if(!$targets&&$codes){foreach($profiles as$key=>$profile){if(!is_array($profile))continue;$profilePlatform=s4ProcurementProfilePlatform($profile);if($platformFilter!=='all'&&$profilePlatform!==$platformFilter)continue;$targets[(string)$key]=$profile;if(count($targets)>=max(1,min(100,$limit)))break;}}$sale=max(0,(int)($item['unit_price']??$item['sale_unit_price']??0));$qty=max(1,(int)($item['qty']??1));$explicitCommission=max(0,(int)($item['commission']??0));$commPct=(float)($settings['bsl_commission_pct']??15);$targetMargin=s4ProcurementItemTargetMargin($item,$settings);$inq=s4ProcurementItemInquiryShipping($item,$settings);$inquiryMode=$inq['inquiry_mode'];$shippingTotal=(int)$inq['shipping_cost_total'];$shippingUnit=(int)$inq['shipping_cost_unit'];$commission=$explicitCommission>0?$explicitCommission:(int)round($sale*($commPct/100));$fixed=max(0,(int)($settings['fixed_cost_per_item']??0));$out=[];foreach($targets as$key=>$profile){$r=$live?s4ProcurementProfileLiveSearch($key,$profile,$item):['ok'=>true,'profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),'supplier_url'=>(string)($profile['url']??''),'suffix'=>(string)($profile['titleSuffix']??''),'products_count'=>count((array)($profile['products']??[])),'candidate'=>s4ProcurementProfileCandidateForItem(['profile_key'=>$key,'profile_name'=>(string)($profile['name']??$key),'supplier_url'=>(string)($profile['url']??''),'suffix'=>(string)($profile['titleSuffix']??''),'profile'=>$profile],$item)];$c=(array)($r['candidate']??[]);$cost=max(0,(int)($c['price']??0));$rowShipTotal=$cost>0?$shippingTotal:0;$rowShipUnit=$cost>0?$shippingUnit:0;$effCost=$cost>0?($cost+$rowShipUnit):0;$profit=s4ProcurementProfitMetrics($sale,$cost,$commission,$fixed,$qty,$settings,$explicitCommission,$targetMargin,$rowShipTotal);$variant=is_array($c['selected_variant']??null)?$c['selected_variant']:null;$stock=$variant!==null?(!empty($variant['in_stock'])?max(1,(int)($variant['stock']??0)):(int)($variant['stock']??0)):(int)($c['stock']??0);$ev=s4ProcurementEnrichVariations((array)($c['variations']??[]),$sale,$commission,$fixed,$qty,$settings,$cost,$explicitCommission,$targetMargin,$shippingTotal);if(!empty($r['candidate'])&&is_array($r['candidate'])){$r['candidate']['variations']=$ev['variations'];$r['candidate']['price_min']=$ev['price_min'];$r['candidate']['price_max']=$ev['price_max'];$r['candidate']['price_varies']=$ev['price_varies'];$r['candidate']['recommended_price_min']=$ev['recommended_price_min'];$r['candidate']['recommended_price_max']=$ev['recommended_price_max'];}$r['sale_unit']=$sale;$r['cost_unit']=$cost;$r['shipping_cost_total']=$rowShipTotal;$r['shipping_cost_unit']=$rowShipUnit;$r['effective_cost_unit']=$effCost;$r['qty']=$qty;$r['inquiry_mode']=$inquiryMode;$r['commission_unit']=$commission;$r['explicit_commission_unit']=$explicitCommission;$r['commission_pct']=$commPct;$r['fixed_cost_unit']=$fixed;$r['profit']=$profit;$r['recommended_price']=(int)($profit['recommended_price']??0);$r['recommended_margin_pct']=(float)($profit['recommended_margin_pct']??$targetMargin);$r['recommended_net_profit_unit']=(int)($profit['recommended_net_profit_unit']??0);$r['recommended_commission_pct']=(float)($profit['recommended_commission_pct']??$commPct);$r['recommended_price_min']=$ev['recommended_price_min'];$r['recommended_price_max']=$ev['recommended_price_max'];$r['eligible']=!empty($r['ok'])&&$cost>0&&$stock>0&&!empty($profit['eligible_profit']);$r['stock']=$stock;$r['variations']=$ev['variations'];$r['price_min']=$ev['price_min'];$r['price_max']=$ev['price_max'];$r['price_varies']=$ev['price_varies'];$out[]=$r;}$profilesChecked=count($out);$directDkCount=0;$directDkErrors=[];$hasDkCandidate=false;foreach($out as$xr){if(!empty($xr['candidate'])&&((string)($xr['source_platform']??'')==='digikala'||(string)($xr['candidate']['platform']??'')==='digikala')){$hasDkCandidate=true;break;}}if($live&&($platformFilter==='all'||$platformFilter==='digikala')&&!$hasDkCandidate){$dkLimit=$platformFilter==='digikala'?12:6;$dkDirect=s4ProcurementDirectSiteSearch($item,$settings,'digikala',$dkLimit);foreach((array)($dkDirect['results']??[])as$dkR){if(!is_array($dkR))continue;$dkR['source_platform']='digikala';$out[]=$dkR;$directDkCount++;}$directDkErrors=(array)($dkDirect['errors']??[]);}$exactTitle=!empty($item['exact_title']);$allowAround=$exactTitle&&!empty($item['exact_title_around']);$hasSalePrice=$sale>0;usort($out,function($a,$b)use($hasSalePrice){$c=(int)!empty($b['eligible'])<=>(int)!empty($a['eligible'])?:(int)!empty($b['candidate'])<=>(int)!empty($a['candidate']);if($c!==0)return $c;if($hasSalePrice)return (int)($b['profit']['net_profit_unit']??PHP_INT_MIN)<=>(int)($a['profit']['net_profit_unit']??PHP_INT_MIN)?:(float)($b['candidate']['score']??0)<=>(float)($a['candidate']['score']??0);return ((int)($b['stock']??0)>0?1:0)<=>((int)($a['stock']??0)>0?1:0)?:(round((float)($b['candidate']['score']??0),2)<=>round((float)($a['candidate']['score']??0),2))?:((int)($a['cost_unit']??PHP_INT_MAX)<=>(int)($b['cost_unit']??PHP_INT_MAX));});return['ok'=>true,'platform'=>$platformFilter,'query'=>(string)($item['title']??''),'exact_title'=>$exactTitle,'exact_title_around'=>$allowAround,'recommended_target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingTotal,'shipping_cost_unit'=>$shippingUnit,'qty'=>$qty,'profit_rules'=>['min_margin_pct'=>(float)($settings['min_margin_pct']??10),'min_net_profit_toman'=>(int)($settings['min_net_profit_toman']??0)],'codes'=>array_keys($codes),'profiles_checked'=>$profilesChecked,'direct_digikala_count'=>$directDkCount,'direct_digikala_errors'=>$directDkErrors,'eligible_profiles'=>count(array_filter($out,fn($x)=>!empty($x['eligible']))),'results'=>$out,'checked_at'=>time(),'live'=>$live,'version'=>APP_VERSION];}
 function s4ProcurementProfitMetrics(int $sale,int $cost,int $commission,int $fixed,int $qty,array $settings,int $explicitCommission=-1,float $targetMarginPct=-1.0,int $shippingTotal=0):array{$qty=max(1,$qty);$shippingTotal=$cost>0?max(0,$shippingTotal):0;$shippingUnit=$shippingTotal>0?(int)round($shippingTotal/$qty):0;$effectiveCost=$cost>0?($cost+$shippingUnit):0;$gross=$sale-$effectiveCost;$net=$gross-$commission-$fixed;$netTotal=($sale-$cost-$commission-$fixed)*$qty-$shippingTotal;$margin=$sale>0?(($sale*$qty-$cost*$qty-$shippingTotal-$commission*$qty-$fixed*$qty)/($sale*$qty)*100.0):0;$commPct=(float)($settings['bsl_commission_pct']??15);$tMargin=$targetMarginPct>=0.0?round(max(0.0,min(95.0,$targetMarginPct)),2):s4ProcurementItemTargetMargin([],$settings);$expComm=$explicitCommission>=0?$explicitCommission:(($sale>0&&$commission>0&&$commission===(int)round($sale*($commPct/100.0)))?0:max(0,$commission));$rec=s4ProcurementRecommendedPrice($effectiveCost,$fixed,$commPct,$expComm,$sale,$tMargin);return['gross_profit_unit'=>$gross,'net_profit_unit'=>$net,'net_margin_pct'=>round($margin,2),'net_profit_total'=>$netTotal,'base_cost_unit'=>$cost,'shipping_cost_total'=>$shippingTotal,'shipping_cost_unit'=>$shippingUnit,'effective_cost_unit'=>$effectiveCost,'eligible_profit'=>$sale>0&&$cost>0&&$margin>=(float)($settings['min_margin_pct']??10)&&$net>=(int)($settings['min_net_profit_toman']??0),'recommended_price'=>(int)$rec['recommended_price'],'recommended_margin_pct'=>(float)$rec['target_margin_pct'],'recommended_net_profit_unit'=>(int)$rec['net_profit_unit'],'recommended_commission_pct'=>(float)$rec['effective_commission_pct'],'recommended_commission_amount'=>(int)$rec['commission_amount']];}
 function s4ProcurementEvaluateBslOrder(array $order,?array $settings=null,?array $profilesOverride=null):array{static $profileCache=null;$settings=$settings??s4ProcurementLoad()['settings'];if($profilesOverride!==null){$profiles=$profilesOverride;}else{if($profileCache===null)$profileCache=loadProfiles();$profiles=$profileCache;}$rows=[];$totalSale=0;$totalCost=0;$totalCommission=0;$totalFixed=0;$totalNet=0;$allEligible=true;foreach(array_values((array)($order['items']??[]))as$i=>$item){if(!is_array($item))continue;$item['_order_vendor_id']=(int)($order['vendor_id']??0);$qty=max(1,(int)($item['qty']??1));$sale=max(0,(int)($item['unit_price']??0));$resolved=s4ProcurementResolveProfileBySuffix($item,$profiles);$candidate=!empty($resolved['ok'])?s4ProcurementProfileCandidateForItem($resolved,$item):null;if((empty($resolved['ok'])||!$candidate)&&function_exists('s4UrgentResolveProfileAndProduct')){$ur=s4UrgentResolveProfileAndProduct($item,$profiles);if(!empty($ur['ok'])&&!empty($ur['profile_key'])&&isset($profiles[$ur['profile_key']])){$resolved=['ok'=>true,'profile_key'=>(string)$ur['profile_key'],'profile_name'=>(string)($ur['profile']['name']??$ur['profile_key']),'supplier_url'=>(string)($ur['profile']['url']??''),'suffix'=>(string)($ur['profile']['titleSuffix']??''),'profile'=>$ur['profile'],'hits'=>[]];$candidate=s4ProcurementProfileCandidateForItem($resolved,$item);if(!$candidate&&!empty($ur['product'])&&is_array($ur['product'])){$candidate=s4ProcurementCandidate((string)$ur['profile_key'],(string)($ur['product_key']??''),$ur['product'],(float)($ur['score']??0.92),'تطابق مستقیم محصول/نقشه');}}}$cost=max(0,(int)($candidate['price']??0));$actualCommission=max(0,(int)($item['commission']??$item['commission_amount']??0));$commission=$actualCommission>0?$actualCommission:(int)round($sale*((float)($settings['bsl_commission_pct']??15)/100));$fixed=max(0,(int)($settings['fixed_cost_per_item']??0));$commPct=(float)($settings['bsl_commission_pct']??15);$targetMargin=s4ProcurementItemTargetMargin($item,$settings);$profit=s4ProcurementProfitMetrics($sale,$cost,$commission,$fixed,$qty,$settings,$actualCommission,$targetMargin);$net=(int)$profit['net_profit_unit'];$margin=(float)$profit['net_margin_pct'];$selectedVariant=is_array($candidate['selected_variant']??null)?$candidate['selected_variant']:null;$stockOk=$candidate===null?false:($selectedVariant!==null?((int)($selectedVariant['stock']??0)>0||!array_key_exists('stock',$selectedVariant)):((int)($candidate['stock']??0)>0||!array_key_exists('stock',$candidate)));$eligible=!empty($resolved['ok'])&&$candidate!==null&&$stockOk&&!empty($profit['eligible_profit']);$reasons=[];if(empty($resolved['ok']))$reasons[]=(string)($resolved['error']??'پروفایل پیدا نشد');elseif(!$candidate)$reasons[]='محصول در پروفایل تأمین‌کننده پیدا نشد';if($sale<=0)$reasons[]='قیمت فروش نامعتبر';if($candidate&&$cost<=0)$reasons[]='قیمت خرید نامعتبر';if($candidate&&!$stockOk)$reasons[]='موجودی منبع صفر است';if($margin<(float)($settings['min_margin_pct']??10))$reasons[]='درصد سود خالص کمتر از حداقل';if($net<(int)($settings['min_net_profit_toman']??0))$reasons[]='مبلغ سود خالص کمتر از حداقل';$evRow=s4ProcurementEnrichVariations((array)($candidate['variations']??[]),$sale,$commission,$fixed,$qty,$settings,$cost,$actualCommission,$targetMargin);if(is_array($candidate)){$candidate['variations']=$evRow['variations'];$candidate['price_min']=$evRow['price_min'];$candidate['price_max']=$evRow['price_max'];$candidate['price_varies']=$evRow['price_varies'];$candidate['recommended_price_min']=$evRow['recommended_price_min'];$candidate['recommended_price_max']=$evRow['recommended_price_max'];}$hitsList=array_values((array)($resolved['hits']??[]));foreach($hitsList as&$hitRef){$hc=is_array($hitRef['candidate']??null)?$hitRef['candidate']:null;$hCost=max(0,(int)($hc['price']??0));$hProfit=s4ProcurementProfitMetrics($sale,$hCost,$commission,$fixed,$qty,$settings,$actualCommission,$targetMargin);$hev=s4ProcurementEnrichVariations((array)($hc['variations']??[]),$sale,$commission,$fixed,$qty,$settings,$hCost,$actualCommission,$targetMargin);if(is_array($hc)){$hc['variations']=$hev['variations'];$hc['price_min']=$hev['price_min'];$hc['price_max']=$hev['price_max'];$hc['price_varies']=$hev['price_varies'];$hc['recommended_price_min']=$hev['recommended_price_min'];$hc['recommended_price_max']=$hev['recommended_price_max'];$hitRef['candidate']=$hc;}$hitRef['sale_unit']=$sale;$hitRef['cost_unit']=$hCost;$hitRef['commission_unit']=$commission;$hitRef['explicit_commission_unit']=$actualCommission;$hitRef['commission_pct']=$commPct;$hitRef['fixed_cost_unit']=$fixed;$hitRef['profit']=$hProfit;$hitRef['recommended_price']=(int)($hProfit['recommended_price']??0);$hitRef['recommended_margin_pct']=(float)($hProfit['recommended_margin_pct']??$targetMargin);$hitRef['recommended_net_profit_unit']=(int)($hProfit['recommended_net_profit_unit']??0);$hitRef['recommended_commission_pct']=(float)($hProfit['recommended_commission_pct']??$commPct);$hitRef['recommended_price_min']=$hev['recommended_price_min'];$hitRef['recommended_price_max']=$hev['recommended_price_max'];$hitRef['variations']=$hev['variations'];$hitRef['price_min']=$hev['price_min'];$hitRef['price_max']=$hev['price_max'];$hitRef['price_varies']=$hev['price_varies'];$hitRef['eligible']=$hc!==null&&$hCost>0&&((int)($hc['stock']??0)>0)&&!empty($hProfit['eligible_profit']);}unset($hitRef);$rows[]=['index'=>$i,'item'=>$item,'profile_key'=>(string)($resolved['profile_key']??''),'profile_name'=>(string)($resolved['profile_name']??''),'supplier_url'=>(string)($resolved['supplier_url']??''),'suffix'=>(string)($resolved['suffix']??''),'resolution_hits'=>$hitsList,'candidate'=>$candidate,'variations'=>$evRow['variations'],'price_min'=>$evRow['price_min'],'price_max'=>$evRow['price_max'],'price_varies'=>$evRow['price_varies'],'recommended_price'=>(int)($profit['recommended_price']??0),'recommended_margin_pct'=>(float)($profit['recommended_margin_pct']??$targetMargin),'recommended_net_profit_unit'=>(int)($profit['recommended_net_profit_unit']??0),'recommended_commission_pct'=>(float)($profit['recommended_commission_pct']??$commPct),'recommended_price_min'=>$evRow['recommended_price_min'],'recommended_price_max'=>$evRow['recommended_price_max'],'qty'=>$qty,'sale_unit'=>$sale,'cost_unit'=>$cost,'commission_unit'=>$commission,'explicit_commission_unit'=>$actualCommission,'commission_pct'=>$commPct,'fixed_cost_unit'=>$fixed,'gross_profit_unit'=>$sale-$cost,'net_profit_unit'=>$net,'net_margin_pct'=>round($margin,2),'net_profit_total'=>$net*$qty,'eligible'=>$eligible,'reasons'=>$reasons];$totalSale+=$sale*$qty;$totalCost+=$cost*$qty;$totalCommission+=$commission*$qty;$totalFixed+=$fixed*$qty;$totalNet+=$net*$qty;if(!$eligible)$allEligible=false;}unset($profiles);$overallMargin=$totalSale>0?$totalNet/$totalSale*100:0;return['ok'=>true,'eligible'=>$rows!==[]&&$allEligible,'rows'=>$rows,'summary'=>['sale'=>$totalSale,'source_cost'=>$totalCost,'commission'=>$totalCommission,'fixed_cost'=>$totalFixed,'gross_profit'=>$totalSale-$totalCost,'net_profit'=>$totalNet,'net_margin_pct'=>round($overallMargin,2)],'policy'=>['commission_pct'=>(float)($settings['bsl_commission_pct']??15),'min_margin_pct'=>(float)($settings['min_margin_pct']??10),'min_net_profit_toman'=>(int)($settings['min_net_profit_toman']??0),'auto_dispatch_bsl'=>!empty($settings['auto_dispatch_bsl'])]];}
@@ -79764,7 +79818,7 @@ function s4UrgentSyncSingleProductToBasalam(string $profileKey, array $profile, 
                 if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId) { $targetShop = $sh; break; }
             }
             if (!$targetShop) {
-                foreach ((array)(function_exists('bslEnabledShops') ? bslEnabledShops($cn) : []) as $sh) {
+                foreach ((array)(function_exists('bslAllShops') ? bslAllShops($cn) : []) as $sh) {
                     if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId) { $targetShop = $sh; break; }
                 }
             }
@@ -79870,6 +79924,602 @@ function s4UrgentSyncSingleProductToBasalam(string $profileKey, array $profile, 
         'kicked' => $kicked,
         'in_stock' => !empty($prepared['in_stock']),
         'raw_price' => extractPriceNum($prepared['price'] ?? 0),
+        'shop_price_est' => (!empty($allShops) && function_exists('bslShopPriceForProfile') && extractPriceNum($prepared['price'] ?? 0) > 0)
+            ? (int)(bslShopPriceForProfile($profile, $prepared['price'], $allShops[0], (int)($cn['basalam']['price_round'] ?? $cn['basalam']['round'] ?? 0))['price'] ?? 0)
+            : 0,
+    ];
+}
+
+function s4UrgentOwnVendorIds(array $cn): array {
+    $out = [];
+    $defVid = (int)($cn['basalam']['vendor_id'] ?? 0);
+    if ($defVid > 0) $out[$defVid] = true;
+    foreach ((array)($cn['basalam']['vendors'] ?? []) as $v) {
+        if (!is_array($v)) continue;
+        $vid = (int)($v['vendor_id'] ?? 0);
+        if ($vid > 0) $out[$vid] = true;
+    }
+    if (function_exists('bslAllShops')) {
+        foreach ((array)bslAllShops($cn) as $sh) {
+            if (!is_array($sh)) continue;
+            $vid = (int)($sh['vendor_id'] ?? 0);
+            if ($vid > 0) $out[$vid] = true;
+        }
+    }
+    return $out;
+}
+
+function s4UrgentDetectPreferredPlatforms(array $hint): array {
+    $blob = strtolower(trim(
+        (string)($hint['title'] ?? '') . ' ' .
+        (string)($hint['sku'] ?? '') . ' ' .
+        (string)($hint['url'] ?? '') . ' ' .
+        (string)($hint['product_url'] ?? '') . ' ' .
+        (string)($hint['source_url'] ?? '')
+    ));
+    if ($blob !== '' && preg_match('~snappshop\.ir|\bsnp-\d+|اسنپ[\s‌]*شاپ~ui', $blob)) {
+        return ['primary' => 'snappshop', 'fallbacks' => ['basalam_snappshop', 'all'], 'detected' => 'snappshop'];
+    }
+    if ($blob !== '' && preg_match('~digikala\.com|\bdkp-\d+~i', $blob)) {
+        return ['primary' => 'all', 'fallbacks' => [], 'detected' => 'digikala'];
+    }
+    return ['primary' => 'basalam_snappshop', 'fallbacks' => ['all'], 'detected' => 'basalam_or_snappshop'];
+}
+
+function s4UrgentCleanTitleForProcurement(string $title): string {
+    $t = trim(stripProductCode($title));
+    if ($t === '') $t = trim($title);
+    // حذف عبارات اضافهٔ انتهایی مثل "| ارسال رایگان" در صورت طولانی‌بودن بخش اصلی
+    if (strpos($t, '|') !== false) {
+        $parts = array_values(array_filter(array_map('trim', explode('|', $t))));
+        if ($parts && mb_strlen($parts[0], 'UTF-8') >= 6) $t = $parts[0];
+    }
+    return trim((string)preg_replace('/\s+/u', ' ', $t));
+}
+
+function s4UrgentPlatformLabelFa(string $plat): string {
+    $p = strtolower(trim($plat));
+    if ($p === 'basalam') return 'باسلام';
+    if ($p === 'snappshop') return 'اسنپ‌شاپ';
+    if ($p === 'digikala') return 'دیجی‌کالا';
+    return $p !== '' ? $p : 'بررسی واجد شرایط';
+}
+
+function s4UrgentSelectBestProcurementRow(array $results, array $ctx = []): ?array {
+    $ownVids = is_array($ctx['own_vendor_ids'] ?? null) ? $ctx['own_vendor_ids'] : [];
+    $ownPid = (int)($ctx['own_product_id'] ?? 0);
+    $saleUnit = max(0, (int)($ctx['sale_unit'] ?? 0));
+    $minScore = max(0.20, min(0.95, (float)($ctx['min_score'] ?? 0.56)));
+    $minScoreOos = max($minScore, (float)($ctx['min_score_oos'] ?? 0.72));
+
+    $scored = [];
+    foreach ($results as $row) {
+        if (!is_array($row)) continue;
+        $cand = is_array($row['candidate'] ?? null) ? $row['candidate'] : null;
+        if (!$cand || trim((string)($cand['title'] ?? '')) === '') continue;
+        $plat = strtolower(trim((string)($row['source_platform'] ?? $cand['platform'] ?? '')));
+        $candVid = (int)($cand['vendor_id'] ?? 0);
+        $candPid = (int)($cand['source_product_id'] ?? 0);
+
+        // جلوگیری از انتخابِ خود محصول یا یکی از غرفه‌های خودمان در باسلام به‌عنوان تأمین‌کننده
+        if ($plat === 'basalam') {
+            if ($ownPid > 0 && $candPid === $ownPid) continue;
+            if ($candVid > 0 && !empty($ownVids[$candVid])) continue;
+        }
+
+        $score = (float)($cand['score'] ?? 0.0);
+        $cost = max(0, (int)($row['cost_unit'] ?? $cand['price'] ?? 0));
+        $stock = max(0, (int)($row['stock'] ?? $cand['stock'] ?? 0));
+        $inStock = $stock > 0 && $cost > 0;
+
+        if ($inStock && $score < $minScore) continue;
+        if (!$inStock && $score < $minScoreOos) continue;
+
+        $isEligible = $saleUnit > 0 && !empty($row['eligible']) && $inStock;
+        $tier = $isEligible ? 3 : ($inStock ? 2 : 1);
+        $netProfit = (int)($row['profit']['net_profit_unit'] ?? ($saleUnit > 0 && $cost > 0 ? ($saleUnit - $cost) : 0));
+        $scoreBucket = !empty($cand['exact_match']) ? 10 : (int)floor(min(0.9999, $score) / 0.12);
+
+        $row['_selection_tier'] = $tier;
+        $row['_selection_score_bucket'] = $scoreBucket;
+        $row['_selection_score'] = $score;
+        $row['_selection_cost'] = $cost;
+        $row['_selection_net'] = $netProfit;
+        $row['_selection_in_stock'] = $inStock;
+        $row['_selection_platform'] = $plat;
+        $scored[] = $row;
+    }
+
+    if (!$scored) return null;
+
+    usort($scored, static function (array $a, array $b) use ($saleUnit): int {
+        // ۱) اولویت سطح: ۳ (سودآور و موجود) > ۲ (موجود و قیمت‌دار) > ۱ (ناموجود ولی تطابق دقیق خود کالا)
+        $cmp = (int)$b['_selection_tier'] <=> (int)$a['_selection_tier'];
+        if ($cmp !== 0) return $cmp;
+
+        $tier = (int)$a['_selection_tier'];
+        if ($tier >= 2) {
+            // ۲) در صورت تفاوت معنادار دقت تطابق عنوان (مثلاً دقیق vs مشکوک)، تطابق دقیق‌تر ارجح است
+            $bucketCmp = (int)$b['_selection_score_bucket'] <=> (int)$a['_selection_score_bucket'];
+            if ($bucketCmp !== 0) return $bucketCmp;
+
+            // ۳) بین گزینه‌های هم‌ردیف یک محصول:
+            // در سفارشِ دارای قیمت فروش → بیشترین سود خالص واحد؛ در استعلام بدون قیمت فروش → ارزان‌ترین خرید معتبر
+            if ($saleUnit > 0) {
+                $netCmp = (int)$b['_selection_net'] <=> (int)$a['_selection_net'];
+                if ($netCmp !== 0) return $netCmp;
+            } else {
+                $costCmp = (int)$a['_selection_cost'] <=> (int)$b['_selection_cost'];
+                if ($costCmp !== 0) return $costCmp;
+            }
+        }
+
+        // ۴) تای‌بریکر نهایی: امتیاز تطابق بیشتر سپس قیمت خرید کمتر
+        $sCmp = (float)$b['_selection_score'] <=> (float)$a['_selection_score'];
+        if ($sCmp !== 0) return $sCmp;
+        $ac = (int)$a['_selection_cost'] > 0 ? (int)$a['_selection_cost'] : PHP_INT_MAX;
+        $bc = (int)$b['_selection_cost'] > 0 ? (int)$b['_selection_cost'] : PHP_INT_MAX;
+        return $ac <=> $bc;
+    });
+
+    return $scored[0];
+}
+
+function s4UrgentPickBestProcurementOption(array $itemHint, array $cn, array $procSettings = []): array {
+    $procCfg = $procSettings ?: (function_exists('s4ProcurementLoad') ? (array)(s4ProcurementLoad()['settings'] ?? []) : []);
+    $ownVids = s4UrgentOwnVendorIds($cn);
+    $ownPid = (int)($itemHint['product_id'] ?? $itemHint['bsl_product_id'] ?? 0);
+    $vendorId = (int)($itemHint['vendor_id'] ?? $itemHint['_order_vendor_id'] ?? 0);
+    $tk = trim((string)($cn['basalam']['token'] ?? ''));
+    if ($vendorId > 0 && function_exists('bslAllShops')) {
+        foreach ((array)bslAllShops($cn) as $sh) {
+            if ((int)($sh['vendor_id'] ?? 0) === $vendorId && trim((string)($sh['token'] ?? '')) !== '') {
+                $tk = trim((string)$sh['token']);
+                break;
+            }
+        }
+    }
+
+    $rawTitle = trim((string)($itemHint['title'] ?? $itemHint['product_title'] ?? ''));
+    $ownPriceToman = max(0, (int)($itemHint['own_price_toman'] ?? $itemHint['unit_price'] ?? $itemHint['sale_unit_price'] ?? 0));
+    $ownTitle = $rawTitle;
+    $ownShopRow = null;
+
+    if ($ownPid > 0 && $tk !== '' && ($ownTitle === '' || $ownPriceToman <= 0)) {
+        if ($vendorId > 0 && function_exists('bslGetProductRow')) {
+            $gRow = bslGetProductRow($tk, $vendorId, $ownPid, 2);
+            if (is_array($gRow) && !empty($gRow['id'])) {
+                $ownShopRow = $gRow;
+                $gTitle = trim((string)($gRow['title'] ?? $gRow['name'] ?? ''));
+                if ($ownTitle === '' && $gTitle !== '') $ownTitle = $gTitle;
+                if ($rawTitle === '' && $gTitle !== '') $rawTitle = $gTitle;
+                $rev = is_array($gRow['revision']['data'] ?? null) ? $gRow['revision']['data'] : [];
+                $gpRial = (int)($rev['primary_price'] ?? $gRow['primary_price'] ?? $gRow['price'] ?? 0);
+                if ($ownPriceToman <= 0 && $gpRial > 0) $ownPriceToman = (int)round($gpRial / 10);
+            }
+        }
+        if (($rawTitle === '' || $ownPriceToman <= 0) && function_exists('bslChatLookupProductMeta')) {
+            $meta = bslChatLookupProductMeta($ownPid, $tk, true);
+            if (is_array($meta)) {
+                $mtTitle = trim((string)($meta['title'] ?? ''));
+                if ($rawTitle === '' && $mtTitle !== '') $rawTitle = $mtTitle;
+                if ($ownTitle === '' && $mtTitle !== '') $ownTitle = $mtTitle;
+                if ($ownPriceToman <= 0 && (int)($meta['price'] ?? 0) > 0) $ownPriceToman = (int)$meta['price'];
+            }
+        }
+    }
+
+    $cleanTitle = s4UrgentCleanTitleForProcurement($rawTitle);
+    if ($cleanTitle === '') {
+        $hintUrl = trim((string)($itemHint['url'] ?? $itemHint['product_url'] ?? ''));
+        if ($hintUrl !== '') {
+            $uPath = trim((string)(parse_url($hintUrl, PHP_URL_PATH) ?? ''), '/');
+            if ($uPath !== '') {
+                $segs = array_values(array_filter(explode('/', $uPath)));
+                $lastSeg = (string)($segs ? end($segs) : '');
+                $lastSeg = rawurldecode(preg_replace('/^(?:snp|dkp)-\d+-?/i', '', $lastSeg));
+                $slugTitle = trim((string)preg_replace('/[-_]+/u', ' ', $lastSeg));
+                if ($slugTitle !== '' && !ctype_digit($slugTitle)) $cleanTitle = $slugTitle;
+            }
+        }
+        if ($cleanTitle === '' && trim((string)($itemHint['sku'] ?? '')) !== '') {
+            $cleanTitle = trim((string)$itemHint['sku']);
+        }
+    }
+    if ($cleanTitle === '') {
+        return ['ok' => false, 'error' => 'عنوان محصول برای جستجو در بررسی واجد شرایط موجود نیست', 'own_product_id' => $ownPid];
+    }
+
+    $platPlan = s4UrgentDetectPreferredPlatforms($itemHint + ['title' => $rawTitle]);
+    $saleForEval = max(0, (int)($itemHint['unit_price'] ?? $itemHint['sale_unit_price'] ?? $ownPriceToman));
+    $qty = max(1, (int)($itemHint['qty'] ?? 1));
+    $commission = max(0, (int)($itemHint['commission'] ?? $itemHint['commission_amount'] ?? 0));
+
+    $baseProbe = [
+        'title' => $cleanTitle,
+        'sku' => trim((string)($itemHint['sku'] ?? '')),
+        'variant' => trim((string)($itemHint['variant'] ?? '')),
+        'unit_price' => $saleForEval,
+        'qty' => $qty,
+        'commission' => $commission,
+        'inquiry_mode' => 'question',
+        'shipping_cost' => 0,
+    ];
+
+    $selCtx = [
+        'own_vendor_ids' => $ownVids,
+        'own_product_id' => $ownPid,
+        'sale_unit' => max(0, (int)($itemHint['unit_price'] ?? $itemHint['sale_unit_price'] ?? 0)),
+        'min_score' => 0.56,
+        'min_score_oos' => 0.72,
+    ];
+
+    $attempts = [
+        [$platPlan['primary'], true, true],
+        [$platPlan['primary'], false, false],
+    ];
+    foreach ((array)$platPlan['fallbacks'] as $fbPlat) {
+        $attempts[] = [$fbPlat, false, false];
+    }
+
+    $bestRow = null;
+    $lastResearch = null;
+    $usedPlatform = (string)$platPlan['primary'];
+    foreach ($attempts as [$searchPlat, $exactFlag, $aroundFlag]) {
+        $probe = $baseProbe;
+        $probe['exact_title'] = $exactFlag;
+        $probe['exact_title_around'] = $aroundFlag;
+        $res = s4ProcurementDeepPlatformSearch($probe, $procCfg, $searchPlat);
+        $lastResearch = $res;
+        $picked = s4UrgentSelectBestProcurementRow((array)($res['results'] ?? []), $selCtx);
+        if (is_array($picked)) {
+            $bestRow = $picked;
+            $usedPlatform = $searchPlat;
+            break;
+        }
+    }
+
+    if (!$bestRow || empty($bestRow['candidate'])) {
+        return [
+            'ok' => false,
+            'error' => 'در بخش بررسی واجد شرایط بودن سفارش (باسلام/اسنپ‌شاپ/سایر) گزینهٔ منطبق معتبری یافت نشد',
+            'query' => $cleanTitle,
+            'detected' => $platPlan['detected'],
+            'own_product_id' => $ownPid,
+            'research' => $lastResearch,
+        ];
+    }
+
+    $cand = (array)$bestRow['candidate'];
+    $candPlat = strtolower(trim((string)($bestRow['source_platform'] ?? $cand['platform'] ?? '')));
+    $platLabel = s4UrgentPlatformLabelFa($candPlat);
+    $costUnit = max(0, (int)($bestRow['cost_unit'] ?? $cand['price'] ?? 0));
+    $stockVal = max(0, (int)($bestRow['stock'] ?? $cand['stock'] ?? 0));
+    $inStock = $stockVal > 0 && $costUnit > 0;
+
+    $recPrice = max(0, (int)($bestRow['recommended_price'] ?? 0));
+    if ($recPrice <= 0 && $costUnit > 0) {
+        $targetMargin = function_exists('s4ProcurementItemTargetMargin') ? s4ProcurementItemTargetMargin($baseProbe, $procCfg) : (float)($procCfg['recommended_margin_pct'] ?? 14.0);
+        $commPct = (float)($procCfg['bsl_commission_pct'] ?? 15.0);
+        $fixedCost = max(0, (int)($procCfg['fixed_cost_per_item'] ?? 0));
+        $recArr = function_exists('s4ProcurementRecommendedPrice')
+            ? s4ProcurementRecommendedPrice($costUnit, $fixedCost, $commPct, 0, $saleForEval, $targetMargin)
+            : ['recommended_price' => 0];
+        $recPrice = max(0, (int)($recArr['recommended_price'] ?? 0));
+    }
+
+    $targetShop = null;
+    if (function_exists('bslFanoutShops')) {
+        foreach ((array)bslFanoutShops($cn) as $sh) {
+            if ($vendorId <= 0 || (int)($sh['vendor_id'] ?? 0) === $vendorId) { $targetShop = $sh; break; }
+        }
+        if (!$targetShop) {
+            $allF = bslFanoutShops($cn);
+            if ($allF) $targetShop = $allF[0];
+        }
+    }
+    if ($recPrice <= 0 && $costUnit > 0 && $targetShop && function_exists('bslShopPriceFor')) {
+        $spRes = bslShopPriceFor($costUnit, $targetShop, (int)($cn['basalam']['price_round'] ?? $cn['basalam']['round'] ?? 0));
+        $recPrice = max(0, (int)($spRes['price'] ?? $costUnit));
+    }
+    if ($recPrice <= 0 && $costUnit > 0) {
+        $recPrice = $costUnit;
+    }
+
+    $roundStep = max(0, (int)($cn['basalam']['price_round'] ?? $cn['basalam']['round'] ?? 0));
+    if ($roundStep > 0 && $recPrice > 0) {
+        $recPrice = (int)(ceil($recPrice / $roundStep) * $roundStep);
+    }
+
+    // اگر کالا در منبعِ برتر ناموجود است، قیمت فعلی غرفه حفظ می‌شود تا باسلام موجودی را بدون خطای «قیمت ۰» صفر کند
+    $targetPriceToman = $inStock
+        ? $recPrice
+        : ($recPrice > 0 ? $recPrice : ($ownPriceToman > 0 ? $ownPriceToman : $saleForEval));
+
+    return [
+        'ok' => true,
+        'query' => $cleanTitle,
+        'detected' => $platPlan['detected'],
+        'used_search_platform' => $usedPlatform,
+        'source_platform' => $candPlat,
+        'platform_label' => $platLabel,
+        'best_row' => $bestRow,
+        'candidate' => $cand,
+        'cost_unit' => $costUnit,
+        'recommended_price' => $recPrice,
+        'target_price_toman' => $targetPriceToman,
+        'in_stock' => $inStock,
+        'stock' => $inStock ? max(1, $stockVal) : 0,
+        'own_product_id' => $ownPid,
+        'own_vendor_id' => $vendorId,
+        'own_price_toman' => $ownPriceToman,
+        'own_title' => $ownTitle !== '' ? $ownTitle : $cleanTitle,
+        'own_shop_row' => $ownShopRow,
+        'variations' => is_array($bestRow['variations'] ?? null) ? $bestRow['variations'] : (is_array($cand['variations'] ?? null) ? $cand['variations'] : []),
+        'supplier_url' => (string)($cand['url'] ?? $cand['product_page_url'] ?? ''),
+        'supplier_name' => (string)($cand['vendor_name'] ?? $cand['shop_name'] ?? $platLabel),
+        'score' => (float)($cand['score'] ?? 0.0),
+    ];
+}
+
+function s4UrgentBuildProcurementQueueItem(array $bestOpt, array $itemHint, array $cn): array {
+    $cand = is_array($bestOpt['candidate'] ?? null) ? $bestOpt['candidate'] : [];
+    $plat = strtolower(trim((string)($bestOpt['source_platform'] ?? $cand['platform'] ?? 'basalam')));
+    $virtualProfKey = '__procurement__' . ($plat !== '' ? $plat : 'all');
+    $title = trim((string)($bestOpt['own_title'] ?? $itemHint['title'] ?? $cand['title'] ?? ''));
+    if ($title === '') $title = trim((string)($cand['title'] ?? 'محصول'));
+    $ownPid = (int)($bestOpt['own_product_id'] ?? $itemHint['product_id'] ?? 0);
+    $ownVid = (int)($bestOpt['own_vendor_id'] ?? $itemHint['vendor_id'] ?? 0);
+    $targetPrice = max(0, (int)($bestOpt['target_price_toman'] ?? $bestOpt['recommended_price'] ?? 0));
+    $inStock = !empty($bestOpt['in_stock']);
+    $stock = $inStock ? max(1, (int)($bestOpt['stock'] ?? 1)) : 0;
+    $roundStep = max(0, (int)($cn['basalam']['price_round'] ?? $cn['basalam']['round'] ?? 0));
+
+    $varCombs = [];
+    foreach ((array)($bestOpt['variations'] ?? []) as $v) {
+        if (!is_array($v)) continue;
+        $vRec = max(0, (int)($v['recommended_price'] ?? 0));
+        if ($vRec <= 0 && (int)($v['price'] ?? 0) > 0 && function_exists('s4ProcurementRecommendedPrice')) {
+            $vRec = (int)(s4ProcurementRecommendedPrice((int)$v['price'])['recommended_price'] ?? 0);
+        }
+        if ($vRec <= 0) $vRec = $targetPrice;
+        if ($roundStep > 0 && $vRec > 0) $vRec = (int)(ceil($vRec / $roundStep) * $roundStep);
+        $vIn = !empty($v['in_stock']) && ($vRec > 0 || (int)($v['stock'] ?? 0) > 0);
+        $varCombs[] = [
+            'attributes' => (array)($v['attributes'] ?? ['تنوع' => (string)($v['label'] ?? 'پیش‌فرض')]),
+            'price' => $vRec,
+            'in_stock' => $vIn,
+            'stock' => $vIn ? max(1, (int)($v['stock'] ?? 1)) : 0,
+            'sku' => (string)($v['sku'] ?? ''),
+        ];
+    }
+
+    $img = trim((string)($cand['image'] ?? ''));
+    $keySeed = $ownPid > 0 ? ('bsl_pid_' . $ownPid) : ('proc_' . substr(sha1($title . '|' . ($bestOpt['supplier_url'] ?? '')), 0, 12));
+
+    $prepared = [
+        'key' => $keySeed,
+        '_profile_key' => $virtualProfKey,
+        'title' => $title,
+        'name' => $title,
+        'price' => (string)$targetPrice,
+        'final_price' => (string)$targetPrice,
+        'forced_price_toman' => $targetPrice,
+        'in_stock' => $inStock,
+        'stock' => $stock,
+        'link' => (string)($bestOpt['supplier_url'] ?? ''),
+        'image' => $img,
+        'images' => $img !== '' ? [$img] : [],
+        'bsl_target_product_id' => $ownPid,
+        'bsl_target_vendor_id' => $ownVid,
+    ];
+    if ($varCombs) $prepared['variation_combinations'] = $varCombs;
+    return $prepared;
+}
+
+function s4UrgentSyncProcurementCandidateToBasalam(array $bestOpt, array $itemHint, array $cn, array $opts = []): array {
+    $mode = (string)($opts['mode'] ?? 'urgent_lane_queue'); // urgent_lane_queue | immediate_for_order
+    $trigger = trim((string)($opts['trigger'] ?? 'urgent_procurement'));
+    $preferVendorId = (int)($opts['prefer_vendor_id'] ?? $bestOpt['own_vendor_id'] ?? 0);
+    $labelExtra = trim((string)($opts['label_extra'] ?? ''));
+
+    $prepared = s4UrgentBuildProcurementQueueItem($bestOpt, $itemHint, $cn);
+    $virtualProfKey = (string)$prepared['_profile_key'];
+    $productKey = (string)$prepared['key'];
+    $platLabel = (string)($bestOpt['platform_label'] ?? 'بررسی واجد شرایط');
+    $targetPrice = max(0, (int)($prepared['forced_price_toman'] ?? 0));
+    $allShops = function_exists('bslFanoutShops') ? bslFanoutShops($cn) : [];
+    $now = time();
+
+    if (empty($cn['basalam']['parallel_profile_lanes']) && function_exists('saveConnections')) {
+        $cn['basalam']['parallel_profile_lanes'] = true;
+        saveConnections($cn);
+    }
+
+    $qDir = __DIR__ . '/bsl_queues';
+    if (!is_dir($qDir)) @mkdir($qDir, 0755, true);
+    $safeKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', $virtualProfKey);
+
+    $enqueueRow = static function (array $extraRow = [], string $status = 'waiting', array $doneSummary = []) use (
+        $virtualProfKey, $productKey, $prepared, $platLabel, $qDir, $safeKey, $trigger, $labelExtra, $now
+    ): string {
+        $stamp = date('Ymd_His') . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
+        $qFile = $qDir . '/bsl_urgent_' . $safeKey . '_' . $stamp . '.json';
+        $json = json_encode([$prepared], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if (!is_string($json) || @file_put_contents($qFile, $json, LOCK_EX) !== strlen($json)) return '';
+        $queueId = 'bsl_urg_' . $safeKey . '_' . $now . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
+        $pTitle = mb_substr((string)($prepared['title'] ?? $productKey), 0, 52);
+        $rowTitle = '🔬 ' . $pTitle . ' (' . $platLabel . ')' . ($labelExtra !== '' ? (' · ' . $labelExtra) : '');
+
+        $queue = bslReadQueue();
+        if (!isset($queue['entries']) || !is_array($queue['entries'])) $queue['entries'] = [];
+        foreach ($queue['entries'] as &$be) {
+            if (!is_array($be)) continue;
+            if ((string)($be['status'] ?? '') !== 'waiting') continue;
+            if ((function_exists('bslRowLane') ? bslRowLane($be) : 'fast') !== 'urgent') continue;
+            if ((string)($be['urgent_product_key'] ?? '') === $productKey) {
+                $vTarget = (int)($extraRow['shop_vendor_id'] ?? 0);
+                $vExist = (int)($be['shop_vendor_id'] ?? 0);
+                if ($vTarget === $vExist) {
+                    $be['status'] = 'done';
+                    $be['completion_kind'] = 'superseded';
+                    $be['completion_label'] = 'جایگزین‌شده با استعلام فوری جدیدتر';
+                    $be['done_at'] = $now;
+                }
+            }
+        }
+        unset($be);
+
+        $row = array_merge([
+            'id' => $queueId,
+            'profile_key' => $virtualProfKey,
+            'profile_name' => $rowTitle,
+            'products_file' => $qFile,
+            'total' => 1,
+            'sent' => (int)($doneSummary['sent'] ?? 0),
+            'failed' => (int)($doneSummary['failed'] ?? 0),
+            'done' => (int)($doneSummary['done'] ?? 0),
+            'offset' => $status === 'done' ? 1 : 0,
+            'status' => $status,
+            'created_at' => $now,
+            'started_at' => $status === 'done' ? $now : 0,
+            'done_at' => $status === 'done' ? $now : 0,
+            'paused_at' => 0,
+            'lane' => 'urgent',
+            'profile_lane' => 'urgent',
+            'urgent_single' => true,
+            'urgent_product_key' => $productKey,
+            'urgent_source_mode' => 'procurement_best',
+            'urgent_procurement_platform' => (string)($prepared['_profile_key'] ?? ''),
+            'trigger' => $trigger,
+            'origin' => $trigger,
+            'origin_trigger' => $trigger,
+            'auto_sync' => false,
+            'config' => [
+                'title_suffix' => '',
+                'category_id' => (int)($prepared['bsl_category_id'] ?? 0),
+                'auto_category' => true,
+                'fallback_cat_ids' => [],
+                'delay_ms' => 100,
+                'retry_delay_ms' => 500,
+                'force_all' => true,
+                'only_changed' => false,
+                'profile_lane' => 'urgent',
+            ],
+        ], $extraRow);
+        if ($status === 'done' && !empty($doneSummary['completion_label'])) {
+            $row['completion_label'] = (string)$doneSummary['completion_label'];
+        }
+        $queue['entries'][] = $row;
+        bslWriteQueue($queue);
+        return $queueId;
+    };
+
+    if ($mode === 'immediate_for_order') {
+        $targetShop = null;
+        if ($preferVendorId > 0) {
+            foreach ($allShops as $sh) {
+                if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId) { $targetShop = $sh; break; }
+            }
+            if (!$targetShop) {
+                foreach ((array)(function_exists('bslAllShops') ? bslAllShops($cn) : []) as $sh) {
+                    if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId) { $targetShop = $sh; break; }
+                }
+            }
+        }
+        if (!$targetShop && $allShops) $targetShop = $allShops[0];
+
+        $upsertRes = ['ok' => false, 'error' => 'غرفه باسلام در دسترس نیست'];
+        if ($targetShop) {
+            $upsertOpts = [
+                'forced_price_toman' => $targetPrice,
+                'force_all' => true,
+                'only_changed' => false,
+            ];
+            if (is_array($bestOpt['own_shop_row'] ?? null) && !empty($bestOpt['own_shop_row']['id'])) {
+                $upsertOpts['existing_override'] = $bestOpt['own_shop_row'];
+            }
+            $upsertRes = bslUpsertToShop($prepared, $targetShop, $upsertOpts);
+        }
+
+        $okImmediate = !empty($upsertRes['ok']);
+        $doneQid = $enqueueRow([
+            'shop_vendor_id' => (int)($targetShop['vendor_id'] ?? $preferVendorId),
+            'shop_name' => (string)($targetShop['shop_name'] ?? ''),
+        ], 'done', [
+            'sent' => $okImmediate ? 1 : 0,
+            'failed' => $okImmediate ? 0 : 1,
+            'done' => 1,
+            'completion_label' => ($okImmediate ? '✅ آپدیت فوری از بررسی واجد شرایط (' . $platLabel . ')' : '❌ خطا در آپدیت فوری (' . $platLabel . ')'),
+        ]);
+
+        $queuedOtherIds = [];
+        foreach ($allShops as $osh) {
+            $sv = (int)($osh['vendor_id'] ?? 0);
+            if ($sv > 0 && $sv !== (int)($targetShop['vendor_id'] ?? 0)) {
+                $qidO = $enqueueRow(['shop_vendor_id' => $sv, 'shop_name' => (string)($osh['shop_name'] ?? '')], 'waiting');
+                if ($qidO !== '') $queuedOtherIds[] = $qidO;
+            }
+        }
+        if ($queuedOtherIds && function_exists('bslKickParallelProfileLanes')) bslKickParallelProfileLanes();
+
+        return [
+            'ok' => $okImmediate,
+            'mode' => $mode,
+            'queue_id' => $doneQid,
+            'other_queue_ids' => $queuedOtherIds,
+            'upsert' => $upsertRes,
+            'target_price_toman' => $targetPrice,
+            'cost_unit' => (int)($bestOpt['cost_unit'] ?? 0),
+            'in_stock' => !empty($prepared['in_stock']),
+            'platform_label' => $platLabel,
+            'source_platform' => (string)($bestOpt['source_platform'] ?? ''),
+            'supplier_url' => (string)($bestOpt['supplier_url'] ?? ''),
+        ];
+    }
+
+    $qids = [];
+    if (count($allShops) > 1 && function_exists('bslEffectiveShopSendMode') && bslEffectiveShopSendMode($cn, []) === 'parallel') {
+        $orderedShops = $allShops;
+        if ($preferVendorId > 0) {
+            usort($orderedShops, fn($a, $b) => ((int)($b['vendor_id'] ?? 0) === $preferVendorId ? 1 : 0) <=> ((int)($a['vendor_id'] ?? 0) === $preferVendorId ? 1 : 0));
+        }
+        $groupId = 'urggrp_' . substr(bin2hex(random_bytes(4)), 0, 8);
+        foreach ($orderedShops as $sh) {
+            $qid = $enqueueRow([
+                'shop_vendor_id' => (int)($sh['vendor_id'] ?? 0),
+                'shop_name' => (string)($sh['shop_name'] ?? ''),
+                'shop_fanout_group' => $groupId,
+            ], 'waiting');
+            if ($qid !== '') $qids[] = $qid;
+        }
+    } else {
+        $qid = $enqueueRow([], 'waiting');
+        if ($qid !== '') $qids[] = $qid;
+    }
+
+    $kicked = [];
+    if ($qids) {
+        if (function_exists('bslKickParallelProfileLanes')) {
+            $kicked = bslKickParallelProfileLanes();
+        } elseif (function_exists('fireAndForgetCliQueueBackend')) {
+            fireAndForgetCliQueueBackend($qids[0], 'urgent');
+            $kicked = ['urgent' => $qids[0]];
+        }
+    }
+
+    return [
+        'ok' => !empty($qids),
+        'mode' => 'urgent_lane_queue',
+        'lane' => 'urgent',
+        'queue_ids' => $qids,
+        'kicked' => $kicked,
+        'target_price_toman' => $targetPrice,
+        'cost_unit' => (int)($bestOpt['cost_unit'] ?? 0),
+        'in_stock' => !empty($prepared['in_stock']),
+        'platform_label' => $platLabel,
+        'source_platform' => (string)($bestOpt['source_platform'] ?? ''),
+        'supplier_url' => (string)($bestOpt['supplier_url'] ?? ''),
     ];
 }
 
@@ -79881,10 +80531,11 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
         $messages = bslFetchChatMessages($tk, $chatId, 6);
     }
 
-    // استخراج سرنخ محصول از چت یا تاریخچه پیام‌ها
+    // استخراج سرنخ محصول از چت یا تاریخچه پیام‌ها (شامل باسلام یا اسنپ‌شاپ)
     $prodId = (int)($nc['product_id'] ?? 0);
     $prodTitle = trim((string)($nc['product_title'] ?? ''));
     $prodUrl = trim((string)($nc['product_url'] ?? ''));
+    $skuHint = trim((string)($nc['sku'] ?? ''));
     if (($prodId <= 0 || $prodTitle === '') && $messages && function_exists('bslMsgExtractMedia')) {
         foreach (array_reverse($messages) as $m) {
             if (!is_array($m)) continue;
@@ -79908,17 +80559,22 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
         if ($prodTitle === '' && trim((string)($inf['title'] ?? '')) !== '') $prodTitle = trim((string)$inf['title']);
         if ($prodUrl === '' && trim((string)($inf['url'] ?? '')) !== '') $prodUrl = trim((string)$inf['url']);
     }
-    if ($prodId <= 0 && $prodTitle === '') {
-        $rawTxt = trim((string)($nc['text_raw'] ?? $nc['text'] ?? ''));
-        if ($rawTxt !== '' && preg_match('~basalam\.com/(?:[^/\s]+/product|p)/(\d+)~i', $rawTxt, $um)) {
-            $prodId = (int)$um[1];
-        }
+    $rawTxt = trim((string)($nc['text_raw'] ?? $nc['text'] ?? ''));
+    if ($prodId <= 0 && $rawTxt !== '' && preg_match('~basalam\.com/(?:[^/\s]+/product|p)/(\d+)~i', $rawTxt, $um)) {
+        $prodId = (int)$um[1];
     }
-    if ($prodId <= 0 && $prodTitle === '') {
+    if ($prodUrl === '' && $rawTxt !== '' && preg_match('~(https?://(?:www\.)?snappshop\.ir/[^\s"\'<>]+)~i', $rawTxt, $sm)) {
+        $prodUrl = $sm[1];
+    }
+    if ($skuHint === '' && $rawTxt !== '' && preg_match('~\b(snp-\d+|dkp-\d+)\b~i', $rawTxt, $skm)) {
+        $skuHint = strtolower($skm[1]);
+    }
+    if ($prodId <= 0 && $prodTitle === '' && $prodUrl === '' && $skuHint === '') {
         return ['ok' => false, 'skipped' => 'no_product_hint'];
     }
 
-    $dedupKey = 'c' . $chatId . '_p' . ($prodId > 0 ? $prodId : substr(sha1($prodTitle), 0, 10));
+    $dedupSeed = $prodId > 0 ? (string)$prodId : substr(sha1($prodTitle . '|' . $prodUrl . '|' . $skuHint), 0, 10);
+    $dedupKey = 'c' . $chatId . '_p' . $dedupSeed;
     $now = time();
     $already = false;
     s4UrgentInquiryStateUpdate(function (array &$st) use ($dedupKey, $lastMsgId, $now, &$already) {
@@ -79939,15 +80595,77 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
     $resolved = s4UrgentResolveProfileAndProduct([
         'product_id' => $prodId,
         'title' => $prodTitle,
+        'url' => $prodUrl,
+        'sku' => $skuHint,
         'vendor_id' => $vendorId,
     ], null, $cn);
 
     if (empty($resolved['ok'])) {
+        // Fallback هوشمند به «بررسی واجد شرایط بودن سفارش» برای محصولات باسلامی/اسنپ‌شاپی خارج از پروفایل
+        $bestOpt = s4UrgentPickBestProcurementOption([
+            'product_id' => $prodId,
+            'title' => $prodTitle,
+            'url' => $prodUrl,
+            'sku' => $skuHint,
+            'vendor_id' => $vendorId,
+        ], $cn);
+
+        if (!empty($bestOpt['ok'])) {
+            $sync = s4UrgentSyncProcurementCandidateToBasalam($bestOpt, [
+                'product_id' => $prodId,
+                'title' => $prodTitle,
+                'vendor_id' => $vendorId,
+            ], $cn, [
+                'mode' => 'urgent_lane_queue',
+                'trigger' => 'urgent_chat_procurement',
+                'prefer_vendor_id' => $vendorId,
+                'label_extra' => 'استعلام پیام مشتری #' . $chatId,
+            ]);
+
+            s4UrgentInquiryStateUpdate(function (array &$st) use ($dedupKey, $lastMsgId, $now, $chatId, $prodId, $bestOpt, $sync) {
+                $st['chats'][$dedupKey] = [
+                    'at' => $now,
+                    'msg_id' => $lastMsgId,
+                    'status' => !empty($sync['ok']) ? 'queued_urgent_procurement' : 'error',
+                    'source_mode' => 'procurement_best',
+                    'source_platform' => (string)($bestOpt['source_platform'] ?? ''),
+                    'target_price_toman' => (int)($bestOpt['target_price_toman'] ?? 0),
+                    'in_stock' => !empty($bestOpt['in_stock']),
+                    'queue_ids' => $sync['queue_ids'] ?? [],
+                ];
+                $st['events'][] = [
+                    'at' => $now,
+                    'type' => 'chat_urgent_procurement',
+                    'chat_id' => $chatId,
+                    'product_id' => $prodId,
+                    'title' => mb_substr((string)($bestOpt['own_title'] ?? ''), 0, 80),
+                    'source_platform' => (string)($bestOpt['source_platform'] ?? ''),
+                    'cost_unit' => (int)($bestOpt['cost_unit'] ?? 0),
+                    'target_price_toman' => (int)($bestOpt['target_price_toman'] ?? 0),
+                    'in_stock' => !empty($bestOpt['in_stock']),
+                    'queue_ids' => $sync['queue_ids'] ?? [],
+                ];
+            });
+
+            return [
+                'ok' => !empty($sync['ok']),
+                'source_mode' => 'procurement_best',
+                'best_option' => $bestOpt,
+                'sync' => $sync,
+                'live_product_meta' => [
+                    'title' => (string)($bestOpt['own_title'] ?? $prodTitle),
+                    'price' => (int)($bestOpt['target_price_toman'] ?? 0),
+                    'in_stock' => !empty($bestOpt['in_stock']),
+                    'stock' => (int)($bestOpt['stock'] ?? 0),
+                ],
+            ];
+        }
+
         s4UrgentInquiryStateUpdate(function (array &$st) use ($dedupKey, $now, $chatId, $prodId, $prodTitle) {
             $st['chats'][$dedupKey] = ['at' => $now, 'status' => 'unmatched', 'product_id' => $prodId];
             $st['events'][] = ['at' => $now, 'type' => 'chat_unmatched', 'chat_id' => $chatId, 'product_id' => $prodId, 'title' => mb_substr($prodTitle, 0, 80)];
         });
-        return ['ok' => false, 'skipped' => 'product_not_in_profiles', 'product_id' => $prodId, 'title' => $prodTitle];
+        return ['ok' => false, 'skipped' => 'product_not_in_profiles_or_procurement', 'product_id' => $prodId, 'title' => $prodTitle];
     }
 
     $fresh = s4UrgentFetchSourceProductFresh(
@@ -79994,7 +80712,19 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
         ];
     });
 
-    return ['ok' => !empty($sync['ok']), 'resolved' => $resolved['profile_key'] . '/' . $resolved['product_key'], 'source_mode' => $fresh['source_mode'], 'sync' => $sync];
+    $metaEstPrice = (int)($sync['shop_price_est'] ?? 0);
+    if ($metaEstPrice <= 0) $metaEstPrice = (int)($sync['raw_price'] ?? 0);
+    return [
+        'ok' => !empty($sync['ok']),
+        'resolved' => $resolved['profile_key'] . '/' . $resolved['product_key'],
+        'source_mode' => $fresh['source_mode'],
+        'sync' => $sync,
+        'live_product_meta' => [
+            'title' => (string)($fresh['product']['title'] ?? $prodTitle),
+            'price' => $metaEstPrice,
+            'in_stock' => !empty($sync['in_stock']),
+        ],
+    ];
 }
 
 function s4BslFindOrCreateCustomerChat(string $tk, array $rawParcel, array $orderFull): array {
@@ -80037,6 +80767,85 @@ function s4BslFindOrCreateCustomerChat(string $tk, array $rawParcel, array $orde
     return ['ok' => false, 'error' => 'شناسه گفتگوی مشتری در باسلام یافت نشد'];
 }
 
+function s4UrgentMergeProcurementRowIntoEval(array &$eval, int $rowIndex, array $bestOpt, array $settings = []): void {
+    if (!isset($eval['rows']) || !is_array($eval['rows'])) return;
+    $targetKey = null;
+    foreach ($eval['rows'] as $k => $r) {
+        if ((int)($r['index'] ?? $k) === $rowIndex) { $targetKey = $k; break; }
+    }
+    if ($targetKey === null) return;
+
+    $row = (array)$eval['rows'][$targetKey];
+    $item = (array)($row['item'] ?? []);
+    $qty = max(1, (int)($row['qty'] ?? $item['qty'] ?? 1));
+    $sale = max(0, (int)($row['sale_unit'] ?? $item['unit_price'] ?? 0));
+    $actualComm = max(0, (int)($row['explicit_commission_unit'] ?? $item['commission'] ?? 0));
+    $commPct = (float)($settings['bsl_commission_pct'] ?? $row['commission_pct'] ?? 15);
+    $commission = $actualComm > 0 ? $actualComm : (int)round($sale * ($commPct / 100));
+    $fixed = max(0, (int)($row['fixed_cost_unit'] ?? $settings['fixed_cost_per_item'] ?? 0));
+    $targetMargin = function_exists('s4ProcurementItemTargetMargin')
+        ? s4ProcurementItemTargetMargin($item, $settings)
+        : (float)($settings['recommended_margin_pct'] ?? 14);
+
+    $cand = is_array($bestOpt['candidate'] ?? null) ? $bestOpt['candidate'] : [];
+    $cost = max(0, (int)($bestOpt['cost_unit'] ?? $cand['price'] ?? 0));
+    $inStock = !empty($bestOpt['in_stock']);
+    $platLabel = (string)($bestOpt['platform_label'] ?? 'بررسی واجد شرایط');
+
+    $profit = function_exists('s4ProcurementProfitMetrics')
+        ? s4ProcurementProfitMetrics($sale, $cost, $commission, $fixed, $qty, $settings, $actualComm, $targetMargin)
+        : ['gross_profit_unit' => $sale - $cost, 'net_profit_unit' => $sale - $cost - $commission - $fixed, 'net_margin_pct' => $sale > 0 ? round(($sale - $cost - $commission - $fixed) / $sale * 100, 2) : 0, 'eligible_profit' => false, 'recommended_price' => (int)($bestOpt['recommended_price'] ?? 0)];
+    $net = (int)($profit['net_profit_unit'] ?? 0);
+    $margin = (float)($profit['net_margin_pct'] ?? 0);
+    $eligible = $cost > 0 && $inStock && !empty($profit['eligible_profit']);
+
+    $reasons = [];
+    if ($sale <= 0) $reasons[] = 'قیمت فروش نامعتبر';
+    if ($cost <= 0) $reasons[] = 'قیمت خرید نامعتبر';
+    if (!$inStock) $reasons[] = 'موجودی زنده منبع صفر است';
+    if ($margin < (float)($settings['min_margin_pct'] ?? 10)) $reasons[] = 'درصد سود خالص کمتر از حداقل';
+    if ($net < (int)($settings['min_net_profit_toman'] ?? 0)) $reasons[] = 'مبلغ سود خالص کمتر از حداقل';
+
+    $row['profile_key'] = (string)($cand['profile_key'] ?? ('__procurement__' . ($bestOpt['source_platform'] ?? 'all')));
+    $row['profile_name'] = '🔬 بهترین گزینه: ' . $platLabel;
+    $row['supplier_url'] = (string)($bestOpt['supplier_url'] ?? $cand['url'] ?? '');
+    $row['candidate'] = $cand;
+    $row['via_procurement'] = true;
+    $row['source_platform'] = (string)($bestOpt['source_platform'] ?? '');
+    $row['cost_unit'] = $cost;
+    $row['commission_unit'] = $commission;
+    $row['fixed_cost_unit'] = $fixed;
+    $row['gross_profit_unit'] = $sale - $cost;
+    $row['net_profit_unit'] = $net;
+    $row['net_margin_pct'] = round($margin, 2);
+    $row['net_profit_total'] = $net * $qty;
+    $row['recommended_price'] = max((int)($profit['recommended_price'] ?? 0), (int)($bestOpt['recommended_price'] ?? 0));
+    $row['eligible'] = $eligible;
+    $row['reasons'] = $reasons;
+    $eval['rows'][$targetKey] = $row;
+
+    $totalSale = 0; $totalCost = 0; $totalComm = 0; $totalFixed = 0; $totalNet = 0; $allElig = true;
+    foreach ($eval['rows'] as $rr) {
+        $q = max(1, (int)($rr['qty'] ?? 1));
+        $totalSale += (int)($rr['sale_unit'] ?? 0) * $q;
+        $totalCost += (int)($rr['cost_unit'] ?? 0) * $q;
+        $totalComm += (int)($rr['commission_unit'] ?? 0) * $q;
+        $totalFixed += (int)($rr['fixed_cost_unit'] ?? 0) * $q;
+        $totalNet += (int)($rr['net_profit_unit'] ?? 0) * $q;
+        if (empty($rr['eligible'])) $allElig = false;
+    }
+    $eval['eligible'] = !empty($eval['rows']) && $allElig;
+    $eval['summary'] = [
+        'sale' => $totalSale,
+        'source_cost' => $totalCost,
+        'commission' => $totalComm,
+        'fixed_cost' => $totalFixed,
+        'gross_profit' => $totalSale - $totalCost,
+        'net_profit' => $totalNet,
+        'net_margin_pct' => round($totalSale > 0 ? ($totalNet / $totalSale * 100) : 0, 2),
+    ];
+}
+
 function s4NotifHandleNewBasalamOrder(array $rawParcel, array $np, array $shop, array $cn, bool $send = true): array {
     $ne = is_array($cn['notif_events'] ?? null) ? $cn['notif_events'] : [];
     $wantElig = notifEventOn($ne, 'order_eligibility');
@@ -80064,12 +80873,45 @@ function s4NotifHandleNewBasalamOrder(array $rawParcel, array $np, array $shop, 
     if ($alreadyProcessed) return ['ok' => true, 'skipped' => 'already_processed'];
 
     $profiles = loadProfiles();
+    $procCfg = function_exists('s4ProcurementLoad') ? (array)(s4ProcurementLoad()['settings'] ?? []) : [];
     $itemRefreshLogs = [];
+    $procFallbacks = [];
     foreach ((array)($orderFull['items'] ?? []) as $idx => $it) {
         if (!is_array($it)) continue;
         $res = s4UrgentResolveProfileAndProduct($it + ['vendor_id' => $vid], $profiles, $cn);
         if (empty($res['ok'])) {
-            $itemRefreshLogs[$idx] = ['matched' => false, 'source_mode' => 'unmatched', 'synced' => false, 'note' => 'در پروفایل‌ها پیدا نشد'];
+            // محصول باسلامی یا اسنپ‌شاپی در هیچ پروفایلی نیست → انتخاب بهترین گزینه از «بررسی واجد شرایط بودن سفارش»
+            $bestOpt = s4UrgentPickBestProcurementOption($it + ['vendor_id' => $vid], $cn, $procCfg);
+            if (!empty($bestOpt['ok'])) {
+                $sync = s4UrgentSyncProcurementCandidateToBasalam($bestOpt, $it + ['vendor_id' => $vid], $cn, [
+                    'mode' => 'immediate_for_order',
+                    'trigger' => 'urgent_order_procurement',
+                    'prefer_vendor_id' => $vid,
+                    'label_extra' => 'سفارش #' . $displayOrd,
+                ]);
+                $procFallbacks[$idx] = $bestOpt;
+                $itemRefreshLogs[$idx] = [
+                    'matched' => true,
+                    'via_procurement' => true,
+                    'source_mode' => 'procurement_best',
+                    'source_platform' => (string)($bestOpt['source_platform'] ?? ''),
+                    'platform_label' => (string)($bestOpt['platform_label'] ?? ''),
+                    'source_url' => (string)($bestOpt['supplier_url'] ?? ''),
+                    'live_ok' => true,
+                    'synced' => !empty($sync['ok']),
+                    'sync_err' => !empty($sync['ok']) ? '' : (string)($sync['upsert']['error'] ?? ''),
+                    'raw_price' => (int)($bestOpt['cost_unit'] ?? 0),
+                    'shop_price' => (int)($bestOpt['target_price_toman'] ?? 0),
+                    'in_stock' => !empty($bestOpt['in_stock']),
+                ];
+            } else {
+                $itemRefreshLogs[$idx] = [
+                    'matched' => false,
+                    'source_mode' => 'unmatched',
+                    'synced' => false,
+                    'note' => (string)($bestOpt['error'] ?? 'در پروفایل‌ها و بررسی واجد شرایط پیدا نشد'),
+                ];
+            }
             continue;
         }
         $pKey = (string)$res['profile_key'];
@@ -80109,10 +80951,12 @@ function s4NotifHandleNewBasalamOrder(array $rawParcel, array $np, array $shop, 
     }
 
     // ارزیابی کامل واجد شرایط بودن سفارش پس از آپدیت محصول در باسلام
-    $procCfg = function_exists('s4ProcurementLoad') ? (array)(s4ProcurementLoad()['settings'] ?? []) : [];
     $eval = function_exists('s4ProcurementEvaluateBslOrder')
         ? s4ProcurementEvaluateBslOrder($orderFull, $procCfg, $profiles)
         : ['ok' => false, 'eligible' => false, 'rows' => [], 'summary' => []];
+    foreach ($procFallbacks as $fbIdx => $fbOpt) {
+        s4UrgentMergeProcurementRowIntoEval($eval, (int)$fbIdx, (array)$fbOpt, $procCfg);
+    }
 
     $hasOos = false;
     $hasPriceLoss = false;
@@ -80183,7 +81027,9 @@ function s4NotifHandleNewBasalamOrder(array $rawParcel, array $np, array $shop, 
             $netU = (int)($r['net_profit_unit'] ?? 0);
             $marg = (float)($r['net_margin_pct'] ?? 0);
             $rLog = $itemRefreshLogs[$r['index'] ?? $rIdx] ?? [];
-            $srcTag = !empty($rLog['live_ok']) ? '🌐 زنده از مبدأ' : (!empty($rLog['matched']) ? '📁 از پروفایل (fallback)' : '❓ نامشخص در پروفایل');
+            $srcTag = !empty($rLog['via_procurement'])
+                ? ('🔬 بهترین گزینه بررسی واجد شرایط (' . ($rLog['platform_label'] !== '' ? $rLog['platform_label'] : 'منبع آزاد') . ')')
+                : (!empty($rLog['live_ok']) ? '🌐 زنده از مبدأ' : (!empty($rLog['matched']) ? '📁 از پروفایل (fallback)' : '❓ نامشخص در پروفایل'));
             $updTag = !empty($rLog['synced']) ? ('✅ باسلام آپدیت شد' . ((int)($rLog['shop_price'] ?? 0) > 0 ? (' ← ' . number_format((int)$rLog['shop_price']) . ' ت') : '')) : (!empty($rLog['matched']) ? ('⚠️ آپدیت باسلام: ' . ($rLog['sync_err'] !== '' ? $rLog['sync_err'] : 'ناموفق')) : '');
 
             $lines[] = ($r['eligible'] ? '🟢 ' : '🔴 ') . $iTitle . ($qty > 1 ? (' ×' . $qty) : '');
@@ -80243,6 +81089,7 @@ if (isset($_GET['urgent_product_sync']) || isset($_POST['urgent_product_sync']))
         'product_id' => (int)($_POST['product_id'] ?? 0),
         'title' => trim((string)($_POST['title'] ?? '')),
         'sku' => trim((string)($_POST['sku'] ?? '')),
+        'url' => trim((string)($_POST['url'] ?? '')),
         'vendor_id' => (int)($_POST['vendor_id'] ?? 0),
     ];
     $profiles = loadProfiles();
@@ -80252,6 +81099,17 @@ if (isset($_GET['urgent_product_sync']) || isset($_POST['urgent_product_sync']))
         $resolved = s4UrgentResolveProfileAndProduct($hint, $profiles, $cn);
     }
     if (empty($resolved['ok'])) {
+        $bestOpt = s4UrgentPickBestProcurementOption($hint, $cn);
+        if (!empty($bestOpt['ok'])) {
+            $sync = s4UrgentSyncProcurementCandidateToBasalam($bestOpt, $hint, $cn, [
+                'mode' => trim((string)($_POST['mode'] ?? 'urgent_lane_queue')),
+                'trigger' => trim((string)($_POST['trigger'] ?? 'urgent_manual_procurement')),
+                'prefer_vendor_id' => (int)$hint['vendor_id'],
+                'label_extra' => trim((string)($_POST['label'] ?? 'استعلام فوری از بررسی واجد شرایط')),
+            ]);
+            echo json_encode(['ok' => !empty($sync['ok']), 'source_mode' => 'procurement_best', 'best_option' => $bestOpt, 'sync' => $sync], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+            exit;
+        }
         http_response_code(404);
         echo json_encode($resolved, JSON_UNESCAPED_UNICODE);
         exit;
@@ -89660,7 +90518,7 @@ if($__singleActiveFast&&$i>=$__singleNextWin&&function_exists('bslParallelLookup
         }
     }
 }
-$rawPTitle=trim($p['title']??$p['name']??'');$pKey=$p['key']??'';$n=$i+1;$pn=s4ResolveQueueItemProfilePriceToman($p,is_array($GLOBALS['_bslActiveProfileSnapshot']??null)?$GLOBALS['_bslActiveProfileSnapshot']:null);
+$rawPTitle=trim($p['title']??$p['name']??'');$pKey=$p['key']??'';$n=$i+1;$__forcedPn=max(0,(int)($p['forced_price_toman']??0));$pn=$__forcedPn>0?$__forcedPn:s4ResolveQueueItemProfilePriceToman($p,is_array($GLOBALS['_bslActiveProfileSnapshot']??null)?$GLOBALS['_bslActiveProfileSnapshot']:null);
 $_rowBarcodeVal=bslExtractValidBarcode($p);
 $pTitle=$rawPTitle!==''?bslSanitizeModerationTitle($rawPTitle,$_rowBarcodeVal!==''):'';
 if($pTitle==='')$pTitle=$rawPTitle;
@@ -89672,7 +90530,7 @@ bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,3
 }
 /* v8.87: تعدیل قیمت مخصوص باسلام — قرینهٔ همان چیزی که برای ووکامرس هست.
    قبل از تبدیل تومان→ریال اعمال می‌شود تا درصد روی عدد نمایشیِ کاربر باشد. */
-if(($bslPriceCfg['mode']??'none')!=='none'&&$pn>0)$pn=destAdjustPrice($pn,$bslPriceCfg);
+if($__forcedPn<=0&&($bslPriceCfg['mode']??'none')!=='none'&&$pn>0)$pn=destAdjustPrice($pn,$bslPriceCfg);
 
 $GLOBALS['_currentProductLink']=$p['link']??'';
 
@@ -89716,9 +90574,15 @@ if(!bslIsRealisticPriceRial($pn)){$fail++;bslShopStatBumpDefault('f');$bslFailed
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,40),"[{$n}/{$total}] ".mb_substr($pTitle,0,50),['phase'=>'send','phase_label'=>'ارسال محصولات','phase_current'=>$i,'phase_total'=>$total,'phase_pct'=>(int)floor($i*100/max(1,$total))]);
 
 $exBsl=null;$nTitle=bslNormalizeTitle($pTitle);$lookupSource='none';
+$__rowBslPid=(int)($p['bsl_target_product_id']??0);$__rowBslVid=(int)($p['bsl_target_vendor_id']??0);
+if($__rowBslPid>0&&($__rowBslVid<=0||$__rowBslVid===(int)$vid)&&function_exists('bslGetProductRow')){
+    $__directRow=bslGetProductRow($tk,(int)$vid,$__rowBslPid,2);
+    if(is_array($__directRow)&&!empty($__directRow['id'])){$exBsl=$__directRow;$lookupSource='direct_product_id';}
+}
 /* v10.510: the per-request matrix projection is the primary product source;
    unresolved rows use targeted lookup only, never a separate catalog rebuild. */
-if(isset($bslExisting[$pTitle])){$exBsl=$bslExisting[$pTitle];$lookupSource='memory_title';}
+if($exBsl){}
+elseif(isset($bslExisting[$pTitle])){$exBsl=$bslExisting[$pTitle];$lookupSource='memory_title';}
 elseif($rawPTitle!==$pTitle&&isset($bslExisting[$rawPTitle])){$exBsl=$bslExisting[$rawPTitle];$lookupSource='memory_title';}
 elseif(isset($bslExistingNorm[$nTitle])){$exBsl=$bslExistingNorm[$nTitle];$lookupSource='memory_norm';}
 else{
@@ -110015,6 +110879,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.724', t:'🔬 انتخاب بهترین گزینه از «بررسی واجد شرایط بودن سفارش» و آپدیت خودکار باسلام برای محصولات باسلامی/اسنپ‌شاپی خارج از پروفایل در چت و سفارش جدید', items:[
+    'هنگامی که پیام مشتری در چت باسلام یا سفارش جدیدی برای محصولی باسلامی یا اسنپ‌شاپی برسد که در هیچ‌یک از پروفایل‌ها ثبت نشده باشد، سیستم به‌طور خودکار در بخش «بررسی واجد شرایط بودن سفارش» (s4UrgentPickBestProcurementOption و پشتیبانی از حالت ترکیبی basalam_snappshop و fallback به کل منابع) جستجو می‌کند و بهترین گزینهٔ تأمین را انتخاب می‌کند.',
+    'انتخاب بهترین گزینه (s4UrgentSelectBestProcurementRow) با فیلتر ضد تطابق خودی روی غرفه‌های خودمان در باسلام، آستانهٔ دقت تطابق عنوان و اولویت سه‌سطحی (۱. موجود و واجد شرایط حداقل سود با بالاترین سود خالص؛ ۲. موجود با کمترین قیمت خرید/بیشترین سود؛ ۳. در صورت ناموجودی قطعیِ همان کالا، صفر کردن موجودی در باسلام با حفظ قیمت فعلی غرفه) انجام می‌شود.',
+    'آپدیت قیمت و موجودی محصول در باسلام بر اساس قیمت فروش پیشنهادی محاسبه‌شدهٔ همان گزینه (forced_price_toman + رُند کردن غرفه بدون اعمال ضرایب مضاعف) و شناسایی مستقیم محصول هدف در باسلام (bsl_target_product_id) در کل مسیر bslUpsertToShop، صف لین ۳ (urgent) و bsl_backend پیاده‌سازی شد.',
+    'در چت باسلام، نتیجه در کارت لین ۳ با برچسب «🔬 بهترین گزینه بررسی واجد شرایط» صف و همگام‌سازی شده و متادیتای زنده بلافاصله در پاسخ خودکار و هوش مصنوعی (autoReplyRun) اعمال می‌شود؛ و در سفارش جدید، محصول فوراً آپدیت شده و همراه با سود، لینک تأمین‌کننده، اعلان بخش سفارشات و پیام لغو احتمالی به مشتری ارزیابی می‌شود.'
+  ]},
   {v:'10.723', t:'⚡ تفکیک کامل ۴ لین موازی باسلام، همگام‌سازی فوری استعلام چت/سفارش جدید، بررسی واجد شرایط بودن سفارش و پیام لغو قابل‌ویرایش به مشتری', items:[
     'به‌روزرسانی و ارسال باسلام به ۴ لین فیزیکی کاملاً مجزا با فایل پیشرفت، فایل محصولات و قفل مستقل ارتقا یافت: لین ۱ (سریع)، لین ۲ (جزئیات کامل)، لین ۳ (⚡ استعلام چت و سفارش فوری با بالاترین اولویت)، و لین ۴ (⚖️ برابر‌سازی جدول شروع).',
     'هر زمان مشتری در چت باسلام روی «گفتگو با غرفه‌دار» محصولی کلیک کند یا پیامی بپرسد، یا سفارش جدیدی در باسلام ثبت شود، محصول فوراً از سایت مبدأ (یا پشتیبان پروفایل) و با ضرایب پروفایل و غرفه در باسلام آپدیت می‌شود (لین ۳)، به‌طوری‌که پاسخ خودکار/هوش مصنوعی پس از آن قیمت و موجودی واقعی را ببیند و سایر لین‌ها نیز در لحظهٔ اجرای لین ۳ با بودجهٔ تطبیقی و مکث همکاری‌گر (yield) حق تقدم را می‌دهند.',
@@ -128206,7 +129076,7 @@ function renderBslQueueLane(q,lane){
         const laneChip=lane==='detail'
             ?'<div style="margin:5px 0;color:#c4b5fd;font-size:10px;font-weight:800">🧾 لین ۲ · ارسال با جزئیات کامل</div>'
             :(lane==='urgent'
-                ?'<div style="margin:5px 0;color:#fde68a;font-size:10px;font-weight:800">⚡ لین ۳ · استعلام چت/سفارش فوری'+(e.urgent_source_mode==='live'?' · 🌐 زنده از مبدأ':(e.urgent_source_mode?' · 📁 پشتیبان پروفایل':''))+'</div>'
+                ?'<div style="margin:5px 0;color:#fde68a;font-size:10px;font-weight:800">⚡ لین ۳ · استعلام چت/سفارش فوری'+(e.urgent_source_mode==='live'?' · 🌐 زنده از مبدأ':(e.urgent_source_mode==='procurement_best'?' · 🔬 بهترین گزینه بررسی واجد شرایط':(e.urgent_source_mode?' · 📁 پشتیبان پروفایل':'')))+'</div>'
                 :(lane==='reconcile'
                     ?'<div style="margin:5px 0;color:#6ee7b7;font-size:10px;font-weight:800">⚖️ لین ۴ · برابر‌سازی جدول شروع</div>'
                     :'<div style="margin:5px 0;color:#7dd3fc;font-size:10px;font-weight:800">⚡ لین ۱ · بدون جزئیات · فقط عکس فهرست</div>'));
