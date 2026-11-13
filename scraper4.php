@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.729';
+const APP_VERSION = '10.730';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -53883,6 +53883,53 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"fetch(req,{cache:'no-store'")!==false
         &&strpos($selfSrc,"{v:'10."."729'")!==false
         &&version_compare(APP_VERSION,'10.729','>='));
+    $__convEntryA730=[
+        'nc'=>['chat_id'=>9101,'shop'=>1,'who'=>'مریم','unseen'=>1,'customer_id'=>501],
+        'shop_name'=>'غرفه اول','is_admin'=>false,'why'=>'new','remind_n'=>0,
+        'msgs'=>[
+            ['text'=>'سلام، این ساعت بند اضافه داره؟','is_admin'=>false,'at'=>'2026-11-12T08:00:00Z'],
+            ['text'=>'سلام بله، یک بند سیلیکونی اضافه داخل جعبه هست','is_admin'=>true,'at'=>'2026-11-12T08:04:00Z'],
+            ['text'=>'عالیه، رنگ مشکی موجوده ارسال کنید؟','is_admin'=>false,'at'=>'2026-11-12T08:07:00Z','quote'=>['text'=>'یک بند سیلیکونی اضافه داخل جعبه هست']],
+        ],
+    ];
+    $__convEntryB730=[
+        'nc'=>['chat_id'=>9102,'shop'=>2,'who'=>'رضا','unseen'=>0,'customer_id'=>502],
+        'shop_name'=>'غرفه دوم','is_admin'=>true,'why'=>'new','remind_n'=>0,
+        'msgs'=>[
+            ['text'=>'سفارش من کی ارسال میشه؟','is_admin'=>false,'at'=>'2026-11-12T09:00:00Z'],
+            ['text'=>'امروز تحویل پست میشه و کد رهگیری براتون میاد','is_admin'=>true,'at'=>'2026-11-12T09:10:00Z'],
+        ],
+    ];
+    $__convMsgA730=s4NotifFormatMergedChatsMessage([$__convEntryA730],['mode'=>'single_digest']);
+    $__convMsgB730=s4NotifFormatConversationMessage($__convEntryB730,['mode'=>'single_digest']);
+    $__longMsgs730=[];
+    for($__li=1;$__li<=14;$__li++){
+        $__longMsgs730[]=['text'=>"پیام شماره $__li ".str_repeat('الف ',65),'is_admin'=>($__li%2===0),'at'=>'2026-11-12T10:00:00Z'];
+    }
+    $__longConv730=s4NotifFormatConversationMessage(['nc'=>['who'=>'نگار','unseen'=>1],'shop_name'=>'غرفه تست','is_admin'=>false,'why'=>'new','msgs'=>$__longMsgs730],['mode'=>'single_digest']);
+    $__addCheck730=(count($__convMsgA730)===1&&count($__convMsgB730)===1&&count($__longConv730)>=1);
+    $add('10.730','ادغام پیام‌های ارسالی و دریافتی هر غرفه‌دار و مشتری منحصربه‌فرد بدون قاطی کردن مشتری‌ها و با حفظ آخرین پیام‌های مکالمه',
+        $__addCheck730
+        &&strpos($__convMsgA730[0],'مریم')!==false
+        &&strpos($__convMsgA730[0],'رضا')===false
+        &&strpos($__convMsgA730[0],'غرفه اول')!==false
+        &&strpos($__convMsgA730[0],'🔵 [مشتری]')!==false
+        &&strpos($__convMsgA730[0],'🟣 [غرفه‌دار]')!==false
+        &&strpos($__convMsgA730[0],'⬅️ ')!==false
+        &&strpos($__convMsgA730[0],'سلام، این ساعت بند اضافه داره؟')!==false
+        &&strpos($__convMsgA730[0],'سلام بله، یک بند سیلیکونی اضافه داخل جعبه هست')!==false
+        &&strpos($__convMsgA730[0],'عالیه، رنگ مشکی موجوده ارسال کنید؟')!==false
+        &&strpos($__convMsgA730[0],'سیر مکالمه (قدیم ← جدید')!==false
+        &&strpos($__convMsgB730[0],'رضا')!==false
+        &&strpos($__convMsgB730[0],'مریم')===false
+        &&strpos($__convMsgB730[0],'سفارش من کی ارسال میشه؟')!==false
+        &&strpos($__convMsgB730[0],'امروز تحویل پست میشه')!==false
+        &&strpos($__longConv730[0],'پیام شماره 14')!==false
+        &&s4FormatTehranChatTime('2026-11-12T08:05:00Z',strtotime('2026-11-12T12:00:00Z'))==='11:35'
+        &&strpos($selfSrc,"function s4NotifFormatConversationMessage(")!==false
+        &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
+        &&strpos($selfSrc,"{v:'10."."730'")!==false
+        &&version_compare(APP_VERSION,'10.730','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -69816,6 +69863,8 @@ function bslNormalizeChat(array $c, string $tk = ''): array {
         'quote'              => $quoteArr,
         'quote_text'         => $quoteText,
         'has_quoted_product' => $hasQuotedProd,
+        'customer_id'        => (int)($c['user']['id'] ?? ($c['contact']['id'] ?? 0)),
+        'last_msg_id'        => (int)($lm['id'] ?? 0),
     ];
 }
 
@@ -69889,7 +69938,23 @@ function bslInferRecentChatProduct(string $tk, int $chatId, int $myUserId = 0): 
     return $p;
 }
 
-function bslFetchChatMessages(string $tk, int $chatId, int $limit = 10, int $myUserId = -1, bool $includeSelf = false): array {
+function s4FormatTehranChatTime(string $isoAt, int $nowTs = 0): string {
+    $isoAt = trim($isoAt);
+    if ($isoAt === '') return '';
+    $ts = strtotime($isoAt);
+    if ($ts === false || $ts <= 0) return '';
+    if ($nowTs <= 0) $nowTs = time();
+    try {
+        $tz = new DateTimeZone('Asia/Tehran');
+        $dt = (new DateTimeImmutable('@' . $ts))->setTimezone($tz);
+        $nowDt = (new DateTimeImmutable('@' . $nowTs))->setTimezone($tz);
+        return ($dt->format('Y-m-d') === $nowDt->format('Y-m-d')) ? $dt->format('H:i') : $dt->format('m/d H:i');
+    } catch (Throwable $_e) {
+        return gmdate('H:i', $ts + 12600);
+    }
+}
+
+function bslFetchChatMessages(string $tk, int $chatId, int $limit = 10, int $myUserId = -1, bool $includeSelf = false, int $peerUserId = 0): array {
     if ($chatId <= 0) return [];
     // v8.33: پیش‌فرض یعنی «خودت پیدا کن» تا پاسخ‌های خود غرفه‌دار در حالت عادی فیلتر شوند
     if ($myUserId < 0) $myUserId = bslMyUserId($tk);
@@ -69904,7 +69969,11 @@ function bslFetchChatMessages(string $tk, int $chatId, int $limit = 10, int $myU
     foreach ($rows as $m) {
         if (!is_array($m)) continue;
         $sid = (int)($m['sender']['id'] ?? 0);
-        $isSelfMsg = ($myUserId > 0 && $sid > 0 && $sid === $myUserId);
+        $sRole = strtolower(trim((string)($m['sender']['role'] ?? $m['sender_type'] ?? '')));
+        $isSelfMsg = ($myUserId > 0 && $sid > 0 && $sid === $myUserId)
+            || ($myUserId <= 0 && $peerUserId > 0 && $sid > 0 && $sid !== $peerUserId)
+            || !empty($m['is_from_me'])
+            || $sRole === 'vendor';
         if (!$includeSelf && $isSelfMsg) continue;   // پیام‌های خودمان را نشان نده
         $media = bslMsgExtractMedia($m, $tk, true);
         $prod = is_array($media['product'] ?? null) ? $media['product'] : [];
@@ -69927,6 +69996,7 @@ function bslFetchChatMessages(string $tk, int $chatId, int $limit = 10, int $myU
         if ($txt === '' && $media['label'] !== '') $txt = $media['label'];
         if (!empty($prod['title']) || !empty($prod['id'])) $hasProductInOut = true;
         $out[] = [
+            'id'          => (int)($m['id'] ?? 0),
             'text'        => $txt,
             'at'          => (string)($m['created_at'] ?? ''),
             'sender'      => trim((string)($m['sender']['name'] ?? '')),
@@ -70114,6 +70184,7 @@ function s4ChatItemHasProduct(array $nc, array $msgs = [], array $rawChat = []):
     if (s4TextHasProductRef((string)($nc['text_raw'] ?? $nc['text'] ?? ''))) return true;
     foreach ($msgs as $m) {
         if (!is_array($m)) continue;
+        if (!empty($m['is_admin'])) continue;
         $p = is_array($m['product'] ?? null) ? $m['product'] : [];
         $q = is_array($m['quote'] ?? null) ? $m['quote'] : [];
         if ((int)($p['id'] ?? 0) > 0 || trim((string)($p['title'] ?? '')) !== '' || trim((string)($p['url'] ?? '')) !== '') return true;
@@ -70170,7 +70241,7 @@ function s4ChatItemHasQuotedProduct(array $nc, array $msgs = [], array $rawChat 
     return false;
 }
 
-function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false): string {
+function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false, int $msgBudgetOverride = 0): string {
     $nc = is_array($entry['nc'] ?? null) ? $entry['nc'] : [];
     $msgs = is_array($entry['msgs'] ?? null) ? $entry['msgs'] : [];
     $shopName = trim((string)($entry['shop_name'] ?? $nc['shop_name'] ?? '')) ?: 'غرفهٔ باسلام';
@@ -70220,11 +70291,21 @@ function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false): st
         $lines[] = '↩️ نقل‌قول: ' . mb_substr($quoteTxt, 0, 180);
     }
 
-    // پیام‌ها
+    // پیام‌ها — وقتی مکالمه دوطرفه ادغام می‌شود، از جدیدترین به قدیمی‌ترین سهمیه را پر می‌کنیم تا آخرین پیام‌ها حفظ شوند
+    $hasBothRoles = false;
+    $sawCust = false; $sawAdmin = false;
+    foreach ($msgs as $mChk) {
+        if (!is_array($mChk)) continue;
+        if (!empty($mChk['is_admin'])) $sawAdmin = true; else $sawCust = true;
+    }
+    if ($sawCust && $sawAdmin) $hasBothRoles = true;
+    $showRoles = $forSingleDigest || $hasBothRoles;
+
     if ($msgs) {
-        $msgBudget = 1000;
-        foreach ($msgs as $m) {
-            if (!is_array($m)) continue;
+        $msgEntries = [];
+        $validMsgs = array_values(array_filter($msgs, 'is_array'));
+        $totalValid = count($validMsgs);
+        foreach ($validMsgs as $mi => $m) {
             $mt = trim((string)($m['text'] ?? ''));
             $mu = trim((string)($m['url'] ?? ''));
             $ml = trim((string)($m['label'] ?? ''));
@@ -70232,15 +70313,54 @@ function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false): st
             if ($mu !== '' && $mt !== '' && mb_strpos($mt, $mu) === false && bslExtractProductIdFromUrl($mu) <= 0) $mt .= ' ' . $mu;
             elseif ($mt === '' && $mu !== '') $mt = ($ml !== '' ? $ml . ' ' : '') . $mu;
             if ($mt === '') continue;
-            $rolePrefix = $forSingleDigest ? (!empty($m['is_admin']) ? '[غرفه‌دار] ' : '[مشتری] ') : '';
-            $piece = '▸ ' . $rolePrefix . mb_substr($mt, 0, 450);
-            if (mb_strlen($piece) > $msgBudget) break;
-            $lines[] = $piece;
-            $msgBudget -= mb_strlen($piece);
+            $mAdmin = !empty($m['is_admin']);
+            $tStr = s4FormatTehranChatTime((string)($m['at'] ?? ''));
+            $timeTag = $tStr !== '' ? (' (' . $tStr . ')') : '';
+            $isLatest = ($mi === $totalValid - 1 && $totalValid > 1);
+            if ($showRoles) {
+                $rolePrefix = ($mAdmin ? '🟣 [غرفه‌دار]' : '🔵 [مشتری]') . $timeTag . ': ';
+            } else {
+                $rolePrefix = $timeTag !== '' ? (trim($timeTag) . ' ') : '';
+            }
+            $piece = ($isLatest ? '⬅️ ' : '▸ ') . $rolePrefix . mb_substr($mt, 0, $forSingleDigest ? 650 : 450);
+            $mq = is_array($m['quote'] ?? null) ? $m['quote'] : [];
+            $mqTxt = trim((string)($mq['text'] ?? ''));
+            if ($showRoles && $mqTxt !== '' && ($pTitle === '' || mb_strpos($mqTxt, $pTitle) === false) && $mqTxt !== $quoteTxt) {
+                $piece .= "
+   ↳ ↩️ در پاسخ به: " . mb_substr($mqTxt, 0, 120);
+            }
+            $msgEntries[] = $piece;
+        }
+        if ($msgEntries) {
+            if ($showRoles && count($msgEntries) > 1) {
+                $lines[] = '📜 سیر مکالمه (قدیم ← جدید · ' . count($msgEntries) . ' پیام):';
+            }
+            $defaultBudget = $forSingleDigest ? (empty($entry['eligibility']) ? 2200 : 1500) : 1100;
+            $msgBudget = $msgBudgetOverride > 0 ? $msgBudgetOverride : $defaultBudget;
+            $keptRev = [];
+            $droppedOld = 0;
+            foreach (array_reverse($msgEntries) as $piece) {
+                $plen = mb_strlen($piece) + 1;
+                if ($keptRev && $plen > $msgBudget) {
+                    $droppedOld++;
+                    continue;
+                }
+                if (!$keptRev && $plen > $msgBudget) {
+                    $piece = mb_substr($piece, 0, max(120, $msgBudget - 1));
+                }
+                $keptRev[] = $piece;
+                $msgBudget -= mb_strlen($piece) + 1;
+            }
+            if ($droppedOld > 0) {
+                $lines[] = '… (' . $droppedOld . ' پیام قدیمی‌تر در باسلام)';
+            }
+            foreach (array_reverse($keptRev) as $kp) {
+                $lines[] = $kp;
+            }
         }
     } else {
         $body = mb_substr(trim((string)($nc['text'] ?? '')), 0, 500);
-        if ($body !== '') $lines[] = '▸ ' . ($forSingleDigest ? ($isAdmin ? '[غرفه‌دار] ' : '[مشتری] ') : '') . $body;
+        if ($body !== '') $lines[] = '▸ ' . ($showRoles ? ($isAdmin ? '🟣 [غرفه‌دار]: ' : '🔵 [مشتری]: ') : '') . $body;
     }
 
     // گزارش تفصیلی استعلام واجد شرایط بودن سفارش (برای پیام‌های دارای محصول نقل‌قول‌شده)
@@ -70336,8 +70456,92 @@ function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false): st
  * قالب‌بندیِ پیام واحدِ ادغام‌شده برای گفتگوهای دارای محصول/نقل‌قول یا تجمیع مشتری+غرفه‌دار.
  * @return list<string>
  */
+/**
+ * v10.730: قالب‌بندی مکالمهٔ یکپارچهٔ ارسالی و دریافتی برای یک غرفه‌دار و یک مشتری منحصربه‌فرد.
+ * پیام‌های مشتری‌های مختلف هرگز در یک پیام ترکیب نمی‌شوند.
+ * @return list<string>
+ */
+function s4NotifFormatConversationMessage(array $entry, array $opts = []): array {
+    if (!$entry) return [];
+    $nc = is_array($entry['nc'] ?? null) ? $entry['nc'] : [];
+    $msgs = is_array($entry['msgs'] ?? null) ? $entry['msgs'] : [];
+    $shopName = trim((string)($entry['shop_name'] ?? $nc['shop_name'] ?? '')) ?: 'غرفهٔ باسلام';
+    $who = trim((string)($nc['who'] ?? '')) ?: 'مشتری';
+    $unseen = (int)($nc['unseen'] ?? 0);
+    $isAdmin = !empty($entry['is_admin']);
+    $why = (string)($entry['why'] ?? 'new');
+    $remindN = (int)($entry['remind_n'] ?? 0);
+    $hasQuoted = !empty($entry['has_quoted_product']);
+    $hasElig = !empty($entry['eligibility']);
+    $mode = (string)($opts['mode'] ?? 'single_digest');
+    $forSingle = ($mode === 'single_digest' || $mode === 'conversation_merge');
+
+    if ($forSingle) {
+        $cnt = count(array_filter($msgs, 'is_array'));
+        $statusTxt = ($why === 'remind' ? ('🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '') . ' · ') : '')
+            . ($isAdmin ? '🟣 پاسخ غرفه‌دار' : '🔵 پیام مشتری');
+        $hdr = '💬 مکالمهٔ غرفه‌دار و مشتری' . ($cnt > 1 ? (' (' . $cnt . ' پیام ارسالی و دریافتی)') : '')
+             . "
+🏪 غرفه: " . $shopName . ' | 👤 مشتری: ' . $who
+             . ($unseen > 0 ? (' (' . $unseen . ' خوانده‌نشده)') : '')
+             . "
+🔔 رویداد: " . $statusTxt;
+    } elseif ($hasQuoted && $hasElig) {
+        $hdr = '🛍 پیام مشتری دارای محصول نقل‌قول‌شده + استعلام واجد شرایط (' . $who . ' | ' . $shopName . ')';
+    } elseif ($hasQuoted || $hasElig || !empty($entry['inquiry'])) {
+        $hdr = '🛍 پیام مشتری دارای محصول (' . $who . ' | ' . $shopName . ')';
+    } else {
+        $hdr = '💬 گفتگوی ' . $who . ' | ' . $shopName;
+    }
+
+    $block = s4NotifFormatChatBlock($entry, $forSingle, $hasElig ? 1600 : 2300);
+    if ($block === '') return [];
+    // در حالت تک‌مکالمه خط اول تکراری هدر بلوک را حذف می‌کنیم چون هدر کامل بالا آمده است
+    $bLines = explode("
+", $block);
+    if ($forSingle && count($bLines) > 1) {
+        array_shift($bLines);
+        $block = implode("
+", $bLines);
+    }
+
+    $full = $hdr . "
+━━━━━━━━━━
+" . $block;
+    if (mb_strlen($full) <= 3400) return [$full];
+
+    // اگر مکالمه یا استعلام خیلی طولانی بود، فقط همان یک گفتگو را به بخش‌های خوانا تقسیم می‌کنیم
+    $out = [];
+    $parts = explode("
+", $block);
+    $cur = '';
+    foreach ($parts as $ln) {
+        if ($cur !== '' && (mb_strlen($cur) + mb_strlen($ln) + 1) > 3150) {
+            $out[] = $cur;
+            $cur = $ln;
+        } else {
+            $cur = ($cur === '' ? $ln : ($cur . "
+" . $ln));
+        }
+    }
+    if ($cur !== '') $out[] = $cur;
+    $tot = count($out);
+    foreach ($out as $idx => &$chunk) {
+        $chunk = $hdr . ($tot > 1 ? (' — بخش ' . ($idx + 1) . '/' . $tot) : '') . "
+━━━━━━━━━━
+" . $chunk;
+    }
+    unset($chunk);
+    return $out;
+}
+
 function s4NotifFormatMergedChatsMessage(array $entries, array $opts = []): array {
     if (!$entries) return [];
+    $entries = array_values(array_filter($entries, 'is_array'));
+    if (!$entries) return [];
+    if (count($entries) === 1) {
+        return s4NotifFormatConversationMessage($entries[0], $opts);
+    }
     $mode = (string)($opts['mode'] ?? 'product_customer'); // product_customer | single_digest
     $forSingle = ($mode === 'single_digest');
     $custCnt = 0; $adminCnt = 0; $quotedCnt = 0; $eligCnt = 0;
@@ -71418,7 +71622,8 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             if ($nc['chat_id'] <= 0) continue;
             $_myUid84 = bslMyUserId($tk);
             $_lmSid84 = (int)($c['last_message']['sender']['id'] ?? 0);
-            $_isAdmin601 = ($_myUid84 > 0 && $_lmSid84 > 0 && $_lmSid84 === $_myUid84);
+            $_custUid = (int)($nc['customer_id'] ?? 0);
+            $_isAdmin601 = ($_myUid84 > 0 && $_lmSid84 > 0 && $_lmSid84 === $_myUid84) || ($_myUid84 <= 0 && $_custUid > 0 && $_lmSid84 > 0 && $_lmSid84 !== $_custUid);
             if (($_isAdmin601 && empty($route['admin'])) || (!$_isAdmin601 && empty($route['customer']))) continue;
             $nc['shop']=(int)($sh['shop'] ?? 1); $nc['vendor_id']=$vid; $nc['shop_name']=$name;
             $lastId = (int)($c['last_message']['id'] ?? 0);
@@ -71468,8 +71673,9 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             $eligTestCount = 0;
             foreach (array_slice($norm, 0, 3) as $f) {
                 $preHasProd = empty($f['is_admin']) && s4ChatItemHasProduct($f['nc'], [], (array)($f['raw_chat'] ?? []));
+                $peerIdT = (int)($f['nc']['customer_id'] ?? 0);
                 $bodyT = ($f['pending'] || $singleDigest || $preHasProd)
-                    ? bslFetchChatMessages($tk, $f['nc']['chat_id'], $singleDigest ? 6 : max(4, min(10, max(1, (int)$f['nc']['unseen']))), -1, $singleDigest)
+                    ? bslFetchChatMessages($tk, $f['nc']['chat_id'], $singleDigest ? 14 : max(4, min(10, max(1, (int)$f['nc']['unseen']))), -1, $singleDigest, $peerIdT)
                     : [];
                 $isQuotedT = empty($f['is_admin']) && s4ChatItemHasQuotedProduct($f['nc'], $bodyT, (array)($f['raw_chat'] ?? []));
                 $eligT = null;
@@ -71535,8 +71741,9 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             if ($why === '') continue;
             $n = (int)($st['items'][$f['key']]['n'] ?? 1);
             $preProd = empty($f['is_admin']) && (s4ChatItemHasProduct($f['nc'], [], (array)($f['raw_chat'] ?? [])) || !empty($f['nc']['quote_text']));
-            $fetchLimit = $singleDigest ? 8 : (($f['pending'] || $preProd || $why === 'new') ? max(4, min(10, max(1, (int)$f['nc']['unseen']))) : 0);
-            $body = $fetchLimit > 0 ? bslFetchChatMessages($tk, $f['nc']['chat_id'], $fetchLimit, -1, $singleDigest) : [];
+            $fetchLimit = $singleDigest ? 14 : (($f['pending'] || $preProd || $why === 'new') ? max(4, min(10, max(1, (int)$f['nc']['unseen']))) : 0);
+            $peerIdL = (int)($f['nc']['customer_id'] ?? 0);
+            $body = $fetchLimit > 0 ? bslFetchChatMessages($tk, $f['nc']['chat_id'], $fetchLimit, -1, $singleDigest, $peerIdL) : [];
             if ($why === 'remind') { $shopRemind++; $reminded++; } else { $shopFound++; $found++; }
 
             $hasProd = empty($f['is_admin']) && s4ChatItemHasProduct($f['nc'], $body, (array)($f['raw_chat'] ?? []));
@@ -71579,17 +71786,17 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
 
     if ($test) {
         if ($singleDigest && $testPreviewEntries) {
-            $mergedSample = s4NotifFormatMergedChatsMessage($testPreviewEntries, ['mode' => 'single_digest']);
+            $mergedSample = s4NotifFormatConversationMessage($testPreviewEntries[0], ['mode' => 'single_digest']);
             if ($mergedSample) $samples[] = $mergedSample[0];
         } elseif (!$singleDigest && $testPreviewEntries) {
             $prodTestEntries = array_values(array_filter($testPreviewEntries, fn($te) => empty($te['is_admin']) && (!empty($te['has_quoted_product']) || s4ChatItemHasProduct($te['nc'], $te['msgs']))));
             if ($prodTestEntries) {
-                $mergedSample = s4NotifFormatMergedChatsMessage($prodTestEntries, ['mode' => 'product_customer']);
+                $mergedSample = s4NotifFormatConversationMessage($prodTestEntries[0], ['mode' => 'product_customer']);
                 if ($mergedSample) array_unshift($samples, $mergedSample[0]);
             }
         }
         if ($send) {
-            $lines = ['🧪 تست پیام‌ها — ' . count($shops) . ' غرفه' . ($singleDigest ? ' · 🔗 تجمیع گفتگوها فعال' : '')];
+            $lines = ['🧪 تست پیام‌ها — ' . count($shops) . ' غرفه' . ($singleDigest ? ' · 🔗 ادغام دوطرفه هر مکالمه فعال' : '')];
             foreach ($shopRows as $sr) {
                 if (empty($sr['ok'])) { $lines[] = '• ' . $sr['shop_name'] . ' — ✗ ' . $sr['error']; continue; }
                 $lines[] = '• ' . $sr['shop_name'] . ' — ' . (int)$sr['seen']
@@ -71615,29 +71822,18 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
         notifSaveState($st);
     }
 
-    $sendMergedGroup = static function (array $bucket, string $mode) use ($cn, $send, &$samples, &$sentTo): void {
+    $sendPerConversation = static function (array $bucket, string $mode) use ($cn, $send, &$samples, &$sentTo): void {
         if (!$bucket) return;
-        $chunks = s4NotifFormatMergedChatsMessage($bucket, ['mode' => $mode]);
-        foreach ($chunks as $cIdx => $chunkText) {
-            $samples[] = $chunkText;
-            if (!$send) continue;
-            $chunkMedia = [];
-            if ($cIdx === 0) {
-                foreach ($bucket as $bi) {
-                    foreach (bslChatCollectMedia($bi['nc'], $bi['msgs']) as $mi) {
-                        $chunkMedia[] = $mi;
-                        if (count($chunkMedia) >= 5) break 2;
-                    }
-                }
-            }
-            $sentTo = notifSend($cn, $chunkText, null, $chunkMedia, 'chat_customer');
-            $ctxEntry = null;
-            foreach ($bucket as $bi) {
-                if (empty($bi['is_admin'])) { $ctxEntry = $bi['nc']; break; }
-            }
-            if (!$ctxEntry && isset($bucket[0]['nc'])) $ctxEntry = $bucket[0]['nc'];
-            if ($ctxEntry) {
-                $_ncCh85 = (int)($ctxEntry['chat_id'] ?? 0); $_ncSh85 = (int)($ctxEntry['shop'] ?? 1); $_ncWh85 = (string)($ctxEntry['who'] ?? '');
+        foreach ($bucket as $conv) {
+            $chunks = s4NotifFormatConversationMessage($conv, ['mode' => $mode]);
+            $convMedia = bslChatCollectMedia($conv['nc'], (array)$conv['msgs']);
+            $routeCls = !empty($conv['is_admin']) ? 'chat_vendor' : 'chat_customer';
+            foreach ($chunks as $cIdx => $chunkText) {
+                $samples[] = $chunkText;
+                if (!$send) continue;
+                $chunkMedia = ($cIdx === 0) ? array_slice($convMedia, 0, 5) : [];
+                $sentTo = notifSend($cn, $chunkText, null, $chunkMedia, $routeCls);
+                $_ncCh85 = (int)($conv['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($conv['nc']['shop'] ?? 1); $_ncWh85 = (string)($conv['nc']['who'] ?? '');
                 foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
                     if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
                 }
@@ -71645,18 +71841,18 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
         }
     };
 
-    $sendMergedGroup($singleDigestBucket, 'single_digest');
-    $sendMergedGroup($productCustomerBucket, 'product_customer');
+    $sendPerConversation($singleDigestBucket, 'single_digest');
+    $sendPerConversation($productCustomerBucket, 'product_customer');
 
-    foreach ($individualBucket as $ind) {
-        $msg = !empty($ind['is_admin'])
-            ? bslChatAdminMessengerMsg($ind['nc'], (string)$ind['shop_name'])
-            : bslChatCustomerMessengerMsg($ind['nc'], (string)$ind['shop_name'], (array)$ind['msgs'], (string)$ind['why'], (int)$ind['remind_n']);
+    foreach ($individualBucket as $f) {
+        $msg = !empty($f['is_admin'])
+            ? bslChatAdminMessengerMsg($f['nc'], (string)$f['shop_name'])
+            : bslChatCustomerMessengerMsg($f['nc'], (string)$f['shop_name'], (array)$f['msgs'], (string)$f['why'], (int)$f['remind_n']);
         $samples[] = $msg;
         if ($send) {
-            $_media109 = bslChatCollectMedia($ind['nc'], (array)$ind['msgs']);
-            $sentTo = notifSend($cn, $msg, null, $_media109, !empty($ind['is_admin']) ? 'chat_vendor' : 'chat_customer');
-            $_ncCh85 = (int)($ind['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($ind['nc']['shop'] ?? 1); $_ncWh85 = (string)($ind['nc']['who'] ?? '');
+            $_media109 = bslChatCollectMedia($f['nc'], (array)$f['msgs']);
+            $sentTo = notifSend($cn, $msg, null, $_media109, !empty($f['is_admin']) ? 'chat_vendor' : 'chat_customer');
+            $_ncCh85 = (int)($f['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($f['nc']['shop'] ?? 1); $_ncWh85 = (string)($f['nc']['who'] ?? '');
             foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
                 if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
             }
@@ -79418,11 +79614,12 @@ if (isset($_GET['bsl_notify_selected'])) {
             $okAny=true; $raw=$r['body']['data']['chats']??($r['body']['data']??[]);
             foreach ((array)$raw as $c) {
                 if (!is_array($c)) continue; $n=bslNormalizeChat($c, (string)$shC['token']); if ((int)$n['chat_id']<=0) continue;
-                $n['vendor_id']=(int)$shC['vendor_id']; $n['shop_name']=(string)$shC['name'];
+                $n['shop']=(int)($shC['shop'] ?? 1); $n['vendor_id']=(int)$shC['vendor_id']; $n['shop_name']=(string)$shC['name'];
                 $n['_token']=(string)$shC['token']; $n['row_key']=$n['vendor_id'].':'.$n['chat_id'];
                 $myU = bslMyUserId((string)$shC['token']);
                 $lmSid = (int)($c['last_message']['sender']['id'] ?? 0);
-                $n['_is_admin'] = ($myU > 0 && $lmSid > 0 && $lmSid === $myU);
+                $custU = (int)($n['customer_id'] ?? 0);
+                $n['_is_admin'] = ($myU > 0 && $lmSid > 0 && $lmSid === $myU) || ($myU <= 0 && $custU > 0 && $lmSid > 0 && $lmSid !== $custU);
                 $n['_raw_chat'] = $c;
                 if ($wantRaw ? in_array($n['row_key'],$wantRaw,true) : $n['unseen']>0) $picked[]=$n;
             }
@@ -79471,7 +79668,7 @@ if (isset($_GET['bsl_notify_selected'])) {
             $chatVid = (int)($n['vendor_id'] ?? $vid);
             $shopNm = (string)($n['shop_name'] ?? '');
             $rawC = (array)($n['_raw_chat'] ?? []);
-            $body = bslFetchChatMessages($chatTk, $n['chat_id'], $singleDigestSel ? 8 : max(4, min(10, $n['unseen'] ?: 4)), -1, $singleDigestSel);
+            $body = bslFetchChatMessages($chatTk, $n['chat_id'], $singleDigestSel ? 14 : max(4, min(10, $n['unseen'] ?: 4)), -1, $singleDigestSel, (int)($n['customer_id'] ?? 0));
             $hasProdSel = empty($n['_is_admin']) && s4ChatItemHasProduct($n, $body, $rawC);
             $hasQuotedSel = empty($n['_is_admin']) && s4ChatItemHasQuotedProduct($n, $body, $rawC);
             $inqSel = null;
@@ -79500,24 +79697,33 @@ if (isset($_GET['bsl_notify_selected'])) {
             elseif ($hasQuotedSel || $hasProdSel) $selProd[] = $ent;
             else $selInd[] = $ent;
         }
-        if ($selSingle) {
-            foreach (s4NotifFormatMergedChatsMessage($selSingle, ['mode' => 'single_digest']) as $cMsg) {
-                $delivery = notifSend($cn, $cMsg, 'remind');
-                $sent++;
+        $sendSelConv = static function (array $items, string $mode) use ($cn, &$delivery, &$sent): void {
+            foreach ($items as $it) {
+                $convMedia = bslChatCollectMedia($it['nc'], (array)$it['msgs']);
+                $routeCls = !empty($it['is_admin']) ? 'chat_vendor' : 'chat_customer';
+                foreach (s4NotifFormatConversationMessage($it, ['mode' => $mode]) as $idx => $cMsg) {
+                    $delivery = notifSend($cn, $cMsg, 'remind', $idx === 0 ? array_slice($convMedia, 0, 5) : [], $routeCls);
+                    $_ch = (int)($it['nc']['chat_id'] ?? 0); $_sh = (int)($it['nc']['shop'] ?? 1); $_wh = (string)($it['nc']['who'] ?? '');
+                    foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_km => $_mm) {
+                        if (!empty($delivery[$_km])) msgrSaveMsg($_mm, (string)$delivery[$_km], $_ch, $_sh, $_wh);
+                    }
+                    $sent++;
+                }
             }
-        }
-        if ($selProd) {
-            foreach (s4NotifFormatMergedChatsMessage($selProd, ['mode' => 'product_customer']) as $cMsg) {
-                $delivery = notifSend($cn, $cMsg, 'remind');
-                $sent++;
-            }
-        }
+        };
+        if ($selSingle) $sendSelConv($selSingle, 'single_digest');
+        if ($selProd) $sendSelConv($selProd, 'product_customer');
         foreach ($selInd as $ind) {
             $msg = !empty($ind['is_admin'])
                 ? bslChatAdminMessengerMsg($ind['nc'], (string)$ind['shop_name'])
                 : bslChatCustomerMessengerMsg($ind['nc'], (string)$ind['shop_name'], (array)$ind['msgs']);
             $_mediaSel = bslChatCollectMedia($ind['nc'], (array)$ind['msgs']);
-            $delivery = notifSend($cn, $msg, 'remind', $_mediaSel);
+            $routeCls = !empty($ind['is_admin']) ? 'chat_vendor' : 'chat_customer';
+            $delivery = notifSend($cn, $msg, 'remind', $_mediaSel, $routeCls);
+            $_ch = (int)($ind['nc']['chat_id'] ?? 0); $_sh = (int)($ind['nc']['shop'] ?? 1); $_wh = (string)($ind['nc']['who'] ?? '');
+            foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_km => $_mm) {
+                if (!empty($delivery[$_km])) msgrSaveMsg($_mm, (string)$delivery[$_km], $_ch, $_sh, $_wh);
+            }
             $sent++;
         }
     } else {
@@ -103860,8 +104066,8 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 <div style="font-size:9.5px;color:#94a3b8;line-height:1.6;margin-top:3px">متغیرهای مجاز: <code>{مشتری}</code> · <code>{شماره_سفارش}</code> · <code>{محصول}</code> · <code>{دلیل}</code> · <code>{غرفه}</code> (خالی = استفاده از متن پیش‌فرض).</div>
 </div>
 <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;cursor:pointer"><input type="checkbox" id="notifChatMsg" checked style="width:15px;height:15px"><span>💬 پیام مشتری</span></label>
-<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#fde68a;cursor:pointer"><input type="checkbox" id="notifChatDigestSingle" style="width:15px;height:15px"><span>🔗 ارسال گفتگوهای مشتری و غرفه‌دار همه در یک پیام منفرد</span></label>
-<div style="font-size:10px;color:#94a3b8;padding-right:21px;line-height:1.6">با زدن این تیک، تمامی گفتگوهای مشتری و غرفه‌دار (شامل تاریخچهٔ مکالمه و محصول) در یک پیام منفرد به پیام‌رسان‌ها ارسال می‌شوند. ضمناً اعلان‌های پیام‌های مشتری دارای محصول همیشه به‌صورت ادغام‌شده ارسال می‌شوند.</div>
+<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#fde68a;cursor:pointer"><input type="checkbox" id="notifChatDigestSingle" style="width:15px;height:15px"><span>🔗 ادغام پیام‌های ارسالی و دریافتی هر غرفه‌دار و مشتری در یک مکالمه</span></label>
+<div style="font-size:10px;color:#94a3b8;padding-right:21px;line-height:1.6">با زدن این تیک، برای هر غرفه‌دار و هر مشتری منحصربه‌فرد به‌طور جداگانه، پیام‌های دریافتی مشتری و پاسخ‌های ارسالی غرفه‌دار به ترتیب زمانی (قدیم ← جدید) در یک پیام واحد کنار هم ادغام می‌شوند تا سیر پیشرفت مکالمه به‌سادگی دیده شود (مشتری‌های مختلف با هم قاطی نمی‌شوند).</div>
 <!-- v10.46 (۶۰): انتخاب غرفه برای رویداد «پیام مشتری» -->
 <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#94a3b8;padding-right:21px">
 <span>غرفهٔ پیام‌ها:</span>
@@ -113793,6 +113999,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.730', t:'💬 ادغام پیام‌های ارسالی و دریافتی هر غرفه‌دار و هر مشتری منحصربه‌فرد در یک مکالمه', items:[
+    'اصلاح مفهوم و رفتار «ادغام پیام» (chat_digest_single / #notifChatDigestSingle و پیام‌های محصولی): هر گفتگوی یکتای (غرفه‌دار ←→ مشتری منحصربه‌فرد) پیام مستقل خودش را دارد و مشتری‌های مختلف یا غرفه‌های مختلف دیگر هرگز داخل یک پیام قاطی نمی‌شوند.',
+    'افزودن s4NotifFormatConversationMessage() و ارتقای s4NotifFormatChatBlock(): هنگام روشن بودن ادغام مکالمه، تا ۱۴ پیام اخیر ارسالی غرفه‌دار و دریافتی همان مشتری (به همراه ساعت تهران، نقل‌قول پاسخ و علامت‌گذاری آخرین پیام) به ترتیب زمانی از قدیم به جدید کنار هم می‌آیند و در صورت طولانی شدن گفتگو، پیام‌های قدیمی‌تر کوتاه می‌شوند تا جدیدترین پیام‌ها همیشه حفظ شوند.',
+    'بهبود bslFetchChatMessages() با تشخیص fallback فرستنده از روی شناسهٔ مشتری (peerUserId)، هم‌راستاسازی ?bsl_notify_selected و notifCheckChats برای ثبت دقیق chat_id هر گفتگو در msgrSaveMsg (پاسخ مستقیم پیام‌رسان)، و بازیابی انطباق تست 10.628.'
+  ]},
   {v:'10.729', t:'🔄 رفع کش نسخهٔ قدیمی برای کاربر غیرادمین و ادمین، استفاده از اندپوینت‌های نسخه و هم‌راستاسازی آپدیتر', items:[
     'تغییر استراتژی پوستهٔ اصلی در Service Worker (?sw=1) از cache-first به network-first همراه با افزودن هدرهای HTTP ضدکش (Cache-Control: no-store, no-cache, must-revalidate, max-age=0) به خروجی HTML هر دو رابط ادمین و کاربر غیرادمین تا صفحهٔ کش‌شده یا نقش قبلی نمایش داده نشود.',
     'اتصال فضای کاری کاربر غیرادمین (s4AccessMemberWorkspace) به اندپوینت‌های ?code_auto_update=1، ?code_update_status=1، ?sw=1 و ?procurement_eligibility_api=capabilities همراه با نمایش شماره نسخهٔ جاری در هدر و رفرش/به‌روزرسانی خودکار کش با ?_v=...، و باز کردن مسیر اندپوینت‌های ?sw=1، ?s4_shell_cache=... و ?_v=... در محافظ دسترسی.',
