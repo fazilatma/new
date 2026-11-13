@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.730';
+const APP_VERSION = '10.731';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -41659,12 +41659,26 @@ if (isset($_GET['notif_health'])) {
             'enabled' => filter_var($_msgrCfg['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN),
             'configured' => notifMessengerConfigured($cnH, $_msgrKey),
             'ready' => notifMessengerReady($cnH, $_msgrKey),
+            'ping_destination_ready' => notifMessengerChatId($_msgrCfg, 'ping') !== '',
+            'conversation_destination_ready' => notifMessengerChatId($_msgrCfg, 'chat_customer') !== '',
+            'separate_conversation_destination' => array_key_exists('all_same', $_msgrCfg) && empty($_msgrCfg['all_same']),
         ];
     }
     $hasAnyMessenger = $hasBaleh || $hasRubika || $hasTelegram;
     $add('messenger', $hasAnyMessenger,
          $hasAnyMessenger ? ('پیام‌رسان فعال: ' . trim(($hasBaleh ? 'بله ' : '') . ($hasRubika ? 'روبیکا ' : '') . ($hasTelegram ? 'تلگرام' : '')))
                           : 'هیچ پیام‌رسان فعالی نیست؛ تیک، توکن و شناسهٔ چت را بررسی کنید',
+         $messengerStates);
+    $hasConversationRoute = false;
+    foreach (['baleh', 'rubika', 'telegram'] as $_routeMsgr) {
+        if (notifMessengerReady($cnH, $_routeMsgr)
+            && notifMessengerChatId((array)($cnH[$_routeMsgr] ?? []), 'chat_customer') !== '') {
+            $hasConversationRoute = true; break;
+        }
+    }
+    $add('conversation_route', $hasConversationRoute,
+         $hasConversationRoute ? 'مقصد پیام‌های گفتگو برای دست‌کم یک پیام‌رسان فعال است'
+                               : 'مقصد اختصاصی/عمومی گفتگوها برای هیچ پیام‌رسان فعالی resolve نمی‌شود',
          $messengerStates);
 
     /* ۲) پیش‌نیازهای اعلانِ باسلام (سفارش/چت/محصول).
@@ -53930,6 +53944,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
         &&strpos($selfSrc,"{v:'10."."730'")!==false
         &&version_compare(APP_VERSION,'10.730','>='));
+    $__chatRoute731=['chat_id'=>'general','all_same'=>false,'chat_ids'=>['conversations'=>'talk']];
+    $add('10.731','ارسال جمعی گفتگو به مقصد گفتگوها و گزارش نتیجهٔ واقعی پیام‌رسان',
+        notifMessengerChatId($__chatRoute731,'chat_customer')==='talk'
+        &&strpos($selfSrc,"\$kind === 'chats' ? 'chat_customer' : null")!==false
+        &&strpos($selfSrc,"'attempted' => \$attempted")!==false
+        &&strpos($selfSrc,"{v:'10."."731'")!==false
+        &&version_compare(APP_VERSION,'10.731','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -79632,7 +79653,22 @@ if (isset($_GET['bsl_notify_selected'])) {
             'note' => 'موردی برای ارسال نبود'], JSON_UNESCAPED_UNICODE); exit;
     }
 
-    $delivery = []; $sent = 0;
+    $delivery = []; $sent = 0; $attempted = 0;
+    $recordDelivery = static function (array $result) use (&$delivery, &$sent, &$attempted): void {
+        $attempted++;
+        $delivered = false;
+        foreach (['baleh', 'rubika', 'telegram'] as $channel) {
+            if (($result[$channel] ?? '') === 'sent') {
+                $delivery[$channel] = 'sent';
+                $delivered = true;
+            } elseif (($result[$channel] ?? '') === 'fail' && ($delivery[$channel] ?? '') !== 'sent') {
+                $delivery[$channel] = 'fail';
+            }
+            if (!empty($result[$channel . '_err'])) $delivery[$channel . '_err'] = $result[$channel . '_err'];
+        }
+        if (!$delivered && isset($result['none'])) $delivery['none'] = $result['none'];
+        if ($delivered) $sent++;
+    };
     $neSel = is_array($cn['notif_events'] ?? null) ? $cn['notif_events'] : [];
     $singleDigestSel = notifEventOn($neSel, 'chat_digest_single');
     if ($digest) {
@@ -79656,8 +79692,8 @@ if (isset($_GET['bsl_notify_selected'])) {
                          . ' — ' . mb_substr($n['text'], 0, 60);
             }
         }
-        $delivery = notifSend($cn, implode("\n", $lines), 'remind');
-        $sent = 1;
+        // Bulk chat summaries must use the conversation destination, not the common/default route.
+        $recordDelivery(notifSend($cn, implode("\n", $lines), 'remind', [], $kind === 'chats' ? 'chat_customer' : null));
     } elseif ($kind === 'chats') {
         $selSingle = [];
         $selProd = [];
@@ -79697,17 +79733,17 @@ if (isset($_GET['bsl_notify_selected'])) {
             elseif ($hasQuotedSel || $hasProdSel) $selProd[] = $ent;
             else $selInd[] = $ent;
         }
-        $sendSelConv = static function (array $items, string $mode) use ($cn, &$delivery, &$sent): void {
+        $sendSelConv = static function (array $items, string $mode) use ($cn, &$delivery, $recordDelivery): void {
             foreach ($items as $it) {
                 $convMedia = bslChatCollectMedia($it['nc'], (array)$it['msgs']);
                 $routeCls = !empty($it['is_admin']) ? 'chat_vendor' : 'chat_customer';
                 foreach (s4NotifFormatConversationMessage($it, ['mode' => $mode]) as $idx => $cMsg) {
-                    $delivery = notifSend($cn, $cMsg, 'remind', $idx === 0 ? array_slice($convMedia, 0, 5) : [], $routeCls);
+                    $sendResult = notifSend($cn, $cMsg, 'remind', $idx === 0 ? array_slice($convMedia, 0, 5) : [], $routeCls);
+                    $recordDelivery($sendResult);
                     $_ch = (int)($it['nc']['chat_id'] ?? 0); $_sh = (int)($it['nc']['shop'] ?? 1); $_wh = (string)($it['nc']['who'] ?? '');
                     foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_km => $_mm) {
-                        if (!empty($delivery[$_km])) msgrSaveMsg($_mm, (string)$delivery[$_km], $_ch, $_sh, $_wh);
+                        if (!empty($sendResult[$_km])) msgrSaveMsg($_mm, (string)$sendResult[$_km], $_ch, $_sh, $_wh);
                     }
-                    $sent++;
                 }
             }
         };
@@ -79719,27 +79755,26 @@ if (isset($_GET['bsl_notify_selected'])) {
                 : bslChatCustomerMessengerMsg($ind['nc'], (string)$ind['shop_name'], (array)$ind['msgs']);
             $_mediaSel = bslChatCollectMedia($ind['nc'], (array)$ind['msgs']);
             $routeCls = !empty($ind['is_admin']) ? 'chat_vendor' : 'chat_customer';
-            $delivery = notifSend($cn, $msg, 'remind', $_mediaSel, $routeCls);
+            $sendResult = notifSend($cn, $msg, 'remind', $_mediaSel, $routeCls);
+            $recordDelivery($sendResult);
             $_ch = (int)($ind['nc']['chat_id'] ?? 0); $_sh = (int)($ind['nc']['shop'] ?? 1); $_wh = (string)($ind['nc']['who'] ?? '');
             foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_km => $_mm) {
-                if (!empty($delivery[$_km])) msgrSaveMsg($_mm, (string)$delivery[$_km], $_ch, $_sh, $_wh);
+                if (!empty($sendResult[$_km])) msgrSaveMsg($_mm, (string)$sendResult[$_km], $_ch, $_sh, $_wh);
             }
-            $sent++;
         }
     } else {
         $eligRun = 0;
         foreach ($picked as $n) {
             $msg = bslParcelMsg($n, '📦 سفارش ارسال‌نشده');
-            $delivery = notifSend($cn, $msg, 'remind');
+            $recordDelivery(notifSend($cn, $msg, 'remind'));
             if ($eligRun < 5 && is_array($n['_raw'] ?? null) && is_array($n['_shop'] ?? null) && function_exists('s4NotifHandleNewBasalamOrder')) {
                 s4NotifHandleNewBasalamOrder($n['_raw'], $n, $n['_shop'], $cn, true, ['force' => true, 'why' => 'manual']);
                 $eligRun++;
             }
-            $sent++;
-            if ($sent >= 20) break;   // سقف ایمنی برای جلوگیری از هرزنامه
+            if ($attempted >= 20) break;   // سقف ایمنی برای جلوگیری از هرزنامه
         }
     }
-    echo json_encode(['ok' => true, 'sent' => $sent, 'picked' => count($picked),
+    echo json_encode(['ok' => true, 'sent' => $sent, 'attempted' => $attempted, 'picked' => count($picked),
         'delivery' => $delivery, 'digest' => $digest], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -113999,6 +114034,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.731', t:'📨 رفع مسیر مقصد و گزارش دقیق نتیجهٔ ارسال جمعی گفتگوها', items:[
+    'خلاصهٔ دستی گفتگوها اکنون صریحاً به مقصد «گفتگوها» می‌رود؛ پیش از این از مقصد عمومی «یادآوری» استفاده می‌کرد و در تنظیمِ مقصدهای جداگانه ممکن بود به کانال گفتگو نرسد.',
+    'نتیجهٔ ارسال جمعی بر اساس پاسخ واقعی پیام‌رسان‌ها تجمیع می‌شود؛ تعداد ارسال موفق دیگر صرفاً تعداد تلاش‌ها نیست و خطاهای هر کانال در پاسخ باقی می‌مانند.',
+    'یادآوری: تست دستی پینگ فاصلهٔ زمان‌بندی را دور می‌زند؛ پینگ خودکار با مقدار پیش‌فرض هر ۳۶۰ دقیقه (۶ ساعت) ارسال می‌شود.'
+  ]},
   {v:'10.730', t:'💬 ادغام پیام‌های ارسالی و دریافتی هر غرفه‌دار و هر مشتری منحصربه‌فرد در یک مکالمه', items:[
     'اصلاح مفهوم و رفتار «ادغام پیام» (chat_digest_single / #notifChatDigestSingle و پیام‌های محصولی): هر گفتگوی یکتای (غرفه‌دار ←→ مشتری منحصربه‌فرد) پیام مستقل خودش را دارد و مشتری‌های مختلف یا غرفه‌های مختلف دیگر هرگز داخل یک پیام قاطی نمی‌شوند.',
     'افزودن s4NotifFormatConversationMessage() و ارتقای s4NotifFormatChatBlock(): هنگام روشن بودن ادغام مکالمه، تا ۱۴ پیام اخیر ارسالی غرفه‌دار و دریافتی همان مشتری (به همراه ساعت تهران، نقل‌قول پاسخ و علامت‌گذاری آخرین پیام) به ترتیب زمانی از قدیم به جدید کنار هم می‌آیند و در صورت طولانی شدن گفتگو، پیام‌های قدیمی‌تر کوتاه می‌شوند تا جدیدترین پیام‌ها همیشه حفظ شوند.',

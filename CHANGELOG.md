@@ -1,5 +1,11 @@
 # Release notes
 
+## scraper4 10.731
+
+- Manual bulk chat summaries now explicitly target the shared conversations destination instead of the generic reminder route; this fixes delivery when a separate conversation Chat ID is configured.
+- Bulk-send responses now aggregate actual per-messenger delivery results, report successful sends separately from attempts, and retain channel errors instead of letting the last conversation overwrite earlier results.
+- `?notif_health=1` now reports whether each active messenger resolves both its ping and conversation destination. The manual ping button intentionally bypasses the configured interval; automatic pings default to every 360 minutes.
+
 ## scraper4 10.730
 
 - Adopted the latest project snapshot from `arena/ae9391a9-new` onto the active chat branch.
