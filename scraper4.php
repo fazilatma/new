@@ -69,6 +69,7 @@ const BSL_PROFILE_LANE_CLAIM_FILE = __DIR__ . '/bsl_profile_lane_claim.lock';
 const BSL_STOP_FILE = __DIR__ . '/bsl_stop_signal.json';
 const BSL_ADAPTIVE_RATE_FILE = __DIR__ . '/bsl_adaptive_rate.json'; // v10.559
 const BSL_PHOTO_ID_CACHE_FILE = __DIR__ . '/bsl_photo_id_cache.json'; // v10.559
+const BSL_CHAT_PRODUCT_CACHE_FILE = __DIR__ . '/bsl_chat_product_cache.json'; // v10.722: کش متادیتای محصولات در گفتگوهای باسلام
 // v8.57: تا این مدت بعد از فشردن «توقف»، هیچ ارسال تازه‌ای شروع نمی‌شود.
 // بدون این، رابط کاربری بلافاصله بعد از توقف دوباره ارسال را راه می‌انداخت.
 const BSL_STOP_HOLD_SEC = 900;
@@ -406,7 +407,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.721';
+const APP_VERSION = '10.722';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -50075,13 +50076,16 @@ if (($_POST['action'] ?? '') === 'ar_save_rules') {
 if (isset($_GET['ar_test'])) {
     header('Content-Type: application/json; charset=UTF-8');
     $txt = (string)($_GET['text'] ?? '');
-    if (trim($txt) === '') { echo json_encode(['ok' => false, 'error' => 'متن خالی است'], JSON_UNESCAPED_UNICODE); exit; }
+    $prodParam = trim((string)($_GET['product'] ?? ''));
+    if (trim($txt) === '' && $prodParam === '') { echo json_encode(['ok' => false, 'error' => 'متن خالی است'], JSON_UNESCAPED_UNICODE); exit; }
+    $testProd = $prodParam !== '' ? ['title' => $prodParam] : [];
+    $testCtx = ['product' => $testProd, 'customer_text' => $txt];
     $rules = arLoadRules();
     $cfgAR = arCfg();
     $all = [];
     foreach ($rules as $r) {
         $all[] = ['id' => $r['id'] ?? '', 'on' => !empty($r['on']),
-                  'match' => arRuleMatches($r, $txt)];
+                  'match' => arRuleMatches($r, $prodParam !== '' ? trim($txt . ' ' . $prodParam) : $txt)];
     }
     /* v9.38: آزمایش طبق «ترتیب اولویت» انتخاب‌شده اجرا می‌شود (rules_first /
        ai_first / rules_only / ai_only) تا نتیجه‌اش همان چیزی باشد که در عمل
@@ -50092,26 +50096,27 @@ if (isset($_GET['ar_test'])) {
     $order = (string)($cfgAR['reply_order'] ?? 'rules_first');
     $aiOk = false; $aiText = ''; $aiErr = '';
     $hit = null; $ruleReply = ''; $ruleId = '';
+    $pickTestRule = static fn() => $prodParam !== '' ? arPickRuleWithProduct($rules, $txt, $prodParam) : arPickRule($rules, $txt);
     if ($order === 'ai_first' || $order === 'ai_only') {
-        $aiRes = arAiReplyText($txt, 8);
+        $aiRes = arAiReplyText($txt !== '' ? $txt : $prodParam, 8, $testCtx);
         $aiOk = !empty($aiRes['ok']);
         $aiText = $aiOk ? ($aiRes['text'] . ($cfgAR['sign'] !== '' ? "\n" . $cfgAR['sign'] : '')) : '';
         $aiErr = $aiOk ? '' : (string)($aiRes['error'] ?? 'خطا');
-        if (!$aiOk && $order === 'ai_first') $hit = arPickRule($rules, $txt);
+        if (!$aiOk && $order === 'ai_first') $hit = $pickTestRule();
     } elseif ($order === 'rules_first') {
-        $hit = arPickRule($rules, $txt);
+        $hit = $pickTestRule();
         if ($hit === null) {
-            $aiRes = arAiReplyText($txt, 8);
+            $aiRes = arAiReplyText($txt !== '' ? $txt : $prodParam, 8, $testCtx);
             $aiOk = !empty($aiRes['ok']);
             $aiText = $aiOk ? ($aiRes['text'] . ($cfgAR['sign'] !== '' ? "\n" . $cfgAR['sign'] : '')) : '';
             $aiErr = $aiOk ? '' : (string)($aiRes['error'] ?? 'خطا');
         }
     } else { // rules_only
-        $hit = arPickRule($rules, $txt);
+        $hit = $pickTestRule();
     }
     if ($hit) {
         $ruleId = (string)$hit['id'];
-        $ruleReply = $hit['reply'] . ($cfgAR['sign'] !== '' ? "\n" . $cfgAR['sign'] : '');
+        $ruleReply = arRenderRuleReply((string)$hit['reply'], $testProd) . ($cfgAR['sign'] !== '' ? "\n" . $cfgAR['sign'] : '');
     }
     $finalReply = $aiOk ? $aiText : $ruleReply;
     $source = $aiOk ? 'ai' : ($hit ? 'rule' : 'none');
@@ -50160,6 +50165,7 @@ if (isset($_GET['bsl_chats'])) {
         if (is_array($cD) && is_array($cD['rows'] ?? null)) $cachedMR = $cD['rows'];
     }
     $rowsMR = []; $shopErrMR = []; $shopOutMR = [];
+    $GLOBALS['_s4ChatProdNetBudget'] = 6;
     foreach ($shopsMR as $shMR) {
         if ($onlyMR > 0 && (int)$shMR['shop'] !== $onlyMR) continue;
         $kMR = (string)$shMR['shop'];
@@ -50181,19 +50187,18 @@ if (isset($_GET['bsl_chats'])) {
         if (!is_array($rawMR)) $rawMR = [];
         foreach ($rawMR as $cMR) {
             if (!is_array($cMR)) continue;
-            $ncMR = bslNormalizeChat($cMR);
+            $ncMR = bslNormalizeChat($cMR, (string)$shMR['token']);
             $lmMR = is_array($cMR['last_message'] ?? null) ? $cMR['last_message'] : [];
             if ($ncMR['chat_id'] <= 0) continue;
-            /* v10.62 (۷۶): آدرسِ تصویرِ آخرین پیام (اگر پیام تصویر باشد) —
-               پیش‌نمایش در کارتِ نوتیف و لیستِ گفتگوها. از همهٔ شکل‌هایِ
-               ممکنِ پاسخ برداشته می‌شود (همان الگوی bslChatThread). */
+            /* v10.62 (۷۶) / v10.722: آدرسِ تصویرِ آخرین پیام یا تصویرِ محصولِ مرتبط */
             $lmImgMR = '';
             foreach ([$lmMR['attachment']['files'][0]['url'] ?? null,
                       $lmMR['content']['url'] ?? null,
                       $lmMR['content']['files'][0]['url'] ?? null,
                       $lmMR['url'] ?? null,
                       $lmMR['content']['image'] ?? null,
-                      $lmMR['image'] ?? null] as $uImgMR) {
+                      $lmMR['image'] ?? null,
+                      $ncMR['product_image'] ?? null] as $uImgMR) {
                 if (is_string($uImgMR) && strncmp($uImgMR, 'http', 4) === 0) { $lmImgMR = $uImgMR; break; }
             }
             $outShMR[] = [
@@ -50205,12 +50210,17 @@ if (isset($_GET['bsl_chats'])) {
                 'last_is_mine' => ($myIdMR > 0 && (int)($lmMR['sender']['id'] ?? 0) === $myIdMR),
                 /* v10.60 (۷۴): شناسهٔ آخرین پیام — مبنای کشفِ پیامِ تازهٔ مشتری
                    برای نوتیفیکیشنِ زنده (کارتِ سوایپ‌شونده). */
-                'last_msg_id'  => (int)($lmMR['id'] ?? 0),
-                'last_img'     => $lmImgMR,
-                'last_type'    => (string)($lmMR['message_type'] ?? ''),
-                'shop'         => (int)$shMR['shop'],
-                'shop_name'    => $shMR['name'],
-                'vendor_id'    => (int)$shMR['vendor_id'],
+                'last_msg_id'   => (int)($lmMR['id'] ?? 0),
+                'last_img'      => $lmImgMR,
+                'last_type'     => (string)($lmMR['message_type'] ?? ''),
+                'product_id'    => (int)($ncMR['product_id'] ?? 0),
+                'product_title' => (string)($ncMR['product_title'] ?? ''),
+                'product_image' => (string)($ncMR['product_image'] ?? ''),
+                'product_url'   => (string)($ncMR['product_url'] ?? ''),
+                'product_price' => (int)($ncMR['product_price'] ?? 0),
+                'shop'          => (int)$shMR['shop'],
+                'shop_name'     => $shMR['name'],
+                'vendor_id'     => (int)$shMR['vendor_id'],
             ];
         }
         $rowsMR = array_merge($rowsMR, $outShMR);
@@ -50317,36 +50327,40 @@ if (isset($_GET['ar_chat'])) {
     header('Content-Type: application/json; charset=UTF-8');
     @set_time_limit(40);
     $txt = (string)($_GET['msg'] ?? ($_GET['text'] ?? ''));
-    if (trim($txt) === '') { echo json_encode(['ok' => false, 'error' => 'متن خالی است'], JSON_UNESCAPED_UNICODE); exit; }
+    $prodParam = trim((string)($_GET['product'] ?? ''));
+    if (trim($txt) === '' && $prodParam === '') { echo json_encode(['ok' => false, 'error' => 'متن خالی است'], JSON_UNESCAPED_UNICODE); exit; }
+    $chatProd = $prodParam !== '' ? ['title' => $prodParam] : [];
+    $chatCtx = ['product' => $chatProd, 'customer_text' => $txt];
     $rules = arLoadRules();
     $cfgAR = arCfg();
     $t0 = microtime(true);
     $order = (string)($cfgAR['reply_order'] ?? 'rules_first');
     $aiOk = false; $aiText = ''; $aiErr = ''; $modelUsed = '';
     $hit = null; $ruleReply = ''; $ruleId = '';
+    $pickChatRule = static fn() => $prodParam !== '' ? arPickRuleWithProduct($rules, $txt, $prodParam) : arPickRule($rules, $txt);
     if ($order === 'ai_first' || $order === 'ai_only') {
-        $aiRes = arAiReplyText($txt, 8);
+        $aiRes = arAiReplyText($txt !== '' ? $txt : $prodParam, 8, $chatCtx);
         $aiOk = !empty($aiRes['ok']);
         $aiText = $aiOk ? ($aiRes['text'] . ($cfgAR['sign'] !== '' ? "\n" . $cfgAR['sign'] : '')) : '';
         $aiErr = $aiOk ? '' : (string)($aiRes['error'] ?? 'خطا');
         $modelUsed = (string)($aiRes['model'] ?? '');
-        if (!$aiOk && $order === 'ai_first') $hit = arPickRule($rules, $txt);
+        if (!$aiOk && $order === 'ai_first') $hit = $pickChatRule();
     } elseif ($order === 'rules_first') {
-        $hit = arPickRule($rules, $txt);
+        $hit = $pickChatRule();
         if ($hit === null) {
-            $aiRes = arAiReplyText($txt, 8);
+            $aiRes = arAiReplyText($txt !== '' ? $txt : $prodParam, 8, $chatCtx);
             $aiOk = !empty($aiRes['ok']);
             $aiText = $aiOk ? ($aiRes['text'] . ($cfgAR['sign'] !== '' ? "\n" . $cfgAR['sign'] : '')) : '';
             $aiErr = $aiOk ? '' : (string)($aiRes['error'] ?? 'خطا');
             $modelUsed = (string)($aiRes['model'] ?? '');
         }
     } else { // rules_only
-        $hit = arPickRule($rules, $txt);
+        $hit = $pickChatRule();
     }
     $latMs = (int)round((microtime(true) - $t0) * 1000);
     if ($hit) {
         $ruleId = (string)$hit['id'];
-        $ruleReply = $hit['reply'] . ($cfgAR['sign'] !== '' ? "\n" . $cfgAR['sign'] : '');
+        $ruleReply = arRenderRuleReply((string)$hit['reply'], $chatProd) . ($cfgAR['sign'] !== '' ? "\n" . $cfgAR['sign'] : '');
     }
     $finalReply = $aiOk ? $aiText : $ruleReply;
     $source = $aiOk ? 'ai' : ($hit ? 'rule' : 'none');
@@ -53424,6 +53438,67 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'X-Client-Info: web')!==false
         &&strpos($selfSrc,"{v:'10."."721'")!==false
         &&version_compare(APP_VERSION,'10.721','>='));
+    $__savedProdCache722=$GLOBALS['_s4ChatProdMemCache']??null;
+    $GLOBALS['_s4ChatProdMemCache']=[
+        '551122'=>['id'=>551122,'title'=>'عسل کنار طبیعی یک کیلویی','image'=>'https://statics.basalam.com/honey.jpg','url'=>'https://basalam.com/asal-shop/product/551122','price'=>450000,'vendor'=>'غرفه عسل','ok'=>true,'ts'=>time()],
+        '663344'=>['id'=>663344,'title'=>'روغن زیتون بکر رودبار','image'=>'https://statics.basalam.com/olive.jpg','url'=>'https://basalam.com/zeytoon/product/663344','price'=>320000,'vendor'=>'غرفه زیتون','ok'=>true,'ts'=>time()],
+        '885566'=>['id'=>885566,'title'=>'چای بهاره لاهیجان ممتاز','image'=>'https://statics.basalam.com/tea.jpg','url'=>'https://basalam.com/p/885566','price'=>195000,'vendor'=>'','ok'=>true,'ts'=>time()],
+    ];
+    $__inProdA722=bslMsgExtractInlineProductMeta(['message_type'=>'product','content'=>['entity_id'=>551122,'text'=>'سلام موجوده؟']]);
+    $__inProdB722=bslMsgExtractInlineProductMeta(['message_type'=>'text','content'=>['text'=>'قیمتش چقدره؟','links'=>[['url'=>'https://basalam.com/zeytoon/product/663344/روغن-زیتون','is_basalam_link'=>true]]]]);
+    $__inProdC722=bslMsgExtractInlineProductMeta(['message_type'=>'product','content'=>['reply_markup'=>[[['id'=>1,'label'=>'مشاهده محصول','type'=>'url','data'=>['url'=>'https://basalam.com/p/885566']]]],'text'=>'ارسال کی میشه؟']]);
+    $__extQ722=bslMsgExtractMedia([
+        'id'=>902,'message_type'=>'text','sender'=>['id'=>77,'name'=>'مریم'],
+        'content'=>['text'=>'سلام این اصل هست؟'],
+        'replied_message'=>['id'=>901,'message_type'=>'product','sender'=>['id'=>77,'name'=>'مریم'],'content'=>['entity_id'=>551122,'text'=>'']],
+    ],'',true);
+    $__norm722=bslNormalizeChat(['id'=>441,'unseen_message_count'=>1,'contact'=>['name'=>'علی'],'last_message'=>['id'=>905,'message_type'=>'product','content'=>['entity_id'=>551122,'text'=>'این رنگش موجوده؟']]]);
+    $__parsedApi722=bslChatProductParseApiPayload(['data'=>['id'=>774455,'title'=>'زعفران قائنات ۴ گرمی','primary_price'=>2800000,'photo'=>['md'=>'https://statics.basalam.com/saffron.jpg'],'vendor'=>['identifier'=>'saffron-shop','title'=>'غرفه زعفران']]],774455);
+    $__infBeforeAdmin722=bslInferProductFromRawMessages([
+        ['id'=>3,'sender'=>['id'=>77],'message_type'=>'text','content'=>['text'=>'سلام قیمت چنده؟']],
+        ['id'=>2,'sender'=>['id'=>77],'message_type'=>'product','content'=>['entity_id'=>551122,'text'=>'']],
+        ['id'=>1,'sender'=>['id'=>10],'message_type'=>'text','content'=>['text'=>'پاسخ قبلی ادمین']],
+    ],10);
+    $__infBlockedAdmin722=bslInferProductFromRawMessages([
+        ['id'=>3,'sender'=>['id'=>77],'message_type'=>'text','content'=>['text'=>'سلام سفارش ثبت شد']],
+        ['id'=>2,'sender'=>['id'=>10],'message_type'=>'text','content'=>['text'=>'در خدمتیم']],
+        ['id'=>1,'sender'=>['id'=>77],'message_type'=>'product','content'=>['entity_id'=>551122,'text'=>'']],
+    ],10);
+    $__rules722=[
+        ['id'=>'gen','on'=>true,'match'=>'always','triggers'=>'','reply'=>'سلام، سوال درباره {product} ثبت شد.','priority'=>99],
+        ['id'=>'honey','on'=>true,'match'=>'contains','triggers'=>'عسل کنار','reply'=>'بله {product} با قیمت {product_price} موجود است.','priority'=>15],
+    ];
+    $__picked722=arPickRuleWithProduct($__rules722,'سلام این موجوده؟','عسل کنار طبیعی یک کیلویی');
+    $__rendered722=$__picked722?arRenderRuleReply((string)$__picked722['reply'],$__extQ722['product']):'';
+    $__msgText722=bslChatMsg(['who'=>'علی','unseen'=>1,'text'=>$__norm722['text']],'🔵 پیام مشتری',[
+        ['text'=>'سلام این اصل هست؟','url'=>'https://statics.basalam.com/honey.jpg','urls'=>['https://statics.basalam.com/honey.jpg'],'links'=>['https://basalam.com/asal-shop/product/551122'],'product'=>$__extQ722['product'],'quote'=>$__extQ722['quote']],
+    ]);
+    if($__savedProdCache722===null)unset($GLOBALS['_s4ChatProdMemCache']);else $GLOBALS['_s4ChatProdMemCache']=$__savedProdCache722;
+    $add('10.722','استخراج نام و جزئیات محصول از پیام محصول/لینک/نقل‌قول باسلام در چت، پیام‌رسان و پاسخ خودکار فعال است',
+        bslExtractProductIdFromUrl('https://basalam.com/my-shop/product/4812903/عسل-کوهی')===4812903
+        &&bslExtractProductIdFromUrl('https://basalam.com/p/99210')===99210
+        &&bslExtractProductIdFromUrl('https://example.com/product/99')===0
+        &&(int)($__inProdA722['id']??0)===551122
+        &&(int)($__inProdB722['id']??0)===663344
+        &&(int)($__inProdC722['id']??0)===885566
+        &&($__extQ722['product']['title']??'')==='عسل کنار طبیعی یک کیلویی'
+        &&($__extQ722['quote']['product']['id']??0)===551122
+        &&($__norm722['product_title']??'')==='عسل کنار طبیعی یک کیلویی'
+        &&($__norm722['product_image']??'')==='https://statics.basalam.com/honey.jpg'
+        &&strpos((string)($__norm722['text']??''),'عسل کنار طبیعی یک کیلویی')!==false
+        &&($__parsedApi722['title']??'')==='زعفران قائنات ۴ گرمی'
+        &&(int)($__parsedApi722['price']??0)===280000
+        &&($__parsedApi722['url']??'')==='https://basalam.com/saffron-shop/product/774455'
+        &&(int)($__infBeforeAdmin722['id']??0)===551122
+        &&empty($__infBlockedAdmin722)
+        &&($__picked722['id']??'')==='honey'
+        &&$__rendered722==='بله عسل کنار طبیعی یک کیلویی با قیمت 450,000 تومان موجود است.'
+        &&strpos($__msgText722,'🛍 محصول: عسل کنار طبیعی یک کیلویی')!==false
+        &&strpos($selfSrc,"function bslChatLookupProductMeta(")!==false
+        &&strpos($selfSrc,"function arPickRuleWithProduct(")!==false
+        &&strpos($selfSrc,"BSL_CHAT_PRODUCT_CACHE_FILE")!==false
+        &&strpos($selfSrc,"{v:'10."."722'")!==false
+        &&version_compare(APP_VERSION,'10.722','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -68646,11 +68721,396 @@ function bslNormalizeParcel(array $o, string $shopName = '', int $vendorId = 0):
  */
 
 /**
- * v10.109: استخراج آدرس‌های چندرسانه‌ای از یک پیام باسلام.
- * شکل‌های ممکن attachment/content (همان الگوی اتاق چت v10.57) + لینک در متن.
- * @return array{type:string,url:string,name:string,urls:string[],links:string[],label:string}
+ * v10.722: استخراج شناسهٔ محصول باسلام از لینک‌های متنی/کارت باسلام.
  */
-function bslMsgExtractMedia(array $m): array {
+function bslExtractProductIdFromUrl(string $url): int {
+    $url = trim($url);
+    if ($url === '') return 0;
+    if (preg_match('~^(?:www\.|m\.)?basalam\.com/~i', $url)) $url = 'https://' . $url;
+    $parts = @parse_url($url);
+    if (!is_array($parts)) return 0;
+    $host = strtolower((string)($parts['host'] ?? ''));
+    if ($host !== '' && $host !== 'basalam.com' && !str_ends_with($host, '.basalam.com')) return 0;
+    $path = (string)($parts['path'] ?? '');
+    if ($path !== '' && preg_match('~/(?:p|product|products)/(\d+)(?:[-/?#]|$)~i', $path, $m)) {
+        return (int)$m[1];
+    }
+    $queryStr = (string)($parts['query'] ?? '');
+    if ($queryStr !== '') {
+        $q = [];
+        @parse_str($queryStr, $q);
+        foreach (['product_id', 'pid'] as $k) {
+            if (!empty($q[$k]) && ctype_digit((string)$q[$k]) && (int)$q[$k] > 0) return (int)$q[$k];
+        }
+        if (!empty($q['id']) && ctype_digit((string)$q['id']) && (int)$q['id'] > 0
+            && ($path === '' || preg_match('~/(?:p|product|products|s/p)~i', $path))) {
+            return (int)$q['id'];
+        }
+    }
+    return 0;
+}
+
+/** v10.722: جست‌وجوی محلی سریع در دفترچهٔ نگاشت باسلام بدون نیاز به درخواست شبکه */
+function bslChatLocalProductLookup(int $pid): array {
+    if ($pid <= 0) return [];
+    static $byId = null;
+    if ($byId === null) {
+        $byId = [];
+        if (function_exists('remoteMapLoad')) {
+            $map = remoteMapLoad();
+            foreach ((array)($map['bsl'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                $id = (int)($row['id'] ?? ($row['remote_id'] ?? 0));
+                $title = trim((string)($row['title'] ?? ''));
+                if ($id > 0 && $title !== '' && !isset($byId[$id])) $byId[$id] = $title;
+            }
+        }
+    }
+    if (empty($byId[$pid])) return [];
+    return [
+        'id' => $pid,
+        'title' => $byId[$pid],
+        'image' => '',
+        'url' => 'https://basalam.com/p/' . $pid,
+        'price' => 0,
+        'vendor' => '',
+    ];
+}
+
+function bslChatProductCacheLoad(): array {
+    if (isset($GLOBALS['_s4ChatProdMemCache']) && is_array($GLOBALS['_s4ChatProdMemCache'])) {
+        return $GLOBALS['_s4ChatProdMemCache'];
+    }
+    $d = is_file(BSL_CHAT_PRODUCT_CACHE_FILE)
+        ? json_decode((string)@file_get_contents(BSL_CHAT_PRODUCT_CACHE_FILE), true)
+        : [];
+    if (!is_array($d)) $d = [];
+    return $GLOBALS['_s4ChatProdMemCache'] = $d;
+}
+
+function bslChatProductCacheSave(array $cache): void {
+    if (count($cache) > 5000) {
+        uasort($cache, fn($a, $b) => ((int)($b['ts'] ?? 0)) <=> ((int)($a['ts'] ?? 0)));
+        $cache = array_slice($cache, 0, 4500, true);
+    }
+    $GLOBALS['_s4ChatProdMemCache'] = $cache;
+    @file_put_contents(
+        BSL_CHAT_PRODUCT_CACHE_FILE,
+        json_encode($cache, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
+        LOCK_EX
+    );
+}
+
+/** v10.722: یکسان‌سازی پاسخ API محصول باسلام (Core v1 / Core v4) */
+function bslChatProductParseApiPayload(array $raw, int $fallbackId = 0): array {
+    $row = (isset($raw['data']) && is_array($raw['data'])
+        && (isset($raw['data']['title']) || isset($raw['data']['name']) || isset($raw['data']['id'])))
+        ? $raw['data'] : $raw;
+    $id = (int)($row['id'] ?? $fallbackId);
+    $rawTitle = trim((string)($row['title'] ?? $row['name'] ?? $row['product_title'] ?? $row['product_name'] ?? ''));
+    $title = function_exists('normalize_text') ? normalize_text($rawTitle) : $rawTitle;
+    $img = '';
+    foreach (array_merge([$row['photo'] ?? null, $row['image'] ?? null], (array)($row['photos'] ?? []), (array)($row['images'] ?? [])) as $ph) {
+        $u = '';
+        if (function_exists('basalamApiImageUrl')) {
+            $u = basalamApiImageUrl($ph);
+        } elseif (is_string($ph)) {
+            $u = trim($ph);
+        } elseif (is_array($ph)) {
+            foreach (['original', 'lg', 'md', 'sm', 'url'] as $k) {
+                $cand = $ph[$k] ?? '';
+                if (is_array($cand)) $cand = $cand[0] ?? '';
+                if (is_string($cand) && trim($cand) !== '') { $u = trim($cand); break; }
+            }
+        }
+        if ($u !== '' && strncmp($u, 'http', 4) === 0) { $img = $u; break; }
+    }
+    $rp = (float)($row['price'] ?? 0);
+    $rpp = (float)($row['primary_price'] ?? 0);
+    $eff = ($rp > 0 && ($rpp <= 0 || $rp <= $rpp)) ? $rp : ($rpp > 0 ? $rpp : $rp);
+    $price = $eff > 0 ? (int)round($eff / 10) : 0;
+    $vendorIdent = trim((string)($row['vendor']['identifier'] ?? ''));
+    $vendorTitle = trim((string)($row['vendor']['title'] ?? $row['vendor']['name'] ?? ''));
+    $url = trim((string)($row['url'] ?? $row['link'] ?? ''));
+    if ($url === '' && $id > 0) {
+        $url = $vendorIdent !== '' ? ('https://basalam.com/' . $vendorIdent . '/product/' . $id) : ('https://basalam.com/p/' . $id);
+    }
+    if ($title === '' && $img === '' && $url === '') return [];
+    return [
+        'id'     => $id,
+        'title'  => $title,
+        'image'  => $img,
+        'url'    => $url,
+        'price'  => $price,
+        'vendor' => $vendorTitle,
+    ];
+}
+
+/**
+ * v10.722: واکشی و کش متادیتای محصول (عنوان، عکس، قیمت، لینک) از روی product_id.
+ */
+function bslChatLookupProductMeta(int $productId, string $tk = '', bool $allowNetwork = true): array {
+    if ($productId <= 0) return [];
+    $now = time();
+    $key = (string)$productId;
+    $cache = bslChatProductCacheLoad();
+    if (isset($cache[$key]) && is_array($cache[$key])) {
+        $ent = $cache[$key];
+        $ts = (int)($ent['ts'] ?? 0);
+        $ttl = !empty($ent['ok']) ? 604800 : 1800; // ۷ روز موفق، ۳۰ دقیقه ناموفق
+        if ($ts > 0 && ($now - $ts) < $ttl) {
+            if (!empty($ent['ok']) && trim((string)($ent['title'] ?? '')) !== '') {
+                return [
+                    'id'     => (int)($ent['id'] ?? $productId),
+                    'title'  => (string)($ent['title'] ?? ''),
+                    'image'  => (string)($ent['image'] ?? ''),
+                    'url'    => (string)($ent['url'] ?? ('https://basalam.com/p/' . $productId)),
+                    'price'  => (int)($ent['price'] ?? 0),
+                    'vendor' => (string)($ent['vendor'] ?? ''),
+                ];
+            }
+            return bslChatLocalProductLookup($productId);
+        }
+    }
+
+    if (!$allowNetwork) {
+        return bslChatLocalProductLookup($productId);
+    }
+    $budgetLeft = $GLOBALS['_s4ChatProdNetBudget'] ?? 20;
+    if ((int)$budgetLeft <= 0) {
+        return bslChatLocalProductLookup($productId);
+    }
+    $GLOBALS['_s4ChatProdNetBudget'] = (int)$budgetLeft - 1;
+
+    $meta = [];
+    if ($tk !== '' && function_exists('bslReqRead')) {
+        $r = bslReqRead($tk, 'products/' . $productId);
+        if (!empty($r['ok']) && is_array($r['body'] ?? null)) {
+            $meta = bslChatProductParseApiPayload($r['body'], $productId);
+        }
+    }
+    if (empty($meta['title']) && function_exists('basalamApiFetchJson')) {
+        $r4 = basalamApiFetchJson('https://core.basalam.com/v4/products/' . $productId, 6);
+        if (!empty($r4['ok']) && is_array($r4['body'] ?? null)) {
+            $parsed4 = bslChatProductParseApiPayload($r4['body'], $productId);
+            if ($parsed4) {
+                $meta = array_merge($meta, array_filter($parsed4, fn($v) => $v !== '' && $v !== 0));
+            }
+        }
+    }
+
+    if (!empty($meta['title'])) {
+        $meta['id'] = (int)($meta['id'] ?? $productId);
+        if (empty($meta['url'])) $meta['url'] = 'https://basalam.com/p/' . $productId;
+        $cache[$key] = $meta + ['ok' => true, 'ts' => $now];
+        bslChatProductCacheSave($cache);
+        return $meta;
+    }
+
+    $local = bslChatLocalProductLookup($productId);
+    if (!empty($local['title'])) {
+        return $local;
+    }
+    $cache[$key] = ['id' => $productId, 'ok' => false, 'ts' => $now];
+    bslChatProductCacheSave($cache);
+    return [];
+}
+
+/**
+ * v10.722: استخراج لینک‌ها، متادیتا، entity_id و نام/تصویر محصول از درون خود ساختار پیام.
+ */
+function bslMsgExtractInlineProductMeta(array $m): array {
+    $mt = strtolower(trim((string)($m['message_type'] ?? '')));
+    $content = is_array($m['content'] ?? null) ? $m['content'] : [];
+    $decodeMeta = static function ($v): array {
+        if (is_array($v)) return $v;
+        if (is_string($v)) {
+            $t = trim($v);
+            if ($t !== '' && ($t[0] === '{' || $t[0] === '[')) {
+                $d = json_decode($t, true);
+                if (is_array($d)) return $d;
+            }
+        }
+        return [];
+    };
+    $metaNodes = [];
+    foreach ([
+        $content['metadata'] ?? null,
+        $m['metadata'] ?? null,
+        $m['message_metadata'] ?? null,
+        $content['entity'] ?? null,
+        $m['entity'] ?? null,
+        $content['product'] ?? null,
+        $m['product'] ?? null,
+    ] as $node) {
+        $arr = $decodeMeta($node);
+        if (!$arr) continue;
+        $metaNodes[] = $arr;
+        foreach (['product', 'entity', 'item', 'data'] as $subKey) {
+            if (isset($arr[$subKey]) && is_array($arr[$subKey])) $metaNodes[] = $arr[$subKey];
+        }
+    }
+
+    $links = [];
+    $linkTitles = [];
+    $pid = 0;
+    $prodUrl = '';
+    $pushLink = static function (string $u, string $lbl = '') use (&$links, &$linkTitles, &$pid, &$prodUrl) {
+        $u = rtrim(trim($u), '.,);]');
+        if ($u === '' || strncmp($u, 'http', 4) !== 0) return;
+        if (!in_array($u, $links, true)) $links[] = $u;
+        $lid = bslExtractProductIdFromUrl($u);
+        if ($lid > 0 && $pid <= 0) {
+            $pid = $lid;
+            if ($prodUrl === '') $prodUrl = $u;
+        }
+        $lbl = trim($lbl);
+        if ($lbl !== '' && !in_array($lbl, ['مشاهده محصول', 'مشاهده', 'لینک محصول', 'باز کردن', 'خرید'], true)) {
+            $linkTitles[] = $lbl;
+        }
+    };
+
+    $collectLinksFromField = static function ($field) use (&$pushLink, &$pid) {
+        if (is_string($field)) { $pushLink($field); return; }
+        if (!is_array($field)) return;
+        if (isset($field['url']) || isset($field['href']) || isset($field['link'])) {
+            $field = [$field];
+        }
+        foreach ($field as $item) {
+            if (is_string($item)) {
+                $pushLink($item);
+            } elseif (is_array($item)) {
+                $u = '';
+                foreach (['url', 'href', 'link'] as $uk) {
+                    if (is_string($item[$uk] ?? null) && trim($item[$uk]) !== '') { $u = trim($item[$uk]); break; }
+                }
+                $lbl = '';
+                foreach (['product_title', 'product_name', 'title', 'name', 'label'] as $tk) {
+                    if (is_string($item[$tk] ?? null) && trim($item[$tk]) !== '') { $lbl = trim($item[$tk]); break; }
+                }
+                if ($pid <= 0) {
+                    foreach (['product_id', 'entity_id'] as $idk) {
+                        if (!empty($item[$idk]) && (int)$item[$idk] > 0) { $pid = (int)$item[$idk]; break; }
+                    }
+                }
+                if ($u !== '') $pushLink($u, $lbl);
+            }
+        }
+    };
+    $collectLinksFromField($content['links'] ?? null);
+    $collectLinksFromField($m['links'] ?? null);
+
+    // reply_markup (دکمه‌های شیشه‌ای لینک محصول)
+    foreach ([$content['reply_markup'] ?? null, $m['reply_markup'] ?? null] as $rm) {
+        if (!is_array($rm)) continue;
+        foreach ($rm as $row) {
+            $btns = is_array($row) && (isset($row['type']) || isset($row['label'])) ? [$row] : (is_array($row) ? $row : []);
+            foreach ($btns as $btn) {
+                if (!is_array($btn)) continue;
+                $bData = is_array($btn['data'] ?? null) ? $btn['data'] : [];
+                $bu = trim((string)($bData['url'] ?? ($bData['link'] ?? ($btn['url'] ?? ''))));
+                $bl = trim((string)($btn['label'] ?? ($bData['title'] ?? '')));
+                if ($bu !== '') $pushLink($bu, $bl);
+            }
+        }
+    }
+
+    // لینک‌های متنی باسلام داخل متن پیام
+    foreach ([$content['text'] ?? null, $m['text'] ?? null, is_string($m['content'] ?? null) ? $m['content'] : null] as $tc) {
+        if (!is_string($tc) || trim($tc) === '') continue;
+        if (preg_match_all('~https?://[^\s<>"\']+~u', $tc, $mm)) {
+            foreach ($mm[0] as $lnk) $pushLink($lnk);
+        }
+    }
+
+    $title = '';
+    $image = '';
+    $price = 0;
+    $vendor = '';
+    $explicitType = '';
+    foreach ($metaNodes as $node) {
+        if ($pid <= 0) {
+            foreach (['product_id', 'id', 'entity_id'] as $idk) {
+                $candId = (int)($node[$idk] ?? 0);
+                if ($candId > 0) { $pid = $candId; break; }
+            }
+        }
+        if ($title === '') {
+            foreach (['product_title', 'product_name', 'title', 'name'] as $tk) {
+                $candT = $node[$tk] ?? null;
+                if (is_string($candT) && trim($candT) !== '') { $title = trim($candT); break; }
+            }
+        }
+        if ($image === '') {
+            foreach (['photo', 'image', 'thumbnail', 'avatar', 'img', 'picture'] as $ik) {
+                $candI = $node[$ik] ?? null;
+                if (is_string($candI) && strncmp(trim($candI), 'http', 4) === 0) { $image = trim($candI); break; }
+                if (is_array($candI)) {
+                    foreach (['original', 'lg', 'md', 'sm', 'url', 'primary'] as $sk) {
+                        if (is_string($candI[$sk] ?? null) && strncmp(trim($candI[$sk]), 'http', 4) === 0) {
+                            $image = trim($candI[$sk]); break 2;
+                        }
+                    }
+                }
+            }
+        }
+        if ($prodUrl === '') {
+            foreach (['url', 'link', 'product_url'] as $uk) {
+                if (is_string($node[$uk] ?? null) && strncmp(trim($node[$uk]), 'http', 4) === 0) {
+                    $prodUrl = trim($node[$uk]);
+                    if ($pid <= 0) $pid = bslExtractProductIdFromUrl($prodUrl);
+                    break;
+                }
+            }
+        }
+        if ($price <= 0) {
+            $rawP = (float)($node['price'] ?? ($node['primary_price'] ?? 0));
+            if ($rawP > 0) $price = $rawP >= 10000 ? (int)round($rawP / 10) : (int)round($rawP);
+        }
+        if ($vendor === '' && is_array($node['vendor'] ?? null)) {
+            $vendor = trim((string)($node['vendor']['title'] ?? ($node['vendor']['name'] ?? '')));
+        }
+        if ($explicitType === '' && !empty($node['entity_type'])) {
+            $explicitType = strtolower(trim((string)$node['entity_type']));
+        }
+    }
+
+    $entityId = (int)($content['entity_id'] ?? ($m['entity_id'] ?? 0));
+    if ($pid <= 0 && $entityId > 0) {
+        $nonProdTypes = ['vendor', 'user', 'coupon', 'order', 'order_process', 'story', 'social_post', 'notification', 'label', 'location', 'agreement', 'voice_call_phone'];
+        if (in_array($mt, ['product', 'product_voice', 'review'], true)) {
+            $pid = $entityId;
+        } elseif (($mt === '' || $mt === 'text') && !in_array($explicitType, ['vendor', 'user', 'order', 'coupon'], true)) {
+            $pid = $entityId;
+        }
+    }
+    if ($title === '' && $linkTitles && ($pid > 0 || $mt === 'product')) {
+        $title = $linkTitles[0];
+    }
+    if ($prodUrl === '' && $pid > 0) {
+        $prodUrl = 'https://basalam.com/p/' . $pid;
+    }
+
+    $isProduct = ($pid > 0 || $mt === 'product' || $mt === 'product_voice'
+        || ($title !== '' && !in_array($mt, ['vendor', 'user', 'coupon', 'order', 'order_process', 'story'], true)));
+    return [
+        'id'         => $pid,
+        'title'      => $title,
+        'image'      => $image,
+        'url'        => $prodUrl,
+        'price'      => $price,
+        'vendor'     => $vendor,
+        'links'      => $links,
+        'is_product' => $isProduct,
+    ];
+}
+
+/**
+ * v10.109 / v10.722: استخراج آدرس‌های چندرسانه‌ای، لینک‌ها، نقل‌قول و اطلاعات محصول از یک پیام باسلام.
+ * شکل‌های ممکن attachment/content + content.links + reply_markup + entity_id + replied_message.
+ * @return array{type:string,url:string,name:string,urls:string[],links:string[],label:string,text:string,product:array,quote:array}
+ */
+function bslMsgExtractMedia(array $m, string $tk = '', bool $resolveProduct = true): array {
     $mt = strtolower(trim((string)($m['message_type'] ?? '')));
     $urls = [];
     $name = '';
@@ -68699,11 +69159,13 @@ function bslMsgExtractMedia(array $m): array {
     foreach ([$m['content']['text'] ?? null, $m['text'] ?? null, $m['content'] ?? null] as $cand) {
         if (is_string($cand) && trim($cand) !== '') { $text = trim($cand); break; }
     }
-    $links = [];
+
+    $inlineProd = bslMsgExtractInlineProductMeta($m);
+    $links = is_array($inlineProd['links'] ?? null) ? $inlineProd['links'] : [];
     if ($text !== '' && preg_match_all('~https?://[^\s<>"\']+~u', $text, $mm)) {
         foreach ($mm[0] as $lnk) {
             $lnk = rtrim($lnk, '.,);]');
-            if (strncmp($lnk, 'http', 4) === 0) $links[] = $lnk;
+            if (strncmp($lnk, 'http', 4) === 0 && !in_array($lnk, $links, true)) $links[] = $lnk;
         }
     }
     $links = array_values(array_unique($links));
@@ -68712,6 +69174,64 @@ function bslMsgExtractMedia(array $m): array {
         if (preg_match('~\.(jpe?g|png|gif|webp|bmp|mp4|webm|mov|m4v|avi|mkv|mp3|ogg|wav|pdf|zip|rar|7z)(\?|$)~i', $lnk)) {
             if (!in_array($lnk, $urls, true)) $urls[] = $lnk;
         }
+    }
+
+    // پیام نقل‌قول‌شده / ریپلای‌شده (حداکثر عمق ۱ برای جلوگیری از بازگشت بی‌نهایت)
+    $quote = [];
+    if (empty($m['_s4_in_quote']) && is_array($m['replied_message'] ?? null)) {
+        $qm = $m['replied_message'];
+        $qm['_s4_in_quote'] = true;
+        $qRes = bslMsgExtractMedia($qm, $tk, $resolveProduct && empty($inlineProd['id']));
+        $qProd = is_array($qRes['product'] ?? null) ? $qRes['product'] : [];
+        $qText = trim((string)($qRes['text'] ?? ''));
+        if ($qText === '' && !empty($qProd['title'])) $qText = '🛍 ' . $qProd['title'];
+        elseif ($qText === '' && !empty($qRes['label'])) $qText = (string)$qRes['label'];
+        $qImg = trim((string)($qRes['url'] ?? ''));
+        if ($qImg === '' && !empty($qProd['image'])) $qImg = (string)$qProd['image'];
+        $qSender = trim((string)($qm['sender']['name'] ?? ''));
+        if ($qText !== '' || $qImg !== '' || !empty($qProd['id']) || !empty($qProd['title'])) {
+            $quote = [
+                'text'    => $qText,
+                'sender'  => $qSender,
+                'type'    => (string)($qRes['type'] ?? ($qm['message_type'] ?? '')),
+                'img'     => $qImg,
+                'product' => $qProd,
+            ];
+        }
+    }
+
+    $product = [
+        'id'     => (int)($inlineProd['id'] ?? 0),
+        'title'  => (string)($inlineProd['title'] ?? ''),
+        'image'  => (string)($inlineProd['image'] ?? ''),
+        'url'    => (string)($inlineProd['url'] ?? ''),
+        'price'  => (int)($inlineProd['price'] ?? 0),
+        'vendor' => (string)($inlineProd['vendor'] ?? ''),
+    ];
+    if ($product['id'] <= 0 && $product['title'] === '' && !empty($quote['product']) && is_array($quote['product'])) {
+        $qp = $quote['product'];
+        if (!empty($qp['id']) || !empty($qp['title'])) {
+            $product = array_merge($product, $qp);
+        }
+    }
+
+    if ($resolveProduct && $product['id'] > 0 && ($product['title'] === '' || $product['image'] === '')) {
+        $fetched = bslChatLookupProductMeta($product['id'], $tk, true);
+        if ($fetched) {
+            if ($product['title'] === '' && !empty($fetched['title'])) $product['title'] = (string)$fetched['title'];
+            if ($product['image'] === '' && !empty($fetched['image'])) $product['image'] = (string)$fetched['image'];
+            if ($product['url'] === '' && !empty($fetched['url']))     $product['url']   = (string)$fetched['url'];
+            if ($product['price'] <= 0 && !empty($fetched['price'])) $product['price'] = (int)$fetched['price'];
+            if ($product['vendor'] === '' && !empty($fetched['vendor'])) $product['vendor'] = (string)$fetched['vendor'];
+        }
+    }
+
+    if ($product['title'] !== '' && $name === '') $name = $product['title'];
+    if ($product['image'] !== '' && !in_array($product['image'], $urls, true)) {
+        $urls[] = $product['image'];
+    }
+    if ($product['url'] !== '' && !in_array($product['url'], $links, true)) {
+        $links[] = $product['url'];
     }
 
     $primary = $urls[0] ?? '';
@@ -68725,6 +69245,9 @@ function bslMsgExtractMedia(array $m): array {
         elseif (in_array($kind, ['gif', 'animation', 'sticker'], true)) $kind = 'animation';
         elseif (in_array($kind, ['voice', 'audio', 'sound'], true)) $kind = 'audio';
         elseif (in_array($kind, ['file', 'document', 'pdf'], true)) $kind = 'file';
+    } elseif ($product['id'] > 0 || $product['title'] !== '') {
+        if ($kind === 'text' || $kind === '') $kind = 'product';
+        if ($product['url'] !== '') $primary = $product['url'];
     } elseif ($links) {
         $kind = 'link';
         $primary = $links[0];
@@ -68736,14 +69259,19 @@ function bslMsgExtractMedia(array $m): array {
         'link' => '🔗 لینک', 'location' => '📍 موقعیت', 'product' => '🛍 محصول',
     ];
     $label = $labels[$kind] ?? ($kind !== '' && $kind !== 'text' ? ('[' . $kind . ']') : '');
+    if ($product['title'] !== '' && ($kind === 'product' || $mt === 'product' || $mt === 'product_voice')) {
+        $label = '🛍 ' . $product['title'];
+    }
     return [
-        'type'  => $kind,
-        'url'   => $primary,
-        'name'  => $name,
-        'urls'  => $urls,
-        'links' => $links,
-        'label' => $label,
-        'text'  => $text,
+        'type'    => $kind,
+        'url'     => $primary,
+        'name'    => $name,
+        'urls'    => $urls,
+        'links'   => $links,
+        'label'   => $label,
+        'text'    => $text,
+        'product' => $product,
+        'quote'   => $quote,
     ];
 }
 
@@ -68779,6 +69307,10 @@ function bslMediaToMsgrItems(array $media, string $caption = ''): array {
     foreach ($urls as $u) {
         $u = trim((string)$u);
         if ($u === '' || isset($seen[$u])) continue;
+        // لینک وب صفحهٔ محصول را به‌عنوان فایل/عکس به پیام‌رسان نفرست؛ در لیست لینک‌ها می‌آید
+        if (bslExtractProductIdFromUrl($u) > 0 && !preg_match('~\.(jpe?g|png|gif|webp|bmp|mp4|webm|mov|pdf|zip)(\?|$)~i', $u)) {
+            continue;
+        }
         $seen[$u] = true;
         $k = bslMediaKindFromUrl($u, $type);
         // map to messenger kind
@@ -68807,11 +69339,11 @@ function bslMediaToMsgrItems(array $media, string $caption = ''): array {
     return $items;
 }
 
-function bslNormalizeChat(array $c): array {
+function bslNormalizeChat(array $c, string $tk = ''): array {
     $lm = is_array($c['last_message'] ?? null) ? $c['last_message'] : [];
-    $txt = '';
+    $txtRaw = '';
     foreach ([$lm['content']['text'] ?? null, $lm['text'] ?? null] as $cand) {
-        if (is_string($cand) && trim($cand) !== '') { $txt = trim($cand); break; }
+        if (is_string($cand) && trim($cand) !== '') { $txtRaw = trim($cand); break; }
     }
     $ct = $c['contact'] ?? [];
     $who = '';
@@ -68824,25 +69356,47 @@ function bslNormalizeChat(array $c): array {
     if ($who === '') $who = trim((string)($lm['sender']['name'] ?? ''));
     if ($who === '') $who = 'مشتری';
     $type = (string)($lm['message_type'] ?? '');
-    /* v10.109: رسانهٔ آخرین پیام (عکس/ویدیو/فایل/لینک) */
-    $media = bslMsgExtractMedia(is_array($lm) ? $lm : []);
-    if ($txt === '') {
+    /* v10.109 / v10.722: رسانه + محصول/نقل‌قول آخرین پیام */
+    $media = bslMsgExtractMedia(is_array($lm) ? $lm : [], $tk, true);
+    $prod = is_array($media['product'] ?? null) ? $media['product'] : [];
+    $prodTitle = trim((string)($prod['title'] ?? ''));
+    $prodImg = trim((string)($prod['image'] ?? ''));
+    $prodUrl = trim((string)($prod['url'] ?? ''));
+    $prodId = (int)($prod['id'] ?? 0);
+    $prodPrice = (int)($prod['price'] ?? 0);
+    $quoteText = trim((string)($media['quote']['text'] ?? ''));
+
+    $txt = $txtRaw;
+    if ($prodTitle !== '') {
+        if ($txt === '') {
+            $txt = '🛍 ' . $prodTitle;
+        } elseif (mb_stripos($txt, $prodTitle, 0, 'UTF-8') === false) {
+            $txt = '🛍 ' . $prodTitle . ' | ' . $txt;
+        }
+    } elseif ($txt === '') {
         if ($media['label'] !== '') $txt = $media['label'] . ($media['url'] !== '' ? ' ' . $media['url'] : '');
         elseif ($type !== '' && $type !== 'text') $txt = '[' . $type . ']';
         else $txt = '—';
     }
     return [
-        'chat_id'    => (int)($c['id'] ?? 0),
-        'who'        => $who,
-        'text'       => $txt,
-        'unseen'     => (int)($c['unseen_message_count'] ?? 0),
-        'updated_at' => (string)($c['updated_at'] ?? ($c['created_at'] ?? '')),
-        'chat_type'  => (string)($c['chat_type'] ?? ''),
-        'sender'     => trim((string)($lm['sender']['name'] ?? '')),
-        'media_url'  => (string)($media['url'] ?? ''),
-        'media_type' => (string)($media['type'] ?? ''),
-        'media_urls' => $media['urls'] ?? [],
-        'media_links'=> $media['links'] ?? [],
+        'chat_id'       => (int)($c['id'] ?? 0),
+        'who'           => $who,
+        'text'          => $txt,
+        'text_raw'      => $txtRaw,
+        'unseen'        => (int)($c['unseen_message_count'] ?? 0),
+        'updated_at'    => (string)($c['updated_at'] ?? ($c['created_at'] ?? '')),
+        'chat_type'     => (string)($c['chat_type'] ?? ''),
+        'sender'        => trim((string)($lm['sender']['name'] ?? '')),
+        'media_url'     => (string)($media['url'] ?? ''),
+        'media_type'    => (string)($media['type'] ?? ''),
+        'media_urls'    => $media['urls'] ?? [],
+        'media_links'   => $media['links'] ?? [],
+        'product_id'    => $prodId,
+        'product_title' => $prodTitle,
+        'product_image' => $prodImg,
+        'product_url'   => $prodUrl,
+        'product_price' => $prodPrice,
+        'quote_text'    => $quoteText,
     ];
 }
 
@@ -68879,25 +69433,68 @@ function bslMyUserId(string $tk): int {
     return $cache[$k] = $id;
 }
 
+/**
+ * v10.722: اگر مشتری کارت/لینک محصول را چند پیام قبل‌تر (پیش از پاسخ اخیر ادمین)
+ * فرستاده باشد و پیام متنی جدید نقل‌قول صریح نداشته باشد، نام محصول را از تاریخچه اخیر گفتگو پیدا می‌کند.
+ */
+function bslInferProductFromRawMessages(array $rowsDesc, int $myUserId = 0): array {
+    foreach ($rowsDesc as $m) {
+        if (!is_array($m)) continue;
+        $sid = (int)($m['sender']['id'] ?? 0);
+        if ($myUserId > 0 && $sid === $myUserId) break; // به پیام قبلیِ ادمین رسیدیم؛ محصولِ سوال فعلی قبل از آن نیست
+        $ex = bslMsgExtractMedia($m, '', false);
+        $p = is_array($ex['product'] ?? null) ? $ex['product'] : [];
+        if (!empty($p['id']) || !empty($p['title'])) return $p;
+    }
+    return [];
+}
+
+function bslInferRecentChatProduct(string $tk, int $chatId, int $myUserId = 0): array {
+    if ($chatId <= 0 || $tk === '') return [];
+    if ($myUserId <= 0) $myUserId = bslMyUserId($tk);
+    $r = bslReqRead($tk, 'chats/' . $chatId . '/messages?limit=6&order=desc');
+    if (empty($r['ok'])) return [];
+    $rows = $r['body']['data']['messages'] ?? ($r['body']['data'] ?? []);
+    if (!is_array($rows)) return [];
+    $p = bslInferProductFromRawMessages($rows, $myUserId);
+    if (!empty($p['id']) && (empty($p['title']) || empty($p['image']))) {
+        $resolved = bslChatLookupProductMeta((int)$p['id'], $tk, true);
+        if ($resolved) {
+            if (empty($p['title']) && !empty($resolved['title'])) $p['title'] = (string)$resolved['title'];
+            if (empty($p['image']) && !empty($resolved['image'])) $p['image'] = (string)$resolved['image'];
+            if (empty($p['url']) && !empty($resolved['url']))     $p['url']   = (string)$resolved['url'];
+            if (empty($p['price']) && !empty($resolved['price'])) $p['price'] = (int)$resolved['price'];
+            if (empty($p['vendor']) && !empty($resolved['vendor'])) $p['vendor'] = (string)$resolved['vendor'];
+        }
+    }
+    return $p;
+}
+
 function bslFetchChatMessages(string $tk, int $chatId, int $limit = 10, int $myUserId = -1): array {
     if ($chatId <= 0) return [];
     // v8.33: پیش‌فرض یعنی «خودت پیدا کن» تا پاسخ‌های خود غرفه‌دار فیلتر شوند
     if ($myUserId < 0) $myUserId = bslMyUserId($tk);
     $lim = max(1, min(50, $limit));
-    $r = bslReqRead($tk, 'chats/' . $chatId . '/messages?limit=' . $lim . '&order=desc');
+    $fetchLim = max($lim, min(50, $lim + 4)); // چند پیام قبل‌تر را هم برای بافتِ محصولِ اخیر می‌بینیم
+    $r = bslReqRead($tk, 'chats/' . $chatId . '/messages?limit=' . $fetchLim . '&order=desc');
     if (!$r['ok']) return [];
     $rows = $r['body']['data']['messages'] ?? ($r['body']['data'] ?? []);
     if (!is_array($rows)) return [];
     $out = [];
+    $hasProductInOut = false;
     foreach ($rows as $m) {
         if (!is_array($m)) continue;
         $sid = (int)($m['sender']['id'] ?? 0);
         if ($myUserId > 0 && $sid === $myUserId) continue;   // پیام‌های خودمان را نشان نده
-        $media = bslMsgExtractMedia($m);
+        $media = bslMsgExtractMedia($m, $tk, true);
+        $prod = is_array($media['product'] ?? null) ? $media['product'] : [];
+        $quote = is_array($media['quote'] ?? null) ? $media['quote'] : [];
         $txt = $m['content']['text'] ?? null;
         if (!is_string($txt) || trim($txt) === '') {
             $mt = (string)($m['message_type'] ?? ($media['type'] ?? ''));
-            if ($media['label'] !== '') {
+            if (!empty($prod['title'])) {
+                $txt = '🛍 ' . $prod['title'];
+            } elseif ($media['label'] !== '') {
                 $txt = $media['label'];
                 if ($media['url'] !== '') $txt .= ' ' . $media['url'];
             } else {
@@ -68905,27 +69502,49 @@ function bslFetchChatMessages(string $tk, int $chatId, int $limit = 10, int $myU
             }
         }
         $txt = trim((string)$txt);
-        // v10.109: پیام فقط‌رسانه را هم نگه دار (قبلاً اگر متن خالی بود drop می‌شد)
-        if ($txt === '' && empty($media['urls']) && empty($media['links'])) continue;
+        // v10.109 / v10.722: پیام فقط‌رسانه یا کارت‌محصول را هم نگه دار
+        if ($txt === '' && empty($media['urls']) && empty($media['links']) && empty($prod['title']) && empty($prod['id'])) continue;
         if ($txt === '' && $media['label'] !== '') $txt = $media['label'];
+        if (!empty($prod['title']) || !empty($prod['id'])) $hasProductInOut = true;
         $out[] = [
-            'text'   => $txt,
-            'at'     => (string)($m['created_at'] ?? ''),
-            'sender' => trim((string)($m['sender']['name'] ?? '')),
-            'type'   => (string)($media['type'] ?? ($m['message_type'] ?? 'text')),
-            'url'    => (string)($media['url'] ?? ''),
-            'urls'   => $media['urls'] ?? [],
-            'links'  => $media['links'] ?? [],
-            'name'   => (string)($media['name'] ?? ''),
-            'label'  => (string)($media['label'] ?? ''),
+            'text'    => $txt,
+            'at'      => (string)($m['created_at'] ?? ''),
+            'sender'  => trim((string)($m['sender']['name'] ?? '')),
+            'type'    => (string)($media['type'] ?? ($m['message_type'] ?? 'text')),
+            'url'     => (string)($media['url'] ?? ''),
+            'urls'    => $media['urls'] ?? [],
+            'links'   => $media['links'] ?? [],
+            'name'    => (string)($media['name'] ?? ''),
+            'label'   => (string)($media['label'] ?? ''),
+            'product' => $prod,
+            'quote'   => $quote,
         ];
+        if (count($out) >= $lim) break;
+    }
+    // اگر در پیام‌های برگردانده‌شده محصولی نبود ولی بلافاصله قبلش مشتری کارت محصول فرستاده بود، روی جدیدترین پیام بچسبان
+    if ($out && !$hasProductInOut) {
+        $inferred = bslInferProductFromRawMessages($rows, $myUserId);
+        if (!empty($inferred['id']) && (empty($inferred['title']) || empty($inferred['image']))) {
+            $resInf = bslChatLookupProductMeta((int)$inferred['id'], $tk, true);
+            if ($resInf) $inferred = array_merge($inferred, array_filter($resInf, fn($v) => $v !== '' && $v !== 0));
+        }
+        if (!empty($inferred['title']) || !empty($inferred['id'])) {
+            $out[0]['product'] = $inferred;
+            if (!empty($inferred['image']) && !in_array($inferred['image'], $out[0]['urls'], true)) {
+                $out[0]['urls'][] = $inferred['image'];
+                if ($out[0]['url'] === '') $out[0]['url'] = $inferred['image'];
+            }
+            if (!empty($inferred['url']) && !in_array($inferred['url'], $out[0]['links'], true)) {
+                $out[0]['links'][] = $inferred['url'];
+            }
+        }
     }
     return array_reverse($out);   // قدیمی‌ترین اول، مثل خود گفتگو
 }
 
 /**
  * متن پیام‌رسان برای یک گفتگو.
- * v8.33: اگر متن پیام‌ها داده شود، همه را می‌فرستد نه فقط آخری.
+ * v8.33 / v10.722: متن پیام‌ها + نام محصول/قیمت/نقل‌قول در پیام‌رسان.
  */
 function bslChatMsg(array $n, string $head = '💬 پیام مشتری باسلام', array $msgs = []): string {
     $s = $head . "\nمشتری: " . $n['who']
@@ -68933,27 +69552,60 @@ function bslChatMsg(array $n, string $head = '💬 پیام مشتری باسل�
     if ($msgs) {
         $s .= "\n━━━━━━━━━━";
         $budget = 3000;   // سقف امن برای بله/روبیکا
+        $shownProdId = 0;
+        $shownProdTitle = '';
         foreach ($msgs as $m) {
             $t = trim((string)($m['text'] ?? ''));
             $u = trim((string)($m['url'] ?? ''));
             $lab = trim((string)($m['label'] ?? ''));
+            $prod = is_array($m['product'] ?? null) ? $m['product'] : [];
+            $quote = is_array($m['quote'] ?? null) ? $m['quote'] : [];
+            $pTitle = trim((string)($prod['title'] ?? ''));
+            $pId = (int)($prod['id'] ?? 0);
+            $pPrice = (int)($prod['price'] ?? 0);
+            $pUrl = trim((string)($prod['url'] ?? ''));
+
+            $parts = [];
+            if ($pTitle !== '' && ($pId !== $shownProdId || $pTitle !== $shownProdTitle)) {
+                $shownProdId = $pId;
+                $shownProdTitle = $pTitle;
+                $pLine = '🛍 محصول: ' . $pTitle . ($pPrice > 0 ? ' (' . number_format($pPrice) . ' تومان)' : '');
+                if ($pUrl !== '' && mb_strpos($t, $pUrl) === false) $pLine .= "\n🔗 " . $pUrl;
+                $parts[] = $pLine;
+            }
+            if (!empty($quote['text']) && ($pTitle === '' || mb_strpos((string)$quote['text'], $pTitle) === false)) {
+                $parts[] = '↩️ نقل‌قول: ' . mb_substr((string)$quote['text'], 0, 160);
+            }
+
             if ($t === '' && $lab !== '') $t = $lab;
-            if ($u !== '' && $t !== '' && mb_strpos($t, $u) === false) $t .= "\n" . $u;
+            if ($u !== '' && $t !== '' && mb_strpos($t, $u) === false && bslExtractProductIdFromUrl($u) <= 0) $t .= "\n" . $u;
             elseif ($t === '' && $u !== '') $t = ($lab !== '' ? $lab . ' ' : '') . $u;
             foreach (($m['links'] ?? []) as $lnk) {
                 $lnk = trim((string)$lnk);
-                if ($lnk !== '' && mb_strpos($t, $lnk) === false) $t .= "\n🔗 " . $lnk;
+                if ($lnk === '' || $lnk === $pUrl) continue;
+                if (mb_strpos($t, $lnk) === false) $t .= "\n🔗 " . $lnk;
             }
-            $line = "\n▸ " . mb_substr($t, 0, 700);
+            $bodyPart = ($t !== '' ? '▸ ' . mb_substr($t, 0, 700) : '');
+            if ($bodyPart !== '') $parts[] = $bodyPart;
+            if (!$parts) continue;
+            $line = "\n" . implode("\n", $parts);
             if (mb_strlen($line) > $budget) { $s .= "\n… (بقیه در باسلام)"; break; }
             $s .= $line; $budget -= mb_strlen($line);
         }
         return $s;
     }
     $body = mb_substr((string)($n['text'] ?? ''), 0, 700);
+    $pt = trim((string)($n['product_title'] ?? ''));
+    $pu = trim((string)($n['product_url'] ?? ''));
+    $pp = (int)($n['product_price'] ?? 0);
+    $prodHdr = '';
+    if ($pt !== '') {
+        $prodHdr = "\n🛍 محصول: " . $pt . ($pp > 0 ? ' (' . number_format($pp) . ' تومان)' : '');
+        if ($pu !== '' && mb_strpos($body, $pu) === false) $prodHdr .= "\n🔗 " . $pu;
+    }
     $mu = trim((string)($n['media_url'] ?? ''));
-    if ($mu !== '' && mb_strpos($body, $mu) === false) $body .= ($body !== '' ? "\n" : '') . $mu;
-    return $s . "\nپیام: " . $body;
+    if ($mu !== '' && $mu !== $pu && mb_strpos($body, $mu) === false) $body .= ($body !== '' ? "\n" : '') . $mu;
+    return $s . $prodHdr . "\nپیام: " . $body;
 }
 
 /** v10.603: قالب‌های کاملاً متمایز برای دو جهت گفتگو در پیام‌رسان. */
@@ -69156,9 +69808,15 @@ function arSaveState(array $st): void {
  * روشن باشد، یک پاسخ کوتاه و مؤدبانهٔ فارسی از ارائه‌دهندهٔ فعال می‌گیریم.
  * خروجی ['ok'=>bool, 'text'=>string, 'error'=>string]
  */
-function arAiReplyText(string $text, ?int $timeoutSec = null): array {
+function arAiReplyText(string $text, ?int $timeoutSec = null, array $ctx = []): array {
     $text = trim((string)$text);
-    if ($text === '') return ['ok' => false, 'text' => '', 'error' => 'پیام خالی'];
+    $prod = is_array($ctx['product'] ?? null) ? $ctx['product'] : [];
+    $prodTitle = trim((string)($prod['title'] ?? ''));
+    $prodPrice = (int)($prod['price'] ?? 0);
+    $prodUrl = trim((string)($prod['url'] ?? ''));
+    $quoteText = trim((string)($ctx['quote']['text'] ?? ''));
+    $custText = array_key_exists('customer_text', $ctx) ? trim((string)$ctx['customer_text']) : $text;
+    if ($text === '' && $prodTitle === '') return ['ok' => false, 'text' => '', 'error' => 'پیام خالی'];
     // v9.37: پیام سیستمیِ هوش مصنوعی — پیش‌فرض یا سفارشی از تنظیمات
     $arCfg = arCfg();
     if ((string)($arCfg['ai_system_mode'] ?? 'default') === 'custom' && trim((string)($arCfg['ai_system_text'] ?? '')) !== '') {
@@ -69169,8 +69827,24 @@ function arAiReplyText(string $text, ?int $timeoutSec = null): array {
                 . 'اگر پاسخ سؤال را نمی‌دانی، بگو همکاران به‌زودی پاسخ می‌دهند. '
                 . 'چیزی خارج از نقش پشتیبانی ننویس.';
     }
-    $prompt = "مشتری این پیام را فرستاده:\n\"{$text}\"\n\n"
-            . "با توجه به دستورالعمل‌ات، همین حالا پاسخ مناسب را بده.";
+    $ctxLines = [];
+    if ($prodTitle !== '') {
+        $pLine = 'محصول مورد پرسش مشتری: «' . $prodTitle . '»';
+        if ($prodPrice > 0) $pLine .= ' (قیمت: ' . number_format($prodPrice) . ' تومان)';
+        if ($prodUrl !== '') $pLine .= ' — ' . $prodUrl;
+        $ctxLines[] = $pLine;
+    }
+    if ($quoteText !== '' && ($prodTitle === '' || mb_strpos($quoteText, $prodTitle) === false)) {
+        $ctxLines[] = 'پیام نقل‌قول‌شده توسط مشتری: «' . mb_substr($quoteText, 0, 220) . '»';
+    }
+    $ctxHeader = $ctxLines ? (implode("\n", $ctxLines) . "\n") : '';
+    if ($custText !== '') {
+        $prompt = $ctxHeader . "مشتری این پیام را فرستاده:\n\"{$custText}\"\n\n"
+                . "با توجه به دستورالعمل‌ات، همین حالا پاسخ مناسب را بده.";
+    } else {
+        $prompt = $ctxHeader . "مشتری کارتِ محصول بالا را از صفحهٔ محصول به گفتگو ارسال کرده و منتظر راهنمایی است.\n\n"
+                . "با توجه به دستورالعمل‌ات و نام محصول، همین حالا پاسخ کوتاه و مؤدبانه بده.";
+    }
     $net = aiNetCfg();
     // v9.35: اگر مهلت داده شد (مثلاً برای دکمهٔ آزمایش که نباید کاربر را معطل
     // کند)، همان مهلتِ کوتاه روی همهٔ تلاش‌ها اعمال می‌شود تا حداکثر در
@@ -69245,6 +69919,40 @@ function arPickRule(array $rules, string $text): ?array {
     usort($on, fn($a, $b) => ((int)($a['priority'] ?? 50)) <=> ((int)($b['priority'] ?? 50)));
     foreach ($on as $r) if (arRuleMatches($r, $text)) return $r;
     return null;
+}
+
+/** v10.722: تطبیق قواعد با در نظر گرفتن نام محصول ضمیمه/نقل‌قول‌شده */
+function arPickRuleWithProduct(array $rules, string $customerText, string $productTitle = ''): ?array {
+    $base = arPickRule($rules, $customerText);
+    $prod = trim($productTitle);
+    if ($prod === '') return $base;
+    $combo = trim($customerText !== '' ? ($customerText . ' ' . $prod) : $prod);
+    $withProd = arPickRule($rules, $combo);
+    if ($withProd === null) return $base;
+    if ($base === null) return $withProd;
+    $bm = (string)($base['match'] ?? '');
+    $pm = (string)($withProd['match'] ?? '');
+    if ($bm === 'always' && $pm !== 'always') return $withProd;
+    if ($pm !== 'always' && (int)($withProd['priority'] ?? 50) < (int)($base['priority'] ?? 50)) return $withProd;
+    return $base;
+}
+
+/** v10.722: جایگزینی متغیرهای نام/لینک/قیمت محصول در متن پاسخ قاعده‌ها */
+function arRenderRuleReply(string $reply, array $product = []): string {
+    $pTitle = trim((string)($product['title'] ?? ''));
+    $pPrice = (int)($product['price'] ?? 0);
+    $pUrl = trim((string)($product['url'] ?? ''));
+    $repl = [
+        '{product}'       => $pTitle !== '' ? $pTitle : 'این محصول',
+        '{product_title}' => $pTitle !== '' ? $pTitle : 'این محصول',
+        '{نام_محصول}'     => $pTitle !== '' ? $pTitle : 'این محصول',
+        '{محصول}'         => $pTitle !== '' ? $pTitle : 'این محصول',
+        '{product_url}'   => $pUrl,
+        '{لینک_محصول}'    => $pUrl,
+        '{product_price}' => $pPrice > 0 ? (number_format($pPrice) . ' تومان') : '',
+        '{قیمت_محصول}'    => $pPrice > 0 ? (number_format($pPrice) . ' تومان') : '',
+    ];
+    return strtr($reply, $repl);
 }
 
 /** ارسال واقعی یک پیام به گفتگوی باسلام */
@@ -69354,23 +70062,36 @@ function bslChatThread(string $tk, int $chatId, int $limit = 30): array {
         if (!is_array($m)) continue;
         $sid = (int)($m['sender']['id'] ?? 0);
         $mt  = (string)($m['message_type'] ?? '');
+        $media = bslMsgExtractMedia($m, $tk, true);
+        $prod = is_array($media['product'] ?? null) ? $media['product'] : [];
+        $quote = is_array($media['quote'] ?? null) ? $media['quote'] : [];
         $txt = $m['content']['text'] ?? null;
-        if (!is_string($txt) || trim($txt) === '') $txt = ($mt !== '' && $mt !== 'text') ? '[' . $mt . ']' : '';
-        /* v10.57 (۷۱): اگر پیام تصویر/فایل است، آدرسش را از شکل‌هایِ ممکنِ
-           پاسخ بردار تا در پنجرهٔ چت نمایش داده شود. */
+        if (!is_string($txt) || trim($txt) === '') {
+            if (!empty($prod['title']) || !empty($prod['id'])) {
+                $txt = ''; // کارت محصول به صورت مستقل در UI رندر می‌شود
+            } else {
+                $txt = ($mt !== '' && $mt !== 'text') ? '[' . $mt . ']' : '';
+            }
+        }
+        /* v10.57 (۷۱): تصویرِ مستقیم یا ضمیمه‌شدهٔ پیام (تصویر محصول جدا در product.image می‌آید) */
         $imgMR = '';
         foreach ([$m['attachment']['files'][0]['url'] ?? null,
                   $m['content']['url'] ?? null,
                   $m['content']['files'][0]['url'] ?? null,
-                  $m['url'] ?? null] as $uImgMR) {
+                  $m['url'] ?? null,
+                  $m['content']['image'] ?? null,
+                  $m['image'] ?? null] as $uImgMR) {
             if (is_string($uImgMR) && strncmp($uImgMR, 'http', 4) === 0) { $imgMR = $uImgMR; break; }
         }
-        $out[] = ['mine'   => ($myId > 0 && $sid === $myId),
-                  'sender' => trim((string)($m['sender']['name'] ?? '')),
-                  'text'   => trim((string)$txt),
-                  'at'     => (string)($m['created_at'] ?? ''),
-                  'type'   => $mt,
-                  'img'    => $imgMR];
+        $out[] = ['id'      => (int)($m['id'] ?? 0),
+                  'mine'    => ($myId > 0 && $sid === $myId),
+                  'sender'  => trim((string)($m['sender']['name'] ?? '')),
+                  'text'    => trim((string)$txt),
+                  'at'      => (string)($m['created_at'] ?? ''),
+                  'type'    => $mt,
+                  'img'     => $imgMR,
+                  'product' => (!empty($prod['id']) || !empty($prod['title'])) ? $prod : null,
+                  'quote'   => $quote ?: null];
     }
     return array_reverse($out);
 }
@@ -69487,15 +70208,17 @@ function autoReplyRun(array $cn, bool $dry = false, bool $ignoreGrace = false): 
 
     $st = arLoadState();
     $myId = bslMyUserId($tk);
+    $GLOBALS['_s4ChatProdNetBudget'] = 8;
 
     foreach ($rows as $c) {
         if (!is_array($c)) continue;
         if ($out['replied'] >= $cfg['max_per_run']) break;
-        $nc = bslNormalizeChat($c);
+        $nc = bslNormalizeChat($c, $tk);
         $chatId = (int)$nc['chat_id'];
         if ($chatId <= 0) continue;
         $out['checked']++;
         $row = ['chat_id' => $chatId, 'who' => $nc['who'], 'text' => mb_substr($nc['text'], 0, 90)];
+        if (!empty($nc['product_title'])) $row['product'] = (string)$nc['product_title'];
 
         // فقط گفتگویی که پیام خوانده‌نشده دارد
         if ((int)$nc['unseen'] <= 0) { $out['skipped']++; continue; }
@@ -69505,9 +70228,28 @@ function autoReplyRun(array $cn, bool $dry = false, bool $ignoreGrace = false): 
         if ($myId > 0 && (int)($lm['sender']['id'] ?? 0) === $myId) {
             $out['skipped']++; continue;
         }
-        // فقط پیام متنی — عکس و فاکتور و سفارش را دست نمی‌زنیم
-        $mt = (string)($lm['message_type'] ?? 'text');
-        if ($mt !== '' && $mt !== 'text') {
+        // پیام متنی، پیام محصول («گفتگو با غرفه‌دار»)، یا پیام حاوی محصول/نقل‌قول محصول پذیرفته است؛
+        // تصویر/ویدیو/فایل/ویس/سفارش خالص را دست نمی‌زنیم.
+        $mediaLm = bslMsgExtractMedia($lm, $tk, false);
+        $effProd = is_array($mediaLm['product'] ?? null) ? $mediaLm['product'] : [];
+        if (empty($effProd['title']) && !empty($nc['product_title'])) {
+            $effProd = [
+                'id'     => (int)($nc['product_id'] ?? 0),
+                'title'  => (string)$nc['product_title'],
+                'image'  => (string)($nc['product_image'] ?? ''),
+                'url'    => (string)($nc['product_url'] ?? ''),
+                'price'  => (int)($nc['product_price'] ?? 0),
+                'vendor' => '',
+            ];
+        }
+        $hasProdInLm = !empty($effProd['id']) || !empty($effProd['title']);
+        $mt = strtolower(trim((string)($lm['message_type'] ?? 'text')));
+        $nonAutoMedia = in_array($mt, [
+            'picture', 'image', 'photo', 'video', 'clip', 'gif', 'animation', 'sticker',
+            'voice', 'audio', 'sound', 'product_voice', 'file', 'document', 'location',
+            'order', 'order_process', 'agreement', 'voice_call_phone',
+        ], true);
+        if ($mt !== '' && $mt !== 'text' && $mt !== 'product' && !($hasProdInLm && !$nonAutoMedia)) {
             $row['skip'] = 'پیام متنی نیست (' . $mt . ')'; $out['items'][] = $row; $out['skipped']++; continue;
         }
 
@@ -69533,7 +70275,38 @@ function autoReplyRun(array $cn, bool $dry = false, bool $ignoreGrace = false): 
             $out['items'][] = $row; $out['skipped']++; continue;
         }
 
-        $text = (string)($lm['content']['text'] ?? $nc['text']);
+        // برای گفتگوی آمادهٔ پاسخ، بودجهٔ کامل استعلام نام محصول را باز می‌کنیم
+        $GLOBALS['_s4ChatProdNetBudget'] = max(3, (int)($GLOBALS['_s4ChatProdNetBudget'] ?? 3));
+        if (!empty($effProd['id']) && empty($effProd['title'])) {
+            $resP = bslChatLookupProductMeta((int)$effProd['id'], $tk, true);
+            if ($resP) $effProd = array_merge($effProd, array_filter($resP, fn($v) => $v !== '' && $v !== 0));
+        }
+        $custText = trim((string)($mediaLm['text'] ?? ($nc['text_raw'] ?? '')));
+        if (empty($effProd['id']) && empty($effProd['title'])) {
+            $recentProd = bslInferRecentChatProduct($tk, $chatId, $myId);
+            if (!empty($recentProd['id']) || !empty($recentProd['title'])) {
+                $effProd = $recentProd;
+            }
+        }
+        $prodTitle = trim((string)($effProd['title'] ?? ''));
+        if ($prodTitle !== '') {
+            $row['product'] = $prodTitle;
+            if ((int)($effProd['id'] ?? 0) > 0) $row['product_id'] = (int)$effProd['id'];
+            if ($custText !== '' && mb_stripos($row['text'], $prodTitle, 0, 'UTF-8') === false) {
+                $row['text'] = mb_substr('🛍 ' . $prodTitle . ' | ' . $custText, 0, 90);
+            } elseif ($custText === '') {
+                $row['text'] = mb_substr('🛍 ' . $prodTitle, 0, 90);
+            }
+        }
+        $text = $custText !== '' ? $custText : $prodTitle;
+        if ($text === '' && $prodTitle === '') {
+            $text = trim((string)$nc['text']);
+        }
+        $aiCtx = [
+            'product'       => $effProd,
+            'quote'         => $mediaLm['quote'] ?? [],
+            'customer_text' => $custText,
+        ];
         /* v9.38: ترتیب اولویت پاسخ‌دهی بین قواعد آماده و هوش مصنوعی.
            در تنظیمات می‌توان از بین این حالت‌ها انتخاب کرد:
              rules_first → اول قواعد؛ اگر هیچ قاعده‌ای نخورد هوش مصنوعی
@@ -69549,24 +70322,25 @@ function autoReplyRun(array $cn, bool $dry = false, bool $ignoreGrace = false): 
         $reply = '';
         $aiError = '';
         $rule = null;
+        $pickArRule = static fn() => $prodTitle !== '' ? arPickRuleWithProduct($rules, $text, $prodTitle) : arPickRule($rules, $text);
 
         if ($order === 'ai_first') {
-            $aiRes = arAiReplyText($text);
+            $aiRes = arAiReplyText($text, null, $aiCtx);
             if (!empty($aiRes['ok'])) {
                 $reply = $aiRes['text'];
                 $rid = 'ai';
                 $aiMode = true;
             } else {
                 $aiError = (string)($aiRes['error'] ?? 'خطا');
-                $rule = arPickRule($rules, $text);
+                $rule = $pickArRule();
                 if ($rule !== null) {
                     $rid = (string)$rule['id'];
                     $dmax = (int)($rule['daily_max'] ?? 0);
-                    $reply = (string)$rule['reply'];
+                    $reply = arRenderRuleReply((string)$rule['reply'], $effProd);
                 }
             }
         } elseif ($order === 'ai_only') {
-            $aiRes = arAiReplyText($text);
+            $aiRes = arAiReplyText($text, null, $aiCtx);
             if (!empty($aiRes['ok'])) {
                 $reply = $aiRes['text'];
                 $rid = 'ai';
@@ -69575,20 +70349,20 @@ function autoReplyRun(array $cn, bool $dry = false, bool $ignoreGrace = false): 
                 $aiError = (string)($aiRes['error'] ?? 'خطا');
             }
         } elseif ($order === 'rules_only') {
-            $rule = arPickRule($rules, $text);
+            $rule = $pickArRule();
             if ($rule !== null) {
                 $rid = (string)$rule['id'];
                 $dmax = (int)($rule['daily_max'] ?? 0);
-                $reply = (string)$rule['reply'];
+                $reply = arRenderRuleReply((string)$rule['reply'], $effProd);
             }
         } else { // rules_first (پیش‌فرض)
-            $rule = arPickRule($rules, $text);
+            $rule = $pickArRule();
             if ($rule !== null) {
                 $rid = (string)$rule['id'];
                 $dmax = (int)($rule['daily_max'] ?? 0);
-                $reply = (string)$rule['reply'];
+                $reply = arRenderRuleReply((string)$rule['reply'], $effProd);
             } else {
-                $aiRes = arAiReplyText($text);
+                $aiRes = arAiReplyText($text, null, $aiCtx);
                 if (!empty($aiRes['ok'])) {
                     $reply = $aiRes['text'];
                     $rid = 'ai';
@@ -69629,11 +70403,15 @@ function autoReplyRun(array $cn, bool $dry = false, bool $ignoreGrace = false): 
             $st['chats']['c' . $chatId] = ['at' => $now, 'msg_id' => $lastId, 'rule' => $rid];
             if ($aiMode) {
                 arLogAdd(['chat_id' => $chatId, 'who' => $nc['who'], 'rule' => 'ai',
-                          'in' => mb_substr($text, 0, 120), 'out' => mb_substr($reply, 0, 160)]);
+                          'product' => $prodTitle,
+                          'in' => mb_substr(($prodTitle !== '' && $custText !== '' ? ('[' . $prodTitle . '] ' . $custText) : $text), 0, 120),
+                          'out' => mb_substr($reply, 0, 160)]);
             } else {
                 arDailyBump($st, $rid, $now);
                 arLogAdd(['chat_id' => $chatId, 'who' => $nc['who'], 'rule' => $rid,
-                          'in' => mb_substr($text, 0, 120), 'out' => mb_substr($reply, 0, 160)]);
+                          'product' => $prodTitle,
+                          'in' => mb_substr(($prodTitle !== '' && $custText !== '' ? ('[' . $prodTitle . '] ' . $custText) : $text), 0, 120),
+                          'out' => mb_substr($reply, 0, 160)]);
             }
         } else {
             $out['failed']++;
@@ -69838,11 +70616,12 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
         // v8.31: پاسخ chats به شکل data.chats است، نه data
         $rows = $r['body']['data']['chats'] ?? ($r['body']['data'] ?? []);
         $totalSeen += count($rows);
+        $GLOBALS['_s4ChatProdNetBudget'] = 8;
 
         $norm = [];
         foreach ($rows as $c) {
             if (!is_array($c)) continue;
-            $nc = bslNormalizeChat($c);
+            $nc = bslNormalizeChat($c, $tk);
             if ($nc['chat_id'] <= 0) continue;
             $_myUid84 = bslMyUserId($tk);
             $_lmSid84 = (int)($c['last_message']['sender']['id'] ?? 0);
@@ -77648,6 +78427,7 @@ if (isset($_GET['bsl_chats_list'])) {
     $ep = 'chats?limit=' . $limit . '&order_by=updated_at';
     if ($filter === 'unseen') $ep .= '&filters=unseen';
     $rows=[]; $shopErrors=[]; $shopsOk=0;
+    $GLOBALS['_s4ChatProdNetBudget'] = 8;
     foreach ($shops as $requestShop) {
         $r=bslReqRead((string)$requestShop['token'],$ep);
         if (empty($r['ok'])) {
@@ -77659,7 +78439,7 @@ if (isset($_GET['bsl_chats_list'])) {
         $raw=$r['body']['data']['chats']??($r['body']['data']??[]);
         foreach ((array)$raw as $c) {
             if (!is_array($c)) continue;
-            $n=bslNormalizeChat($c); if ((int)$n['chat_id']<=0) continue;
+            $n=bslNormalizeChat($c, (string)$requestShop['token']); if ((int)$n['chat_id']<=0) continue;
             $payloadVendor=(int)($c['vendor_id']??($c['vendor']['id']??($c['shop']['vendor_id']??($c['shop']['id']??0))));
             $n['vendor_id']=$payloadVendor>0?$payloadVendor:(int)$requestShop['vendor_id'];
             $n['shop_name']=(string)$requestShop['name'];
@@ -77728,12 +78508,13 @@ if (isset($_GET['bsl_notify_selected'])) {
         if (!$okAny) { echo json_encode(['ok' => false, 'error' => $lastErr ?: 'دریافت سفارش‌ها ناموفق'], JSON_UNESCAPED_UNICODE); exit; }
     } elseif ($kind === 'chats') {
         $picked=[]; $okAny=false; $lastErr='';
+        $GLOBALS['_s4ChatProdNetBudget'] = 8;
         foreach (bslChatShops($cn) as $shC) {
             $r=bslReqRead((string)$shC['token'],'chats?limit=50&order_by=updated_at');
             if (empty($r['ok'])) { $lastErr=bslApiError($r,'دریافت گفتگوها ناموفق','chats','customer.chat.read'); continue; }
             $okAny=true; $raw=$r['body']['data']['chats']??($r['body']['data']??[]);
             foreach ((array)$raw as $c) {
-                if (!is_array($c)) continue; $n=bslNormalizeChat($c); if ((int)$n['chat_id']<=0) continue;
+                if (!is_array($c)) continue; $n=bslNormalizeChat($c, (string)$shC['token']); if ((int)$n['chat_id']<=0) continue;
                 $n['vendor_id']=(int)$shC['vendor_id']; $n['shop_name']=(string)$shC['name'];
                 $n['_token']=(string)$shC['token']; $n['row_key']=$n['vendor_id'].':'.$n['chat_id'];
                 if ($wantRaw ? in_array($n['row_key'],$wantRaw,true) : $n['unseen']>0) $picked[]=$n;
@@ -107848,6 +108629,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.722', t:'🛍 استخراج هوشمند نام، تصویر، قیمت و لینک محصول از پیام‌های «گفتگو با غرفه‌دار» باسلام در کل پنل، پیام‌رسان‌ها و پاسخ خودکار', items:[
+    'استخراج‌گر پیام چت باسلام (bslMsgExtractMedia و bslMsgExtractInlineProductMeta) به پشتیبانی از تمام ساختارهای ارسال محصول هنگام کلیک مشتری روی «گفتگو با غرفه‌دار» مجهز شد: message_type=product، فیلدهای content.entity_id، content.metadata/entity/product، آرایهٔ content.links[]، دکمه‌های reply_markup، لینک محصول داخل متن، و پیام نقل‌قول‌شده (replied_message).',
+    'لایه‌ٔ واکشی و کش سریع متادیتای محصول چت باسلام (bslChatLookupProductMeta با کش پایدار bsl_chat_product_cache.json و پشتیبانی از دفترچهٔ محلی غرفه، GET v1/products/{id} و core.basalam.com/v4/products/{id}) برای تبدیل خودکار شناسه یا لینک محصول به نام کامل، عکس، قیمت و لینک باسلام اضافه شد.',
+    'موتور پاسخ خودکار و هوش مصنوعی (autoReplyRun، arAiReplyText، arPickRuleWithProduct و arRenderRuleReply) از این پس پیام‌های محصول و نقل‌قول محصول (و نیز کارت محصولِ ارسال‌شده در چند پیام قبلِ مشتری) را رد نمی‌کند؛ بلکه نام، قیمت و لینک محصول را به هوش مصنوعی و تطبیق قواعد می‌دهد و متغیرهای {product} / {نام_محصول} را در پاسخ جایگزین می‌کند.',
+    'نام، تصویر و لینک محصول به‌علاوهٔ باکس نقل‌قول به طور یکپارچه در اتاق چت وب‌اپ (bslChatThread و mrMsgHtml)، لیست گفتگوها و اعلان‌های زنده (bsl_chats، bsl_chats_list، mrNotifPush و جدول مودال گفتگوها) و پیام‌های ارسالی به بله/تلگرام/روبیکا (bslFetchChatMessages و bslChatMsg) نمایش داده می‌شوند.'
+  ]},
   {v:'10.721', t:'🚫 تبدیل تیک‌های دراپ‌داون غرفه به استثنا و افزودن ارسال گروهی سریع پیام اجازه به غرفه‌های باسلام', items:[
     'منطق تیک‌های دراپ‌داون سرچ‌پذیر غرفه (#bbsVendorDropdown) در پرفروش‌های باسلام از شمول به «استثنا» (excluded_vendors) تغییر کرد؛ غرفه‌های تیک‌خورده با نشانگر قرمز مستثنی و حذف می‌شوند و این استثنا مستقیماً در جدول، پروفایل «باسلام -پرفروش ها» و خروجی Excel اعمال می‌شود.',
     'دکمه و مودال یکپارچهٔ «ارسال پیام اجازه به غرفه‌ها» (#s4OutreachModal) به بخش «پرفروش‌ترین محصولات باسلام» و هر دو بخش «غرفه‌های شخص ثالث» (جدول کشف و ایمپورت دسته‌جمعی لینک) اضافه شد؛ شامل انتخاب غرفهٔ فرستنده از میان غرفه‌های متصل، متن پیشنهادی مؤدبانه و قابل ویرایش/ذخیره با متغیرهای {غرفه} و {غرفه_ما}، پیش‌نمایش زنده و گزینهٔ عدم ارسال مجدد.',
@@ -115206,9 +115993,34 @@ async function mrPollThread(force){
 }
 function mrMsgHtml(m){
   let inner='';
-  if(m.img)inner+='<div style="margin-top:4px"><img src="'+esc(m.img)+'" alt="تصویر" style="max-width:180px;max-height:180px;border-radius:6px;display:block;cursor:zoom-in" title="برای بزرگ‌نمایی کلیک کنید" onclick="event.stopPropagation();mrLightbox(this.src)"></div>';
+  const q=m.quote&&typeof m.quote==='object'?m.quote:null;
+  if(q&&(q.text||q.img)){
+    inner+='<div style="border-right:3px solid #60a5fa;background:#0f172a99;padding:4px 8px;margin-bottom:5px;border-radius:4px;font-size:10.5px;color:#94a3b8">'+
+      '<div style="color:#93c5fd;font-size:9.5px;margin-bottom:1px">↩️ '+(q.sender?esc(q.sender):'پاسخ به پیام قبلی')+'</div>'+
+      (q.text?'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(String(q.text).slice(0,150))+'</div>':'')+
+    '</div>';
+  }
+  const pr=m.product&&typeof m.product==='object'?m.product:null;
+  if(pr&&(pr.title||pr.id)){
+    const pTitle=String(pr.title||('محصول #'+toFa(pr.id)));
+    const pUrl=(pr.url&&/^https?:\/\//i.test(String(pr.url)))?String(pr.url):'';
+    const pImg=(pr.image&&/^https?:\/\//i.test(String(pr.image)))?String(pr.image):'';
+    const pPrice=Number(pr.price||0);
+    inner+='<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;margin-bottom:5px;border-radius:6px;background:#0f172a;border:1px solid #38bdf844">'+
+      (pImg?'<img src="'+esc(pImg)+'" alt="تصویر محصول" style="width:44px;height:44px;object-fit:cover;border-radius:5px;flex:0 0 auto;cursor:zoom-in;border:1px solid #334155" onclick="event.stopPropagation();mrLightbox(this.src)" title="بزرگ‌نمایی تصویر محصول">':'')+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:9.5px;color:#38bdf8;margin-bottom:2px">🛍 محصول مورد پرسش</div>'+
+        '<div style="font-size:11.5px;font-weight:700;color:#f1f5f9;line-height:1.45">'+esc(pTitle)+'</div>'+
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px;font-size:10px">'+
+          (pPrice>0?'<span style="color:#4ade80">'+toFa(pPrice.toLocaleString('en-US'))+' تومان</span>':'')+
+          (pUrl?'<a href="'+esc(pUrl)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="color:#93c5fd;text-decoration:none">مشاهده در باسلام ↗</a>':'')+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  }
+  if(m.img&&(!pr||!pr.image||m.img!==pr.image))inner+='<div style="margin-top:4px"><img src="'+esc(m.img)+'" alt="تصویر" style="max-width:180px;max-height:180px;border-radius:6px;display:block;cursor:zoom-in" title="برای بزرگ‌نمایی کلیک کنید" onclick="event.stopPropagation();mrLightbox(this.src)"></div>';
   if(m.text)inner+='<div>'+esc(m.text)+'</div>';
-  else if(!m.img&&m.type&&m.type!=='text')inner+='<span style="color:#64748b">['+esc(m.type)+']</span>';
+  else if(!m.img&&!pr&&m.type&&m.type!=='text')inner+='<span style="color:#64748b">['+esc(m.type)+']</span>';
   const mine=!!m.mine;
   return '<div style="margin-bottom:9px">'+
     '<div style="font-size:9.5px;color:#64748b;margin-bottom:2px">'+esc(m.sender||(mine?'شما':'مشتری'))+(m.at?' · '+mrRelTime(m.at):'')+'</div>'+
@@ -115819,6 +116631,7 @@ function mrNotifPush(c){
       '<button class="mrnsys" style="flex:0 0 auto;background:none;border:none;color:'+(mrSysOn()?'#4ade80':'#475569')+';font-size:12px;cursor:pointer;padding:2px 4px" title="اعلانِ سیستم‌عامل — پیام‌های مشتری در اعلان‌هایِ سیستم">🖥</button>'+
       '<button class="mrnbtn-close" style="flex:0 0 auto;background:none;border:none;color:#475569;font-size:13px;cursor:pointer;padding:2px 4px" title="بستن">✕</button>'+
     '</div>'+
+    (c.product_title?'<div class="mrnprod" style="margin:0 12px 4px;padding:3px 7px;border-radius:6px;background:#0f2942;border:1px solid #38bdf844;color:#7dd3fc;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">🛍 '+esc(c.product_title)+'</div>':'')+
     '<div class="mrntext" style="font-size:11.5px;color:#cbd5e1;line-height:1.8;padding:0 12px '+(c.last_img?'4px':'8px')+';overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">'+esc(mrNotifText(c))+'</div>'+
     (c.last_img?'<div style="padding:0 12px 8px"><img src="'+esc(c.last_img)+'" alt="تصویرِ مشتری" onclick="event.stopPropagation();mrLightbox(this.src)" style="max-width:100%;max-height:120px;border-radius:10px;cursor:zoom-in;border:1px solid #334155" title="برای بزرگ‌نمایی کلیک کنید"></div>':'')+
     '<div class="mrnreply" style="display:block;padding:8px 12px 10px;background:#0b122055;border-top:1px solid #1e293b">'+
@@ -117773,7 +118586,9 @@ function inqRenderBody(){
     }else{
       h+='<td>'+esc(r.who||'—')+'</td>';
       h+='<td style="min-width:140px"><span style="color:#67e8f9;font-weight:700">'+esc(r.shop_name||'غرفهٔ پیش‌فرض')+'</span>'+(r.vendor_id?'<div style="font-size:9px;color:#64748b;direction:ltr;text-align:right">#'+toFa(r.vendor_id)+'</div>':'')+'</td>';
-      h+='<td style="max-width:340px;color:#cbd5e1">'+esc((r.text||'').slice(0,90))+'</td>';
+      h+='<td style="max-width:340px;color:#cbd5e1">'
+        +(r.product_title?'<div style="font-size:10px;color:#7dd3fc;margin-bottom:2px">🛍 '+esc(String(r.product_title).slice(0,70))+'</div>':'')
+        +esc((r.text||'').slice(0,110))+'</td>';
       h+='<td style="text-align:center">'+(r.unseen>0
         ?'<span style="font-size:10px;padding:2px 7px;border-radius:10px;background:#7f1d1d;color:#fca5a5">'+toFa(r.unseen)+'</span>'
         :'<span style="color:#475569">—</span>')+'</td>';
