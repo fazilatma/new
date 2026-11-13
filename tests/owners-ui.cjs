@@ -12,7 +12,7 @@ w.eval(script + `
   PK.date = {get:()=> '2026-09-08',set() {}};
   window.app = {state, calc, ownerFinance, companyReportOrders, summarize, renderOrders, renderOwners, renderBooths,
     renderDashboard, renderReports, fillSelects, editOrder, formData, liveCalc, newOwnerOrder, resetForm, buildNav, go,
-    charts: testCharts, setIncludeOwners, ownerBoothModal, ownerTokenModal, Store, submitOrder};
+    charts: testCharts, setIncludeOwners, ownerBoothModal, assignOwnerModal, connectedOwnerCandidates, submitOwnerAssignment, Api, Store, submitOrder};
 `);
 const a=w.app, $=s=>w.document.querySelector(s);
 a.state.booths=[{id:1,name:'Owned',is_independent:0},{id:2,name:'Partner',owner_name:'Owner',is_independent:1,owner_share_pct:20}];
@@ -57,6 +57,28 @@ $('#ow-q').value='no-such-order';a.renderOwners();assert.equal($('#owner-orders-
   a.Store.saveOrder=async o=>({...o,owner_share_pct:20,credit_fee_pct:5});
   await a.submitOrder({preventDefault(){}});
   assert($('#view-owners').classList.contains('active'));assert.equal(a.state.orders[0].owner_payment_mode,'credit');
+  // Assignment reuses connected booths; unconnected/already-independent booths are excluded.
+  a.state.integrations=[];a.ownerBoothModal();assert($('#modal-body').textContent.includes('اتصال‌ها'));assert.equal(w.document.querySelectorAll('.assign-owner-check').length,0);
+  a.state.booths.push({id:3,name:'No connection',is_independent:0});
+  a.state.integrations=[{id:1,type:'basalam',booth_id:1,has_token:true},{id:2,type:'basalam',booth_id:1,has_token:true},{id:3,type:'basalam',booth_id:2,has_token:true}];
+  a.state.orders.push({...base,id:12,order_code:'MOVE-ME',booth_id:1,is_independent:0});
+  a.ownerBoothModal();assert.equal(w.document.querySelectorAll('.assign-owner-check').length,1);assert(!$('#ob-name'));
+  await a.submitOwnerAssignment();assert($('#assign-owner-error').textContent.includes('انتخاب'));
+  $('.assign-owner-check').checked=true;await a.submitOwnerAssignment();assert($('#assign-owner-error').textContent.includes('تایید'));
+  $('#assign-owner-confirm').checked=true;$('#assign-share-1').value=25;$('#assign-name-1').value='Assigned Owner';
+  let posted;
+  a.Api.req=async(path,method,body)=>{
+    assert.equal(path,'/booths/assign-owners');assert.equal(method,'POST');posted=body;
+    Object.assign(a.state.booths.find(b=>b.id===1),{is_independent:1,owner_share_pct:25,owner_name:'Assigned Owner'});
+    Object.assign(a.state.orders.find(o=>o.id===12),{is_independent:1,owner_share_pct:25,credit_fee_pct:10});
+    return {assigned:1,orders_moved:1};
+  };
+  a.Store.listBooths=async()=>a.state.booths;a.Store.listOrders=async()=>a.state.orders;
+  await a.submitOwnerAssignment();assert.equal(posted.booths.length,1);assert.equal(posted.booths[0].id,'1');assert.equal(posted.confirm_existing,true);
+  assert.equal(a.state.booths.length,3);assert.equal(a.state.integrations.length,3);assert($('#owner-managers').textContent.includes('Assigned Owner'));assert(!$('#booths-grid').textContent.includes('Owned'));
+  a.renderOrders();assert(!$('#orders-tbl').textContent.includes('MOVE-ME'));a.renderOwners();assert($('#owner-orders-table').textContent.includes('MOVE-ME'));
+  assert.equal(a.connectedOwnerCandidates().length,0);
+  console.log('Assignment UI passed: empty state, checklist, confirmation, reuse of IDs/tokens, list and order movement');
   console.log('Owner UI/finance passed: split, cash/credit, losses, missing cost, preserved rates, tables, filters, pagination, edit/save, charts, inclusion toggle');
   dom.window.close();
 })().catch(e=>{dom.window.close();console.error(e);process.exitCode=1;});

@@ -138,6 +138,25 @@ function d1Store(db) {
   return {
     mode: 'd1',
     migrate,
+    // D1 batch is a transaction: readers cannot see moved orders without the booth move.
+    assignOwners: async (assignments, fee) => {
+      const statements = [];
+      for (const a of assignments) {
+        const eligible = `EXISTS (SELECT 1 FROM booths b JOIN integrations i ON i.booth_id = b.id
+          WHERE b.id = ? AND COALESCE(b.is_independent,0) = 0 AND i.type = 'basalam' AND length(trim(COALESCE(i.token,''))) > 0)`;
+        statements.push(db.prepare(`UPDATE orders SET is_independent = 1, owner_share_pct = ?, credit_fee_pct = ?, owner_label = ?
+          WHERE booth_id = ? AND COALESCE(is_independent,0) = 0 AND ${eligible}`)
+          .bind(a.owner_share_pct, fee, a.owner_name, a.id, a.id));
+        statements.push(db.prepare(`UPDATE booths SET is_independent = 1, owner_name = ?, owner_share_pct = ?
+          WHERE id = ? AND COALESCE(is_independent,0) = 0 AND ${eligible}`)
+          .bind(a.owner_name, a.owner_share_pct, a.id, a.id));
+      }
+      const results = await db.batch(statements);
+      return results.reduce((sum,r,i) => {
+        sum[i % 2 ? 'assigned' : 'orders_moved'] += r.meta?.changes || 0;
+        return sum;
+      }, {assigned:0,orders_moved:0});
+    },
     list: (t) => all(`SELECT * FROM ${t} ORDER BY id DESC LIMIT 5000`),
     findBy: (t, f, v) => get(`SELECT * FROM ${t} WHERE ${f} = ? LIMIT 1`, [v]),
     insert: async (t, obj) => {
@@ -643,7 +662,10 @@ async function checkOwnerIntegration(store, obj, previous = null) {
   if (previous && (+booth?.is_independent || +oldBooth?.is_independent) && String(boothId) !== String(previous.booth_id)) return 'اتصال خودفرما قابل انتقال به غرفه دیگر نیست';
   if (!+booth?.is_independent) return '';
   const vendor = obj.vendor_id ?? previous?.vendor_id;
-  if (!vendor) return 'توکن خودفرما باید ابتدا تست شود و شناسه غرفه مشخص باشد';
+  if (!vendor) {
+    if (previous && !obj.token && String(boothId) === String(previous.booth_id)) return ''; // Existing token-only connections can still toggle auto-sync.
+    return 'توکن خودفرما باید ابتدا تست شود و شناسه غرفه مشخص باشد';
+  }
   if (previous?.vendor_id && String(previous.vendor_id) !== String(vendor)) return 'شناسه غرفه توکن با اتصال قبلی مطابقت ندارد';
   const rows = await store.list('integrations');
   if (rows.some(x => x.type === 'basalam' && x.vendor_id && ((String(x.vendor_id) === String(vendor) && String(x.booth_id) !== String(boothId)) || (String(x.booth_id) === String(boothId) && String(x.vendor_id) !== String(vendor))))) return 'این توکن/غرفه با اتصال موجود تداخل دارد';
@@ -1127,6 +1149,29 @@ async function handleApi(req, store, url) {
     return json({ error: 'method not allowed' }, 405);
   }
 
+  /* Explicit, atomic reassignment of connected booths and their existing orders. */
+  if (resource === 'booths' && id === 'assign-owners' && method === 'POST') {
+    const b = await body();
+    if (b.confirm_existing !== true) return json({error:'انتقال سفارش‌های موجود باید تایید شود'},400);
+    if (!Array.isArray(b.booths) || !b.booths.length || b.booths.length > 50) return json({error:'بین یک تا ۵۰ غرفه را انتخاب کنید'},400);
+    const assignments = [], seen = new Set(), connections = await store.list('integrations');
+    for (const entry of b.booths) {
+      if (!entry || !Number.isSafeInteger(Number(entry.id)) || Number(entry.id) <= 0 || seen.has(String(entry.id))) return json({error:'شناسه غرفه نامعتبر یا تکراری است'},400);
+      seen.add(String(entry.id));
+      const booth = await store.findBy('booths','id',entry.id);
+      if (!booth) return json({error:'غرفه انتخاب‌شده یافت نشد'},404);
+      if (+booth.is_independent) return json({error:'این غرفه قبلاً خودفرما شده است؛ فهرست را تازه‌سازی کنید'},409);
+      if (!connections.some(c=>c.type==='basalam' && String(c.booth_id)===String(booth.id) && String(c.token||'').trim())) return json({error:'فقط غرفه‌های دارای اتصال باسلام و توکن قابل انتخاب هستند'},400);
+      const share=Number(entry.owner_share_pct), name=String(entry.owner_name||'').trim();
+      if (entry.owner_share_pct == null || entry.owner_share_pct === '' || !Number.isFinite(share) || share<0 || share>100 || !name) return json({error:'نام غرفه‌دار و درصد بین صفر تا صد الزامی است'},400);
+      assignments.push({id:booth.id,owner_name:name.slice(0,200),owner_share_pct:share});
+    }
+    const setting = await store.getSetting('owner_credit_fee_pct');
+    const fee = Math.min(100,Math.max(0,setting == null ? 5 : num(setting,5)));
+    const result = await store.assignOwners(assignments,fee);
+    return json({ok:true,...result});
+  }
+
   /* منابع CRUD */
   const config = {
     booths: { fields: BOOTH_FIELDS },
@@ -1160,7 +1205,7 @@ async function handleApi(req, store, url) {
     if (resource === 'booths') {
       if (b.owner_share_pct != null && (!Number.isFinite(Number(b.owner_share_pct)) || Number(b.owner_share_pct) < 0 || Number(b.owner_share_pct) > 100)) return json({error: 'درصد سهم مجموعه باید بین صفر و صد باشد'}, 400);
       const previous = id ? await store.findBy('booths', 'id', id) : null;
-      if (previous && b.is_independent != null && !!Number(previous.is_independent) !== !!Number(b.is_independent)) return json({error: 'نوع مالکیت غرفه پس از ایجاد تغییر نمی‌کند'}, 400);
+      if (previous && b.is_independent != null && !!Number(previous.is_independent) !== !!Number(b.is_independent)) return json({error: 'برای تخصیص خودفرما از دکمه افزودن غرفه‌دار خودفرما استفاده کنید'}, 400);
     }
     const name = String(b.name || '').trim();
     if (!name && method === 'POST') return json({ error: 'نام الزامی است' }, 400);

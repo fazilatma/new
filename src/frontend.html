@@ -452,7 +452,8 @@ tailwind.config = {
       <div id="booths-bulkbar"></div>
       <div id="booths-grid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
       <div class="glass card p-4 mt-5">
-        <div class="flex flex-wrap gap-3 items-center mb-3"><h2 class="font-black">🤝 غرفه‌داران خودفرما و توکن‌ها</h2><button class="btn btn-primary" onclick="ownerBoothModal()">＋ غرفه‌دار خودفرما</button></div>
+        <div class="flex flex-wrap gap-3 items-center mb-3"><h2 class="font-black">🤝 غرفه‌داران خودفرما و توکن‌ها</h2><button class="btn btn-primary" onclick="ownerBoothModal()">＋ افزودن غرفه‌دار خودفرما</button></div>
+        <p class="text-xs text-slate-500 mb-3">ابتدا غرفه را با توکن در تب اتصال‌ها ثبت کنید؛ سپس با «افزودن غرفه‌دار خودفرما» از فهرست غرفه‌های متصل انتخاب کنید.</p>
         <div class="flex flex-wrap items-center gap-3 mb-3"><label>کارمزد سراسری اعتبار (%) <input id="owner-fee-setting" type="number" min="0" max="100" step="0.01" class="inp !w-24"></label><button class="btn btn-soft" onclick="saveOwnerFee()">ذخیره نرخ</button><label>بازه سینک <select id="owner-sync-days" class="inp !w-auto"><option value="30">۳۰ روز</option><option value="90">۹۰ روز</option><option value="all">همه سفارش‌ها</option></select></label></div>
         <p class="text-xs text-slate-500 mb-3">مثال: مبلغ نقدی ۱۰۰٬۰۰۰ با نرخ ۵٪، اعتباری ۱۰۵٬۰۰۰ می‌شود. نرخ و درصد سهم فقط برای سفارش‌های ثبت/واردشده بعد از تغییر اعمال می‌شوند، نه سوابق قبلی.</p>
         <div id="owner-managers" class="grid lg:grid-cols-2 gap-4"></div>
@@ -618,7 +619,7 @@ tailwind.config = {
 'use strict';
 /* ═══════════════ ابزارهای عمومی ═══════════════ */
 const $ = (s) => document.querySelector(s);
-const APP_VER = '1.21.0';
+const APP_VER = '1.22.0';
 const $$ = (s) => [...document.querySelectorAll(s)];
 const FA_D = '۰۱۲۳۴۵۶۷۸۹';
 const toFa = (x) => String(x).replace(/[0-9]/g, (d) => FA_D[d]);
@@ -1621,9 +1622,9 @@ function renderOwnerManagers() {
     const conns = state.integrations.filter(c => String(c.booth_id) === String(b.id) && c.type === 'basalam');
     return `<div class="glass card p-4"><h3 class="font-black">${esc(b.owner_name || b.name)} • ${esc(b.name)}</h3>
       <p class="text-xs my-2">${esc(b.owner_phone || '')} • سهم مجموعه از سود: ${fmtN(b.owner_share_pct)}٪</p>
-      <div class="flex flex-wrap gap-2 mb-2"><button class="btn btn-soft" onclick="ownerBoothModal('${b.id}')">ویرایش غرفه‌دار / درصد</button><button class="btn btn-primary" onclick="ownerTokenModal('${b.id}')">＋ توکن</button><button class="btn btn-soft" onclick="go('owners');$('#ow-booth').value='${b.id}';renderOwners()">سفارش‌ها</button></div>
+      <div class="flex flex-wrap gap-2 mb-2"><button class="btn btn-soft" onclick="ownerBoothModal('${b.id}')">ویرایش غرفه‌دار / درصد</button><button class="btn btn-primary" onclick="go('integrations')">مدیریت اتصال‌ها</button><button class="btn btn-soft" onclick="go('owners');$('#ow-booth').value='${b.id}';renderOwners()">سفارش‌ها</button></div>
       ${conns.map(c => `<div class="rounded-xl bg-slate-100 dark:bg-white/5 p-3 mt-2 text-xs"><b>${esc(c.name || c.vendor_title || 'اتصال باسلام')}</b> • ${esc(c.token_hint || 'توکن ذخیره شده')}
-        <div class="flex flex-wrap gap-2 mt-2"><button class="btn btn-soft" onclick="syncOwnerToken('${c.id}',this)">🔄 سینک</button><button class="btn btn-soft" onclick="ownerTokenModal('${b.id}','${c.id}')">تعویض توکن</button><button class="btn btn-danger" onclick="removeOwnerToken('${c.id}')">حذف توکن</button><label>خودکار <input type="checkbox" ${+c.auto_sync ? 'checked' : ''} onchange="toggleAuto('${c.id}',this.checked)"></label></div><p>${esc(c.last_status || '')}</p></div>`).join('') || '<p class="text-xs text-amber-600">هنوز توکنی اضافه نشده است.</p>'}</div>`;
+        <div class="flex flex-wrap gap-2 mt-2"><button class="btn btn-soft" onclick="syncOwnerToken('${c.id}',this)">🔄 سینک</button><button class="btn btn-soft" onclick="editInteg('${c.id}')">ویرایش اتصال / توکن</button><button class="btn btn-danger" onclick="removeOwnerToken('${c.id}')">حذف توکن</button><label>خودکار <input type="checkbox" ${+c.auto_sync ? 'checked' : ''} onchange="toggleAuto('${c.id}',this.checked)"></label></div><p>${esc(c.last_status || '')}</p></div>`).join('') || '<p class="text-xs text-amber-600">هنوز توکنی اضافه نشده است.</p>'}</div>`;
   }).join('') || emptyBox('هنوز غرفه‌دار خودفرما اضافه نشده است');
 }
 async function saveOwnerFee() {
@@ -1632,14 +1633,61 @@ async function saveOwnerFee() {
   try { await Store.saveSettings({owner_credit_fee_pct:fee}); state.settings.owner_credit_fee_pct = fee; toast('نرخ جدید فقط برای سفارش‌های بعدی اعمال می‌شود'); }
   catch(e) { toast(e.message,'err'); }
 }
+function connectedOwnerCandidates() {
+  return state.booths.filter(b => !Number(b.is_independent) && state.integrations.some(c =>
+    c.type === 'basalam' && String(c.booth_id) === String(b.id) && c.has_token));
+}
+function assignOwnerModal() {
+  const candidates = connectedOwnerCandidates();
+  if (!candidates.length) {
+    openModal({title:'افزودن غرفه‌دار خودفرما', body:'<p class="text-sm leading-7">غرفه متصل و تخصیص‌نیافته‌ای وجود ندارد. ابتدا در تب «اتصال‌ها»، غرفه باسلام را با توکن ثبت کنید؛ سپس به این بخش برگردید.</p>', buttons:[{label:'رفتن به اتصال‌ها',onClick:()=>{closeModal();go('integrations');}}]});
+    return;
+  }
+  openModal({title:'انتخاب غرفه‌های خودفرما از اتصال‌ها', body:`
+    <p class="text-sm leading-7 mb-3">غرفه‌ها را تیک بزنید و سهم مجموعه از سود خالص هر کدام را مشخص کنید. توکن جدید یا غرفه تکراری ساخته نمی‌شود.</p>
+    <div class="flex flex-col gap-3">${candidates.map(b => {
+      const count = state.orders.filter(o => String(o.booth_id) === String(b.id) && !isOwnerOrder(o)).length;
+      return `<div class="rounded-xl border border-slate-300 dark:border-white/10 p-3">
+        <label class="font-bold flex items-center gap-2"><input type="checkbox" class="assign-owner-check w-4 h-4" value="${b.id}"> ${esc(b.name)} <span class="text-xs text-slate-500">(${fmtN(count)} سفارش موجود)</span></label>
+        <div class="grid sm:grid-cols-2 gap-2 mt-2"><label class="text-xs">نام غرفه‌دار<input id="assign-name-${b.id}" class="inp" value="${esc(b.owner_name || b.name)}"></label><label class="text-xs">درصد سهم مجموعه از سود<input id="assign-share-${b.id}" class="inp" type="number" min="0" max="100" step="0.01" value="${N(b.owner_share_pct)}"></label></div>
+      </div>`;
+    }).join('')}</div>
+    <div class="rounded-xl bg-amber-100 dark:bg-amber-500/10 p-3 mt-3 text-xs leading-7">
+      غرفه‌های انتخاب‌شده از فهرست اصلی خارج می‌شوند. تمام سفارش‌های موجود آن‌ها نیز به تب غرفه‌داران منتقل می‌شوند؛ هزینه‌ها، وضعیت‌ها، شناسه‌ها و توکن‌ها حفظ می‌شوند. سهم انتخابی و نرخ اعتبار فعلی (${fmtN(state.settings.owner_credit_fee_pct ?? 5)}٪) برای سفارش‌های منتقل‌شده ثبت می‌شود. نرخ‌های سفارش‌های قبلاً خودفرما تغییر نمی‌کند.
+      <label class="flex gap-2 items-center mt-2 font-bold"><input type="checkbox" id="assign-owner-confirm"> انتقال سفارش‌های موجود و اثر آن بر گزارش‌ها را تایید می‌کنم</label>
+    </div><div id="assign-owner-error" class="text-xs text-rose-600 mt-2" role="alert"></div>`,
+    buttons:[{label:'تخصیص غرفه‌های انتخاب‌شده',onClick:submitOwnerAssignment}]});
+}
+let assigningOwners = false;
+async function submitOwnerAssignment() {
+  if (assigningOwners) return;
+  const error = $('#assign-owner-error');
+  const selected = [...document.querySelectorAll('.assign-owner-check:checked')];
+  if (!selected.length) {error.textContent='حداقل یک غرفه را انتخاب کنید';return;}
+  if (!$('#assign-owner-confirm').checked) {error.textContent='ابتدا انتقال سفارش‌های موجود را تایید کنید';return;}
+  const booths = selected.map(el => ({id:el.value, owner_name:$('#assign-name-'+el.value).value.trim(), owner_share_pct:Number($('#assign-share-'+el.value).value)}));
+  if (booths.some(b=>!b.owner_name || !Number.isFinite(b.owner_share_pct) || b.owner_share_pct<0 || b.owner_share_pct>100)) {error.textContent='نام غرفه‌دار و درصد بین صفر تا صد الزامی است';return;}
+  assigningOwners = true;error.textContent='در حال انتقال…';
+  try {
+    const r=await Api.req('/booths/assign-owners','POST',{booths,confirm_existing:true});
+    // Refresh the existing records instead of adding local duplicates.
+    const [newBooths,newOrders]=await Promise.all([Store.listBooths(),Store.listOrders()]);
+    state.booths=newBooths;state.orders=newOrders;state.sel.booths.clear();state.sel.orders.clear();
+    closeModal();fillSelects();updateSideProfit();go('booths');
+    toast(`${fmtN(r.assigned)} غرفه به خودفرما تخصیص یافت؛ ${fmtN(r.orders_moved)} سفارش منتقل شد`);
+  } catch(e) { error.textContent=e.message || 'تخصیص ناموفق بود؛ فهرست را تازه‌سازی کنید'; }
+  finally {assigningOwners=false;}
+}
+
 function ownerBoothModal(id) {
+  if (!id) { assignOwnerModal(); return; }
   const b = state.booths.find(x => String(x.id) === String(id)) || {};
   openModal({title: id ? 'ویرایش غرفه‌دار خودفرما' : 'افزودن غرفه‌دار خودفرما', body: `<div class="flex flex-col gap-3">
     <label>نام غرفه<input id="ob-name" class="inp" value="${esc(b.name || '')}"></label>
     <label>نام غرفه‌دار<input id="ob-owner" class="inp" value="${esc(b.owner_name || '')}"></label>
     <label>تلفن<input id="ob-phone" class="inp" value="${esc(b.owner_phone || '')}"></label>
     <label>درصد سهم مجموعه از سود خالص<input id="ob-share" class="inp" type="number" min="0" max="100" step="0.01" value="${N(b.owner_share_pct)}"></label>
-    <p class="text-xs text-slate-500">سهم باقیمانده متعلق به غرفه‌دار است. تغییر درصد فقط روی سفارش‌های جدید اثر دارد. زیان نیز با همین نسبت تقسیم می‌شود. توکن پس از ذخیره از بخش غرفه‌ها اضافه می‌شود.</p></div>`,
+    <p class="text-xs text-slate-500">سهم باقیمانده متعلق به غرفه‌دار است. تغییر درصد فقط روی سفارش‌های جدید اثر دارد. زیان نیز با همین نسبت تقسیم می‌شود. توکن این غرفه در تب اتصال‌ها مدیریت می‌شود.</p></div>`,
     buttons:[{label:'ذخیره',onClick:async()=>{
       const name=$('#ob-name').value.trim(), owner_name=$('#ob-owner').value.trim(), pct=Number($('#ob-share').value);
       if (!name || !owner_name || !Number.isFinite(pct) || pct<0 || pct>100) {toast('نام‌ها و درصد معتبر را وارد کنید','err');return;}
@@ -1648,23 +1696,6 @@ function ownerBoothModal(id) {
         closeModal();fillSelects();renderBooths(); if(currentView==='owners') renderOwners();toast('غرفه‌دار ذخیره شد');
       }catch(e){toast(e.message,'err');}
     }}]});
-}
-function ownerTokenModal(boothId, id) {
-  const c=state.integrations.find(x=>String(x.id)===String(id));
-  openModal({title:'توکن غرفه‌دار خودفرما',body:`<label>توکن باسلام<input id="owner-token" class="inp" type="password" autocomplete="off" dir="ltr"></label><p class="text-xs mt-2">توکن تست می‌شود و فقط برای همین غرفه ذخیره می‌شود. توکن قبلی نمایش داده نمی‌شود.</p>`,buttons:[{label:'تست و ذخیره',onClick:async()=>{
-    const token=$('#owner-token').value.trim(); if(!token){toast('توکن را وارد کنید','err');return;}
-    try {
-      const test=await Store.testIntegration({type:'basalam',token});
-      if(!test.ok){toast('تست توکن ناموفق: '+(test.error||''),'err');return;}
-      const info=test.info||{};
-      if (!info.vendor_id) {toast('شناسه غرفه از توکن قابل تشخیص نیست','err');return;}
-      if(state.integrations.some(x=>x.type==='basalam' && String(x.vendor_id)===String(info.vendor_id) && String(x.booth_id)!==String(boothId))){toast('این غرفه قبلاً به اتصال دیگری متصل شده است','err');return;}
-      if(state.integrations.some(x=>x.type==='basalam' && String(x.booth_id)===String(boothId) && x.vendor_id && String(x.vendor_id)!==String(info.vendor_id))){toast('توکن مربوط به غرفه دیگری است','err');return;}
-      const saved=await Store.saveIntegration({id:c?.id,type:'basalam',name:boothName(boothId),booth_id:boothId,token,vendor_id:info.vendor_id,vendor_title:info.vendor_title||'',auto_sync:c?.auto_sync||0});
-      if(c)Object.assign(c,saved);else state.integrations.push(saved);
-      closeModal();renderOwnerManagers();toast('توکن ذخیره شد');
-    }catch(e){toast(e.message,'err');}
-  }}]});
 }
 function removeOwnerToken(id) {
   confirmDlg('حذف توکن','اتصال و سینک خودکار حذف شود؟ سفارش‌ها و سوابق مالی حفظ می‌شوند.',async()=>{
@@ -2407,7 +2438,19 @@ async function basSave() {
   const token = $('#bas-token').value.trim();
   if (!id && !token) { toast('توکن را وارد کنید', 'err'); return; }
   let boothId = $('#bas-booth').value;
-  const info = state._basTest;
+  let info = state._basTest;
+  if (token && state.booths.some(b => String(b.id) === String(boothId) && +b.is_independent)) {
+    try {
+      const tested = await Store.testIntegration({type:'basalam',token});
+      if (!tested.ok || !tested.info?.vendor_id) { toast('توکن خودفرما باید معتبر باشد و شناسه غرفه داشته باشد','err'); return; }
+      info = tested.info;
+      if (state.integrations.some(c => c.type === 'basalam' && c.vendor_id &&
+        ((String(c.booth_id) === String(boothId) && String(c.vendor_id) !== String(info.vendor_id)) ||
+         (String(c.booth_id) !== String(boothId) && String(c.vendor_id) === String(info.vendor_id))))) {
+        toast('توکن متعلق به غرفه دیگری است یا قبلاً به غرفه دیگری متصل شده است','err'); return;
+      }
+    } catch(e) { toast(e.message,'err'); return; }
+  }
   if (boothId === '__new__') {
     const b = await Store.saveBooth({ name: $('#bas-name').value.trim() || (info && info.vendor_title) || 'غرفه باسلام' });
     state.booths.push(b); fillSelects(); boothId = b.id;
@@ -2426,6 +2469,7 @@ async function basSave() {
 }
 function basReset() {
   $('#bas-id').value = ''; $('#bas-name').value = ''; $('#bas-token').value = '';
+  $('#bas-booth').disabled = false;
   $('#bas-booth').value = '__new__'; $('#bas-result').innerHTML = '';
   $('#bas-form-title').textContent = '＋ افزودن غرفه جدید';
   $('#bas-cancel').classList.add('hidden'); state._basTest = null;
@@ -2533,11 +2577,12 @@ async function setAutoEvery(id, val) {
 function editInteg(id) {
   const c = state.integrations.find((x) => String(x.id) === String(id));
   if (!c) return;
-  if (c.type === 'basalam' && state.booths.some(b => String(b.id) === String(c.booth_id) && +b.is_independent)) { go('booths'); ownerTokenModal(c.booth_id, c.id); return; }
+  go('integrations');
   if (c.type === 'basalam') {
     basReset();
     $('#bas-id').value = c.id; $('#bas-name').value = c.name || '';
     $('#bas-booth').value = c.booth_id || '__new__';
+    $('#bas-booth').disabled = state.booths.some(b => String(b.id) === String(c.booth_id) && +b.is_independent);
     $('#bas-token').value = ''; $('#bas-token').placeholder = 'خالی بگذارید تا توکن قبلی حفظ شود';
     $('#bas-form-title').textContent = '✏️ ویرایش اتصال باسلام';
     $('#bas-cancel').classList.remove('hidden');
