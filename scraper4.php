@@ -406,7 +406,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.720';
+const APP_VERSION = '10.721';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -11945,6 +11945,10 @@ function bslNetModes(array $net): array {
 function bslCurlOpts(string $url, string $tk, string $m, $d, bool $mp, array $net, string $mode): array {
     $h = ['Accept: application/json', 'Authorization: Bearer ' . $tk];
     if (!$mp) $h[] = 'Content-Type: application/json';
+    if (strpos($url, '/chats') !== false) {
+        $h[] = 'X-Client-Info: web';
+        $h[] = 'User-Agent: Mozilla/5.0 (compatible; S4BasalamClient/1.0)';
+    }
     $opt = [
         CURLOPT_URL => $url,
         CURLOPT_RETURNTRANSFER => 1, CURLOPT_FOLLOWLOCATION => 1,
@@ -27587,28 +27591,31 @@ function s4BasalamBestSellersNormalizeFilters(array $filters):array{
     $exact=(string)($filters['exact']??'all');if(!in_array($exact,['all','verified','pending'],true))$exact='all';$stock=(string)($filters['stock']??'all');if(!in_array($stock,['all','in_stock','low_stock'],true))$stock='all';
     $metric=(string)($filters['sales_metric']??'exact_sales');if(!in_array($metric,['exact_sales','indexed_sales','weekly_sales'],true))$metric='exact_sales';
     $sort=(string)($filters['sort']??'exact_sales');if(in_array($sort,['exact_score','indexed_score','weekly_score','sales_score'],true))$sort='composite_score';if(!in_array($sort,['exact_sales','indexed_sales','weekly_sales','composite_score','price','stock','title','vendor','category'],true))$sort='exact_sales';
-    $rawVendors=$filters['vendors']??[];
-    if(is_string($rawVendors)){
-        $rawTrim=trim($rawVendors);
-        if($rawTrim!==''&&$rawTrim[0]==='['){
-            $dec=json_decode($rawTrim,true);
-            $rawVendors=is_array($dec)?$dec:[];
-        }elseif($rawTrim!==''){
-            $rawVendors=preg_split('~[\r\n,،]+~u',$rawTrim)?:[];
-        }else{
-            $rawVendors=[];
+    $parseVendorList=static function($raw):array{
+        if(is_string($raw)){
+            $rawTrim=trim($raw);
+            if($rawTrim!==''&&$rawTrim[0]==='['){
+                $dec=json_decode($rawTrim,true);
+                $raw=is_array($dec)?$dec:[];
+            }elseif($rawTrim!==''){
+                $raw=preg_split('~[\r\n,،]+~u',$rawTrim)?:[];
+            }else{
+                $raw=[];
+            }
         }
-    }
-    $vendors=[];
-    if(is_array($rawVendors)){
-        foreach($rawVendors as$vItem){
-            if(!is_scalar($vItem))continue;
-            $vs=mb_strtolower(trim((string)$vItem));
-            if($vs==='')continue;
-            $vendors[$vs]=$vs;
+        $out=[];
+        if(is_array($raw)){
+            foreach($raw as$vItem){
+                if(!is_scalar($vItem))continue;
+                $vs=mb_strtolower(trim((string)$vItem));
+                if($vs==='')continue;
+                $out[$vs]=$vs;
+            }
         }
-    }
-    return['q'=>mb_strtolower(trim((string)($filters['q']??''))),'category'=>mb_strtolower(trim((string)($filters['category']??''))),'vendor'=>mb_strtolower(trim((string)($filters['vendor']??''))),'vendors'=>array_values($vendors),'exact'=>$exact,'sales_metric'=>$metric,'min_sales'=>max(0,(int)($filters['min_sales']??0)),'max_products'=>max(1,(int)($filters['max_products']??10000)),'stock'=>$stock,'sort'=>$sort,'dir'=>strtolower((string)($filters['dir']??'desc'))==='asc'?'asc':'desc'];
+        return array_values($out);
+    };
+    $excludedVendors=$parseVendorList($filters['excluded_vendors']??($filters['vendors']??[]));
+    return['q'=>mb_strtolower(trim((string)($filters['q']??''))),'category'=>mb_strtolower(trim((string)($filters['category']??''))),'vendor'=>mb_strtolower(trim((string)($filters['vendor']??''))),'excluded_vendors'=>$excludedVendors,'exact'=>$exact,'sales_metric'=>$metric,'min_sales'=>max(0,(int)($filters['min_sales']??0)),'max_products'=>max(1,(int)($filters['max_products']??10000)),'stock'=>$stock,'sort'=>$sort,'dir'=>strtolower((string)($filters['dir']??'desc'))==='asc'?'asc':'desc'];
 }
 function s4BasalamBestSellerSalesMetricValue(array $product,string $metric):int{
     if($metric==='indexed_sales')return max(0,(int)($product['sales_count_indexed']??0));
@@ -27648,15 +27655,15 @@ function s4BasalamBestSellerCompositeScore(array $product,bool $withComponents=f
 }
 function s4BasalamBestSellersFilterProducts(array $products,array $filters):array{
     $f=s4BasalamBestSellersNormalizeFilters($filters);
-    $vendorIdsSet=[];$vendorNamesSet=[];$vendorTerms=[];
-    foreach((array)$f['vendors'] as$vk){
+    $exIdsSet=[];$exNamesSet=[];$exTerms=[];
+    foreach((array)($f['excluded_vendors']??[]) as$vk){
         $vk=(string)$vk;if($vk==='')continue;
-        if(preg_match('/^#?(\d+)$/',$vk,$m))$vendorIdsSet[(string)(int)$m[1]]=true;
-        elseif(strpos($vk,'name:')===0){$nm=trim(substr($vk,5));if($nm!=='')$vendorNamesSet[$nm]=true;}
-        else$vendorTerms[]=$vk;
+        if(preg_match('/^#?(\d+)$/',$vk,$m))$exIdsSet[(string)(int)$m[1]]=true;
+        elseif(strpos($vk,'name:')===0){$nm=trim(substr($vk,5));if($nm!=='')$exNamesSet[$nm]=true;}
+        else$exTerms[]=$vk;
     }
-    $hasVendorsFilter=!empty($vendorIdsSet)||!empty($vendorNamesSet)||!empty($vendorTerms);
-    $products=array_filter($products,function($p)use($f,$hasVendorsFilter,$vendorIdsSet,$vendorNamesSet,$vendorTerms){if(array_key_exists('in_stock',$p)&&$p['in_stock']===false)return false;$status=(int)($p['status']??2976);if($status>0&&!in_array($status,[1,2976],true))return false;$hasExact=array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']!==null;if($f['exact']==='verified'&&!$hasExact)return false;if($f['exact']==='pending'&&$hasExact)return false;if(s4BasalamBestSellerSalesMetricValue($p,$f['sales_metric'])<$f['min_sales'])return false;$stock=(int)($p['stock']??$p['inventory']??0);if($f['stock']==='in_stock'&&$stock<=0)return false;if($f['stock']==='low_stock'&&($stock<=0||$stock>10))return false;$cat=mb_strtolower((string)($p['category']??$p['category_id']??''));$pVidNum=(int)($p['vendor_id']??0);$pVid=$pVidNum>0?(string)$pVidNum:'';$pVname=mb_strtolower(trim((string)($p['vendor_name']??'')));$vendor=mb_strtolower(trim($pVname.($pVid!==''?(' '.$pVid):'')));if($f['category']!==''&&mb_strpos($cat,$f['category'])===false)return false;if($hasVendorsFilter){$vMatch=($pVid!==''&&isset($vendorIdsSet[$pVid]))||($pVname!==''&&isset($vendorNamesSet[$pVname]));if(!$vMatch&&$vendorTerms){foreach($vendorTerms as$vt){if($vendor!==''&&mb_strpos($vendor,$vt)!==false){$vMatch=true;break;}}}if(!$vMatch)return false;}if($f['vendor']!==''&&mb_strpos($vendor,$f['vendor'])===false)return false;if($f['q']!==''){$hay=mb_strtolower(implode(' ',[(string)($p['title']??''),$cat,$vendor,(string)($p['basalam_product_id']??'')]));if(mb_strpos($hay,$f['q'])===false)return false;}return true;});
+    $hasExcluded=!empty($exIdsSet)||!empty($exNamesSet)||!empty($exTerms);
+    $products=array_filter($products,function($p)use($f,$hasExcluded,$exIdsSet,$exNamesSet,$exTerms){if(array_key_exists('in_stock',$p)&&$p['in_stock']===false)return false;$status=(int)($p['status']??2976);if($status>0&&!in_array($status,[1,2976],true))return false;$hasExact=array_key_exists('sales_count_exact',$p)&&$p['sales_count_exact']!==null;if($f['exact']==='verified'&&!$hasExact)return false;if($f['exact']==='pending'&&$hasExact)return false;if(s4BasalamBestSellerSalesMetricValue($p,$f['sales_metric'])<$f['min_sales'])return false;$stock=(int)($p['stock']??$p['inventory']??0);if($f['stock']==='in_stock'&&$stock<=0)return false;if($f['stock']==='low_stock'&&($stock<=0||$stock>10))return false;$cat=mb_strtolower((string)($p['category']??$p['category_id']??''));$pVidNum=(int)($p['vendor_id']??0);$pVid=$pVidNum>0?(string)$pVidNum:'';$pVname=mb_strtolower(trim((string)($p['vendor_name']??'')));$vendor=mb_strtolower(trim($pVname.($pVid!==''?(' '.$pVid):'')));if($f['category']!==''&&mb_strpos($cat,$f['category'])===false)return false;if($hasExcluded){$isEx=($pVid!==''&&isset($exIdsSet[$pVid]))||($pVname!==''&&isset($exNamesSet[$pVname]));if(!$isEx&&$exTerms){foreach($exTerms as$et){if($vendor!==''&&mb_strpos($vendor,$et)!==false){$isEx=true;break;}}}if($isEx)return false;}if($f['vendor']!==''&&mb_strpos($vendor,$f['vendor'])===false)return false;if($f['q']!==''){$hay=mb_strtolower(implode(' ',[(string)($p['title']??''),$cat,$vendor,(string)($p['basalam_product_id']??'')]));if(mb_strpos($hay,$f['q'])===false)return false;}return true;});
     if(count($products)>1){
         $sort=$f['sort'];$useStr=in_array($sort,['vendor','category','title'],true);$sortKeys=[];$pids=[];
         foreach($products as$k=>$p){
@@ -28398,15 +28405,442 @@ function s4ThirdPartyExplorerSalesDiagnostic(int $vendorId):array{
         $out=s4ThirdPartyExplorerEnrichPublicOrders($d,8,$vendorId);$d['last_sales_enrichment']=array_merge(['at'=>time(),'trigger'=>'diagnostic'],$out);s4ThirdPartyExplorerSave($d);return$d['last_sales_enrichment'];
     }finally{@flock($lf,LOCK_UN);@fclose($lf);}
 }
+function s4BasalamVendorOutreachFile():string{return __DIR__.'/.basalam-vendor-outreach.json';}
+function s4BasalamVendorOutreachDefaultTemplate():string{
+    return"سلام و وقت بخیر خدمت مدیریت محترم غرفه «{غرفه}» 🌿\n"
+        ."از طرف غرفه «{غرفه_ما}» در باسلام پیام می‌دهم.\n"
+        ."کیفیت و تنوع محصولات غرفهٔ شما برایمان بسیار ارزشمند است و مایل هستیم تعدادی از محصولات شما را (با حفظ مشخصات و ثبت سفارش مستقیم از خود شما هنگام فروش) در غرفهٔ ما هم عرضه کنیم تا فروش بیشتری برایتان ایجاد شود.\n"
+        ."آیا اجازه و رضایت دارید محصولاتتان را در غرفهٔ ما هم قرار دهیم؟ پیشاپیش از لطف و همکاری شما سپاسگزاریم 🙏";
+}
+function s4BasalamVendorOutreachLoad():array{
+    $d=json_decode((string)@file_get_contents(s4BasalamVendorOutreachFile()),true);
+    if(!is_array($d))$d=[];
+    $tpl=trim((string)($d['template']??''));
+    if($tpl==='')$tpl=s4BasalamVendorOutreachDefaultTemplate();
+    return[
+        'schema'=>1,
+        'template'=>$tpl,
+        'last_sender_vendor_id'=>(int)($d['last_sender_vendor_id']??0),
+        'vendor_owners'=>is_array($d['vendor_owners']??null)?$d['vendor_owners']:[],
+        'chats'=>is_array($d['chats']??null)?$d['chats']:[],
+        'sent'=>is_array($d['sent']??null)?$d['sent']:[],
+        'sent_by_sender'=>is_array($d['sent_by_sender']??null)?$d['sent_by_sender']:[],
+        'history'=>is_array($d['history']??null)?array_values($d['history']):[],
+    ];
+}
+function s4BasalamVendorOutreachSave(array $d):bool{
+    $file=s4BasalamVendorOutreachFile();
+    $tmp=$file.'.tmp.'.getmypid().'.'.substr(md5((string)microtime(true)),0,6);
+    $json=json_encode($d,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);
+    if(!is_string($json)||@file_put_contents($tmp,$json,LOCK_EX)===false){@unlink($tmp);return false;}
+    if(@rename($tmp,$file))return true;
+    @unlink($tmp);return false;
+}
+function s4BasalamVendorOutreachSenderShops():array{
+    $cn=loadConnections();
+    $out=[];
+    foreach(bslAllShops($cn) as$sh){
+        $vid=(int)($sh['vendor_id']??0);
+        $tok=trim((string)($sh['token']??''));
+        if($vid<=0||$tok==='')continue;
+        $out[]=[
+            'vendor_id'=>$vid,
+            'shop_name'=>(string)($sh['shop_name']??('غرفه #'.$vid)),
+            'is_default'=>!empty($sh['is_default']),
+        ];
+    }
+    return$out;
+}
+function s4BasalamVendorOutreachFindSenderShop(int $senderVid):?array{
+    $cn=loadConnections();
+    $shops=bslAllShops($cn);
+    foreach($shops as$sh){
+        if((int)($sh['vendor_id']??0)===$senderVid&&trim((string)($sh['token']??''))!=='')return$sh;
+    }
+    if($senderVid<=0){
+        foreach($shops as$sh){
+            if(!empty($sh['is_default'])&&trim((string)($sh['token']??''))!=='')return$sh;
+        }
+        return$shops[0]??null;
+    }
+    return null;
+}
+function s4BasalamVendorOutreachRenderMessage(string $template,string $targetVendorName,string $senderShopName,int $targetVendorId=0):string{
+    $tpl=trim($template)!==''?$template:s4BasalamVendorOutreachDefaultTemplate();
+    $vName=trim($targetVendorName)!==''?trim($targetVendorName):($targetVendorId>0?('غرفه #'.$targetVendorId):'شما');
+    $sName=trim($senderShopName)!==''?trim($senderShopName):'فروشگاه ما';
+    return strtr($tpl,[
+        '{غرفه}'=>$vName,
+        '{نام_غرفه}'=>$vName,
+        '{vendor}'=>$vName,
+        '{غرفه_ما}'=>$sName,
+        '{نام_غرفه_ما}'=>$sName,
+        '{sender_shop}'=>$sName,
+        '{شناسه_غرفه}'=>$targetVendorId>0?(string)$targetVendorId:'',
+        '{vendor_id}'=>$targetVendorId>0?(string)$targetVendorId:'',
+    ]);
+}
+function s4BasalamVendorOutreachExtractVendorOwner(array $body):array{
+    $data=(is_array($body['data']??null)&&(isset($body['data']['id'])||isset($body['data']['user'])))
+        ?$body['data']
+        :(is_array($body['data'][0]??null)?$body['data'][0]:$body);
+    $user=is_array($data['user']??null)?$data['user']:[];
+    $uid=(int)($user['id']??$data['user_id']??$data['owner_id']??0);
+    $hashId=trim((string)($user['hash_id']??$data['hash_id']??''));
+    $title=trim((string)($data['title']??$data['name']??''));
+    $ident=trim((string)($data['identifier']??''));
+    return['user_id'=>$uid,'hash_id'=>$hashId,'title'=>$title,'identifier'=>$ident];
+}
+function s4BasalamVendorOutreachApiError(array $resp,string $fallback='request_failed'):string{
+    $code=(int)($resp['code']??0);
+    $body=is_array($resp['body']??null)?$resp['body']:[];
+    $msg=trim((string)($body['message']??($body['detail']??($body['error']??($resp['error']??'')))));
+    if($msg===''&&!empty($body['errors'])&&is_array($body['errors'])){
+        $first=reset($body['errors']);
+        if(is_array($first))$msg=trim((string)($first['message']??($first['msg']??json_encode($first,JSON_UNESCAPED_UNICODE))));
+        elseif(is_string($first))$msg=trim($first);
+    }
+    if($msg==='')$msg=$fallback;
+    if(in_array($code,[401,403],true)){
+        return'خطای دسترسی چت (HTTP '.$code.'): '.$msg.' — بررسی کنید توکن غرفه مجوز گفت‌وگو/چت را داشته باشد.';
+    }
+    if($code===429)return'محدودیت نرخ باسلام (429): '.$msg;
+    return($code>0?('HTTP '.$code.': '):'').$msg;
+}
+function s4BasalamVendorOutreachPrepareTargets(array $args):array{
+    $scope=(string)($args['scope']??'best_sellers_filtered');
+    $outreach=s4BasalamVendorOutreachLoad();
+    $senderShops=s4BasalamVendorOutreachSenderShops();
+    $ownIds=function_exists('s4ThirdPartyExplorerOwnShopIds')?s4ThirdPartyExplorerOwnShopIds():[];
+    $sentMap=(array)($outreach['sent']??[]);
+    $targetsMap=[];
+    if($scope==='best_sellers_filtered'){
+        $filters=is_array($args['filters']??null)?$args['filters']:[];
+        $stamp=s4BasalamBestSellersSourceStamp();
+        $profiles=loadProfiles();
+        $pk=s4BasalamBestSellersProfileKey();
+        $profile=is_array($profiles[$pk]??null)?$profiles[$pk]:[];
+        [$indexItems]=s4BasalamBestSellersIndexLoadOrBuild($stamp['catalog'],$profile);
+        $filtered=s4BasalamBestSellersFilterProducts($indexItems,$filters);
+        foreach($filtered as$p){
+            $vid=(int)($p['vendor_id']??0);
+            if($vid<=0)continue;
+            $vname=trim((string)($p['vendor_name']??''));
+            if(!isset($targetsMap[$vid])){
+                $targetsMap[$vid]=[
+                    'vendor_id'=>$vid,
+                    'name'=>$vname!==''?$vname:('غرفه #'.$vid),
+                    'product_count'=>0,
+                    'url'=>$vname!==''?('https://basalam.com/s/vendors?q='.rawurlencode($vname)):'https://basalam.com/s/vendors',
+                ];
+            }elseif($vname!==''&&strpos($targetsMap[$vid]['name'],'غرفه #')===0){
+                $targetsMap[$vid]['name']=$vname;
+            }
+            $targetsMap[$vid]['product_count']++;
+        }
+        $targets=array_values($targetsMap);
+        usort($targets,static function(array $a,array $b):int{
+            $cmp=((int)$b['product_count'])<=>((int)$a['product_count']);
+            return$cmp!==0?$cmp:strcmp((string)$a['name'],(string)$b['name']);
+        });
+    }else{
+        $d=s4ThirdPartyExplorerLoad();
+        $reqIds=array_values(array_unique(array_filter(array_map('intval',(array)($args['vendor_ids']??[])),static fn($v)=>$v>0)));
+        if(!$reqIds){
+            $reqItems=is_array($args['items']??null)?$args['items']:[];
+            foreach($reqItems as$it){
+                $iv=(int)($it['vendor_id']??0);
+                if($iv>0)$reqIds[]=$iv;
+            }
+            $reqIds=array_values(array_unique($reqIds));
+        }
+        $importById=[];
+        foreach((array)($d['last_bulk_import']??[])as$ir){
+            $iv=(int)($ir['vendor_id']??0);
+            if($iv>0)$importById[$iv]=$ir;
+        }
+        $clientItems=[];
+        foreach((array)($args['items']??[])as$it){
+            $iv=(int)($it['vendor_id']??0);
+            if($iv>0)$clientItems[$iv]=$it;
+        }
+        if(!$reqIds){
+            if($scope==='third_party_import'){
+                foreach($importById as$iv=>$ir){if(!empty($ir['ok']))$reqIds[]=$iv;}
+            }else{
+                $st=s4ThirdPartyExplorerComputeStatus($d,null,false);
+                foreach((array)($st['candidates']??[])as$cand){$iv=(int)($cand['vendor_id']??0);if($iv>0)$reqIds[]=$iv;}
+            }
+        }
+        foreach($reqIds as$vid){
+            $v=is_array($d['vendors'][(string)$vid]??null)?$d['vendors'][(string)$vid]:($importById[$vid]??($clientItems[$vid]??[]));
+            $name=trim((string)($v['title']??($v['name']??($clientItems[$vid]['name']??''))));
+            $url=trim((string)($v['url']??($clientItems[$vid]['url']??'')));
+            if($url===''&&function_exists('s4ThirdPartyExplorerStorefrontUrl')&&$v)$url=s4ThirdPartyExplorerStorefrontUrl($v);
+            if($url==='')$url='https://basalam.com/s/vendors';
+            $targetsMap[$vid]=[
+                'vendor_id'=>$vid,
+                'name'=>$name!==''?$name:('غرفه #'.$vid),
+                'product_count'=>max(0,(int)($v['product_count']??($clientItems[$vid]['product_count']??0))),
+                'url'=>$url,
+            ];
+        }
+        $targets=array_values($targetsMap);
+    }
+    $totalTargets=count($targets);
+    if($totalTargets>1000)$targets=array_slice($targets,0,1000);
+    foreach($targets as&$t){
+        $vid=(int)$t['vendor_id'];
+        $sentInfo=is_array($sentMap[(string)$vid]??null)?$sentMap[(string)$vid]:null;
+        $t['already_sent']=is_array($sentInfo)&&!empty($sentInfo['at']);
+        $t['last_sent_at']=(int)($sentInfo['at']??0);
+        $t['last_sender_name']=(string)($sentInfo['sender_name']??'');
+        $t['is_own_shop']=isset($ownIds[$vid]);
+    }
+    unset($t);
+    $defaultSender=(int)($outreach['last_sender_vendor_id']??0);
+    $senderValid=false;
+    foreach($senderShops as$sh){if((int)$sh['vendor_id']===$defaultSender){$senderValid=true;break;}}
+    if(!$senderValid&&!empty($senderShops))$defaultSender=(int)$senderShops[0]['vendor_id'];
+    return[
+        'ok'=>true,
+        'scope'=>$scope,
+        'sender_shops'=>$senderShops,
+        'default_sender_vendor_id'=>$defaultSender,
+        'template'=>$outreach['template'],
+        'default_template'=>s4BasalamVendorOutreachDefaultTemplate(),
+        'targets'=>$targets,
+        'total_targets'=>$totalTargets,
+        'history_count'=>count((array)$outreach['sent']),
+    ];
+}
+function s4BasalamVendorOutreachSendBatch(array $args):array{
+    $senderVid=(int)($args['sender_vendor_id']??0);
+    $shop=s4BasalamVendorOutreachFindSenderShop($senderVid);
+    if(!$shop)return['ok'=>false,'error'=>'sender_shop_not_configured'];
+    $senderVid=(int)$shop['vendor_id'];
+    $senderName=(string)($shop['shop_name']??('غرفه #'.$senderVid));
+    $tk=(string)$shop['token'];
+    $template=trim((string)($args['template']??''));
+    if($template==='')$template=s4BasalamVendorOutreachDefaultTemplate();
+    $skipSent=!array_key_exists('skip_sent',$args)||!empty($args['skip_sent']);
+    $saveTpl=!array_key_exists('save_template',$args)||!empty($args['save_template']);
+    $rawTargets=is_array($args['targets']??null)?$args['targets']:[];
+    $targets=[];
+    foreach($rawTargets as$rt){
+        if(is_numeric($rt)){$vid=(int)$rt;$name='';}
+        elseif(is_array($rt)){$vid=(int)($rt['vendor_id']??0);$name=trim((string)($rt['name']??''));}
+        else continue;
+        if($vid>0&&!isset($targets[$vid]))$targets[$vid]=['vendor_id'=>$vid,'name'=>$name];
+        if(count($targets)>=25)break;
+    }
+    if(!$targets)return['ok'=>false,'error'=>'no_targets_selected'];
+    $ownIds=function_exists('s4ThirdPartyExplorerOwnShopIds')?s4ThirdPartyExplorerOwnShopIds():[];
+    $now=time();
+
+    $state=s4BasalamVendorOutreachLoad();
+    if($saveTpl){
+        $lf=@fopen(s4BasalamVendorOutreachFile().'.lock','c');
+        if($lf&&@flock($lf,LOCK_EX)){
+            $cur=s4BasalamVendorOutreachLoad();
+            $cur['template']=$template;
+            $cur['last_sender_vendor_id']=$senderVid;
+            s4BasalamVendorOutreachSave($cur);
+            $state=$cur;
+            @flock($lf,LOCK_UN);@fclose($lf);
+        }elseif($lf){@fclose($lf);}
+    }
+
+    $results=[];$newOwners=[];$newChats=[];$newSent=[];$newHistory=[];
+    $ownerJobs=[];
+    foreach($targets as$vid=>$t){
+        if($vid===$senderVid||isset($ownIds[$vid])){
+            $results[$vid]=['vendor_id'=>$vid,'name'=>$t['name']?:('غرفه #'.$vid),'status'=>'skipped_own_shop','ok'=>false,'skipped'=>true,'error'=>'غرفهٔ خودمان'];
+            continue;
+        }
+        if($skipSent&&!empty($state['sent'][(string)$vid]['at'])){
+            $results[$vid]=['vendor_id'=>$vid,'name'=>$t['name']?:('غرفه #'.$vid),'status'=>'skipped_already_sent','ok'=>true,'skipped'=>true,'last_sent_at'=>(int)$state['sent'][(string)$vid]['at']];
+            continue;
+        }
+        $cachedOwner=is_array($state['vendor_owners'][(string)$vid]??null)?$state['vendor_owners'][(string)$vid]:null;
+        if($cachedOwner&&(((int)($cachedOwner['user_id']??0)>0)||trim((string)($cachedOwner['hash_id']??''))!=='')&&($now-(int)($cachedOwner['updated_at']??0))<30*86400){
+            if($t['name']===''&&!empty($cachedOwner['title']))$targets[$vid]['name']=(string)$cachedOwner['title'];
+        }else{
+            $ownerJobs[(string)$vid]=['tk'=>$tk,'m'=>'GET','ep'=>'vendors/'.$vid];
+        }
+    }
+
+    if($ownerJobs){
+        $ownerRes=bslReqMulti($ownerJobs,min(5,count($ownerJobs)),true);
+        $fallbackUrls=[];
+        foreach($ownerJobs as$vStr=>$_job){
+            $vid=(int)$vStr;
+            $r=$ownerRes[$vStr]??[];
+            $ext=(!empty($r['ok'])&&is_array($r['body']??null))?s4BasalamVendorOutreachExtractVendorOwner($r['body']):['user_id'=>0,'hash_id'=>'','title'=>'','identifier'=>''];
+            if($ext['user_id']>0||$ext['hash_id']!==''){
+                $ext['updated_at']=$now;
+                $newOwners[$vStr]=$ext;
+                if($targets[$vid]['name']===''&&$ext['title']!=='')$targets[$vid]['name']=$ext['title'];
+            }else{
+                $fallbackUrls[$vid]='https://core.basalam.com/v3/vendors/'.$vid;
+            }
+        }
+        if($fallbackUrls&&function_exists('s4ThirdPartyExplorerFetchMany')){
+            $fbRes=s4ThirdPartyExplorerFetchMany($fallbackUrls,8);
+            foreach($fallbackUrls as$vid=>$_u){
+                $r=$fbRes[$vid]??[];
+                $ext=(!empty($r['ok'])&&is_array($r['body']??null))?s4BasalamVendorOutreachExtractVendorOwner($r['body']):['user_id'=>0,'hash_id'=>'','title'=>'','identifier'=>''];
+                if($ext['user_id']>0||$ext['hash_id']!==''){
+                    $ext['updated_at']=$now;
+                    $newOwners[(string)$vid]=$ext;
+                    if($targets[$vid]['name']===''&&$ext['title']!=='')$targets[$vid]['name']=$ext['title'];
+                }
+            }
+        }
+    }
+
+    $chatCreateJobs=[];$readyChatIds=[];$cachedChatUsed=[];
+    foreach($targets as$vid=>$t){
+        if(isset($results[$vid]))continue;
+        $owner=$newOwners[(string)$vid]??($state['vendor_owners'][(string)$vid]??null);
+        $ownerUid=(int)($owner['user_id']??0);
+        $ownerHash=trim((string)($owner['hash_id']??''));
+        if($ownerUid<=0&&$ownerHash===''){
+            $results[$vid]=['vendor_id'=>$vid,'name'=>$t['name']?:('غرفه #'.$vid),'status'=>'error','ok'=>false,'error'=>'شناسهٔ کاربر صاحب غرفه از API باسلام دریافت نشد'];
+            continue;
+        }
+        $chatKey=$senderVid.':'.($ownerUid>0?(string)$ownerUid:$ownerHash);
+        $cachedCid=(int)($state['chats'][$chatKey]??0);
+        if($cachedCid>0){
+            $readyChatIds[$vid]=$cachedCid;
+            $cachedChatUsed[$vid]=true;
+        }else{
+            $payload=$ownerUid>0?['user_id'=>$ownerUid]:['hash_id'=>$ownerHash];
+            $chatCreateJobs[(string)$vid]=['tk'=>$tk,'m'=>'POST','ep'=>'chats','d'=>$payload];
+        }
+    }
+
+    if($chatCreateJobs){
+        $chatRes=bslReqMulti($chatCreateJobs,min(4,count($chatCreateJobs)),true);
+        foreach($chatCreateJobs as$vStr=>$job){
+            $vid=(int)$vStr;
+            $r=$chatRes[$vStr]??[];
+            if(empty($r['ok'])&&(int)($r['code']??0)===0){
+                $r=bslReq($tk,'POST','chats',$job['d'],false,null,true,2);
+            }
+            $body=is_array($r['body']??null)?$r['body']:[];
+            $cid=(int)($body['data']['id']??($body['id']??0));
+            if(!empty($r['ok'])&&$cid>0){
+                $readyChatIds[$vid]=$cid;
+                $owner=$newOwners[$vStr]??($state['vendor_owners'][$vStr]??[]);
+                $ownerUid=(int)($owner['user_id']??0);
+                $ownerHash=trim((string)($owner['hash_id']??''));
+                $chatKey=$senderVid.':'.($ownerUid>0?(string)$ownerUid:$ownerHash);
+                $newChats[$chatKey]=$cid;
+            }else{
+                $results[$vid]=['vendor_id'=>$vid,'name'=>$targets[$vid]['name']?:('غرفه #'.$vid),'status'=>'error','ok'=>false,'error'=>s4BasalamVendorOutreachApiError($r,'chat_create_failed')];
+            }
+        }
+    }
+
+    $msgJobs=[];$msgTexts=[];
+    foreach($readyChatIds as$vid=>$cid){
+        $tName=$targets[$vid]['name']!==''?$targets[$vid]['name']:('غرفه #'.$vid);
+        $text=s4BasalamVendorOutreachRenderMessage($template,$tName,$senderName,$vid);
+        $msgTexts[$vid]=$text;
+        $msgJobs[(string)$vid]=['tk'=>$tk,'m'=>'POST','ep'=>'chats/'.$cid.'/messages','d'=>['chat_id'=>$cid,'message_type'=>'text','content'=>['text'=>$text]]];
+    }
+
+    if($msgJobs){
+        $msgRes=bslReqMulti($msgJobs,min(4,count($msgJobs)),true);
+        foreach($msgJobs as$vStr=>$job){
+            $vid=(int)$vStr;
+            $cid=$readyChatIds[$vid];
+            $r=$msgRes[$vStr]??[];
+            if(empty($r['ok'])&&!empty($cachedChatUsed[$vid])&&in_array((int)($r['code']??0),[400,404,422],true)){
+                $owner=$newOwners[$vStr]??($state['vendor_owners'][$vStr]??[]);
+                $ownerUid=(int)($owner['user_id']??0);
+                $ownerHash=trim((string)($owner['hash_id']??''));
+                $cp=$ownerUid>0?['user_id'=>$ownerUid]:['hash_id'=>$ownerHash];
+                $rc=bslReq($tk,'POST','chats',$cp,false,null,true,2);
+                $rcBody=is_array($rc['body']??null)?$rc['body']:[];
+                $freshCid=(int)($rcBody['data']['id']??($rcBody['id']??0));
+                if(!empty($rc['ok'])&&$freshCid>0){
+                    $cid=$freshCid;
+                    $chatKey=$senderVid.':'.($ownerUid>0?(string)$ownerUid:$ownerHash);
+                    $newChats[$chatKey]=$cid;
+                    $r=bslReq($tk,'POST','chats/'.$cid.'/messages',['chat_id'=>$cid,'message_type'=>'text','content'=>['text'=>$msgTexts[$vid]]],false,null,true,2);
+                }
+            }elseif(empty($r['ok'])&&(int)($r['code']??0)===0){
+                $r=bslReq($tk,'POST','chats/'.$cid.'/messages',$job['d'],false,null,true,2);
+            }
+            $mBody=is_array($r['body']??null)?$r['body']:[];
+            $mid=(int)($mBody['data']['id']??($mBody['id']??0));
+            $tName=$targets[$vid]['name']!==''?$targets[$vid]['name']:('غرفه #'.$vid);
+            if(!empty($r['ok'])){
+                $sentRow=[
+                    'at'=>$now,
+                    'vendor_id'=>$vid,
+                    'vendor_name'=>$tName,
+                    'sender_vendor_id'=>$senderVid,
+                    'sender_name'=>$senderName,
+                    'chat_id'=>$cid,
+                    'message_id'=>$mid,
+                ];
+                $newSent[$vStr]=$sentRow;
+                $newHistory[]=$sentRow;
+                $results[$vid]=['vendor_id'=>$vid,'name'=>$tName,'status'=>'sent','ok'=>true,'chat_id'=>$cid,'message_id'=>$mid];
+            }else{
+                $results[$vid]=['vendor_id'=>$vid,'name'=>$tName,'status'=>'error','ok'=>false,'chat_id'=>$cid,'error'=>s4BasalamVendorOutreachApiError($r,'message_send_failed')];
+            }
+        }
+    }
+
+    if($newOwners||$newChats||$newSent){
+        $lf=@fopen(s4BasalamVendorOutreachFile().'.lock','c');
+        if($lf&&@flock($lf,LOCK_EX)){
+            $cur=s4BasalamVendorOutreachLoad();
+            foreach($newOwners as$k=>$v)$cur['vendor_owners'][$k]=$v;
+            foreach($newChats as$k=>$v)$cur['chats'][$k]=$v;
+            foreach($newSent as$k=>$v){
+                $cur['sent'][$k]=$v;
+                $cur['sent_by_sender'][$senderVid.':'.$k]=$v;
+            }
+            if($newHistory){
+                $cur['history']=array_slice(array_merge($cur['history'],$newHistory),-500);
+            }
+            s4BasalamVendorOutreachSave($cur);
+            @flock($lf,LOCK_UN);@fclose($lf);
+        }elseif($lf){@fclose($lf);}
+    }
+
+    $ordered=[];$cntSent=0;$cntSkipped=0;$cntFailed=0;
+    foreach($targets as$vid=>$_t){
+        $row=$results[$vid]??['vendor_id'=>$vid,'name'=>$_t['name']?:('غرفه #'.$vid),'status'=>'error','ok'=>false,'error'=>'unknown'];
+        if(($row['status']??'')==='sent')$cntSent++;
+        elseif(!empty($row['skipped']))$cntSkipped++;
+        else$cntFailed++;
+        $ordered[]=$row;
+    }
+    return[
+        'ok'=>true,
+        'sender'=>['vendor_id'=>$senderVid,'shop_name'=>$senderName],
+        'counts'=>['sent'=>$cntSent,'skipped'=>$cntSkipped,'failed'=>$cntFailed],
+        'results'=>$ordered,
+    ];
+}
 if(isset($_GET['third_party_explorer_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerProbe(false),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_sales_test'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerSalesDiagnostic((int)$_GET['third_party_explorer_sales_test']),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['third_party_explorer_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4ThirdPartyExplorerStatus(['prefer_cache'=>!empty($_GET['prefer_cache']),'force_fresh'=>!empty($_GET['fresh'])]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
-if(isset($_GET['basalam_best_sellers_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4BasalamBestSellersStatus((int)($_GET['page']??1),(int)($_GET['page_size']??50),['q'=>(string)($_GET['q']??''),'category'=>(string)($_GET['category']??''),'vendor'=>(string)($_GET['vendor']??''),'vendors'=>$_GET['vendors']??'','exact'=>(string)($_GET['exact']??'all'),'sales_metric'=>(string)($_GET['sales_metric']??'exact_sales'),'min_sales'=>(int)($_GET['min_sales']??0),'max_products'=>(int)($_GET['max_products']??10000),'stock'=>(string)($_GET['stock']??'all'),'sort'=>(string)($_GET['sort']??'exact_sales'),'dir'=>(string)($_GET['dir']??'desc')],['prefer_cache'=>!empty($_GET['prefer_cache']),'force_fresh'=>!empty($_GET['fresh']),'use_applied_filters'=>!empty($_GET['use_applied_filters'])]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_GET['basalam_best_sellers_status'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(s4BasalamBestSellersStatus((int)($_GET['page']??1),(int)($_GET['page_size']??50),['q'=>(string)($_GET['q']??''),'category'=>(string)($_GET['category']??''),'vendor'=>(string)($_GET['vendor']??''),'excluded_vendors'=>$_GET['excluded_vendors']??($_GET['vendors']??''),'exact'=>(string)($_GET['exact']??'all'),'sales_metric'=>(string)($_GET['sales_metric']??'exact_sales'),'min_sales'=>(int)($_GET['min_sales']??0),'max_products'=>(int)($_GET['max_products']??10000),'stock'=>(string)($_GET['stock']??'all'),'sort'=>(string)($_GET['sort']??'exact_sales'),'dir'=>(string)($_GET['dir']??'desc')],['prefer_cache'=>!empty($_GET['prefer_cache']),'force_fresh'=>!empty($_GET['fresh']),'use_applied_filters'=>!empty($_GET['use_applied_filters'])]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_GET['settings_menu_clicks'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode(['ok'=>true,'items'=>s4SettingsMenuClicksLoad()],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_POST['settings_menu_click'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();echo json_encode(s4SettingsMenuClickRecord((string)($_POST['menu_key']??''),(string)($_POST['menu_label']??'')),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
 if(isset($_GET['third_party_explorer_run'])||isset($_GET['basalam_best_sellers_run'])){http_response_code(405);header('Content-Type: application/json; charset=UTF-8');echo json_encode(['ok'=>false,'error'=>'POST required']);exit;}
-if(isset($_POST['basalam_best_sellers_apply_filter'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();echo json_encode(s4BasalamBestSellersApplyFilter(['q'=>(string)($_POST['q']??''),'category'=>(string)($_POST['category']??''),'vendor'=>(string)($_POST['vendor']??''),'vendors'=>$_POST['vendors']??'','exact'=>(string)($_POST['exact']??'all'),'sales_metric'=>(string)($_POST['sales_metric']??'exact_sales'),'min_sales'=>(int)($_POST['min_sales']??0),'max_products'=>(int)($_POST['max_products']??10000),'stock'=>(string)($_POST['stock']??'all'),'sort'=>(string)($_POST['sort']??'exact_sales'),'dir'=>(string)($_POST['dir']??'desc')]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_POST['basalam_best_sellers_apply_filter'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();echo json_encode(s4BasalamBestSellersApplyFilter(['q'=>(string)($_POST['q']??''),'category'=>(string)($_POST['category']??''),'vendor'=>(string)($_POST['vendor']??''),'excluded_vendors'=>$_POST['excluded_vendors']??($_POST['vendors']??''),'exact'=>(string)($_POST['exact']??'all'),'sales_metric'=>(string)($_POST['sales_metric']??'exact_sales'),'min_sales'=>(int)($_POST['min_sales']??0),'max_products'=>(int)($_POST['max_products']??10000),'stock'=>(string)($_POST['stock']??'all'),'sort'=>(string)($_POST['sort']??'exact_sales'),'dir'=>(string)($_POST['dir']??'desc')]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_POST['basalam_best_sellers_run'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();echo json_encode(s4BasalamBestSellersTick('manual',true),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
+if(isset($_POST['basalam_vendor_outreach_prepare'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();$filters=json_decode((string)($_POST['filters']??'{}'),true);$vids=json_decode((string)($_POST['vendor_ids']??'[]'),true);$items=json_decode((string)($_POST['items']??'[]'),true);echo json_encode(s4BasalamVendorOutreachPrepareTargets(['scope'=>(string)($_POST['scope']??'best_sellers_filtered'),'filters'=>is_array($filters)?$filters:[],'vendor_ids'=>is_array($vids)?$vids:[],'items'=>is_array($items)?$items:[]]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_POST['basalam_vendor_outreach_save_template'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();$tpl=trim((string)($_POST['template']??''));if($tpl==='')$tpl=s4BasalamVendorOutreachDefaultTemplate();$svid=(int)($_POST['sender_vendor_id']??0);$lf=@fopen(s4BasalamVendorOutreachFile().'.lock','c');if(!$lf||!@flock($lf,LOCK_EX)){if($lf)@fclose($lf);http_response_code(503);echo json_encode(['ok'=>false,'error'=>'lock_failed']);exit;}$cur=s4BasalamVendorOutreachLoad();$cur['template']=$tpl;if($svid>0)$cur['last_sender_vendor_id']=$svid;$ok=s4BasalamVendorOutreachSave($cur);@flock($lf,LOCK_UN);@fclose($lf);echo json_encode(['ok'=>$ok,'template'=>$tpl,'last_sender_vendor_id'=>(int)$cur['last_sender_vendor_id']],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
+if(isset($_POST['basalam_vendor_outreach_send'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();$targets=json_decode((string)($_POST['targets']??'[]'),true);echo json_encode(s4BasalamVendorOutreachSendBatch(['sender_vendor_id'=>(int)($_POST['sender_vendor_id']??0),'template'=>(string)($_POST['template']??''),'skip_sent'=>!empty($_POST['skip_sent']),'save_template'=>!array_key_exists('save_template',$_POST)||!empty($_POST['save_template']),'targets'=>is_array($targets)?$targets:[]]),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 if(isset($_POST['third_party_explorer_save'])||isset($_POST['third_party_explorer_action'])||isset($_POST['third_party_explorer_run'])||isset($_POST['third_party_explorer_import'])){
     header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');s4RequireAuthenticatedMutation();
     if(isset($_POST['third_party_explorer_run'])){echo json_encode(s4ThirdPartyExplorerTick('manual',true),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}
@@ -52942,12 +53376,12 @@ if (isset($_GET['selftest'])) {
         'p5'=>['title'=>'ث','vendor_id'=>101,'vendor_name'=>'','sales_count_exact'=>90,'stock'=>2,'basalam_product_id'=>5],
     ];
     $__bbsNorm720=s4BasalamBestSellersNormalizeFilters(['vendors'=>'["101","103","101"]']);
-    $__bbsFil720=s4BasalamBestSellersFilterProducts($__bbs720,['vendors'=>['101','103'],'sort'=>'exact_sales','dir'=>'desc']);
+    $__bbsFil720=s4BasalamBestSellersFilterProducts($__bbs720,['excluded_vendors'=>['101','103'],'sort'=>'exact_sales','dir'=>'desc']);
     $__bbsOpts720=s4BasalamBestSellersVendorOptionsFromItems($__bbs720);
     $__bbsIdx720=s4BasalamBestSellersIndexLoadOrBuild(['exists'=>false],null,$__bbs720);
     $add('10.720','فیلتر چند-غرفه‌ای در دراپ‌داون سرچ‌پذیر تیک‌خور پرفروش‌های باسلام فعال است',
-        ($__bbsNorm720['vendors']??[])===['101','103']
-        &&array_keys($__bbsFil720)===['p3','p1','p5']
+        ($__bbsNorm720['excluded_vendors']??[])===['101','103']
+        &&array_keys($__bbsFil720)===['p4','p2']
         &&count($__bbsOpts720)===4
         &&(string)($__bbsOpts720[0]['key']??'')==='101'
         &&(int)($__bbsOpts720[0]['count']??0)===2
@@ -52958,10 +53392,38 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'id="bbsVendorSearch"')!==false
         &&strpos($selfSrc,'id="bbsVendorList"')!==false
         &&strpos($selfSrc,'bbsVendorItemChanged')!==false
-        &&strpos($selfSrc,"'vendors'=>\$_GET['vendors']??''")!==false
-        &&strpos($selfSrc,"'vendors'=>\$_POST['vendors']??''")!==false
+        &&strpos($selfSrc,"'excluded_vendors'=>\$_GET['excluded_vendors']??")!==false
+        &&strpos($selfSrc,"'excluded_vendors'=>\$_POST['excluded_vendors']??")!==false
         &&strpos($selfSrc,"{v:'10."."720'")!==false
         &&version_compare(APP_VERSION,'10.720','>='));
+    $__bbsFil721ExName=s4BasalamBestSellersFilterProducts($__bbs720,['excluded_vendors'=>['name:غرفه خرما'],'sort'=>'exact_sales','dir'=>'desc']);
+    $__outTpl721=s4BasalamVendorOutreachDefaultTemplate();
+    $__outMsg721=s4BasalamVendorOutreachRenderMessage('سلام مدیر {غرفه}، از غرفه {غرفه_ما} ({شناسه_غرفه}) پیام می‌دهم.','عسل سبلان','فروشگاه سبا',4455);
+    $__outOwnerA=s4BasalamVendorOutreachExtractVendorOwner(['data'=>['id'=>4455,'title'=>'عسل سبلان','identifier'=>'asal-sabalan','user'=>['id'=>9911,'hash_id'=>'h9911']]]);
+    $__outOwnerB=s4BasalamVendorOutreachExtractVendorOwner(['id'=>4455,'name'=>'عسل','user'=>['id'=>9922]]);
+    $__outChatPayload=bslSanitizeProductWritePayload('chats',['user_id'=>9911]);
+    $add('10.721','تیک‌های دراپ‌داون غرفه استثنا می‌سازند و ارسال گروهی پیام اجازه در پرفروش‌ها و غرفه‌های شخص ثالث فعال است',
+        array_keys($__bbsFil721ExName)===['p3','p2','p1','p5']
+        &&strpos($__outTpl721,'{غرفه}')!==false
+        &&strpos($__outTpl721,'{غرفه_ما}')!==false
+        &&$__outMsg721==='سلام مدیر عسل سبلان، از غرفه فروشگاه سبا (4455) پیام می‌دهم.'
+        &&(int)($__outOwnerA['user_id']??0)===9911
+        &&($__outOwnerA['hash_id']??'')==='h9911'
+        &&(int)($__outOwnerB['user_id']??0)===9922
+        &&($__outChatPayload['user_id']??0)===9911
+        &&strpos($selfSrc,'function s4BasalamVendorOutreachSendBatch(')!==false
+        &&strpos($selfSrc,'function s4BasalamVendorOutreachPrepareTargets(')!==false
+        &&strpos($selfSrc,'basalam_vendor_outreach_prepare')!==false
+        &&strpos($selfSrc,'basalam_vendor_outreach_send')!==false
+        &&strpos($selfSrc,'id="bbsOutreachBtn"')!==false
+        &&strpos($selfSrc,'id="tpeOutreachBtn"')!==false
+        &&strpos($selfSrc,'id="tpeImportOutreachBtn"')!==false
+        &&strpos($selfSrc,'id="s4OutreachModal"')!==false
+        &&strpos($selfSrc,'id="s4OutreachSender"')!==false
+        &&strpos($selfSrc,'id="s4OutreachTemplate"')!==false
+        &&strpos($selfSrc,'X-Client-Info: web')!==false
+        &&strpos($selfSrc,"{v:'10."."721'")!==false
+        &&version_compare(APP_VERSION,'10.721','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -95575,7 +96037,7 @@ let s4uaUsers=[];function s4uaEsc(x){return String(x??'').replace(/[&<>"']/g,c=>
 <div class="smenu" id="basalamBestSellersSmenu">
 <div class="smenu-hdr" style="background:linear-gradient(90deg,#b45309,#0f172a)" onclick="toggleSmenu(this);if(this.classList.contains('open'))bbsLoad()"><h3>🏆 پرفروش‌ترین محصولات باسلام</h3><span class="cst on" id="bbsBadge">فعال</span><span class="arrow">▼</span></div>
 <div class="smenu-body">
-<style>.bbs-fold{border:1px solid #334155;border-radius:10px;margin:8px 0;background:rgba(15,23,42,.55);overflow:hidden}.bbs-fold.bbs-fold-dropdown[open]{overflow:visible}.bbs-fold>summary{cursor:pointer;list-style:none;padding:10px 12px;font-weight:800;color:#e2e8f0;background:linear-gradient(90deg,rgba(180,83,9,.26),rgba(15,23,42,.2));user-select:none;border-radius:9px}.bbs-fold[open]>summary{border-radius:9px 9px 0 0}.bbs-fold>summary::-webkit-details-marker{display:none}.bbs-fold>summary:after{content:'◀';float:left;color:#fbbf24;transition:transform .2s}.bbs-fold[open]>summary:after{transform:rotate(-90deg)}.bbs-fold-body{padding:9px 11px}.bbs-ms{position:relative}.bbs-ms-trigger{width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;background:#111827;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:11px;cursor:pointer;text-align:right;min-height:30px;box-sizing:border-box}.bbs-ms-trigger:hover,.bbs-ms-trigger[aria-expanded="true"]{border-color:#0891b2;background:#0f172a}.bbs-ms-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bbs-ms-actions{display:flex;align-items:center;gap:5px;flex:0 0 auto}.bbs-ms-clear{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:999px;background:#334155;color:#fca5a5;font-size:10px;line-height:1;cursor:pointer}.bbs-ms-clear:hover{background:#7f1d1d;color:#fff}.bbs-ms-caret{color:#94a3b8;font-size:10px}.bbs-ms-panel{position:absolute;top:calc(100% + 4px);right:0;min-width:max(100%,280px);max-width:min(360px,86vw);background:#0f172a;border:1px solid #0891b2;border-radius:9px;box-shadow:0 14px 32px rgba(0,0,0,.65);padding:8px;z-index:120;box-sizing:border-box}.bbs-ms-panel.hidden,.bbs-ms-clear.hidden{display:none}.bbs-ms-search{width:100%;box-sizing:border-box;background:#111827;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:11px;margin-bottom:6px}.bbs-ms-toolbar{display:flex;align-items:center;justify-content:space-between;gap:4px;flex-wrap:wrap;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #1e293b}.bbs-ms-tbtn{background:#1e293b;border:1px solid #334155;border-radius:5px;color:#cbd5e1;padding:3px 7px;font-size:10px;cursor:pointer}.bbs-ms-tbtn:hover{background:#334155;color:#fff}.bbs-ms-meta{font-size:9.5px;color:#67e8f9;margin-right:auto}.bbs-ms-list{max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;padding-left:2px}.bbs-ms-item{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;cursor:pointer;font-size:10.5px;color:#e2e8f0;user-select:none}.bbs-ms-item:hover{background:#1e293b}.bbs-ms-item.selected{background:rgba(8,145,178,.18);color:#cffafe}.bbs-ms-item input[type="checkbox"]{width:auto!important;margin:0;accent-color:#22d3ee;cursor:pointer;flex:0 0 auto}.bbs-ms-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bbs-ms-count{flex:0 0 auto;font-size:9.5px;color:#94a3b8;background:#111827;border:1px solid #1e293b;border-radius:999px;padding:1px 6px}.bbs-ms-empty{padding:14px 8px;text-align:center;font-size:10.5px;color:#64748b}.bbs-ms-more{width:100%;margin-top:4px;padding:5px;background:#111827;border:1px dashed #334155;border-radius:6px;color:#7dd3fc;font-size:10px;cursor:pointer}.bbs-ms-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}.bbs-ms-chips:empty{display:none}.bbs-ms-chip{display:inline-flex;align-items:center;gap:4px;background:rgba(8,145,178,.18);border:1px solid #0e7490;color:#cffafe;border-radius:999px;padding:2px 7px;font-size:9.5px;max-width:100%}.bbs-ms-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}.bbs-ms-chip button{background:none;border:none;color:#fca5a5;cursor:pointer;padding:0 2px;font-size:10px;line-height:1}</style>
+<style>.bbs-fold{border:1px solid #334155;border-radius:10px;margin:8px 0;background:rgba(15,23,42,.55);overflow:hidden}.bbs-fold.bbs-fold-dropdown[open]{overflow:visible}.bbs-fold>summary{cursor:pointer;list-style:none;padding:10px 12px;font-weight:800;color:#e2e8f0;background:linear-gradient(90deg,rgba(180,83,9,.26),rgba(15,23,42,.2));user-select:none;border-radius:9px}.bbs-fold[open]>summary{border-radius:9px 9px 0 0}.bbs-fold>summary::-webkit-details-marker{display:none}.bbs-fold>summary:after{content:'◀';float:left;color:#fbbf24;transition:transform .2s}.bbs-fold[open]>summary:after{transform:rotate(-90deg)}.bbs-fold-body{padding:9px 11px}.bbs-ms{position:relative}.bbs-ms-trigger{width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;background:#111827;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:11px;cursor:pointer;text-align:right;min-height:30px;box-sizing:border-box}.bbs-ms-trigger:hover,.bbs-ms-trigger[aria-expanded="true"]{border-color:#dc2626;background:#0f172a}.bbs-ms-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bbs-ms-actions{display:flex;align-items:center;gap:5px;flex:0 0 auto}.bbs-ms-clear{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:999px;background:#334155;color:#fca5a5;font-size:10px;line-height:1;cursor:pointer}.bbs-ms-clear:hover{background:#7f1d1d;color:#fff}.bbs-ms-caret{color:#94a3b8;font-size:10px}.bbs-ms-panel{position:absolute;top:calc(100% + 4px);right:0;min-width:max(100%,280px);max-width:min(360px,86vw);background:#0f172a;border:1px solid #b91c1c;border-radius:9px;box-shadow:0 14px 32px rgba(0,0,0,.65);padding:8px;z-index:120;box-sizing:border-box}.bbs-ms-panel.hidden,.bbs-ms-clear.hidden{display:none}.bbs-ms-search{width:100%;box-sizing:border-box;background:#111827;border:1px solid #334155;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:11px;margin-bottom:6px}.bbs-ms-toolbar{display:flex;align-items:center;justify-content:space-between;gap:4px;flex-wrap:wrap;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #1e293b}.bbs-ms-tbtn{background:#1e293b;border:1px solid #334155;border-radius:5px;color:#cbd5e1;padding:3px 7px;font-size:10px;cursor:pointer}.bbs-ms-tbtn:hover{background:#334155;color:#fff}.bbs-ms-meta{font-size:9.5px;color:#fca5a5;margin-right:auto}.bbs-ms-list{max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;padding-left:2px}.bbs-ms-item{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;cursor:pointer;font-size:10.5px;color:#e2e8f0;user-select:none}.bbs-ms-item:hover{background:#1e293b}.bbs-ms-item.selected{background:rgba(220,38,38,.18);color:#fecaca}.bbs-ms-item input[type="checkbox"]{width:auto!important;margin:0;accent-color:#ef4444;cursor:pointer;flex:0 0 auto}.bbs-ms-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bbs-ms-count{flex:0 0 auto;font-size:9.5px;color:#94a3b8;background:#111827;border:1px solid #1e293b;border-radius:999px;padding:1px 6px}.bbs-ms-empty{padding:14px 8px;text-align:center;font-size:10.5px;color:#64748b}.bbs-ms-more{width:100%;margin-top:4px;padding:5px;background:#111827;border:1px dashed #334155;border-radius:6px;color:#7dd3fc;font-size:10px;cursor:pointer}.bbs-ms-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}.bbs-ms-chips:empty{display:none}.bbs-ms-chip{display:inline-flex;align-items:center;gap:4px;background:rgba(220,38,38,.16);border:1px solid #b91c1c;color:#fecaca;border-radius:999px;padding:2px 7px;font-size:9.5px;max-width:100%}.bbs-ms-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px}.bbs-ms-chip button{background:none;border:none;color:#fca5a5;cursor:pointer;padding:0 2px;font-size:10px;line-height:1}</style>
 <details class="bbs-fold" id="bbsStatusFold" open><summary>📊 وضعیت و عملیات جمع‌آوری</summary><div class="bbs-fold-body">
 <div class="tpe-actions"><button type="button" class="btn btn-cyan" onclick="bbsRun()">↻ اجرای گام بعدی</button><button type="button" class="btn btn-gray" onclick="bbsLoad(bbsCurrentPage,{forceFresh:true})">تازه‌سازی وضعیت</button></div>
 <div class="tpe-stats" id="bbsStats"><span class="tpe-stat">در انتظار بارگذاری…</span></div>
@@ -95589,7 +96051,7 @@ let s4uaUsers=[];function s4uaEsc(x){return String(x??'').replace(/[&<>"']/g,c=>
 <div class="tpe-grid" id="bbsFilters" style="margin:8px 0">
 <div class="tpe-box"><label>جست‌وجوی عنوان، شناسه، غرفه یا دسته</label><input id="bbsQuery" placeholder="عبارت جست‌وجو…" oninput="bbsFiltersChanged()"></div>
 <div class="tpe-box"><label>دسته</label><input id="bbsCategory" placeholder="مثلاً عسل" oninput="bbsFiltersChanged()"></div>
-<div class="tpe-box" id="bbsVendorBox"><label>غرفه (جست‌وجو و انتخاب چندتایی)</label><div class="bbs-ms" id="bbsVendorDropdown"><button type="button" class="bbs-ms-trigger" id="bbsVendorTrigger" aria-expanded="false" onclick="bbsVendorToggle(event)"><span class="bbs-ms-label" id="bbsVendorTriggerLabel">همهٔ غرفه‌ها</span><span class="bbs-ms-actions"><span class="bbs-ms-clear hidden" id="bbsVendorClearBtn" title="پاک‌کردن غرفه‌های انتخاب‌شده" onclick="bbsVendorClearAll(event)">✕</span><span class="bbs-ms-caret">▾</span></span></button><div class="bbs-ms-panel hidden" id="bbsVendorMenu" onclick="event.stopPropagation()"><input type="text" class="bbs-ms-search" id="bbsVendorSearch" placeholder="جست‌وجوی نام یا شناسهٔ غرفه…" oninput="bbsVendorRenderCap=200;bbsVendorRenderList()"><div class="bbs-ms-toolbar"><button type="button" class="bbs-ms-tbtn" onclick="bbsVendorSelectVisible(true)">✓ انتخاب یافته‌ها</button><button type="button" class="bbs-ms-tbtn" onclick="bbsVendorClearAll(event)">✕ پاک‌کردن همه</button><span class="bbs-ms-meta" id="bbsVendorMeta">۰ انتخاب</span></div><div class="bbs-ms-list" id="bbsVendorList"><div class="bbs-ms-empty">در حال بارگذاری غرفه‌ها…</div></div></div></div><input type="hidden" id="bbsVendor" value=""><div class="bbs-ms-chips" id="bbsVendorChips"></div></div>
+<div class="tpe-box" id="bbsVendorBox"><label>مستثنی‌کردن غرفه‌ها (جست‌وجو و تیک برای حذف)</label><div class="bbs-ms" id="bbsVendorDropdown"><button type="button" class="bbs-ms-trigger" id="bbsVendorTrigger" aria-expanded="false" onclick="bbsVendorToggle(event)"><span class="bbs-ms-label" id="bbsVendorTriggerLabel">همهٔ غرفه‌ها (هیچ‌کدام مستثنی نیست)</span><span class="bbs-ms-actions"><span class="bbs-ms-clear hidden" id="bbsVendorClearBtn" title="لغو همهٔ استثناها" onclick="bbsVendorClearAll(event)">✕</span><span class="bbs-ms-caret">▾</span></span></button><div class="bbs-ms-panel hidden" id="bbsVendorMenu" onclick="event.stopPropagation()"><input type="text" class="bbs-ms-search" id="bbsVendorSearch" placeholder="جست‌وجوی نام یا شناسهٔ غرفه برای مستثنی‌کردن…" oninput="bbsVendorRenderCap=200;bbsVendorRenderList()"><div class="bbs-ms-toolbar"><button type="button" class="bbs-ms-tbtn" onclick="bbsVendorSelectVisible(true)">✓ مستثنی‌کردن یافته‌ها</button><button type="button" class="bbs-ms-tbtn" onclick="bbsVendorClearAll(event)">✕ لغو همهٔ استثناها</button><span class="bbs-ms-meta" id="bbsVendorMeta">۰ مستثنی</span></div><div class="bbs-ms-list" id="bbsVendorList"><div class="bbs-ms-empty">در حال بارگذاری غرفه‌ها…</div></div></div></div><input type="hidden" id="bbsVendor" value=""><div class="bbs-ms-chips" id="bbsVendorChips"></div></div>
 <div class="tpe-box"><label>وضعیت فروش دقیق</label><select id="bbsExact" onchange="bbsFiltersChanged(true)"><option value="all">همه</option><option value="verified">تأییدشده</option><option value="pending">در انتظار تأیید</option></select></div>
 <div class="tpe-box"><label>مبنای حداقل فروش</label><select id="bbsSalesMetric" onchange="bbsFiltersChanged(true)"><option value="exact_sales">فروش دقیق</option><option value="indexed_sales">فروش فهرست / جست‌وجو</option><option value="weekly_sales">فروش هفتگی</option></select><small style="display:block;color:#64748b;margin-top:4px;line-height:1.6">فروش فهرست عددی است که خود باسلام در پاسخ فهرست/جست‌وجو، پیش از بررسی دقیق هر محصول، برمی‌گرداند.</small></div>
 <div class="tpe-box"><label>حداقل فروش بر مبنای انتخاب‌شده</label><input id="bbsMinSales" type="number" min="0" value="0" oninput="bbsFiltersChanged()"></div>
@@ -95598,7 +96060,7 @@ let s4uaUsers=[];function s4uaEsc(x){return String(x??'').replace(/[&<>"']/g,c=>
 <div class="tpe-box" style="border-color:#0891b2;background:rgba(8,145,178,.08)"><label>مرتب‌سازی بر اساس</label><select id="bbsSort" aria-label="معیار مرتب‌سازی پرفروش‌های باسلام" onchange="bbsFiltersChanged(true)"><optgroup label="امتیاز و فروش"><option value="composite_score">امتیاز جامع همهٔ پارامترها</option><option value="exact_sales">فروش دقیق</option><option value="indexed_sales">فروش فهرست</option><option value="weekly_sales">فروش هفته</option></optgroup><optgroup label="مشخصات محصول"><option value="price">قیمت</option><option value="stock">موجودی</option><option value="title">عنوان</option><option value="vendor">غرفه</option><option value="category">دسته</option></optgroup></select><small style="display:block;color:#67e8f9;margin-top:4px">معیار مرتب‌سازی را از این فهرست کشویی انتخاب کنید.</small></div>
 <div class="tpe-box" style="border-color:#0891b2;background:rgba(8,145,178,.08)"><label>ترتیب نمایش</label><select id="bbsDir" aria-label="جهت مرتب‌سازی پرفروش‌های باسلام" onchange="bbsFiltersChanged(true)"><option value="desc">بیشترین به کمترین / نزولی</option><option value="asc">کمترین به بیشترین / صعودی</option></select><small style="display:block;color:#67e8f9;margin-top:4px">جهت مرتب‌سازی را از این فهرست کشویی انتخاب کنید.</small></div>
 </div>
-<div class="tpe-actions"><button type="button" class="btn btn-gray" onclick="bbsResetFilters()">پاک‌کردن فیلترها</button><label class="tpe-stat" style="color:#bbf7d0"><input id="bbsExcelAllShops" type="checkbox" checked> همهٔ غرفه‌های انتخاب‌شده</label><button type="button" class="btn btn-green" onclick="bslExcelExport('best_sellers_filtered')">⬇ Excel باسلام از نتیجهٔ فیلترشده</button><span class="tpe-stat" id="bbsFilteredCount">۰ نتیجه</span><span class="tpe-stat">هر تغییر فیلتر مستقیماً محصولات پروفایل را بروزرسانی می‌کند</span></div>
+<div class="tpe-actions"><button type="button" class="btn btn-gray" onclick="bbsResetFilters()">پاک‌کردن فیلترها</button><label class="tpe-stat" style="color:#bbf7d0"><input id="bbsExcelAllShops" type="checkbox" checked> همهٔ غرفه‌های انتخاب‌شده</label><button type="button" class="btn btn-green" onclick="bslExcelExport('best_sellers_filtered')">⬇ Excel باسلام از نتیجهٔ فیلترشده</button><button type="button" class="btn btn-cyan" id="bbsOutreachBtn" onclick="s4OutreachOpen('best_sellers_filtered')">💬 ارسال پیام اجازه به غرفه‌ها</button><span class="tpe-stat" id="bbsFilteredCount">۰ نتیجه</span><span class="tpe-stat">هر تغییر فیلتر مستقیماً محصولات پروفایل را بروزرسانی می‌کند</span></div>
 </div></details>
 <details class="bbs-fold" id="bbsTableFold" open><summary>📦 جدول محصولات پرفروش</summary><div class="bbs-fold-body">
 <div class="tpe-table-wrap" style="max-height:58vh;overflow:auto"><table class="tpe-table" id="bbsTable"><thead><tr><th>رتبه</th><th>تصویر</th><th>محصول</th><th>فروش دقیق</th><th>فروش فهرست</th><th>فروش هفته</th><th>امتیاز جامع</th><th>قیمت</th><th>موجودی</th><th>غرفه</th><th>دسته</th></tr></thead><tbody id="bbsRows"><tr><td colspan="11">برای نمایش جدول، این بخش را باز کنید.</td></tr></tbody></table></div>
@@ -95625,7 +96087,7 @@ let s4uaUsers=[];function s4uaEsc(x){return String(x??'').replace(/[&<>"']/g,c=>
 <div class="tpe-box"><label>افزایش قیمت پروفایل (%)</label><input id="tpePrice" type="number" value="20"></div>
 <div class="tpe-box"><label>الگوی پسوند یکتا</label><input id="tpeSuffix" value="(کد:{n})"></div>
 </div>
-<div class="tpe-actions"><button class="btn btn-green" onclick="tpeSave(true)">💾 ذخیره تنظیمات</button><button class="btn btn-cyan" onclick="tpeRun()">↻ اجرای یک گام فوری</button><button class="btn btn-cyan" onclick="tpeProbe()">🧪 آزمایش کشف</button><button class="btn btn-gray" onclick="tpeLoad(true)">تازه‌سازی</button><button class="btn btn-green" id="tpeBulkBtn" onclick="tpeBulkApprove()">➕ افزودن انتخاب‌شده‌ها به غرفه‌ها</button><span id="tpeSelectedCount" class="tpe-stat">۰ انتخاب</span></div>
+<div class="tpe-actions"><button class="btn btn-green" onclick="tpeSave(true)">💾 ذخیره تنظیمات</button><button class="btn btn-cyan" onclick="tpeRun()">↻ اجرای یک گام فوری</button><button class="btn btn-cyan" onclick="tpeProbe()">🧪 آزمایش کشف</button><button class="btn btn-gray" onclick="tpeLoad(true)">تازه‌سازی</button><button class="btn btn-green" id="tpeBulkBtn" onclick="tpeBulkApprove()">➕ افزودن انتخاب‌شده‌ها به غرفه‌ها</button><button type="button" class="btn btn-cyan" id="tpeOutreachBtn" onclick="s4OutreachOpen('third_party_explorer')" title="ارسال یکجا پیام اجازه گذاشتن محصولات به غرفه‌های انتخاب‌شده یا لیست فعلی">💬 ارسال پیام اجازه به غرفه‌ها</button><span id="tpeSelectedCount" class="tpe-stat">۰ انتخاب</span></div>
 <details open class="tpe-box" style="margin:10px 0;border-color:#7c3aed">
 <summary style="cursor:pointer;color:#ddd6fe;font-weight:700;font-size:11px">📥 افزودن دسته‌جمعی غرفه‌ها از فهرست لینک</summary>
 <div class="tpe-note">لینک‌های عمومی غرفه‌های باسلام را هر کدام در یک خط پیست کنید یا فایل TXT / CSV / TSV بدهید. حداکثر ۲۰۰ غرفه، بدون تکرار، فوراً شناسایی و با همان درصد تعدیل قیمت، الگوی پسوند کددار و ارسال به همهٔ مقصدها آماده می‌شوند. قبل از ساخت پروفایل می‌توانید جدول را بررسی و انتخاب کنید.</div>
@@ -95633,7 +96095,7 @@ let s4uaUsers=[];function s4uaEsc(x){return String(x??'').replace(/[&<>"']/g,c=>
 <div class="tpe-actions"><input id="tpeImportFile" type="file" accept=".txt,.csv,.tsv,text/plain,text/csv" style="max-width:300px;color:#cbd5e1;font-size:10px"><button type="button" class="btn btn-cyan" id="tpeImportResolveBtn" onclick="tpeImportResolve()">⚡ تبدیل فوری به جدول غرفه‌ها</button><button type="button" class="btn btn-gray" onclick="tpeImportClear()">پاک‌کردن</button><span class="tpe-stat" id="tpeImportSummary">هنوز فهرستی تبدیل نشده است</span></div>
 <div id="tpeImportMsg" class="tpe-note"></div>
 <div class="tpe-table-wrap" style="max-height:48vh;overflow:auto"><table class="tpe-table"><thead><tr><th><input type="checkbox" id="tpeImportSelectAll" onchange="tpeImportToggleAll(this.checked)"></th><th>ردیف</th><th>عنوان پروفایل پیشنهادی / غرفه</th><th>شناسه</th><th>فروش عمومی / سفارش</th><th>محصول</th><th>کد و پسوند</th><th>تعدیل قیمت</th><th>وضعیت</th></tr></thead><tbody id="tpeImportRows"><tr><td colspan="9">لینک‌ها را وارد و به جدول تبدیل کنید.</td></tr></tbody></table></div>
-<div class="tpe-actions"><button type="button" class="btn btn-green" id="tpeImportCreateBtn" onclick="tpeImportCreateProfiles()" disabled>➕ ایجاد و افزودن پروفایل‌های انتخاب‌شده</button><span class="tpe-stat" id="tpeImportSelectedCount">۰ انتخاب</span></div>
+<div class="tpe-actions"><button type="button" class="btn btn-green" id="tpeImportCreateBtn" onclick="tpeImportCreateProfiles()" disabled>➕ ایجاد و افزودن پروفایل‌های انتخاب‌شده</button><button type="button" class="btn btn-cyan" id="tpeImportOutreachBtn" onclick="s4OutreachOpen('third_party_import')">💬 ارسال پیام اجازه به غرفه‌ها</button><span class="tpe-stat" id="tpeImportSelectedCount">۰ انتخاب</span></div>
 </details>
 <div class="tpe-stats" id="tpeStats"></div><div class="tpe-progress" title="پیشرفت بررسی فروش"><i id="tpeProgressBar"></i></div><div id="tpeLive" class="tpe-live">در انتظار وضعیت زنده…</div><div id="tpeMsg" class="tpe-note"></div>
 <details style="margin:6px 0"><summary style="font-size:10px;color:#a78bfa;cursor:pointer">تاریخچهٔ ممیزی تأیید/رد</summary><div id="tpeAudit" class="tpe-note">هنوز رویدادی ثبت نشده است.</div></details>
@@ -95686,11 +96148,11 @@ function bbsVendorRenderList(){
   if(!qNorm&&selSet.size){matched=[...matched.filter(o=>selSet.has(String(o.key))),...matched.filter(o=>!selSet.has(String(o.key)))];}
   bbsVendorLastMatched=matched.map(o=>String(o.key));
   const slice=matched.slice(0,bbsVendorRenderCap);
-  if(metaEl)metaEl.textContent=`${selSet.size.toLocaleString('fa-IR')} انتخاب · ${matched.length.toLocaleString('fa-IR')} از ${opts.length.toLocaleString('fa-IR')}`;
+  if(metaEl)metaEl.textContent=`${selSet.size.toLocaleString('fa-IR')} مستثنی · ${matched.length.toLocaleString('fa-IR')} از ${opts.length.toLocaleString('fa-IR')}`;
   if(!matched.length){listEl.innerHTML=`<div class="bbs-ms-empty">${opts.length?'غرفه‌ای با این عبارت یافت نشد.':'هنوز فهرست غرفه‌ها آماده نشده است.'}</div>`;return;}
   let html=slice.map(o=>{
     const k=String(o.key),checked=selSet.has(k),label=String(o.name||('غرفه #'+(o.vendor_id||k))),vid=Number(o.vendor_id||0);
-    return `<label class="bbs-ms-item${checked?' selected':''}" title="${tpeEsc(label)}${vid?' (#'+vid+')':''}"><input type="checkbox" data-vkey="${tpeEsc(k)}"${checked?' checked':''} onchange="bbsVendorItemChanged(this)"><span class="bbs-ms-name">${tpeEsc(label)}${vid&&!label.includes('#'+vid)?` <small style="color:#64748b">#${vid}</small>`:''}</span><span class="bbs-ms-count">${Number(o.count||0).toLocaleString()}</span></label>`;
+    return `<label class="bbs-ms-item${checked?' selected':''}" title="${tpeEsc(label)}${vid?' (#'+vid+')':''} — تیک برای مستثنی‌کردن"><input type="checkbox" data-vkey="${tpeEsc(k)}"${checked?' checked':''} onchange="bbsVendorItemChanged(this)"><span class="bbs-ms-name">${tpeEsc(label)}${vid&&!label.includes('#'+vid)?` <small style="color:#64748b">#${vid}</small>`:''}</span><span class="bbs-ms-count">${Number(o.count||0).toLocaleString()}</span></label>`;
   }).join('');
   if(matched.length>bbsVendorRenderCap){html+=`<button type="button" class="bbs-ms-more" onclick="bbsVendorRenderCap+=300;bbsVendorRenderList()">نمایش ${(matched.length-bbsVendorRenderCap).toLocaleString('fa-IR')} غرفهٔ دیگر…</button>`;}
   listEl.innerHTML=html;
@@ -95701,16 +96163,16 @@ function bbsVendorSyncUi(){
   const legacyVal=String((legacyEl&&legacyEl.value)||'').trim();
   const n=bbsSelectedVendors.length;
   if(lbl){
-    if(n===0&&!legacyVal)lbl.textContent='همهٔ غرفه‌ها';
-    else if(n===0&&legacyVal)lbl.textContent='فیلتر متنی: '+legacyVal;
-    else if(n===1)lbl.textContent=bbsVendorOptionLabel(bbsSelectedVendors[0]);
-    else lbl.textContent=`${n.toLocaleString('fa-IR')} غرفه انتخاب شده (${bbsVendorOptionLabel(bbsSelectedVendors[0])}، …)`;
+    if(n===0&&!legacyVal)lbl.textContent='همهٔ غرفه‌ها (هیچ‌کدام مستثنی نیست)';
+    else if(n===0&&legacyVal)lbl.textContent='حذف متنی: '+legacyVal;
+    else if(n===1)lbl.textContent='مستثنی: '+bbsVendorOptionLabel(bbsSelectedVendors[0]);
+    else lbl.textContent=`مستثنی: ${n.toLocaleString('fa-IR')} غرفه (${bbsVendorOptionLabel(bbsSelectedVendors[0])}، …)`;
   }
   if(clr)clr.classList.toggle('hidden',n===0&&!legacyVal);
   if(chipsEl){
-    let chipsHtml=bbsSelectedVendors.slice(0,12).map(k=>`<span class="bbs-ms-chip" title="${tpeEsc(bbsVendorOptionLabel(k))}"><span>${tpeEsc(bbsVendorOptionLabel(k))}</span><button type="button" data-vkey="${tpeEsc(String(k))}" onclick="bbsVendorRemoveBtn(this,event)" title="حذف">✕</button></span>`).join('');
-    if(n>12)chipsHtml+=`<span class="bbs-ms-chip">+${(n-12).toLocaleString('fa-IR')} مورد دیگر</span>`;
-    if(legacyVal)chipsHtml+=`<span class="bbs-ms-chip" style="border-color:#d97706;background:rgba(217,119,6,.16);color:#fde68a"><span>متنی: ${tpeEsc(legacyVal)}</span><button type="button" onclick="bbsVendorClearLegacy(event)" title="حذف فیلتر متنی">✕</button></span>`;
+    let chipsHtml=bbsSelectedVendors.slice(0,12).map(k=>`<span class="bbs-ms-chip" title="مستثنی: ${tpeEsc(bbsVendorOptionLabel(k))}"><span>🚫 ${tpeEsc(bbsVendorOptionLabel(k))}</span><button type="button" data-vkey="${tpeEsc(String(k))}" onclick="bbsVendorRemoveBtn(this,event)" title="حذف از استثناها">✕</button></span>`).join('');
+    if(n>12)chipsHtml+=`<span class="bbs-ms-chip">+${(n-12).toLocaleString('fa-IR')} غرفهٔ مستثنی دیگر</span>`;
+    if(legacyVal)chipsHtml+=`<span class="bbs-ms-chip" style="border-color:#d97706;background:rgba(217,119,6,.16);color:#fde68a"><span>حذف متنی: ${tpeEsc(legacyVal)}</span><button type="button" onclick="bbsVendorClearLegacy(event)" title="حذف فیلتر متنی">✕</button></span>`;
     chipsEl.innerHTML=chipsHtml;
   }
   bbsVendorRenderList();
@@ -95723,9 +96185,9 @@ function bbsVendorClearAll(ev){if(ev)ev.stopPropagation();const legacy=document.
 document.addEventListener('click',ev=>{if(!bbsVendorMenuOpen)return;const dd=document.getElementById('bbsVendorDropdown');if(dd&&!dd.contains(ev.target))bbsVendorSetOpen(false);});
 document.addEventListener('keydown',ev=>{if(bbsVendorMenuOpen&&ev.key==='Escape')bbsVendorSetOpen(false);});
 function bbsVal(id,fallback=''){const e=document.getElementById(id);return e?e.value:fallback;}
-function bbsFilterValues(){return{q:bbsVal('bbsQuery'),category:bbsVal('bbsCategory'),vendor:bbsVal('bbsVendor'),vendors:JSON.stringify(bbsSelectedVendors),exact:bbsVal('bbsExact','all'),sales_metric:bbsVal('bbsSalesMetric','exact_sales'),min_sales:bbsVal('bbsMinSales','0'),max_products:bbsVal('bbsMaxProducts','10000'),stock:bbsVal('bbsStock','all'),sort:bbsVal('bbsSort','exact_sales'),dir:bbsVal('bbsDir','desc')};}
+function bbsFilterValues(){return{q:bbsVal('bbsQuery'),category:bbsVal('bbsCategory'),vendor:bbsVal('bbsVendor'),excluded_vendors:JSON.stringify(bbsSelectedVendors),exact:bbsVal('bbsExact','all'),sales_metric:bbsVal('bbsSalesMetric','exact_sales'),min_sales:bbsVal('bbsMinSales','0'),max_products:bbsVal('bbsMaxProducts','10000'),stock:bbsVal('bbsStock','all'),sort:bbsVal('bbsSort','exact_sales'),dir:bbsVal('bbsDir','desc')};}
 function bbsFilterSig(){return JSON.stringify(bbsFilterValues());}
-function bbsApplyFilterValuesToDom(af){if(!af||typeof af!=='object')return;[['bbsQuery',af.q??''],['bbsCategory',af.category??''],['bbsVendor',af.vendor??''],['bbsExact',af.exact??'all'],['bbsSalesMetric',af.sales_metric??'exact_sales'],['bbsMinSales',af.min_sales??0],['bbsMaxProducts',af.max_products??10000],['bbsStock',af.stock??'all'],['bbsSort',af.sort??'exact_sales'],['bbsDir',af.dir??'desc']].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.value=v;});let vs=af.vendors;if(typeof vs==='string'){try{const parsed=vs.trim().startsWith('[')?JSON.parse(vs):vs.split(/[\r\n,،]+/);vs=Array.isArray(parsed)?parsed:[];}catch(e){vs=[];}}bbsSelectedVendors=Array.isArray(vs)?[...new Set(vs.map(x=>String(x).trim()).filter(Boolean))]:[];bbsVendorSyncUi();}
+function bbsApplyFilterValuesToDom(af){if(!af||typeof af!=='object')return;[['bbsQuery',af.q??''],['bbsCategory',af.category??''],['bbsVendor',af.vendor??''],['bbsExact',af.exact??'all'],['bbsSalesMetric',af.sales_metric??'exact_sales'],['bbsMinSales',af.min_sales??0],['bbsMaxProducts',af.max_products??10000],['bbsStock',af.stock??'all'],['bbsSort',af.sort??'exact_sales'],['bbsDir',af.dir??'desc']].forEach(([id,v])=>{const e=document.getElementById(id);if(e)e.value=v;});let vs=af.excluded_vendors!==undefined?af.excluded_vendors:af.vendors;if(typeof vs==='string'){try{const parsed=vs.trim().startsWith('[')?JSON.parse(vs):vs.split(/[\r\n,،]+/);vs=Array.isArray(parsed)?parsed:[];}catch(e){vs=[];}}bbsSelectedVendors=Array.isArray(vs)?[...new Set(vs.map(x=>String(x).trim()).filter(Boolean))]:[];bbsVendorSyncUi();}
 function bbsQueryParams(page,opts={}){const p=new URLSearchParams({basalam_best_sellers_status:'1',page:String(page),page_size:'50',...bbsFilterValues(),_t:String(Date.now())});if(opts.preferCache)p.set('prefer_cache','1');if(opts.forceFresh)p.set('fresh','1');if(opts.useApplied)p.set('use_applied_filters','1');return p.toString();}
 function bbsClearClientCache(){bbsMemCache.clear();try{localStorage.removeItem(BBS_LS_CACHE_KEY);}catch(e){}}
 function bbsReadClientCache(page,sig){const key=String(page)+'|'+sig;if(bbsMemCache.has(key))return bbsMemCache.get(key);try{const raw=localStorage.getItem(BBS_LS_CACHE_KEY);if(!raw)return null;const store=JSON.parse(raw);if(!store||typeof store!=='object')return null;const entry=(store.entries&&store.entries[key])||(sig==='__applied__'&&store.latestKey?store.entries?.[store.latestKey]:null);if(!entry||!entry.data||(Date.now()-Number(entry.at||0))>7*86400*1000)return null;return entry;}catch(e){return null;}}
@@ -95733,7 +96195,7 @@ function bbsWriteClientCache(page,sig,d){const key=String(page)+'|'+sig,entry={a
 function bbsRenderData(d,opts={}){if(!d||typeof d!=='object')return;if(Array.isArray(d.vendor_options)){bbsVendorOptions=d.vendor_options;bbsVendorSyncUi();}const badge=document.getElementById('bbsBadge');if(badge)badge.textContent=d.enabled?'فعال':'متوقف';const stats=document.getElementById('bbsStats');if(stats)stats.innerHTML=`<span class="tpe-stat">فعال در پروفایل: ${Number(d.saved_count||0).toLocaleString()}</span><span class="tpe-stat">کل کاتالوگ: ${Number(d.catalog_count||0).toLocaleString()}</span><span class="tpe-stat">کشف‌شده: ${Number(d.products_discovered||0).toLocaleString()}</span><span class="tpe-stat">جزئیات کامل: ${Number(d.products_enriched||0).toLocaleString()}</span><span class="tpe-stat">صف جزئیات: ${Number(d.detail_pending||0).toLocaleString()}</span><span class="tpe-stat">فروش دقیق: ${Number(d.products_verified||0).toLocaleString()}</span><span class="tpe-stat">صف تأیید: ${Number(d.verify_pending||0).toLocaleString()}</span><span class="tpe-stat">صفحات: ${Number(d.pages_scanned||0).toLocaleString()}</span><span class="tpe-stat">نقطه ادامه: ${Number(d.offset||0).toLocaleString()}</span><span class="tpe-stat">سقف گزارش بیرونی: ${Number(d.reported_total||0).toLocaleString()}</span><span class="tpe-stat">دسته‌های پارتیشن: ${(Number(d.partition_index??-1)>=0?(Number(d.partition_index)+1).toLocaleString()+' / ':'')+Number(d.partition_categories_count||0).toLocaleString()}</span><span class="tpe-stat">پارتیشن قیمت در صف: ${Number(d.price_subpartitions_pending||0).toLocaleString()}</span><span class="tpe-stat">پارتیشن جاری: ${d.partition?.category_id?("دسته #"+d.partition.category_id):"سراسری"}${d.partition?.min_price||d.partition?.max_price?(" ("+Number(Math.round((d.partition.min_price||0)/10)).toLocaleString()+" تا "+(d.partition.max_price?Number(Math.round(d.partition.max_price/10)).toLocaleString():"∞")+" ت)"):""}</span><span class="tpe-stat">استخراج دوره‌ای: ${d.profile_settings?.periodic_enabled?'روشن':'خاموش'}</span><span class="tpe-stat">بازه: ${Number(d.profile_settings?.interval_sec||0).toLocaleString()} ثانیه</span><span class="tpe-stat">مقصد: ${tpeEsc(d.profile_settings?.target||'none')}</span><span class="tpe-stat">موتور: ${tpeEsc(d.profile_settings?.engine||'—')}</span><span class="tpe-stat">پسوند: ${tpeEsc(d.profile_settings?.title_suffix||'ندارد')}</span><span class="tpe-stat">تعدیل: ${tpeEsc(d.profile_settings?.price_mode||'none')} ${Number(d.profile_settings?.price_value||0).toLocaleString()}${Number(d.profile_settings?.round_price||0)>0?(' (گرد '+Number(d.profile_settings.round_price).toLocaleString()+')'):''}</span>`;const t=d.table||{},rows=t.rows||[];bbsCurrentPage=Number(t.page||1);bbsTotalPages=Number(t.pages||1);const tbody=document.getElementById('bbsRows');if(tbody)tbody.innerHTML=rows.length?rows.map((p,i)=>{const rank=(bbsCurrentPage-1)*Number(t.page_size||50)+i+1,exact=p.sales_count_exact;return `<tr><td>${rank.toLocaleString()}</td><td>${p.image?`<img src="${tpeEsc(p.image)}" loading="lazy" style="width:42px;height:42px;object-fit:cover;border-radius:6px">`:'—'}</td><td><a href="${tpeEsc(p.link||'#')}" target="_blank" rel="noopener" style="color:#7dd3fc">${tpeEsc(p.title||'—')}</a></td><td>${exact===null||exact===undefined?'در انتظار':Number(exact).toLocaleString()}</td><td>${Number(p.sales_count_indexed||0).toLocaleString()}</td><td>${Number(p.sales_count_week||0).toLocaleString()}</td><td title="فروش دقیق ${Number(p.score_components?.exact_sales||0).toFixed(1)} + فهرست ${Number(p.score_components?.indexed_sales||0).toFixed(1)} + هفتگی ${Number(p.score_components?.weekly_sales||0).toFixed(1)} + موجودی ${Number(p.score_components?.availability||0).toFixed(1)} + قیمت ${Number(p.score_components?.price_validity||0).toFixed(1)} + کیفیت محتوا ${Number(p.score_components?.content_quality||0).toFixed(1)} + اطمینان ${Number(p.score_components?.verification_confidence||0).toFixed(1)}">${Number(p.composite_score||0).toLocaleString(undefined,{maximumFractionDigits:2})}</td><td>${tpeEsc(p.price||'—')}</td><td>${Number(p.stock||0).toLocaleString()}</td><td>${tpeEsc(p.vendor_name||p.vendor_id||'—')}</td><td>${tpeEsc(p.category||p.category_id||'—')}</td></tr>`;}).join(''):'<tr><td colspan="11">هنوز محصولی ذخیره نشده است.</td></tr>';const pageLbl=document.getElementById('bbsPageLabel');if(pageLbl)pageLbl.textContent=`صفحه ${bbsCurrentPage.toLocaleString()} از ${bbsTotalPages.toLocaleString()}`;const cntLbl=document.getElementById('bbsFilteredCount');if(cntLbl)cntLbl.textContent=`${Number(t.total||0).toLocaleString()} محصول برتر از ${Number(t.all_total||0).toLocaleString()} محصول کاتالوگ`;const prevBtn=document.getElementById('bbsPrev'),nextBtn=document.getElementById('bbsNext');if(prevBtn)prevBtn.disabled=bbsCurrentPage<=1;if(nextBtn)nextBtn.disabled=bbsCurrentPage>=bbsTotalPages;const msg=document.getElementById('bbsMsg');if(msg){const base=(d.last_error?'آخرین خطا: '+d.last_error:'آخرین کار: '+(d.last_action||'—'))+' • پروفایل: '+d.profile_title;if(opts.fromClientCache){const ageSec=Math.max(0,Math.round((Date.now()-(opts.cachedAt||Date.now()))/1000));msg.textContent=base+' • کش مرورگر'+(ageSec>2?' ('+ageSec.toLocaleString()+' ثانیه پیش)':'')+(opts.pendingSync?' · در حال همگام‌سازی…':'');}else{const note=d.cache_state==='stale'&&d.needs_refresh?' • کش سرور (در حال بروزرسانی…)':(d.from_cache?' • کش سرور':'');msg.textContent=base+note;}}}
 async function bbsApplyFilters(){const msg=document.getElementById('bbsMsg');bbsFiltersHydrated=true;bbsClearClientCache();if(msg)msg.textContent='در حال اعمال نتیجهٔ فیلترشده به محصولات پروفایل…';try{const r=await fetch('',{method:'POST',body:tpeForm({basalam_best_sellers_apply_filter:1,...bbsFilterValues()})}),d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));if(d.profile_key&&typeof currentProfileKey==='string'&&currentProfileKey===d.profile_key&&Number(d.updated_at||0)>0){currentProfileUpdatedAt=Math.max(currentProfileUpdatedAt||0,Number(d.updated_at||0));}await bbsLoad(1,{explicitFilters:true});if(msg)msg.textContent=`${Number(d.active_count||0).toLocaleString()} محصول برترِ سراسری مستقیماً در پروفایل «باسلام -پرفروش ها» ذخیره شد.`;}catch(e){if(msg)msg.textContent='خطا در اعمال فیلتر به پروفایل: '+e.message;}}
 function bbsFiltersChanged(immediate=false){clearTimeout(bbsFilterTimer);bbsCurrentPage=1;bbsFilterTimer=setTimeout(()=>bbsApplyFilters(),immediate?0:500);}
-function bbsResetFilters(){const vs=document.getElementById('bbsVendorSearch');if(vs)vs.value='';bbsApplyFilterValuesToDom({q:'',category:'',vendor:'',vendors:[],exact:'all',sales_metric:'exact_sales',min_sales:0,max_products:10000,stock:'all',sort:'exact_sales',dir:'desc'});bbsFiltersChanged(true);}
+function bbsResetFilters(){const vs=document.getElementById('bbsVendorSearch');if(vs)vs.value='';bbsApplyFilterValuesToDom({q:'',category:'',vendor:'',excluded_vendors:[],exact:'all',sales_metric:'exact_sales',min_sales:0,max_products:10000,stock:'all',sort:'exact_sales',dir:'desc'});bbsFiltersChanged(true);}
 async function bbsLoad(page=bbsCurrentPage,opts={}){const msg=document.getElementById('bbsMsg');page=Math.max(1,Number(page)||1);const forceFresh=!!opts.forceFresh,background=!!opts.background;const useApplied=!bbsFiltersHydrated&&!opts.explicitFilters;const sig=useApplied?'__applied__':bbsFilterSig();if(!forceFresh&&!background){const hit=bbsReadClientCache(page,sig);if(hit&&hit.data){if(useApplied&&hit.data.table?.applied_filter)bbsApplyFilterValuesToDom(hit.data.table.applied_filter);bbsRenderData(hit.data,{fromClientCache:true,cachedAt:hit.at,pendingSync:true});}else if(msg){const stats=document.getElementById('bbsStats');msg.textContent=stats&&stats.textContent.includes('در انتظار بارگذاری')?'در حال دریافت از کش سرور…':'در حال بارگذاری صفحه…';}}else if(!background&&msg){msg.textContent='در حال بروزرسانی وضعیت…';}if(!background&&bbsBgTimer){clearTimeout(bbsBgTimer);bbsBgTimer=null;}if(bbsFetchCtrl){try{bbsFetchCtrl.abort();}catch(e){}}const seq=++bbsLoadSeq;const ctrl=typeof AbortController!=='undefined'?new AbortController():null;bbsFetchCtrl=ctrl;try{const r=await fetch('?'+bbsQueryParams(page,{preferCache:!forceFresh,forceFresh,useApplied}),{cache:'no-store',signal:ctrl?ctrl.signal:undefined}),d=await r.json();if(seq!==bbsLoadSeq)return;if(!r.ok||d.ok===false)throw new Error(d.error||('HTTP '+r.status));if(useApplied){bbsApplyFilterValuesToDom(d.table?.applied_filter||{});bbsFiltersHydrated=true;}const resolvedPage=Number(d.table?.page||page),finalSig=bbsFilterSig();bbsWriteClientCache(resolvedPage,finalSig,d);if(useApplied)bbsWriteClientCache(resolvedPage,'__applied__',d);bbsRenderData(d,{fromClientCache:false});if(!forceFresh&&d.cache_state==='stale'&&d.needs_refresh){bbsBgTimer=setTimeout(()=>bbsLoad(resolvedPage,{forceFresh:true,background:true,explicitFilters:true}),60);}}catch(e){if(e&&e.name==='AbortError')return;if(!background&&msg)msg.textContent='خطا: '+e.message;}finally{if(bbsFetchCtrl===ctrl)bbsFetchCtrl=null;}}
 function bbsInitFromCache(){const hit=bbsReadClientCache(1,'__applied__');if(!hit||!hit.data)return;if(hit.data.table?.applied_filter)bbsApplyFilterValuesToDom(hit.data.table.applied_filter);bbsRenderData(hit.data,{fromClientCache:true,cachedAt:hit.at,pendingSync:false});}
 bbsInitFromCache();
@@ -95765,6 +96227,323 @@ setInterval(()=>{const menu=document.getElementById('thirdPartyExplorerSmenu'),b
 setInterval(tpeRenderLiveClock,1000);
 async function tpeBulkApprove(){const ids=tpeSelected();if(!ids.length)return;const btn=document.getElementById('tpeBulkBtn');if(btn)btn.disabled=true;tpeClearClientCache();try{document.getElementById('tpeMsg').textContent='در حال ساخت پروفایل‌های انتخاب‌شده…';const d=await tpeReq({third_party_explorer_action:1,explorer_action:'approve_bulk',vendor_ids:JSON.stringify(ids)},true);await tpeLoad(true);document.getElementById('tpeMsg').textContent=`${d.created||0} پروفایل ساخته شد؛ ${d.duplicates||0} مورد از قبل موجود بود.`;}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}finally{tpeSelectionChanged();}}
 async function tpeAction(action,id){tpeClearClientCache();try{await tpeReq({third_party_explorer_action:1,explorer_action:action,vendor_id:id},true);await tpeLoad(true);}catch(e){document.getElementById('tpeMsg').textContent='خطا: '+e.message;}}
+</script>
+<style>
+.s4-om-overlay{position:fixed;inset:0;background:rgba(2,6,23,.84);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:10060;display:none;align-items:center;justify-content:center;padding:12px;direction:rtl}
+.s4-om-overlay.open{display:flex}
+.s4-om-card{width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;background:#0f172a;border:1px solid #0891b2;border-radius:14px;box-shadow:0 26px 70px rgba(0,0,0,.78);overflow:hidden;color:#e2e8f0;font-size:11px}
+.s4-om-hdr{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 15px;background:linear-gradient(90deg,#0e7490,#0f172a);border-bottom:1px solid #1e293b}
+.s4-om-hdr h4{margin:0;font-size:13px;font-weight:800;color:#f8fafc;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.s4-om-badge{font-size:10px;font-weight:600;background:rgba(15,23,42,.65);border:1px solid #22d3ee;color:#a5f3fc;border-radius:999px;padding:2px 9px}
+.s4-om-x{background:#1e293b;border:1px solid #334155;color:#cbd5e1;border-radius:8px;width:28px;height:28px;cursor:pointer;font-size:13px;line-height:1}
+.s4-om-x:hover:not(:disabled){background:#991b1b;border-color:#ef4444;color:#fff}
+.s4-om-body{padding:13px 15px;overflow-y:auto;display:flex;flex-direction:column;gap:11px}
+.s4-om-sec{background:#0b1220;border:1px solid #1e293b;border-radius:10px;padding:10px 12px}
+.s4-om-lbl{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;color:#94a3b8;font-size:10.5px;font-weight:700;margin-bottom:6px}
+.s4-om-sec select,.s4-om-sec input[type="text"],.s4-om-sec textarea{width:100%;box-sizing:border-box;background:#111827;border:1px solid #334155;border-radius:7px;color:#e2e8f0;padding:7px 9px;font-size:11px;font-family:inherit}
+.s4-om-sec textarea{resize:vertical;line-height:1.85;min-height:105px}
+.s4-om-tokens{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin:6px 0}
+.s4-om-tok{background:#1e293b;border:1px solid #334155;color:#7dd3fc;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer}
+.s4-om-tok:hover{background:#0e7490;border-color:#22d3ee;color:#fff}
+.s4-om-preview{background:#09101d;border:1px dashed #0e7490;border-radius:8px;padding:8px 10px;font-size:10.5px;color:#cbd5e1;line-height:1.85;white-space:pre-wrap;margin-top:7px}
+.s4-om-list{max-height:220px;overflow-y:auto;border:1px solid #1e293b;border-radius:8px;background:#09101d;padding:4px;display:flex;flex-direction:column;gap:3px;margin-top:6px}
+.s4-om-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 8px;border-radius:6px;font-size:10.5px;border:1px solid transparent}
+.s4-om-row:hover{background:#111827}
+.s4-om-row.disabled{opacity:.58}
+.s4-om-row label{display:flex;align-items:center;gap:7px;cursor:pointer;flex:1 1 auto;min-width:0;margin:0;color:#e2e8f0}
+.s4-om-row input[type="checkbox"]{width:auto!important;margin:0;accent-color:#06b6d4;cursor:pointer;flex:0 0 auto}
+.s4-om-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.s4-om-tag{flex:0 0 auto;font-size:9.5px;border-radius:999px;padding:1px 7px;border:1px solid #334155;background:#111827;color:#94a3b8}
+.s4-om-tag.ready{border-color:#0e7490;color:#67e8f9;background:rgba(8,145,178,.14)}
+.s4-om-tag.sent{border-color:#15803d;color:#86efac;background:rgba(21,128,61,.18)}
+.s4-om-tag.own{border-color:#b45309;color:#fde68a;background:rgba(180,83,9,.18)}
+.s4-om-log{max-height:170px;overflow-y:auto;background:#070d18;border:1px solid #1e293b;border-radius:8px;padding:7px 9px;font-size:10px;line-height:1.85;display:none}
+.s4-om-log.show{display:block}
+.s4-om-ftr{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:11px 15px;background:#0b1220;border-top:1px solid #1e293b}
+</style>
+<div class="s4-om-overlay" id="s4OutreachModal" onclick="if(event.target===this&&!s4OutreachSending)s4OutreachClose()">
+<div class="s4-om-card" role="dialog" aria-modal="true" aria-labelledby="s4OutreachTitle">
+<div class="s4-om-hdr"><h4 id="s4OutreachTitle">💬 ارسال گروهی پیام کسب اجازه به غرفه‌های باسلام <span class="s4-om-badge" id="s4OutreachSourceBadge">—</span></h4><button type="button" class="s4-om-x" id="s4OutreachXBtn" onclick="if(!s4OutreachSending)s4OutreachClose()">✕</button></div>
+<div class="s4-om-body">
+<div class="s4-om-sec">
+<div class="s4-om-lbl"><span>۱) انتخاب غرفهٔ فرستنده (پیام از طرف کدام غرفهٔ خودمان ارسال شود؟)</span><span class="tpe-stat" id="s4OutreachSenderNote">در حال بررسی…</span></div>
+<select id="s4OutreachSender" onchange="s4OutreachSenderChanged()"><option value="0">در حال بارگذاری غرفه‌های خودمان…</option></select>
+</div>
+<div class="s4-om-sec">
+<div class="s4-om-lbl"><span>۲) متن پیام پیشنهادی (قابل ویرایش و ذخیره)</span><span style="display:flex;gap:5px"><button type="button" class="s4-om-tok" onclick="s4OutreachResetTemplate()">↺ بازگردانی متن پیش‌فرض</button><button type="button" class="s4-om-tok" onclick="s4OutreachSaveTemplate()">💾 ذخیرهٔ متن</button></span></div>
+<textarea id="s4OutreachTemplate" oninput="s4OutreachTemplateTouched=true;s4OutreachRenderPreview()"></textarea>
+<div class="s4-om-tokens"><span style="color:#94a3b8;font-size:10px">درج متغیر:</span><button type="button" class="s4-om-tok" onclick="s4OutreachInsertToken('{غرفه}')">+ {غرفه} (نام غرفهٔ مقصد)</button><button type="button" class="s4-om-tok" onclick="s4OutreachInsertToken('{غرفه_ما}')">+ {غرفه_ما} (نام غرفهٔ فرستنده)</button><button type="button" class="s4-om-tok" onclick="s4OutreachInsertToken('{شناسه_غرفه}')">+ {شناسه_غرفه}</button></div>
+<div class="s4-om-preview" id="s4OutreachPreview">پیش‌نمایش پیام اینجا نمایش داده می‌شود…</div>
+</div>
+<div class="s4-om-sec">
+<div class="s4-om-lbl"><span>۳) غرفه‌های مقصد</span><span class="tpe-stat" id="s4OutreachSummary">در حال بارگذاری…</span></div>
+<div class="tpe-actions" style="margin:4px 0 6px;align-items:center">
+<label class="tpe-stat" style="color:#bbf7d0;cursor:pointer"><input type="checkbox" id="s4OutreachSkipSent" checked onchange="s4OutreachSkipSentChanged()" style="width:auto!important;margin:0 0 0 5px"> عدم ارسال مجدد به غرفه‌هایی که قبلاً پیام گرفته‌اند</label>
+<button type="button" class="s4-om-tok" onclick="s4OutreachSelectAll(true)">✓ انتخاب همهٔ قابل‌ارسال‌ها</button>
+<button type="button" class="s4-om-tok" onclick="s4OutreachSelectAll(false)">✕ لغو انتخاب همه</button>
+</div>
+<input type="text" id="s4OutreachSearch" placeholder="جست‌وجوی نام یا شناسهٔ غرفه در فهرست ارسال…" oninput="s4OutreachRenderCap=300;s4OutreachRenderTargets()">
+<div class="s4-om-list" id="s4OutreachTargetList"><div style="padding:14px;text-align:center;color:#64748b">در حال دریافت غرفه‌ها…</div></div>
+</div>
+<div class="s4-om-sec" id="s4OutreachProgressBox">
+<div class="tpe-progress" title="پیشرفت ارسال گروهی"><i id="s4OutreachProgressBar" style="width:0%"></i></div>
+<div id="s4OutreachStatus" class="tpe-note" style="margin:4px 0 0;color:#cbd5e1">آمادهٔ ارسال.</div>
+<div class="s4-om-log" id="s4OutreachLog"></div>
+</div>
+</div>
+<div class="s4-om-ftr">
+<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+<button type="button" class="btn btn-green" id="s4OutreachSendBtn" onclick="s4OutreachStartSend()">🚀 شروع ارسال پیام به ۰ غرفه</button>
+<button type="button" class="btn btn-red" id="s4OutreachStopBtn" onclick="s4OutreachStop()" style="display:none">⏹ توقف ارسال</button>
+</div>
+<button type="button" class="btn btn-gray" id="s4OutreachCloseBtn" onclick="s4OutreachClose()">بستن</button>
+</div>
+</div>
+</div>
+<script>
+const S4_OUTREACH_SOURCE_LABELS={best_sellers_filtered:'🏆 پرفروش‌های باسلام (نتیجهٔ فیلترشده)',third_party_explorer:'🧭 غرفه‌های شخص ثالث',third_party_import:'📥 جدول لینک غرفه‌های شخص ثالث'};
+let s4OutreachState={scope:'',default_template:'',template:'',sender_shops:[],default_sender_vendor_id:0,selected_sender_vendor_id:0,targets:[]},s4OutreachSelectedIds=new Set(),s4OutreachSending=false,s4OutreachStopReq=false,s4OutreachTemplateTouched=false,s4OutreachRenderCap=300;
+function s4OutreachEnsureMount(){const m=document.getElementById('s4OutreachModal');if(m&&document.body&&m.parentElement!==document.body)document.body.appendChild(m);return m;}
+function s4OutreachSenderObj(){const id=Number((document.getElementById('s4OutreachSender')||{}).value||0);return(s4OutreachState.sender_shops||[]).find(s=>Number(s.vendor_id)===id)||null;}
+function s4OutreachRenderPreview(){
+  const prev=document.getElementById('s4OutreachPreview'),tpl=(document.getElementById('s4OutreachTemplate')||{}).value||'';
+  if(!prev)return;
+  const sender=s4OutreachSenderObj(),myName=sender?String(sender.shop_name||sender.title||('غرفه #'+(sender.vendor_id||''))):'فروشگاه ما';
+  const sample=(s4OutreachState.targets||[]).find(t=>s4OutreachSelectedIds.has(Number(t.vendor_id)))||(s4OutreachState.targets||[])[0]||{name:'غرفه نمونه',vendor_id:12345};
+  const vTitle=String(sample.name||sample.title||('غرفه #'+(sample.vendor_id||'')));
+  const rendered=tpl.replace(/\{غرفه\}|\{نام_غرفه\}|\{vendor\}/g,vTitle).replace(/\{غرفه_ما\}|\{نام_غرفه_ما\}|\{sender_shop\}/g,myName).replace(/\{شناسه_غرفه\}|\{vendor_id\}/g,String(sample.vendor_id||''));
+  prev.textContent=rendered||'متن پیام خالی است.';
+}
+function s4OutreachInsertToken(tok){
+  const ta=document.getElementById('s4OutreachTemplate');if(!ta)return;
+  const start=Number.isFinite(ta.selectionStart)?ta.selectionStart:ta.value.length,end=Number.isFinite(ta.selectionEnd)?ta.selectionEnd:start;
+  ta.value=ta.value.slice(0,start)+tok+ta.value.slice(end);
+  try{ta.focus();ta.setSelectionRange(start+tok.length,start+tok.length);}catch(e){}
+  s4OutreachTemplateTouched=true;s4OutreachRenderPreview();
+}
+function s4OutreachSenderChanged(){
+  s4OutreachState.selected_sender_vendor_id=Number((document.getElementById('s4OutreachSender')||{}).value||0);
+  s4OutreachRenderPreview();s4OutreachUpdateSendBtn();
+}
+function s4OutreachUpdateSendBtn(){
+  const btn=document.getElementById('s4OutreachSendBtn'),skip=!!(document.getElementById('s4OutreachSkipSent')||{}).checked;
+  const eligible=s4OutreachEligibleTargets(skip).filter(t=>s4OutreachSelectedIds.has(Number(t.vendor_id)));
+  const senderOk=Number((document.getElementById('s4OutreachSender')||{}).value||0)>0;
+  if(btn){
+    btn.disabled=s4OutreachSending||!senderOk||eligible.length===0;
+    btn.textContent=s4OutreachSending?'⏳ در حال ارسال گروهی…':`🚀 شروع ارسال پیام به ${eligible.length.toLocaleString('fa-IR')} غرفه`;
+  }
+  const sum=document.getElementById('s4OutreachSummary');
+  if(sum){
+    const all=s4OutreachState.targets||[],sentBefore=all.filter(t=>t.already_sent).length,own=all.filter(t=>t.is_own_shop).length;
+    sum.textContent=`کل: ${all.length.toLocaleString('fa-IR')} · ارسال‌شده قبلی: ${sentBefore.toLocaleString('fa-IR')}${own?' · خودمان: '+own.toLocaleString('fa-IR'):''} · آمادهٔ ارسال: ${eligible.length.toLocaleString('fa-IR')}`;
+  }
+}
+function s4OutreachEligibleTargets(skipSent){
+  return(s4OutreachState.targets||[]).filter(t=>Number(t.vendor_id)>0&&!t.is_own_shop&&(!skipSent||!t.already_sent));
+}
+function s4OutreachSyncDefaultSelection(){
+  const skip=!!(document.getElementById('s4OutreachSkipSent')||{}).checked;
+  s4OutreachSelectedIds=new Set(s4OutreachEligibleTargets(skip).map(t=>Number(t.vendor_id)));
+}
+function s4OutreachSkipSentChanged(){
+  const skip=!!(document.getElementById('s4OutreachSkipSent')||{}).checked;
+  if(skip){
+    (s4OutreachState.targets||[]).forEach(t=>{if(t.already_sent)s4OutreachSelectedIds.delete(Number(t.vendor_id));});
+  }else{
+    s4OutreachSyncDefaultSelection();
+  }
+  s4OutreachRenderTargets();s4OutreachRenderPreview();
+}
+function s4OutreachSelectAll(checked){
+  const skip=!!(document.getElementById('s4OutreachSkipSent')||{}).checked;
+  if(checked){s4OutreachSelectedIds=new Set(s4OutreachEligibleTargets(skip).map(t=>Number(t.vendor_id)));}
+  else{s4OutreachSelectedIds.clear();}
+  s4OutreachRenderTargets();s4OutreachRenderPreview();
+}
+function s4OutreachToggleTarget(cb){
+  const vid=Number(cb?.value||0);if(!vid)return;
+  if(cb.checked)s4OutreachSelectedIds.add(vid);else s4OutreachSelectedIds.delete(vid);
+  s4OutreachUpdateSendBtn();s4OutreachRenderPreview();
+}
+function s4OutreachRenderTargets(){
+  const list=document.getElementById('s4OutreachTargetList');if(!list)return;
+  const skip=!!(document.getElementById('s4OutreachSkipSent')||{}).checked;
+  const q=bbsVendorNorm((document.getElementById('s4OutreachSearch')||{}).value||'');
+  const rows=(s4OutreachState.targets||[]).filter(t=>{
+    if(!q)return true;
+    return bbsVendorNorm((t.name||t.title||'')+' '+(t.identifier||'')+' '+(t.vendor_id||'')).includes(q);
+  });
+  if(!rows.length){
+    list.innerHTML='<div style="padding:14px;text-align:center;color:#64748b">غرفه‌ای برای ارسال یافت نشد.</div>';
+    s4OutreachUpdateSendBtn();return;
+  }
+  const slice=rows.slice(0,s4OutreachRenderCap);
+  let html=slice.map(t=>{
+    const vid=Number(t.vendor_id||0),own=!!t.is_own_shop,sent=!!t.already_sent,blocked=own||(skip&&sent),checked=!blocked&&s4OutreachSelectedIds.has(vid);
+    const title=String(t.name||t.title||('غرفه #'+vid));
+    const tag=own?'<span class="s4-om-tag own">غرفهٔ خودمان</span>':(sent?'<span class="s4-om-tag sent">✅ قبلاً ارسال شده</span>':'<span class="s4-om-tag ready">آمادهٔ ارسال</span>');
+    return `<div class="s4-om-row${blocked?' disabled':''}"><label><input type="checkbox" value="${vid}"${checked?' checked':''}${blocked||s4OutreachSending?' disabled':''} onchange="s4OutreachToggleTarget(this)"><span class="s4-om-title">${tpeEsc(title)} <small style="color:#64748b">#${vid}</small>${t.product_count?` <small style="color:#94a3b8">(${Number(t.product_count).toLocaleString('fa-IR')} محصول)</small>`:''}</span></label>${tag}</div>`;
+  }).join('');
+  if(rows.length>s4OutreachRenderCap){
+    html+=`<button type="button" class="bbs-ms-more" onclick="s4OutreachRenderCap+=300;s4OutreachRenderTargets()">نمایش ${(rows.length-s4OutreachRenderCap).toLocaleString('fa-IR')} غرفهٔ دیگر…</button>`;
+  }
+  list.innerHTML=html;
+  s4OutreachUpdateSendBtn();
+}
+function s4OutreachRenderSenders(){
+  const sel=document.getElementById('s4OutreachSender'),note=document.getElementById('s4OutreachSenderNote');
+  const shops=s4OutreachState.sender_shops||[];
+  if(sel){
+    if(!shops.length){
+      sel.innerHTML='<option value="0">هیچ غرفهٔ خودمان با توکن باسلام یافت نشد</option>';
+    }else{
+      sel.innerHTML=shops.map(s=>`<option value="${Number(s.vendor_id)}">${tpeEsc(s.shop_name||s.title||('غرفه #'+s.vendor_id))} (#${Number(s.vendor_id)})${s.is_default?' — پیش‌فرض':''}</option>`).join('');
+      const want=Number(s4OutreachState.selected_sender_vendor_id||s4OutreachState.default_sender_vendor_id||0);
+      if(want&&shops.some(s=>Number(s.vendor_id)===want))sel.value=String(want);
+      else sel.value=String(shops[0].vendor_id);
+      s4OutreachState.selected_sender_vendor_id=Number(sel.value||0);
+    }
+  }
+  if(note)note.textContent=shops.length?`${shops.length.toLocaleString('fa-IR')} غرفهٔ باسلام متصل`:'غرفهٔ متصل یافت نشد';
+}
+async function s4OutreachOpen(scope){
+  const modal=s4OutreachEnsureMount();if(!modal)return;
+  s4OutreachState.scope=scope;s4OutreachTemplateTouched=false;s4OutreachRenderCap=300;
+  document.getElementById('s4OutreachSourceBadge').textContent=S4_OUTREACH_SOURCE_LABELS[scope]||scope;
+  document.getElementById('s4OutreachStatus').textContent='در حال آماده‌سازی غرفه‌های فرستنده و مقصد…';
+  document.getElementById('s4OutreachProgressBar').style.width='0%';
+  const logEl=document.getElementById('s4OutreachLog');if(logEl){logEl.innerHTML='';logEl.classList.remove('show');}
+  document.getElementById('s4OutreachTargetList').innerHTML='<div style="padding:14px;text-align:center;color:#64748b">در حال دریافت لیست غرفه‌ها…</div>';
+  modal.classList.add('open');
+  const payload={basalam_vendor_outreach_prepare:1,scope};
+  if(scope==='best_sellers_filtered'){
+    payload.filters=JSON.stringify(bbsFilterValues());
+  }else if(scope==='third_party_explorer'){
+    const picked=tpeSelected();
+    const list=(tpeLiveStatus&&Array.isArray(tpeLiveStatus.candidates))?tpeLiveStatus.candidates:[];
+    const pickedSet=new Set(picked.map(Number));
+    const chosen=picked.length?list.filter(c=>pickedSet.has(Number(c.vendor_id))):list;
+    payload.vendor_ids=JSON.stringify(picked.length?picked:chosen.map(c=>Number(c.vendor_id)).filter(Boolean));
+    payload.items=JSON.stringify(chosen.map(c=>({vendor_id:Number(c.vendor_id||0),name:String(c.title||c.name||''),url:String(c.url||''),product_count:Number(c.product_count||0)})));
+  }else if(scope==='third_party_import'){
+    const checkedIds=[...document.querySelectorAll('.tpeImportPick:checked')].map(x=>Number(x.value)).filter(Boolean);
+    const validRows=(Array.isArray(tpeImportData)?tpeImportData:[]).filter(r=>r&&r.ok&&Number(r.vendor_id)>0);
+    const pickedSet=new Set(checkedIds);
+    const chosen=checkedIds.length?validRows.filter(r=>pickedSet.has(Number(r.vendor_id))):validRows;
+    payload.vendor_ids=JSON.stringify(checkedIds.length?checkedIds:chosen.map(r=>Number(r.vendor_id)));
+    payload.items=JSON.stringify(chosen.map(r=>({vendor_id:Number(r.vendor_id||0),name:String(r.title||r.name||r.identifier||''),url:String(r.url||''),product_count:Number(r.product_count||0)})));
+  }
+  try{
+    const d=await tpeReq(payload,true);
+    s4OutreachState={...d,selected_sender_vendor_id:Number(d.default_sender_vendor_id||0)};
+    const ta=document.getElementById('s4OutreachTemplate');
+    if(ta&&!s4OutreachTemplateTouched)ta.value=d.template||d.default_template||'';
+    s4OutreachRenderSenders();
+    s4OutreachSyncDefaultSelection();
+    s4OutreachRenderTargets();
+    s4OutreachRenderPreview();
+    document.getElementById('s4OutreachStatus').textContent=d.sender_shops&&d.sender_shops.length?'متن پیام و غرفه‌ها آماده است؛ برای شروع روی دکمهٔ ارسال کلیک کنید.':'برای ارسال پیام، حداقل یک غرفهٔ باسلام دارای توکن در تنظیمات نیاز است.';
+  }catch(e){
+    document.getElementById('s4OutreachStatus').textContent='خطا در آماده‌سازی: '+e.message;
+    document.getElementById('s4OutreachTargetList').innerHTML=`<div style="padding:14px;text-align:center;color:#fca5a5">${tpeEsc(e.message)}</div>`;
+  }
+}
+function s4OutreachClose(){
+  if(s4OutreachSending)return;
+  const m=document.getElementById('s4OutreachModal');
+  if(m)m.classList.remove('open');
+}
+async function s4OutreachSaveTemplate(){
+  const ta=document.getElementById('s4OutreachTemplate'),st=document.getElementById('s4OutreachStatus'),sender=Number((document.getElementById('s4OutreachSender')||{}).value||0);
+  if(!ta||!ta.value.trim()){if(st)st.textContent='متن پیام نمی‌تواند خالی باشد.';return;}
+  if(st)st.textContent='در حال ذخیرهٔ متن پیام…';
+  try{
+    const d=await tpeReq({basalam_vendor_outreach_save_template:1,template:ta.value,sender_vendor_id:sender},true);
+    s4OutreachState.template=d.template||ta.value;s4OutreachTemplateTouched=false;
+    if(st)st.textContent='متن پیام پیشنهادی با موفقیت ذخیره شد.';
+    s4OutreachRenderPreview();
+  }catch(e){if(st)st.textContent='خطا در ذخیرهٔ متن: '+e.message;}
+}
+function s4OutreachResetTemplate(){
+  const ta=document.getElementById('s4OutreachTemplate');
+  if(!ta)return;
+  ta.value=s4OutreachState.default_template||'';
+  s4OutreachTemplateTouched=true;s4OutreachRenderPreview();
+}
+function s4OutreachStop(){
+  if(!s4OutreachSending)return;
+  s4OutreachStopReq=true;
+  const st=document.getElementById('s4OutreachStatus');
+  if(st)st.textContent='در حال توقف پس از اتمام دستهٔ جاری…';
+}
+function s4OutreachSetBusyUi(busy){
+  s4OutreachSending=!!busy;
+  ['s4OutreachSender','s4OutreachTemplate','s4OutreachSkipSent','s4OutreachCloseBtn','s4OutreachXBtn'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=!!busy;});
+  const stopBtn=document.getElementById('s4OutreachStopBtn');
+  if(stopBtn)stopBtn.style.display=busy?'inline-flex':'none';
+  s4OutreachRenderTargets();
+}
+async function s4OutreachStartSend(){
+  if(s4OutreachSending)return;
+  const senderId=Number((document.getElementById('s4OutreachSender')||{}).value||0);
+  const tpl=((document.getElementById('s4OutreachTemplate')||{}).value||'').trim();
+  const skip=!!(document.getElementById('s4OutreachSkipSent')||{}).checked;
+  if(!senderId){document.getElementById('s4OutreachStatus').textContent='ابتدا غرفهٔ فرستنده را انتخاب کنید.';return;}
+  if(!tpl){document.getElementById('s4OutreachStatus').textContent='متن پیام نمی‌تواند خالی باشد.';return;}
+  const queue=s4OutreachEligibleTargets(skip).filter(t=>s4OutreachSelectedIds.has(Number(t.vendor_id)));
+  if(!queue.length){document.getElementById('s4OutreachStatus').textContent='هیچ غرفهٔ آماده‌ای برای ارسال انتخاب نشده است.';return;}
+  s4OutreachStopReq=false;
+  const logEl=document.getElementById('s4OutreachLog'),pb=document.getElementById('s4OutreachProgressBar'),st=document.getElementById('s4OutreachStatus');
+  if(logEl){logEl.innerHTML='';logEl.classList.add('show');}
+  if(pb)pb.style.width='2%';
+  s4OutreachSetBusyUi(true);
+  const BATCH=10;let done=0,sentCnt=0,skippedCnt=0,errCnt=0;
+  try{
+    for(let i=0;i<queue.length;i+=BATCH){
+      if(s4OutreachStopReq)break;
+      const chunk=queue.slice(i,i+BATCH);
+      if(st)st.textContent=`در حال ارسال سریع دستهٔ ${Math.floor(i/BATCH)+1} (${done.toLocaleString('fa-IR')} از ${queue.length.toLocaleString('fa-IR')})…`;
+      const d=await tpeReq({basalam_vendor_outreach_send:1,sender_vendor_id:senderId,template:tpl,skip_sent:skip?1:0,save_template:i===0?1:0,targets:JSON.stringify(chunk.map(t=>({vendor_id:Number(t.vendor_id),name:String(t.name||t.title||'')})))},true);
+      const resRows=Array.isArray(d.results)?d.results:[],cts=d.counts||{};
+      sentCnt+=Number(cts.sent||0);skippedCnt+=Number(cts.skipped||0);errCnt+=Number(cts.failed||0);
+      done+=chunk.length;
+      const pct=Math.min(100,Math.round((done/queue.length)*100));
+      if(pb)pb.style.width=pct+'%';
+      const byVid=new Map((s4OutreachState.targets||[]).map(t=>[Number(t.vendor_id),t]));
+      let linesHtml='',authErrCount=0;
+      resRows.forEach(r=>{
+        const vid=Number(r.vendor_id||0),tObj=byVid.get(vid);
+        if(r.status==='sent'||r.status==='skipped_already_sent'){
+          if(tObj)tObj.already_sent=true;
+          if(r.status==='sent')s4OutreachSelectedIds.delete(vid);
+        }
+        if(r.status==='error'&&/HTTP (401|403)/.test(String(r.error||'')))authErrCount++;
+        const icon=r.status==='sent'?'✅':(r.status==='skipped_already_sent'||r.status==='skipped_own_shop'?'⏭':'❌');
+        const clr=r.status==='sent'?'#86efac':(r.status==='error'?'#fca5a5':'#fde68a');
+        const msg=r.status==='sent'?'پیام با موفقیت ارسال شد':(r.status==='skipped_already_sent'?'قبلاً پیام ارسال شده (رد شد)':(r.status==='skipped_own_shop'?'غرفهٔ خودمان (رد شد)':String(r.error||r.status||'خطا')));
+        linesHtml+=`<div style="color:${clr}">${icon} <b>${tpeEsc(r.name||r.vendor_title||('#'+vid))}</b> (#${vid}): ${tpeEsc(msg)}</div>`;
+      });
+      if(logEl&&linesHtml)logEl.insertAdjacentHTML('afterbegin',linesHtml);
+      if(d.stop_recommended||(resRows.length>0&&authErrCount===resRows.length)){
+        if(st)st.textContent=`توقف خودکار به دلیل خطای دسترسی غرفهٔ فرستنده (401/403): ${sentCnt.toLocaleString('fa-IR')} موفق · ${errCnt.toLocaleString('fa-IR')} خطا`;
+        s4OutreachStopReq=true;
+        break;
+      }
+    }
+    if(!s4OutreachStopReq){
+      if(pb)pb.style.width='100%';
+      if(st)st.textContent=`پایان ارسال: ${sentCnt.toLocaleString('fa-IR')} پیام ارسال شد · ${skippedCnt.toLocaleString('fa-IR')} مورد رد شد · ${errCnt.toLocaleString('fa-IR')} خطا.`;
+    }else if(st&&!st.textContent.includes('توقف خودکار')){
+      st.textContent=`متوقف شد (${done.toLocaleString('fa-IR')} از ${queue.length.toLocaleString('fa-IR')}): ${sentCnt.toLocaleString('fa-IR')} ارسال · ${skippedCnt.toLocaleString('fa-IR')} رد · ${errCnt.toLocaleString('fa-IR')} خطا.`;
+    }
+  }catch(e){
+    if(st)st.textContent=`خطا حین ارسال (${done.toLocaleString('fa-IR')} از ${queue.length.toLocaleString('fa-IR')} انجام شد): ${e.message}`;
+  }finally{
+    s4OutreachSetBusyUi(false);
+  }
+}
+document.addEventListener('keydown',ev=>{if(ev.key==='Escape'&&!s4OutreachSending){const m=document.getElementById('s4OutreachModal');if(m&&m.classList.contains('open'))s4OutreachClose();}});
 </script>
 
 <!-- v10.691: universal order eligibility research, shared with embedded storefront/plugin -->
@@ -107069,6 +107848,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.721', t:'🚫 تبدیل تیک‌های دراپ‌داون غرفه به استثنا و افزودن ارسال گروهی سریع پیام اجازه به غرفه‌های باسلام', items:[
+    'منطق تیک‌های دراپ‌داون سرچ‌پذیر غرفه (#bbsVendorDropdown) در پرفروش‌های باسلام از شمول به «استثنا» (excluded_vendors) تغییر کرد؛ غرفه‌های تیک‌خورده با نشانگر قرمز مستثنی و حذف می‌شوند و این استثنا مستقیماً در جدول، پروفایل «باسلام -پرفروش ها» و خروجی Excel اعمال می‌شود.',
+    'دکمه و مودال یکپارچهٔ «ارسال پیام اجازه به غرفه‌ها» (#s4OutreachModal) به بخش «پرفروش‌ترین محصولات باسلام» و هر دو بخش «غرفه‌های شخص ثالث» (جدول کشف و ایمپورت دسته‌جمعی لینک) اضافه شد؛ شامل انتخاب غرفهٔ فرستنده از میان غرفه‌های متصل، متن پیشنهادی مؤدبانه و قابل ویرایش/ذخیره با متغیرهای {غرفه} و {غرفه_ما}، پیش‌نمایش زنده و گزینهٔ عدم ارسال مجدد.',
+    'موتور ارسال گروهی پیام اجازه (s4BasalamVendorOutreachSendBatch) با واکشی موازی اطلاعات صاحب غرفه (user_id/hash_id)، ساخت/بازیابی چت خصوصی باسلام (POST /v1/chats)، ارسال موازی پیام (POST /v1/chats/{id}/messages) با bslReqMulti در دسته‌های سریع و کش پایدار روی دیسک (.basalam-vendor-outreach.json) پیاده‌سازی شد.'
+  ]},
   {v:'10.720', t:'🏪 افزودن فیلتر چند-غرفه‌ای با چک‌باکس در دراپ‌داون سرچ‌پذیر «پرفروش‌ترین محصولات باسلام»', items:[
     'فیلد تک‌مقداری «غرفه» در بخش پرفروش‌های باسلام به یک دراپ‌داون سرچ‌پذیر تیک‌خور (#bbsVendorDropdown) تبدیل شد تا کاربران بتوانند همزمان چند غرفه را جست‌وجو، انتخاب (چک‌باکس)، با یک کلیک همهٔ موارد یافت‌شده را انتخاب یا به‌صورت تکی/کلی از چیپ‌ها حذف کنند.',
     'فهرست تجمیعی غرفه‌های موجود در کاتالوگ (vendor_options با شناسه، نام و تعداد محصول) در ایندکس و کش سرور محاسبه و نگهداری می‌شود و پارامتر vendors در فیلتر جدول، کش چندصفحه‌ای، اعمال روی پروفایل «باسلام -پرفروش ها» و خروجی Excel فیلترشده اعمال می‌شود.'
