@@ -1,5 +1,12 @@
 # Release notes
 
+## scraper4 10.732
+
+- Non-admin workspaces now have a fixed footer for order eligibility and popular products; supervisors also get a daily attendance-hours tab with per-account records.
+- Suffix/profile-first procurement matching avoids unrelated profile fallback when product codes are supplied. Order Lane 3 research is restricted to newly created orders and runs only after customer chat notifications.
+- Quoted-product conversations send an initial notice before slow inquiry work, then an updated notice with a separate eligibility result. Product names are no longer shortened in order eligibility notices.
+- Added optional shop-originated quoted-product customer replies and per-shop auto-reply selection.
+
 ## scraper4 10.731
 
 - Manual bulk chat summaries now explicitly target the shared conversations destination instead of the generic reminder route; this fixes delivery when a separate conversation Chat ID is configured.
