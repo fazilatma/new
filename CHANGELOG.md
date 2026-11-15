@@ -1,5 +1,10 @@
 # Release notes
 
+## scraper4 10.734
+
+- Messenger notification timestamps now use the Jalali calendar and the `Asia/Tehran` timezone, including chat-history times, cron/test pings, daily digests, reconciliation and sync reports, and retirement notices.
+- Added a dependency-free Gregorian-to-Jalali date converter and routed the existing readable-date helper through it.
+
 ## scraper4 10.733
 
 - Quoted-product chat notifications are now consolidated into a single integrated messenger message with the quoted product link and available eligibility result; separate media posts and the earlier duplicate notice are suppressed for these conversations.

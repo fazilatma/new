@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.733';
+const APP_VERSION = '10.734';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -3928,9 +3928,27 @@ function extractedProductIsValid(array $p): bool {
  * v8.25: گزارش کامل هر اجرای استخراج را کنار صف نگه می‌دارد تا بعداً
  * قابل مرور باشد. فقط ۲۰ گزارش آخر می‌ماند تا دیسک پر نشود.
  */
-/** تاریخ و ساعت خوانا برای لاگ — بدون وابستگی به افزونهٔ تقویم */
+/** Convert a Gregorian calendar date to Jalali (Solar Hijri) without extensions. */
+function s4GregorianToJalali(int $gy, int $gm, int $gd): array {
+    $gdm=[0,31,59,90,120,151,181,212,243,273,304,334];
+    $gy2=$gm>2?$gy+1:$gy;
+    $days=355666+365*$gy+intdiv($gy2+3,4)-intdiv($gy2+99,100)+intdiv($gy2+399,400)+$gd+$gdm[max(0,min(11,$gm-1))];
+    $jy=-1595+33*intdiv($days,12053);$days%=12053;
+    $jy+=4*intdiv($days,1461);$days%=1461;
+    if($days>365){$jy+=intdiv($days-1,365);$days=($days-1)%365;}
+    if($days<186){$jm=1+intdiv($days,31);$jd=1+($days%31);}
+    else{$jm=7+intdiv($days-186,30);$jd=1+(($days-186)%30);}
+    return[$jy,$jm,$jd];
+}
+/** Current/Unix timestamp rendered in Asia/Tehran using the Jalali calendar. */
+function s4JalaliDateTime(?int $ts=null,bool $withSeconds=false):string{
+    if($ts===null)$ts=time();$dt=(new DateTimeImmutable('@'.$ts))->setTimezone(new DateTimeZone('Asia/Tehran'));
+    [$jy,$jm,$jd]=s4GregorianToJalali((int)$dt->format('Y'),(int)$dt->format('n'),(int)$dt->format('j'));
+    return sprintf($withSeconds?'%04d/%02d/%02d %02d:%02d:%02d':'%04d/%02d/%02d %02d:%02d',$jy,$jm,$jd,(int)$dt->format('H'),(int)$dt->format('i'),(int)$dt->format('s'));
+}
+/** Jalali/Tehran timestamp for readable logs and notifications. */
 function jdate_fa(int $ts): string {
-    return date('Y/m/d H:i', $ts);
+    return s4JalaliDateTime($ts);
 }
 function extractReportFile(string $queueId): string {
     $safe = preg_replace('~[^A-Za-z0-9_.-]~', '_', $queueId);
@@ -41747,7 +41765,7 @@ if (isset($_GET['notif_health'])) {
     $startAt = (int)($stH['last_cron_start'] ?? 0);
     $ranOk  = $doneAt > 0 && ($now - $doneAt) < 86400;
     $add('cron_runs', $ranOk,
-         $doneAt > 0 ? ('آخرین اجرای کاملِ کران: ' . date('Y-m-d H:i:s', $doneAt))
+         $doneAt > 0 ? ('آخرین اجرای کاملِ کران: ' . s4JalaliDateTime($doneAt,true))
                      : 'هیچ اجرای کاملی ثبت نشده — کران‌جاب را بررسی کنید',
          ['last_complete_at' => $doneAt, 'last_start_at' => $startAt]);
 
@@ -41822,7 +41840,7 @@ if (isset($_GET['notif_test_send'])) {
     $cnT = loadConnections();
     $why = notifPrereq($cnT);
     if ($why !== null) { echo json_encode(['ok' => false, 'error' => $why], JSON_UNESCAPED_UNICODE); exit; }
-    $d = notifSend($cnT, "🔔 پیام آزمایشی\nزمان سرور: " . date('Y-m-d H:i:s') . "\nنسخه: " . APP_VERSION);
+    $d = notifSend($cnT, "🔔 پیام آزمایشی\nزمان تهران: " . s4JalaliDateTime(time(),true) . "\nنسخه: " . APP_VERSION);
     $anyOk = in_array('sent', array_values($d), true);
     echo json_encode(['ok' => $anyOk, 'delivery' => $d], JSON_UNESCAPED_UNICODE);
     exit;
@@ -68881,7 +68899,7 @@ function notifCronPing(array $cn, array $results, bool $force = false): array {
     $_doneAt  = is_file($_doneF) ? (int)@filemtime($_doneF) : 0;
     if ($_startAt > 0 && $_doneAt > 0 && $_startAt - $_doneAt > 120) {
         $incomplete = "\n⚠️ اجرای قبلی نیمه‌کاره ماند (هاست پردازه را کشت)"
-                    . "\n   آخرین اجرای کاملِ ثبت‌شده: " . date('m-d H:i', $_doneAt);
+                    . "\n   آخرین اجرای کاملِ ثبت‌شده: " . s4JalaliDateTime($_doneAt);
     }
     /* v10.22 (۳۵ج): «نبض» فقط وقتی نبض است که پینگِ خلاصه‌دار به‌تازگی
        نرفته باشد.
@@ -68911,7 +68929,7 @@ function notifCronPing(array $cn, array $results, bool $force = false): array {
     }
 
     $msg = ($hb ? "📡 کران‌جاب شروع شد" : "📡 کران‌جاب اجرا شد")
-         . "\nزمان سرور: " . date('Y-m-d H:i:s')
+         . "\nزمان تهران: " . s4JalaliDateTime(time(),true)
          . "\nنسخه: " . APP_VERSION
          . (!$hb ? "\nپروفایل‌های اجراشده: " . $ran : '')
          . (!$hb && $notDue > 0 ? " · نوبتشان نبود: " . $notDue : '')
@@ -69995,9 +70013,9 @@ function s4FormatTehranChatTime(string $isoAt, int $nowTs = 0): string {
         $tz = new DateTimeZone('Asia/Tehran');
         $dt = (new DateTimeImmutable('@' . $ts))->setTimezone($tz);
         $nowDt = (new DateTimeImmutable('@' . $nowTs))->setTimezone($tz);
-        return ($dt->format('Y-m-d') === $nowDt->format('Y-m-d')) ? $dt->format('H:i') : $dt->format('m/d H:i');
+        return ($dt->format('Y-m-d') === $nowDt->format('Y-m-d')) ? $dt->format('H:i') : s4JalaliDateTime($ts);
     } catch (Throwable $_e) {
-        return gmdate('H:i', $ts + 12600);
+        return s4JalaliDateTime($ts);
     }
 }
 
@@ -76249,7 +76267,7 @@ function digestBuild(array $cn, int $sinceHours = 24): array {
 /** متن گزارش شبانه */
 function digestMsg(array $d): string {
     $m = "🌙 گزارش شبانهٔ محصولات\n";
-    $m .= '🗓 ' . date('Y-m-d H:i') . ' · ' . (int)($d['hours'] ?? 24) . " ساعت گذشته\n";
+    $m .= '🗓 ' . s4JalaliDateTime() . ' · ' . (int)($d['hours'] ?? 24) . " ساعت گذشته\n";
     $m .= "═══════════════\n";
     $m .= "📊 مجموع همهٔ پروفایل‌ها\n";
     $m .= '🆕 اضافه‌شده: ' . (int)$d['tot_new'] . "\n";
@@ -78930,7 +78948,7 @@ function reconAutoTick(array $cn, int $now = 0): array {
                 $lines[] = '🔧 اصلاح: خطا — ' . (string)($fx['error'] ?? '');
             }
         }
-        $lines[] = '🕐 ' . date('Y/m/d H:i');
+        $lines[] = '🕐 ' . s4JalaliDateTime();
         try { notifSend($cn, implode("\n", $lines), 'sync'); } catch (\Throwable $e) {}
     }
     return $out;
@@ -79019,7 +79037,7 @@ function catfixAutoTick(array $cn, int $now = 0): array {
                 . ' · یادگیری: ' . (int)($rep['learned_hits'] ?? 0)
                 . ' · ناموفق: ' . (int)($rep['failed'] ?? 0)
                 . ' · کل: ' . (int)($rep['total'] ?? 0)
-                . "\n🕐 " . date('Y/m/d H:i');
+                . "\n🕐 " . s4JalaliDateTime();
             try { notifSend($cn, $msg, 'sync'); } catch (\Throwable $e) {}
         }
     } catch (\Throwable $e) {
@@ -79133,7 +79151,7 @@ function syncReportText(array $r): string {
     $trig=['periodic'=>'دوره‌ای','manual'=>'دستی','background'=>'پس‌زمینه · منشأ نامشخص'][$origin]??'پس‌زمینه · منشأ نامشخص';
     $L = ['🔄 گزارشِ همگام‌سازی — ' . (string)($r['profile'] ?? '?')
           . ($trig !== '' ? ' (' . $trig . ')' : '')];
-    $L[] = '🕐 ' . date('Y/m/d H:i', (int)($r['at'] ?? time()))
+    $L[] = '🕐 ' . s4JalaliDateTime((int)($r['at'] ?? time()))
          . ((int)($r['took'] ?? 0) > 0 ? ' · ' . (int)$r['took'] . ' ثانیه' : '');
 
     $ex = is_array($r['extract'] ?? null) ? $r['extract'] : [];
@@ -79255,7 +79273,7 @@ function notifRetire(array $cn, array $res, string $profileName = ''): array {
         $n++;
     }
     if ($nRet > $n && $n > 0) $lines[] = '… و ' . max(0, $nRet - $n) . ' مورد دیگر';
-    $lines[] = '🕐 ' . date('Y/m/d H:i');
+    $lines[] = '🕐 ' . s4JalaliDateTime();
     return ['ok' => true, 'delivery' => notifSend($cn, implode("\n", $lines), 'retire'), 'sent_lines' => count($lines)];
 }
 
@@ -85887,7 +85905,7 @@ $type=trim($_POST['notif_type']??'');
 $token=trim($_POST['token']??'');
 $chatId=trim($_POST['chat_id']??'');
 if(empty($token)||empty($chatId)){echo json_encode(['ok'=>false,'error'=>'Token و Chat ID الزامی است'],JSON_UNESCAPED_UNICODE);exit;}
-$testMsg='🔔 تست اعلان — '.date('H:i:s Y/m/d').' — Scraper v8.22';
+$testMsg='🔔 تست اعلان — '.s4JalaliDateTime(time(),true).' — Scraper v8.22';
 if($type==='baleh'){
 $rr=bslSendToBaleh($token,$chatId,$testMsg);
 if($rr['ok']){echo json_encode(['ok'=>true,'message'=>'پیام بله ارسال شد (' . $rr['via'] . ')'],JSON_UNESCAPED_UNICODE);}
