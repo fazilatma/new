@@ -1,5 +1,10 @@
 # Release notes
 
+## scraper4 10.733
+
+- Quoted-product chat notifications are now consolidated into a single integrated messenger message with the quoted product link and available eligibility result; separate media posts and the earlier duplicate notice are suppressed for these conversations.
+- Recent unprocessed orders are eligible for a check on the first scan and can be retried if their eligibility result was not delivered. Delivery state now reflects successful messenger delivery, and queued order checks run after initial chat notifications but before slower quoted-product inquiries.
+
 ## scraper4 10.732
 
 - Non-admin workspaces now have a fixed footer for order eligibility and popular products; supervisors also get a daily attendance-hours tab with per-account records.

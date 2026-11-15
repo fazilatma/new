@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.732';
+const APP_VERSION = '10.733';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -71498,9 +71498,11 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
             if (!is_array($o)) continue;
             $np = bslNormalizeParcel($o, $name, $vid);
             if ($np['parcel_id'] <= 0) continue;
+            $createdAtTs = strtotime((string)($np['created_at'] ?? '')) ?: 0;
             $norm[] = ['np' => $np, 'raw' => $o, 'key' => ($isDef ? 'order:' : 'order:' . $vid . ':') . $np['parcel_id'],
                        'sig' => (string)$np['status_id'],
-                       'ts' => strtotime($np['created_at'] ?: 'now') ?: $now,
+                       'ts' => $createdAtTs > 0 ? $createdAtTs : $now,
+                       'created_at_valid' => $createdAtTs > 0,
                        'pending' => !empty($np['unsent'])];
         }
 
@@ -71535,16 +71537,18 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
         if ($since <= 0) {
             /* v10.45 (۵۹): اولین مشاهدهٔ این غرفه خاموش است (توضیح در بالای تابع). */
             if (!isset($st['items']) || !is_array($st['items'])) $st['items'] = [];
-            $initEligCount = 0;
             foreach ($norm as $f) {
                 $st['items'][$f['key']] = ['sig' => $f['sig'], 'first' => (int)$f['ts'],
                     'last' => $now, 'seen' => $now, 'n' => 1, 'pending' => !empty($f['pending'])];
-                $ordUid0 = 'bsl:' . $f['np']['parcel_id'];
-                $isRecent0 = false; // First scan is a baseline, not a newly created order.
-                if ($wantEligGlobal && $isRecent0 && $initEligCount < 8 && empty($urgOrdState[$ordUid0]['done'])
+                $ordUid0 = 'bsl:' . $vid . ':' . $f['np']['parcel_id'];
+                $legacyOrdUid0 = 'bsl:' . $f['np']['parcel_id'];
+                $ordState0 = is_array($urgOrdState[$ordUid0] ?? null) ? $urgOrdState[$ordUid0] : (array)($urgOrdState[$legacyOrdUid0] ?? []);
+                $recentCreated0 = !empty($f['created_at_valid']) && (int)$f['ts'] >= ($now - 86400);
+                if ($wantEligGlobal && $recentCreated0 && empty($ordState0['elig_notif_sent'])
                     && function_exists('s4NotifHandleNewBasalamOrder') && is_array($f['raw'] ?? null)) {
-                    s4NotifHandleNewBasalamOrder($f['raw'], $f['np'], $sh, $cn, $send, ['why' => 'recent', 'allow_recheck' => false]);
-                    $initEligCount++;
+                    $job=['raw'=>$f['raw'],'np'=>$f['np'],'shop'=>$sh,'opts'=>['why'=>'recent','allow_recheck'=>false]];
+                    if(isset($GLOBALS['_s4DeferredOrderEligibility'])&&is_array($GLOBALS['_s4DeferredOrderEligibility'])) $GLOBALS['_s4DeferredOrderEligibility'][]=$job;
+                    else s4NotifHandleNewBasalamOrder($f['raw'],$f['np'],$sh,$cn,$send,$job['opts']);
                 }
             }
             $st[$wmKey] = $now;
@@ -71559,10 +71563,13 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
         $recheckEligCount = 0;
         foreach ($norm as $f) {
             $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now, (int)$f['ts'], $since);
-            $ordUid = 'bsl:' . $f['np']['parcel_id'];
-            $ordPrev = is_array($urgOrdState[$ordUid] ?? null) ? $urgOrdState[$ordUid] : [];
-            $ordNeedsElig = empty($ordPrev['done']) || empty($ordPrev['elig_notif_sent']);
-            $ordEligibleScope = ($why === 'new');
+            $ordUid = 'bsl:' . $vid . ':' . $f['np']['parcel_id'];
+            $legacyOrdUid = 'bsl:' . $f['np']['parcel_id'];
+            $ordPrev = is_array($urgOrdState[$ordUid] ?? null) ? $urgOrdState[$ordUid] : (array)($urgOrdState[$legacyOrdUid] ?? []);
+            $eligReportPending = notifEventOn($neOrd, 'order_eligibility') && empty($ordPrev['elig_notif_sent']);
+            $ordNeedsElig = empty($ordPrev['done']) || $eligReportPending;
+            $recentUnreported = !empty($f['created_at_valid']) && (int)$f['ts'] >= ($now - 86400) && $ordNeedsElig;
+            $ordEligibleScope = ($why === 'new') || $recentUnreported;
 
             if ($why === 'new') foreach((array)($f['np']['items']??[]) as $orderItem) if(is_array($orderItem)) s4MemberProductStatBump((string)($orderItem['title']??''),max(1,(int)($orderItem['qty']??1)),'orders',(int)($orderItem['product_id']??0),(string)$name,(int)($orderItem['unit_price']??$orderItem['sale_unit_price']??$orderItem['price']??0));
             if ($why !== '') {
@@ -71609,36 +71616,28 @@ function notifCheckOrders(array $cn, bool $test = false, bool $send = true): arr
                 'shops' => $shopRows, 'errors' => $errors];
     }
 
-    // Slow product/source inquiries are intentionally deferred until all initial chat notifications are sent.
-    if ($send) {
-        foreach ([$singleDigestBucket, $productCustomerBucket] as $deferredBucket) {
-            foreach ($deferredBucket as $conv) {
-                if (empty($conv['has_quoted_product']) || !empty($conv['is_admin'])) continue;
-                $nc=(array)($conv['nc']??[]);$deferTk=(string)($nc['_s4_shop_token']??'');$deferVid=(int)($nc['vendor_id']??0);
-                $deferInq=function_exists('s4UrgentHandleChatInquiry')?s4UrgentHandleChatInquiry($deferTk,$deferVid,$nc,(array)($conv['raw_chat']??[]),(array)($conv['msgs']??[]),$cn):null;
-                $deferElig=function_exists('s4UrgentEvaluateChatProductEligibility')?s4UrgentEvaluateChatProductEligibility($deferTk,$deferVid,(string)($conv['shop_name']??''),$nc,(array)($conv['msgs']??[]),(array)($conv['raw_chat']??[]),$cn,$deferInq):null;
-                if(!$deferInq&&!$deferElig)continue;
-                $conv['inquiry']=$deferInq;$conv['eligibility']=$deferElig;
-                foreach(s4NotifFormatConversationMessage($conv,['mode'=>'product_customer']) as $updatedMsg){$samples[]=$updatedMsg;$sentTo=notifSend($cn,$updatedMsg,null,[], 'chat_customer');}
-                // Optional customer reply uses the token of the shop that received this message.
-                $neReply=(array)($cn['notif_events']??[]);
-                if(notifEventOn($neReply,'quoted_product_reply')&&$deferTk!==''&&(int)($nc['chat_id']??0)>0){
-                    $meta=is_array($deferInq['live_product_meta']??null)?$deferInq['live_product_meta']:[];
-                    $priceState=!empty($meta['matched'])?'قیمت فعلی در باسلام به‌روز است':'وضعیت به‌روزبودن قیمت در حال بررسی است';
-                    $stockState=array_key_exists('in_stock',$meta)?(!empty($meta['in_stock'])?'در دادهٔ فعلی موجود است':'در دادهٔ فعلی ناموجود است'):'موجودی در حال بررسی است';
-                    $template=trim((string)($cn['notif_quoted_product_template']??''));if($template==='')$template='سلام 🌿 {price_state} و {stock_state}. همکارانمان پس از بررسی انبار، موجودی نهایی را تأیید می‌کنند. سپاس از شکیبایی شما 🙏';
-                    $reply=strtr($template,['{price_state}'=>$priceState,'{stock_state}'=>$stockState]);
-                    bslSendChatMessage($deferTk,(int)$nc['chat_id'],$reply);
-                }
-            }
-        }
-    }
-
     notifPrune($st, $now);
     notifSaveState($st);
     return ['ok' => true, 'found' => $found, 'reminded' => $reminded,
             'total_seen' => $totalSeen, 'sent' => $sentTo, 'sample' => $samples[0] ?? '',
             'shops' => $shopRows, 'errors' => $errors];
+}
+
+/** Run order eligibility work once chat alerts have been delivered; unprocessed work remains retryable. */
+function s4NotifDrainDeferredOrderEligibility(array $cn): int {
+    $queue = (array)($GLOBALS['_s4DeferredOrderEligibility'] ?? []);
+    $GLOBALS['_s4DeferredOrderEligibility'] = [];
+    $done = 0;
+    foreach ($queue as $job) {
+        if (!is_array($job) || !is_array($job['raw'] ?? null) || !is_array($job['np'] ?? null) || !is_array($job['shop'] ?? null)) continue;
+        try {
+            s4NotifHandleNewBasalamOrder($job['raw'], $job['np'], $job['shop'], $cn, true, (array)($job['opts'] ?? []));
+            $done++;
+        } catch (Throwable $e) {
+            error_log('[scraper4] Deferred order eligibility failed: ' . $e->getMessage());
+        }
+    }
+    return $done;
 }
 
 /**
@@ -71906,6 +71905,10 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
     $sendPerConversation = static function (array $bucket, string $mode) use ($cn, $send, &$samples, &$sentTo): void {
         if (!$bucket) return;
         foreach ($bucket as $conv) {
+            $isQuotedCustomer = !empty($conv['has_quoted_product']) && empty($conv['is_admin']);
+            // A quoted-product conversation is dispatched once, after the eligibility
+            // lookup, so its text, quoted link, and result arrive as one integrated post.
+            if ($isQuotedCustomer) continue;
             $chunks = s4NotifFormatConversationMessage($conv, ['mode' => $mode]);
             $convMedia = bslChatCollectMedia($conv['nc'], (array)$conv['msgs']);
             $routeCls = !empty($conv['is_admin']) ? 'chat_vendor' : 'chat_customer';
@@ -71939,6 +71942,38 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             }
         }
     }
+
+    if ($send && !empty($GLOBALS['_s4DeferredOrderEligibility'])) s4NotifDrainDeferredOrderEligibility($cn);
+
+    // Slow product/source inquiries are intentionally deferred until all initial chat notifications are sent.
+    if ($send) {
+        foreach ([$singleDigestBucket, $productCustomerBucket] as $deferredBucket) {
+            foreach ($deferredBucket as $conv) {
+                if (empty($conv['has_quoted_product']) || !empty($conv['is_admin'])) continue;
+                $nc=(array)($conv['nc']??[]);$deferTk=(string)($nc['_s4_shop_token']??'');$deferVid=(int)($nc['vendor_id']??0);
+                $deferInq=function_exists('s4UrgentHandleChatInquiry')?s4UrgentHandleChatInquiry($deferTk,$deferVid,$nc,(array)($conv['raw_chat']??[]),(array)($conv['msgs']??[]),$cn):null;
+                $deferElig=function_exists('s4UrgentEvaluateChatProductEligibility')?s4UrgentEvaluateChatProductEligibility($deferTk,$deferVid,(string)($conv['shop_name']??''),$nc,(array)($conv['msgs']??[]),(array)($conv['raw_chat']??[]),$cn,$deferInq):null;
+                $conv['inquiry']=$deferInq;$conv['eligibility']=$deferElig;
+                $updatedMsgs=s4NotifFormatConversationMessage($conv,['mode'=>'product_customer']);
+                if(count($updatedMsgs)>1){
+                    $eligSummary=is_array($deferElig)&&array_key_exists('eligible',$deferElig)?(!empty($deferElig['eligible'])?'🟢 نتیجهٔ تأمین: واجد شرایط':'🔴 نتیجهٔ تأمین: غیرواجد شرایط'):'🔎 نتیجهٔ استعلام: در دسترس نیست';
+                    $updatedMsgs=[rtrim(mb_substr((string)$updatedMsgs[0],0,2800))."\n…\n".$eligSummary];
+                }
+                foreach($updatedMsgs as $updatedMsg){$samples[]=$updatedMsg;$sentTo=notifSend($cn,$updatedMsg,null,[], 'chat_customer');}
+                // Optional customer reply uses the token of the shop that received this message.
+                $neReply=(array)($cn['notif_events']??[]);
+                if(notifEventOn($neReply,'quoted_product_reply')&&$deferTk!==''&&(int)($nc['chat_id']??0)>0){
+                    $meta=is_array($deferInq['live_product_meta']??null)?$deferInq['live_product_meta']:[];
+                    $priceState=!empty($meta['matched'])?'قیمت فعلی در باسلام به‌روز است':'وضعیت به‌روزبودن قیمت در حال بررسی است';
+                    $stockState=array_key_exists('in_stock',$meta)?(!empty($meta['in_stock'])?'در دادهٔ فعلی موجود است':'در دادهٔ فعلی ناموجود است'):'موجودی در حال بررسی است';
+                    $template=trim((string)($cn['notif_quoted_product_template']??''));if($template==='')$template='سلام 🌿 {price_state} و {stock_state}. همکارانمان پس از بررسی انبار، موجودی نهایی را تأیید می‌کنند. سپاس از شکیبایی شما 🙏';
+                    $reply=strtr($template,['{price_state}'=>$priceState,'{stock_state}'=>$stockState]);
+                    bslSendChatMessage($deferTk,(int)$nc['chat_id'],$reply);
+                }
+            }
+        }
+    }
+
 
     notifPrune($st, $now);
     notifSaveState($st);
@@ -79359,11 +79394,8 @@ function bslCheckNotifications(array $cn): array {
         if ($found['chats'] > 0) $out['chats'] = $found['chats'];
         if (!empty($r['errors'])) $errors = array_merge($errors, (array)$r['errors']);
     }
-    // Run Lane 3 order research only after chat notifications have already been delivered.
-    foreach ((array)($GLOBALS['_s4DeferredOrderEligibility']??[]) as $deferOrder) {
-        if (!is_array($deferOrder)) continue;
-        s4NotifHandleNewBasalamOrder((array)$deferOrder['raw'],(array)$deferOrder['np'],(array)$deferOrder['shop'],$cn,true,(array)$deferOrder['opts']);
-    }
+    // Fallback when there were no chat notifications to deliver.
+    if (!empty($GLOBALS['_s4DeferredOrderEligibility'])) s4NotifDrainDeferredOrderEligibility($cn);
     unset($GLOBALS['_s4DeferredOrderEligibility']);
     if ($wantProd) {
         $r = notifCheckProducts($cn);
@@ -83433,7 +83465,7 @@ function s4NotifHandleNewBasalamOrder(array $rawParcel, array $np, array $shop, 
     $allowRecheck = !empty($opts['allow_recheck']) || $forceCheck;
     $whyLabel = trim((string)($opts['why'] ?? 'new'));
     if (!in_array($whyLabel,['new','recent','test'],true)) return ['ok'=>true,'skipped'=>'eligibility_only_for_new_orders'];
-    $wantElig = notifEventOn($ne, 'order_eligibility') && ($whyLabel === 'new' || $forceCheck || $whyLabel==='test');
+    $wantElig = notifEventOn($ne, 'order_eligibility') && ($whyLabel === 'new' || $whyLabel === 'recent' || $forceCheck || $whyLabel==='test');
     $wantCancelMsg = notifEventOn($ne, 'order_cancel_customer_msg');
     if (!$wantElig && !$wantCancelMsg) return ['ok' => true, 'skipped' => 'disabled'];
 
@@ -83699,7 +83731,7 @@ function s4NotifHandleNewBasalamOrder(array $rawParcel, array $np, array $shop, 
         }
         $eligMsg = implode("\n", $lines);
         $sentRes = notifSend($cn, $eligMsg, 'order');
-        $eligSent = !empty($sentRes);
+        $eligSent = in_array('sent', [(string)($sentRes['baleh'] ?? ''), (string)($sentRes['rubika'] ?? ''), (string)($sentRes['telegram'] ?? '')], true);
     }
 
     s4UrgentInquiryStateUpdate(function (array &$st) use ($orderKey, $displayOrd, $parcelStatus, $eval, $itemRefreshLogs, $cancelResult, $eligSent) {
