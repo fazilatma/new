@@ -1,5 +1,15 @@
 # Release notes
 
+## scraper4 10.741
+
+- Timestamps no longer carry the word «تهران». `s4FormatTehranChatTime()` returns a bare `HH:MM` (with the Jalali date prefix for older days) and `s4TehranStamp()` returns the Jalali date/time without the «به وقت تهران» suffix. The values are still computed in Tehran time; only the label is gone.
+- Root cause of Noviex not running long server-side operations: `exec` is listed in `disable_functions`, so the persistent CLI worker could never start and every spawn path returned `exec_disabled`. Long jobs therefore died with the web request that created them.
+- Added capability detection instead of domain detection. `s4RuntimeCaps()` actually *runs* a probe through `exec` (not just `function_exists`) and picks the engine: a working `exec` keeps the existing persistent CLI daemon (Sabashopping is unchanged), a disabled `exec` switches to a self-chained web worker.
+- The web worker is a detached loopback request authenticated with a rotating HMAC token. It takes the canonical `worker.lock`, writes the same `worker_state` heartbeat, drains the job queue for one bounded slice (default 45s) and calls the next slice over loopback HTTP before exiting, so a long operation survives across request lifetimes.
+- `exec` children were given an HTTP equivalent: matrix build, matrix fix, manual sync and the internal cron run through the existing endpoints over loopback, preserving the memory isolation that motivated using child processes. Backend extraction, which already runs in-process, is queued and the web worker is armed immediately.
+- Every successful enqueue arms the engine, throttled to at most one kick per 8 seconds, and a slice only chains when it actually did work and more claimable work remains — so no endless loop of empty requests, and `worker_stop.json` is still honoured.
+- `?worker_status` and the PHP health report now expose `engine` (`cli_daemon` / `web_worker`), `exec_available` and the web-worker state, so it is visible which engine a host is using.
+
 ## scraper4 10.740
 
 - Fixed messenger message times showing 3.5 hours ahead (for example `17:15 تهران` for a message that arrived at 13:45 Tehran). Basalam returns Tehran wall-clock without a zone suffix, but the code treated those values as UTC and converted them to Tehran a second time.
