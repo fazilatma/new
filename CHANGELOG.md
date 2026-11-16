@@ -1,5 +1,9 @@
 # Release notes
 
+## scraper4 10.738
+
+- Fixed a self-referential needle in the 10.737 assertion that always reported failure; the check now builds its search strings in parts and verifies the real `bslSanitizeProductWritePayload(payload, endpoint)` behaviour.
+
 ## scraper4 10.737
 
 - Fixed a reversed-argument call to `bslSanitizeProductWritePayload()` inside the 10.721 self-test fixture that raised a `TypeError` and aborted the whole `?selftest=1` run; all version assertions are reported again.

@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.737';
+const APP_VERSION = '10.738';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -54074,10 +54074,14 @@ if (isset($_GET['selftest'])) {
     $__chatPayload737=bslSanitizeProductWritePayload(['user_id'=>9911],'chats');
     $add('10.737','اجرای کامل سلف‌تست بدون توقف به‌خاطر ترتیب نادرست آرگومان‌های bslSanitizeProductWritePayload',
         ($__chatPayload737['user_id']??0)===9911
-        &&strpos($selfSrc,"bslSanitizeProductWritePayload(['user_id'=>9911],'chats')")!==false
-        &&strpos($selfSrc,"bslSanitizeProductWritePayload('chats',['user_id'=>9911])")===false
+        &&strpos($selfSrc,"bslSanitizeProductWritePayload(['user_id'"."=>9911],'chats')")!==false
+        &&strpos($selfSrc,"bslSanitizeProductWritePayload('chats',"."['user_id'=>9911])")===false
         &&strpos($selfSrc,"{v:'10."."737'")!==false
         &&version_compare(APP_VERSION,'10.737','>='));
+    $add('10.738','آزمون ترتیب آرگومان‌ها بدون needle خودارجاع اجرا می‌شود',
+        bslSanitizeProductWritePayload(['user_id'=>7],'chats')===['user_id'=>7]
+        &&strpos($selfSrc,"{v:'10."."738'")!==false
+        &&version_compare(APP_VERSION,'10.738','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -114252,6 +114256,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.738', t:'🧪 رفع ادعای خودارجاع در آزمون ترتیب آرگومان‌ها', items:[
+    'ادعای نسخهٔ ۱۰.۷۳۷ رشتهٔ جست‌وجوی خودش را در سورس پیدا می‌کرد و همیشه ناموفق گزارش می‌شد؛ needle اکنون تکه‌تکه ساخته می‌شود و آزمون رفتار واقعی bslSanitizeProductWritePayload(payload, endpoint) را می‌سنجد.'
+  ]},
   {v:'10.737', t:'🧪 رفع توقف کامل سلف‌تست به‌دلیل ترتیب نادرست آرگومان‌ها', items:[
     'فراخوانی آزمونی bslSanitizeProductWritePayload در تست نسخهٔ ۱۰.۷۲۱ آرگومان‌هایش جابه‌جا بود و با TypeError کل خروجی ?selftest=1 را متوقف می‌کرد؛ اکنون به شکل (payload, endpoint) اصلاح شده و همهٔ ادعاهای نسخه‌ها دوباره گزارش می‌شوند.'
   ]},
