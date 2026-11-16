@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.741';
+const APP_VERSION = '10.742';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -54628,7 +54628,8 @@ if (isset($_GET['selftest'])) {
         &&strpos($__convMsgA730[0],'سلام بله، یک بند سیلیکونی اضافه داخل جعبه هست')!==false
         &&strpos($__convMsgA730[0],'عالیه، رنگ مشکی موجوده ارسال کنید؟')!==false
         &&strpos($__convMsgA730[0],'سیر مکالمه (قدیم ← جدید')!==false
-        &&preg_match('~\(\d{2}:\d{2}\)~u',$__convMsgA730[0])===1
+        &&strpos($__convMsgA730[0],'('.s4FormatTehranChatTime('2026-11-12T08:00:00Z').')')!==false
+        &&mb_strpos($__convMsgA730[0],'ته'.'ران')===false
         &&strpos($__convMsgB730[0],'رضا')!==false
         &&strpos($__convMsgB730[0],'مریم')===false
         &&strpos($__convMsgB730[0],'سفارش من کی ارسال میشه؟')!==false
@@ -54773,6 +54774,12 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'manual_sync' => '1', 'profile' => \$profileKey")!==false
         &&strpos($selfSrc,"isset(\$_GET['web_wor"."ker'])")!==false
         &&strpos($selfSrc,"{v:'10."."741'")!==false);
+    $add('10.742','ادعای ساعت در آزمون گفتگو به قالب واقعی پیام تکیه می‌کند، نه به کلمهٔ حذف‌شده',
+        strpos($__convMsgA730[0],'('.s4FormatTehranChatTime('2026-11-12T08:00:00Z').')')!==false
+        &&mb_strpos($__convMsgA730[0],'ته'.'ران')===false
+        &&s4FormatTehranChatTime('2026-11-12T08:00:00Z')!==''
+        &&strpos($selfSrc,"{v:'10."."742'")!==false
+        &&version_compare(APP_VERSION,'10.742','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -114945,6 +114952,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.742', t:'🧪 اصلاح ادعای ساعت در آزمون ۱۰.۷۳۰ پس از حذف کلمهٔ «تهران»', items:[
+    'آزمون ۱۰.۷۳۰ هنوز دنبال کلمهٔ «تهران» در متن گفتگو می‌گشت و پس از حذف برچسب، شکست می‌خورد؛ حالا دقیقاً همان ساعتِ قالب‌بندی‌شدهٔ پیام (داخل پرانتز) بررسی می‌شود و نبودِ کلمهٔ «تهران» هم جداگانه ادعا می‌گردد.'
+  ]},
   {v:'10.741', t:'⚙️ اجرای پایدار کارهای طولانی روی هاست بدون exec + حذف کلمهٔ «تهران» از ساعت‌ها', items:[
     'ساعت‌ها دیگر برچسب «تهران» یا «به وقت تهران» ندارند؛ فقط عدد ساعت (و در صورت نیاز تاریخ شمسی) نمایش داده می‌شود — مبنای محاسبه همچنان دقیقاً ساعت تهران است.',
     'ریشهٔ مشکل نوویکس: تابع exec در disable_functions غیرفعال است، پس هیچ‌وقت worker دائمی CLI بالا نمی‌آمد و همهٔ مسیرهای spawn با خطای exec_disabled برمی‌گشتند؛ کارهای طولانی با پایان همان درخواست وب می‌مردند.',

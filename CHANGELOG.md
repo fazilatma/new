@@ -1,5 +1,9 @@
 # Release notes
 
+## scraper4 10.742
+
+- Fixed the 10.730 conversation assertion, which still searched for the word «تهران» in the merged chat text and therefore failed once the label was removed. It now checks the exact formatted message time in parentheses and separately asserts that the Tehran word is absent.
+
 ## scraper4 10.741
 
 - Timestamps no longer carry the word «تهران». `s4FormatTehranChatTime()` returns a bare `HH:MM` (with the Jalali date prefix for older days) and `s4TehranStamp()` returns the Jalali date/time without the «به وقت تهران» suffix. The values are still computed in Tehran time; only the label is gone.
