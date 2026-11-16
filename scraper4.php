@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.736';
+const APP_VERSION = '10.737';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -53542,7 +53542,8 @@ if (isset($_GET['selftest'])) {
     $__outMsg721=s4BasalamVendorOutreachRenderMessage('سلام مدیر {غرفه}، از غرفه {غرفه_ما} ({شناسه_غرفه}) پیام می‌دهم.','عسل سبلان','فروشگاه سبا',4455);
     $__outOwnerA=s4BasalamVendorOutreachExtractVendorOwner(['data'=>['id'=>4455,'title'=>'عسل سبلان','identifier'=>'asal-sabalan','user'=>['id'=>9911,'hash_id'=>'h9911']]]);
     $__outOwnerB=s4BasalamVendorOutreachExtractVendorOwner(['id'=>4455,'name'=>'عسل','user'=>['id'=>9922]]);
-    $__outChatPayload=bslSanitizeProductWritePayload('chats',['user_id'=>9911]);
+    // v10.736: ترتیب درست آرگومان‌ها (payload, endpoint) تا کل سلف‌تست با TypeError متوقف نشود
+    $__outChatPayload=bslSanitizeProductWritePayload(['user_id'=>9911],'chats');
     $add('10.721','تیک‌های دراپ‌داون غرفه استثنا می‌سازند و ارسال گروهی پیام اجازه در پرفروش‌ها و غرفه‌های شخص ثالث فعال است',
         array_keys($__bbsFil721ExName)===['p3','p2','p1','p5']
         &&strpos($__outTpl721,'{غرفه}')!==false
@@ -54070,6 +54071,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'$time_str = s4TehranStamp();')!==false
         &&strpos($selfSrc,"{v:'10."."736'")!==false
         &&version_compare(APP_VERSION,'10.736','>='));
+    $__chatPayload737=bslSanitizeProductWritePayload(['user_id'=>9911],'chats');
+    $add('10.737','اجرای کامل سلف‌تست بدون توقف به‌خاطر ترتیب نادرست آرگومان‌های bslSanitizeProductWritePayload',
+        ($__chatPayload737['user_id']??0)===9911
+        &&strpos($selfSrc,"bslSanitizeProductWritePayload(['user_id'=>9911],'chats')")!==false
+        &&strpos($selfSrc,"bslSanitizeProductWritePayload('chats',['user_id'=>9911])")===false
+        &&strpos($selfSrc,"{v:'10."."737'")!==false
+        &&version_compare(APP_VERSION,'10.737','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -114244,6 +114252,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.737', t:'🧪 رفع توقف کامل سلف‌تست به‌دلیل ترتیب نادرست آرگومان‌ها', items:[
+    'فراخوانی آزمونی bslSanitizeProductWritePayload در تست نسخهٔ ۱۰.۷۲۱ آرگومان‌هایش جابه‌جا بود و با TypeError کل خروجی ?selftest=1 را متوقف می‌کرد؛ اکنون به شکل (payload, endpoint) اصلاح شده و همهٔ ادعاهای نسخه‌ها دوباره گزارش می‌شوند.'
+  ]},
   {v:'10.736', t:'🕐 یکسان‌سازی ساعت تهران در تمام تایم‌استمپ‌های داخل پیام‌های پیام‌رسان', items:[
     'افزودن توابع s4TehranDate()، s4ZoneDate()، s4TehranStamp() و s4ParseApiTimestamp() و جایگزینی همهٔ فراخوانی‌های date() سمت سرور با نسخهٔ تهرانی؛ از این پس ساعت سرور (معمولاً UTC) در هیچ پیام، گزارش، لاگ و نام فایلی دیده نمی‌شود.',
     'پیام‌های پیام‌رسان (پاسخ انسانی ادمین به مشتری، گزارش نتیجهٔ عملیات، ضربان و خلاصهٔ کران، وضعیت سرور) اکنون تاریخ شمسی و برچسب صریح «به وقت تهران» دارند.',

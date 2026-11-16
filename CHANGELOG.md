@@ -1,5 +1,9 @@
 # Release notes
 
+## scraper4 10.737
+
+- Fixed a reversed-argument call to `bslSanitizeProductWritePayload()` inside the 10.721 self-test fixture that raised a `TypeError` and aborted the whole `?selftest=1` run; all version assertions are reported again.
+
 ## scraper4 10.736
 
 - Every server-side timestamp is now rendered in `Asia/Tehran`. Added `s4TehranDate()`, `s4ZoneDate()`, `s4TehranStamp()` and `s4ParseApiTimestamp()` and replaced all `date()` calls so the server clock (usually UTC) no longer leaks into messenger messages, reports, logs or file stamps.
