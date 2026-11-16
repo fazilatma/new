@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.734';
+const APP_VERSION = '10.735';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -52437,7 +52437,7 @@ if (isset($_GET['selftest'])) {
         &&notifMessengerChatId($__notifCfg628,'order')==='orders'
         &&notifMessengerChatId($__notifCfg628,'site_visit')==='visits'
         &&notifMessengerChatId(['chat_id'=>'legacy','chat_ids'=>[]],'order')==='legacy'
-        &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
+        &&strpos($selfSrc,"s4NotifFormatConversationMessage(\$f, ['mode' => 'product_customer'])")!==false
         &&strpos($selfSrc,"{v:'10." . "628'")!==false
         &&version_compare(APP_VERSION,'10.628','>='));
     $__notifCfg629=['chat_id'=>'common','all_same'=>false,'chat_ids'=>['conversations'=>'talk','orders'=>'orders','visits'=>'visits']];
@@ -53964,7 +53964,7 @@ if (isset($_GET['selftest'])) {
         $__longMsgs730[]=['text'=>"پیام شماره $__li ".str_repeat('الف ',65),'is_admin'=>($__li%2===0),'at'=>'2026-11-12T10:00:00Z'];
     }
     $__longConv730=s4NotifFormatConversationMessage(['nc'=>['who'=>'نگار','unseen'=>1],'shop_name'=>'غرفه تست','is_admin'=>false,'why'=>'new','msgs'=>$__longMsgs730],['mode'=>'single_digest']);
-    $__addCheck730=(count($__convMsgA730)===1&&count($__convMsgB730)===1&&count($__longConv730)>=1);
+    $__addCheck730=(count($__convMsgA730)===1&&count($__convMsgB730)===1&&count($__longConv730)===1);
     $add('10.730','ادغام پیام‌های ارسالی و دریافتی هر غرفه‌دار و مشتری منحصربه‌فرد بدون قاطی کردن مشتری‌ها و با حفظ آخرین پیام‌های مکالمه',
         $__addCheck730
         &&strpos($__convMsgA730[0],'مریم')!==false
@@ -53977,14 +53977,17 @@ if (isset($_GET['selftest'])) {
         &&strpos($__convMsgA730[0],'سلام بله، یک بند سیلیکونی اضافه داخل جعبه هست')!==false
         &&strpos($__convMsgA730[0],'عالیه، رنگ مشکی موجوده ارسال کنید؟')!==false
         &&strpos($__convMsgA730[0],'سیر مکالمه (قدیم ← جدید')!==false
+        &&strpos($__convMsgA730[0],'تهران')!==false
         &&strpos($__convMsgB730[0],'رضا')!==false
         &&strpos($__convMsgB730[0],'مریم')===false
         &&strpos($__convMsgB730[0],'سفارش من کی ارسال میشه؟')!==false
         &&strpos($__convMsgB730[0],'امروز تحویل پست میشه')!==false
         &&strpos($__longConv730[0],'پیام شماره 14')!==false
-        &&s4FormatTehranChatTime('2026-11-12T08:05:00Z',strtotime('2026-11-12T12:00:00Z'))==='11:35'
+        &&s4FormatTehranChatTime('2026-11-12T08:05:00Z',strtotime('2026-11-12T12:00:00Z'))==='11:35 تهران'
+        &&s4FormatTehranChatTime('2026-11-12 08:05:00',strtotime('2026-11-12T12:00:00Z'))==='11:35 تهران'
+        &&s4FormatTehranChatTime((string)strtotime('2026-11-12T08:05:00Z'),strtotime('2026-11-12T12:00:00Z'))==='11:35 تهران'
         &&strpos($selfSrc,"function s4NotifFormatConversationMessage(")!==false
-        &&strpos($selfSrc,"null, \$_media109, !empty(\$f['is_admin']) ? 'chat_vendor' : 'chat_customer'")!==false
+        &&strpos($selfSrc,"s4NotifFormatConversationMessage(\$f, ['mode' => 'product_customer'])")!==false
         &&strpos($selfSrc,"{v:'10."."730'")!==false
         &&version_compare(APP_VERSION,'10.730','>='));
     $__chatRoute731=['chat_id'=>'general','all_same'=>false,'chat_ids'=>['conversations'=>'talk']];
@@ -70006,18 +70009,32 @@ function bslInferRecentChatProduct(string $tk, int $chatId, int $myUserId = 0): 
 function s4FormatTehranChatTime(string $isoAt, int $nowTs = 0): string {
     $isoAt = trim($isoAt);
     if ($isoAt === '') return '';
-    $ts = strtotime($isoAt);
-    if ($ts === false || $ts <= 0) return '';
-    if ($nowTs <= 0) $nowTs = time();
     try {
+        // API timestamps are UTC when they omit an explicit zone; numeric values are Unix seconds.
+        if (preg_match('~^\d{9,13}(?:\.\d+)?$~', $isoAt)) {
+            $numeric = (float)$isoAt;
+            $digits = preg_replace('~\D~', '', $isoAt);
+            $ts = (int)($numeric >= 1000000000000 ? $numeric / 1000 : $numeric);
+            $dt = new DateTimeImmutable('@' . $ts);
+        } else {
+            $utc = new DateTimeZone('UTC');
+            $hasZone = preg_match('~(?:Z|[+-]\d{2}:?\d{2})$~i', $isoAt) === 1;
+            $dt = new DateTimeImmutable($hasZone ? $isoAt : ($isoAt . ' UTC'), $utc);
+        }
+        if ($nowTs <= 0) $nowTs = time();
         $tz = new DateTimeZone('Asia/Tehran');
-        $dt = (new DateTimeImmutable('@' . $ts))->setTimezone($tz);
+        $dt = $dt->setTimezone($tz);
         $nowDt = (new DateTimeImmutable('@' . $nowTs))->setTimezone($tz);
-        return ($dt->format('Y-m-d') === $nowDt->format('Y-m-d')) ? $dt->format('H:i') : s4JalaliDateTime($ts);
+        $jalali = s4GregorianToJalali((int)$dt->format('Y'), (int)$dt->format('n'), (int)$dt->format('j'));
+        $nowJalali = s4GregorianToJalali((int)$nowDt->format('Y'), (int)$nowDt->format('n'), (int)$nowDt->format('j'));
+        $time = $dt->format('H:i') . ' تهران';
+        if ($jalali === $nowJalali) return $time;
+        return sprintf('%04d/%02d/%02d %s', $jalali[0], $jalali[1], $jalali[2], $time);
     } catch (Throwable $_e) {
-        return s4JalaliDateTime($ts);
+        return '';
     }
 }
+
 
 function bslFetchChatMessages(string $tk, int $chatId, int $limit = 10, int $myUserId = -1, bool $includeSelf = false, int $peerUserId = 0): array {
     if ($chatId <= 0) return [];
@@ -70375,6 +70392,9 @@ function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false, int
             $mt = trim((string)($m['text'] ?? ''));
             $mu = trim((string)($m['url'] ?? ''));
             $ml = trim((string)($m['label'] ?? ''));
+            $mediaLinks = array_values(array_unique(array_filter(array_map('trim', array_merge(
+                [$mu], (array)($m['urls'] ?? []), (array)($m['links'] ?? [])
+            )), static fn($u) => $u !== '')));
             if ($mt === '' && $ml !== '') $mt = $ml;
             if ($mu !== '' && $mt !== '' && mb_strpos($mt, $mu) === false && bslExtractProductIdFromUrl($mu) <= 0) $mt .= ' ' . $mu;
             elseif ($mt === '' && $mu !== '') $mt = ($ml !== '' ? $ml . ' ' : '') . $mu;
@@ -70388,7 +70408,12 @@ function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false, int
             } else {
                 $rolePrefix = $timeTag !== '' ? (trim($timeTag) . ' ') : '';
             }
-            $piece = ($isLatest ? '⬅️ ' : '▸ ') . $rolePrefix . mb_substr($mt, 0, $forSingleDigest ? 650 : 450);
+            $inlineLinks = [];
+            foreach ($mediaLinks as $mediaLink) {
+                if (mb_strpos($mt, $mediaLink) === false && $mediaLink !== $pUrl) $inlineLinks[] = $mediaLink;
+            }
+            if ($inlineLinks) $mt .= "\n🔗 " . implode("\n🔗 ", $inlineLinks);
+            $piece = ($isLatest ? '⬅️ ' : '▸ ') . $rolePrefix . mb_substr($mt, 0, $forSingleDigest ? 950 : 700);
             $mq = is_array($m['quote'] ?? null) ? $m['quote'] : [];
             $mqTxt = trim((string)($mq['text'] ?? ''));
             if ($showRoles && $mqTxt !== '' && ($pTitle === '' || mb_strpos($mqTxt, $pTitle) === false) && $mqTxt !== $quoteTxt) {
@@ -70571,35 +70596,15 @@ function s4NotifFormatConversationMessage(array $entry, array $opts = []): array
 ", $bLines);
     }
 
-    $full = $hdr . "
-━━━━━━━━━━
-" . $block;
+    $full = $hdr . "\n━━━━━━━━━━\n" . $block;
     if (mb_strlen($full) <= 3400) return [$full];
 
-    // اگر مکالمه یا استعلام خیلی طولانی بود، فقط همان یک گفتگو را به بخش‌های خوانا تقسیم می‌کنیم
-    $out = [];
-    $parts = explode("
-", $block);
-    $cur = '';
-    foreach ($parts as $ln) {
-        if ($cur !== '' && (mb_strlen($cur) + mb_strlen($ln) + 1) > 3150) {
-            $out[] = $cur;
-            $cur = $ln;
-        } else {
-            $cur = ($cur === '' ? $ln : ($cur . "
-" . $ln));
-        }
-    }
-    if ($cur !== '') $out[] = $cur;
-    $tot = count($out);
-    foreach ($out as $idx => &$chunk) {
-        $chunk = $hdr . ($tot > 1 ? (' — بخش ' . ($idx + 1) . '/' . $tot) : '') . "
-━━━━━━━━━━
-" . $chunk;
-    }
-    unset($chunk);
-    return $out;
+    // Keep one conversation in one messenger post; preserve context and newest tail.
+    return [rtrim(mb_substr($full, 0, 1650))
+        . "\n… متن قدیمی‌تر برای ارسال یکپارچه کوتاه شد …\n"
+        . ltrim(mb_substr($full, -1650))];
 }
+
 
 function s4NotifFormatMergedChatsMessage(array $entries, array $opts = []): array {
     if (!$entries) return [];
@@ -71799,9 +71804,11 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             if ($norm && !$singleDigest) {
                 $f = $norm[0];
                 $body = $f['pending'] ? bslFetchChatMessages($tk, $f['nc']['chat_id'], min(10, max(1, $f['nc']['unseen']))) : [];
-                $samples[] = !empty($f['is_admin'])
-                    ? bslChatAdminMessengerMsg($f['nc'], $name)
-                    : bslChatCustomerMessengerMsg($f['nc'], $name, $body);
+                $preview = s4NotifFormatConversationMessage([
+                    'nc' => $f['nc'], 'shop_name' => $name, 'msgs' => $body,
+                    'is_admin' => !empty($f['is_admin']), 'why' => 'new', 'remind_n' => 0,
+                ], ['mode' => 'product_customer']);
+                if ($preview) $samples[] = $preview[0];
             }
             continue;   // حالت تست: وضعیت ذخیره نمی‌شود
         }
@@ -71928,13 +71935,11 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             // lookup, so its text, quoted link, and result arrive as one integrated post.
             if ($isQuotedCustomer) continue;
             $chunks = s4NotifFormatConversationMessage($conv, ['mode' => $mode]);
-            $convMedia = bslChatCollectMedia($conv['nc'], (array)$conv['msgs']);
             $routeCls = !empty($conv['is_admin']) ? 'chat_vendor' : 'chat_customer';
             foreach ($chunks as $cIdx => $chunkText) {
                 $samples[] = $chunkText;
                 if (!$send) continue;
-                $chunkMedia = ($cIdx === 0) ? array_slice($convMedia, 0, 5) : [];
-                $sentTo = notifSend($cn, $chunkText, null, $chunkMedia, $routeCls);
+                $sentTo = notifSend($cn, $chunkText, null, [], $routeCls);
                 $_ncCh85 = (int)($conv['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($conv['nc']['shop'] ?? 1); $_ncWh85 = (string)($conv['nc']['who'] ?? '');
                 foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
                     if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
@@ -71947,13 +71952,14 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
     $sendPerConversation($productCustomerBucket, 'product_customer');
 
     foreach ($individualBucket as $f) {
-        $msg = !empty($f['is_admin'])
-            ? bslChatAdminMessengerMsg($f['nc'], (string)$f['shop_name'])
-            : bslChatCustomerMessengerMsg($f['nc'], (string)$f['shop_name'], (array)$f['msgs'], (string)$f['why'], (int)$f['remind_n']);
+        $convMsgs = s4NotifFormatConversationMessage($f, ['mode' => 'product_customer']);
+        $msg = $convMsgs[0] ?? '';
+        if ($msg === '') continue;
         $samples[] = $msg;
         if ($send) {
-            $_media109 = bslChatCollectMedia($f['nc'], (array)$f['msgs']);
-            $sentTo = notifSend($cn, $msg, null, $_media109, !empty($f['is_admin']) ? 'chat_vendor' : 'chat_customer');
+            // Keep media references inline instead of sending separate attachment posts.
+            $routeCls = !empty($f['is_admin']) ? 'chat_vendor' : 'chat_customer';
+            $sentTo = notifSend($cn, $msg, null, [], $routeCls);
             $_ncCh85 = (int)($f['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($f['nc']['shop'] ?? 1); $_ncWh85 = (string)($f['nc']['who'] ?? '');
             foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
                 if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
@@ -79852,10 +79858,9 @@ if (isset($_GET['bsl_notify_selected'])) {
         }
         $sendSelConv = static function (array $items, string $mode) use ($cn, &$delivery, $recordDelivery): void {
             foreach ($items as $it) {
-                $convMedia = bslChatCollectMedia($it['nc'], (array)$it['msgs']);
                 $routeCls = !empty($it['is_admin']) ? 'chat_vendor' : 'chat_customer';
                 foreach (s4NotifFormatConversationMessage($it, ['mode' => $mode]) as $idx => $cMsg) {
-                    $sendResult = notifSend($cn, $cMsg, 'remind', $idx === 0 ? array_slice($convMedia, 0, 5) : [], $routeCls);
+                    $sendResult = notifSend($cn, $cMsg, 'remind', [], $routeCls);
                     $recordDelivery($sendResult);
                     $_ch = (int)($it['nc']['chat_id'] ?? 0); $_sh = (int)($it['nc']['shop'] ?? 1); $_wh = (string)($it['nc']['who'] ?? '');
                     foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_km => $_mm) {
@@ -79867,12 +79872,11 @@ if (isset($_GET['bsl_notify_selected'])) {
         if ($selSingle) $sendSelConv($selSingle, 'single_digest');
         if ($selProd) $sendSelConv($selProd, 'product_customer');
         foreach ($selInd as $ind) {
-            $msg = !empty($ind['is_admin'])
-                ? bslChatAdminMessengerMsg($ind['nc'], (string)$ind['shop_name'])
-                : bslChatCustomerMessengerMsg($ind['nc'], (string)$ind['shop_name'], (array)$ind['msgs']);
-            $_mediaSel = bslChatCollectMedia($ind['nc'], (array)$ind['msgs']);
+            $formatted = s4NotifFormatConversationMessage($ind, ['mode' => 'product_customer']);
+            $msg = $formatted[0] ?? '';
+            if ($msg === '') continue;
             $routeCls = !empty($ind['is_admin']) ? 'chat_vendor' : 'chat_customer';
-            $sendResult = notifSend($cn, $msg, 'remind', $_mediaSel, $routeCls);
+            $sendResult = notifSend($cn, $msg, 'remind', [], $routeCls);
             $recordDelivery($sendResult);
             $_ch = (int)($ind['nc']['chat_id'] ?? 0); $_sh = (int)($ind['nc']['shop'] ?? 1); $_wh = (string)($ind['nc']['who'] ?? '');
             foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_km => $_mm) {

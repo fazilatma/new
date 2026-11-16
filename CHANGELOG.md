@@ -1,5 +1,11 @@
 # Release notes
 
+## scraper4 10.735
+
+- Every conversation notification is now sent as one integrated text post, including long conversations; oversized content is compacted rather than split into numbered posts. Conversation media URLs stay inline instead of creating separate attachment posts.
+- All conversation message timestamps now parse explicit offsets, UTC timestamps without an offset, and Unix timestamps consistently, then display Jalali date/time labeled `تهران`.
+- Standard and manually resent chat notifications now use the same formatter and timezone handling.
+
 ## scraper4 10.734
 
 - Messenger notification timestamps now use the Jalali calendar and the `Asia/Tehran` timezone, including chat-history times, cron/test pings, daily digests, reconciliation and sync reports, and retirement notices.
