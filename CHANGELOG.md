@@ -1,5 +1,12 @@
 # Release notes
 
+## scraper4 10.736
+
+- Every server-side timestamp is now rendered in `Asia/Tehran`. Added `s4TehranDate()`, `s4ZoneDate()`, `s4TehranStamp()` and `s4ParseApiTimestamp()` and replaced all `date()` calls so the server clock (usually UTC) no longer leaks into messenger messages, reports, logs or file stamps.
+- Messenger bodies that embed a time (admin human reply to customer, operation result report, cron heartbeat and cron summary, server status output) now show a Jalali Tehran stamp with an explicit `به وقت تهران` label.
+- Basalam order notifications include the order creation time, parsing zone-less API timestamps as UTC before converting to Tehran.
+- Daily digest scheduling, off-hours detection and daily counters are evaluated on the Tehran day/hour (or the explicitly configured digest timezone).
+
 ## scraper4 10.735
 
 - Every conversation notification is now sent as one integrated text post, including long conversations; oversized content is compacted rather than split into numbered posts. Conversation media URLs stay inline instead of creating separate attachment posts.

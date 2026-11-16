@@ -412,7 +412,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.735';
+const APP_VERSION = '10.736';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -1336,7 +1336,7 @@ function s4WorkerRecoverStaleLockPath(int $staleSec = 180): array {
     /* A dead daemon's exec child may inherit the old flock. Rotate only the
        path after dead PID + stale heartbeat proof; the child keeps its old
        inode while the replacement daemon owns the canonical new lock. */
-    $orphan=WORKER_LOCK_FILE.'.orphan.'.date('Ymd_His').'.'.substr(md5(uniqid('',true)),0,6);
+    $orphan=WORKER_LOCK_FILE.'.orphan.'.s4TehranDate('Ymd_His').'.'.substr(md5(uniqid('',true)),0,6);
     if(!@rename(WORKER_LOCK_FILE,$orphan))return ['recovered'=>false,'reason'=>'rename_failed'];
     return ['recovered'=>true,'reason'=>'dead_worker_inherited_lock','old_pid'=>$pid,'heartbeat_age'=>$age,'orphan'=>basename($orphan)];
 }
@@ -2549,7 +2549,7 @@ function matrixCronLogArrival(string $source,array $cfg,array $watchdog,int $res
        the mode emits mode_switch, which is a control pulse rather than cron. */
     if((string)($cfg['mode']??'')!=='cron_only'
         ||(!str_starts_with($source,'external')&&$source!=='browser_internal'))return;
-    $parts=['🫀 کران رسید',date('Y/m/d H:i:s'),'منبع: '.$source,'lease: '.(int)($cfg['lease_sec']??0).' ثانیه'];
+    $parts=['🫀 کران رسید',s4TehranStamp(time(),true),'منبع: '.$source,'lease: '.(int)($cfg['lease_sec']??0).' ثانیه'];
     if($resumed>0)$parts[]='بیدارسازی '.(int)$resumed.' job';
     if(!empty($waiting['woken']))$parts[]='ادامهٔ checkpoint مستقل';
     if(!empty($watchdog['stale']))$parts[]='نگهبان: بازیابی '.$watchdog['kind'].' PID '.(int)($watchdog['pid']??0);
@@ -2900,14 +2900,14 @@ function s4WorkerLoopFromCli(): void {
         if (is_resource($lockFp)) { @flock($lockFp, LOCK_UN); @fclose($lockFp); }
     });
     $lastCron = time();$lastWorkerResumeAll = 0;$restartAfterUpdate=false;
-    echo '[' . date('Y-m-d H:i:s') . "] scraper4 worker started (pid=$pid, tick=$tick)\n";
+    echo '[' . s4TehranDate('Y-m-d H:i:s') . "] scraper4 worker started (pid=$pid, tick=$tick)\n";
     while (true) {
         if (($stopFile !== '' && is_file($stopFile)) || is_file(WORKER_STOP_FILE)) break;
         if(s4SettingsPriorityActive()){
             s4WorkerStateWrite(['phase'=>'settings_priority_wait','foreground_settings'=>true]);
             if($once)break;usleep(250000);continue;
         }
-        if(function_exists('s4AutoCodeUpdateTick')){$au=s4AutoCodeUpdateTick(false);if(!empty($au['updated'])||!empty($au['restart_required'])){$restartAfterUpdate=true;echo '['.date('Y-m-d H:i:s')."] code updated; worker restart requested\n";break;}}
+        if(function_exists('s4AutoCodeUpdateTick')){$au=s4AutoCodeUpdateTick(false);if(!empty($au['updated'])||!empty($au['restart_required'])){$restartAfterUpdate=true;echo '['.s4TehranDate('Y-m-d H:i:s')."] code updated; worker restart requested\n";break;}}
         /* Extraction has its own configurable pool; matrix/manual jobs remain
            serialized in this daemon. */
         $px=s4DispatchParallelExtractJobs();
@@ -2939,19 +2939,19 @@ function s4WorkerLoopFromCli(): void {
             }
             $jid = (string)($job['id'] ?? '');
             s4WorkerStateWrite(['running' => true, 'phase' => 'job', 'job_id' => $jid, 'job_type' => (string)($job['type'] ?? '')]);
-            echo '[' . date('Y-m-d H:i:s') . "] job start: $jid " . (string)($job['type'] ?? '') . "\n";
+            echo '[' . s4TehranDate('Y-m-d H:i:s') . "] job start: $jid " . (string)($job['type'] ?? '') . "\n";
             try {
                 $res = s4WorkerRunJob($job);
                 $ok = !empty($res['ok']);
                 if(!empty($res['retryable'])&&s4WorkerRequeueForRetry($jid,(string)($res['retry_reason']??'extract_lock_busy'),(int)($res['retry_delay']??10))){
                     s4WorkerStateWrite(['phase'=>'idle','last_job_id'=>$jid,'last_job_ok'=>true,'last_error'=>'',
                         'last_retry_reason'=>(string)($res['retry_reason']??'extract_lock_busy')]);
-                    echo '['.date('Y-m-d H:i:s')."] transient extraction contention; job requeued: $jid\n";
+                    echo '['.s4TehranDate('Y-m-d H:i:s')."] transient extraction contention; job requeued: $jid\n";
                     if($once)break;continue;
                 }
                 if($ok&&!empty($res['daemon_recycle'])&&s4WorkerRequeueForRecycle($jid)){
                     s4WorkerStateWrite(['phase'=>'recycle','last_job_id'=>$jid,'last_job_ok'=>true,'last_error'=>'','recycle_reason'=>'matrix_fix_host_budget']);
-                    echo '['.date('Y-m-d H:i:s')."] matrix fix checkpoint handed to fresh worker: $jid\n";
+                    echo '['.s4TehranDate('Y-m-d H:i:s')."] matrix fix checkpoint handed to fresh worker: $jid\n";
                     $restartAfterUpdate=true;break;
                 }
                 s4WorkerFinishJob($jid, ($ok && empty($res['resume_needed'])) ? 'done' : ($ok ? 'paused' : 'failed'), ['ok' => $ok,
@@ -2961,11 +2961,11 @@ function s4WorkerLoopFromCli(): void {
                     $ok ? '' : (string)($res['error'] ?? 'job failed'));
                 s4WorkerStateWrite(['phase' => 'idle', 'last_job_id' => $jid, 'last_job_ok' => $ok, 'last_error' => $ok ? '' : (string)($res['error'] ?? ''),
                     'last_job_detail'=>mb_substr((string)($res['tail']??''),-2000)]);
-                echo '[' . date('Y-m-d H:i:s') . "] job done: $jid ok=" . ($ok ? '1' : '0') . "\n";
+                echo '[' . s4TehranDate('Y-m-d H:i:s') . "] job done: $jid ok=" . ($ok ? '1' : '0') . "\n";
             } catch (Throwable $e) {
                 s4WorkerFinishJob($jid, 'failed', [], $e->getMessage());
                 s4WorkerStateWrite(['phase' => 'idle', 'last_job_id' => $jid, 'last_job_ok' => false, 'last_error' => $e->getMessage()]);
-                echo '[' . date('Y-m-d H:i:s') . "] job fatal: $jid " . $e->getMessage() . "\n";
+                echo '[' . s4TehranDate('Y-m-d H:i:s') . "] job fatal: $jid " . $e->getMessage() . "\n";
             }
             if ($once) break;
             continue;
@@ -2980,7 +2980,7 @@ function s4WorkerLoopFromCli(): void {
             s4WorkerStateWrite(['phase' => 'idle', 'last_cron_at' => $lastCron,
                 'last_cron_ok' => !empty($cr['ok']), 'last_cron_code' => (int)($cr['exit_code'] ?? 0),
                 'last_cron_tail' => (string)($cr['tail'] ?? '')]);
-            echo '[' . date('Y-m-d H:i:s') . '] cron tick ok=' . (!empty($cr['ok']) ? '1' : '0') . ' code=' . (int)($cr['exit_code'] ?? 0) . "\n";
+            echo '[' . s4TehranDate('Y-m-d H:i:s') . '] cron tick ok=' . (!empty($cr['ok']) ? '1' : '0') . ' code=' . (int)($cr['exit_code'] ?? 0) . "\n";
             if ($once) break;
         } else {
             if ($effectiveTick > 0 && $matrixNeedsWorker && (time() - $lastCron) >= $effectiveTick) {
@@ -2996,7 +2996,7 @@ function s4WorkerLoopFromCli(): void {
         }
     }
     if($restartAfterUpdate)register_shutdown_function(static function(){usleep(300000);s4SpawnPersistentWorker();});
-    echo '[' . date('Y-m-d H:i:s') . "] scraper4 worker stopped\n";
+    echo '[' . s4TehranDate('Y-m-d H:i:s') . "] scraper4 worker stopped\n";
 }
 
 /* =====================================================================
@@ -3950,6 +3950,54 @@ function s4JalaliDateTime(?int $ts=null,bool $withSeconds=false):string{
 function jdate_fa(int $ts): string {
     return s4JalaliDateTime($ts);
 }
+/**
+ * v10.736: Wall-clock formatting pinned to Asia/Tehran.
+ * The hosting server frequently runs on UTC, so every timestamp that reaches a
+ * human (messenger text, logs, reports, file stamps) must be rendered here and
+ * never through the server-default date().
+ */
+function s4TehranDate(string $fmt, ?int $ts = null): string {
+    if ($ts === null) $ts = time();
+    try {
+        return (new DateTimeImmutable('@' . $ts))->setTimezone(new DateTimeZone('Asia/Tehran'))->format($fmt);
+    } catch (Throwable $_e) {
+        return gmdate($fmt, $ts + 12600);
+    }
+}
+/** Same as s4TehranDate() but honours an explicitly configured timezone, defaulting to Tehran. */
+function s4ZoneDate(string $fmt, int $ts, string $tz = ''): string {
+    $tz = trim($tz);
+    if ($tz === '') $tz = 'Asia/Tehran';
+    try {
+        return (new DateTimeImmutable('@' . $ts))->setTimezone(new DateTimeZone($tz))->format($fmt);
+    } catch (Throwable $_e) {
+        return s4TehranDate($fmt, $ts);
+    }
+}
+/** Tehran clock-and-date stamp with an explicit zone label for messenger bodies. */
+function s4TehranStamp(?int $ts = null, bool $withSeconds = false): string {
+    return s4JalaliDateTime($ts, $withSeconds) . ' به وقت تهران';
+}
+/**
+ * v10.736: Parse a marketplace/API timestamp into a Unix timestamp.
+ * Zone-less values are treated as UTC (how Basalam and friends emit them) so a
+ * later Tehran rendering is not silently shifted by the server timezone.
+ */
+function s4ParseApiTimestamp(string $value): int {
+    $value = trim($value);
+    if ($value === '') return 0;
+    try {
+        if (preg_match('~^\d{9,13}(?:\.\d+)?$~', $value)) {
+            $num = (float)$value;
+            return (int)($num >= 1000000000000 ? $num / 1000 : $num);
+        }
+        $hasZone = preg_match('~(?:Z|[+-]\d{2}:?\d{2})$~i', $value) === 1;
+        $dt = new DateTimeImmutable($hasZone ? $value : ($value . ' UTC'), new DateTimeZone('UTC'));
+        return (int)$dt->format('U');
+    } catch (Throwable $_e) {
+        return 0;
+    }
+}
 function extractReportFile(string $queueId): string {
     $safe = preg_replace('~[^A-Za-z0-9_.-]~', '_', $queueId);
     return __DIR__ . '/extract_report_' . $safe . '.json';
@@ -4466,7 +4514,7 @@ function s4StorageLogThrottled(string $path, string $msg, int $ttlSec = 60): voi
         @file_put_contents($stampFile, json_encode([$sig => $now]));
     }
     s4TruncateFileTailInPlace($logFile, 262144, 32768);
-    @file_put_contents($logFile, date('Y-m-d H:i:s') . ' | ' . $path . ' | ' . $msg . "\n", FILE_APPEND);
+    @file_put_contents($logFile, s4TehranDate('Y-m-d H:i:s') . ' | ' . $path . ' | ' . $msg . "\n", FILE_APPEND);
 }
 
 function s4AtomicCopyVerified(string $src, string $dst): bool {
@@ -5522,7 +5570,7 @@ function cronEmit(array $results): void {
 /** v9.15: خلاصهٔ خوانا برای ترمینال و ایمیلِ کران‌جاب */
 function cronSummaryText(array $r): string {
     $L = [];
-    $L[] = '=== اجرای کران — ' . date('Y/m/d H:i:s') . ' (v' . APP_VERSION . ') ===';
+    $L[] = '=== اجرای کران — ' . s4TehranStamp(time(), true) . ' (v' . APP_VERSION . ') ===';
     if (!empty($r['skipped'])) $L[] = '⏭ رد شد: ' . (string)($r['reason'] ?? '');
     if (!empty($r['lock_reaped'])) $L[] = '🔓 قفل اجرای مردهٔ قبلی برداشته شد';
     foreach ((array)($r['profiles'] ?? []) as $p) {
@@ -21904,7 +21952,7 @@ if (isset($_GET['store_chat_api']) || isset($_POST['store_chat_api'])) {
         }
 
         $now = time();
-        $time_str = date('H:i');
+        $time_str = s4TehranStamp(); // v10.736: پیام پیام‌رسان همیشه ساعت تهران را نشان می‌دهد
         $found = false;
         $updated_thread = null;
 
@@ -22500,7 +22548,7 @@ if(isset($_POST['start_misc_product_action'])){
         if(empty($r['ok'])){http_response_code(422);echo json_encode(['ok'=>false,'error'=>bslApiError($r,'حذف/بایگانی ناموفق','products/'.$pid)],JSON_UNESCAPED_UNICODE);exit;}
         $msg='محصول #'.$pid.' از غرفه حذف/بایگانی شد';
     }
-    @file_put_contents(__DIR__.'/start_misc_actions.log',date('Y-m-d H:i:s').' | '.$action.' | '.$destination.' | '.$pid.' | '.str_replace(["\r","\n"],' ',$title)."\n",FILE_APPEND|LOCK_EX);
+    @file_put_contents(__DIR__.'/start_misc_actions.log',s4TehranDate('Y-m-d H:i:s').' | '.$action.' | '.$destination.' | '.$pid.' | '.str_replace(["\r","\n"],' ',$title)."\n",FILE_APPEND|LOCK_EX);
     echo json_encode(['ok'=>true,'action'=>$action,'destination'=>$destination,'product_id'=>$pid,'title'=>$title,'msg'=>$msg],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;
 }
 
@@ -22621,7 +22669,7 @@ if (isset($_GET['start_product_stats'])) {
     if($dailyLock&&@flock($dailyLock,LOCK_EX)){
         $saved=json_decode((string)@file_get_contents(START_SHOP_DAILY_FILE),true);
         if(is_array($saved))$daily=$saved;
-        $day=date('Y-m-d');$daily[$day]=['date'=>$day,'total'=>$shopTotal,'shops'=>$shopCount,'at'=>time(),
+        $day=s4TehranDate('Y-m-d');$daily[$day]=['date'=>$day,'total'=>$shopTotal,'shops'=>$shopCount,'at'=>time(),
             'matrix_at'=>(int)($matrixStats['generated_at']??0)];
         ksort($daily);if(count($daily)>180)$daily=array_slice($daily,-180,null,true);
         writeJsonFile(START_SHOP_DAILY_FILE,$daily);@flock($dailyLock,LOCK_UN);@fclose($dailyLock);
@@ -29907,7 +29955,7 @@ $customName = $_POST['customName'] ?? 'Custom';
 $detailFields = json_decode($_POST['detailFields'] ?? '[]', true) ?: [];
 
 header('Content-Type: text/csv; charset=UTF-8');
-header('Content-Disposition: attachment; filename="products-' . date('Ymd-His') . '.csv"');
+header('Content-Disposition: attachment; filename="products-' . s4TehranDate('Ymd-His') . '.csv"');
 echo "\xEF\xBB\xBF";
 $out = fopen('php://output', 'w');
 
@@ -30019,7 +30067,7 @@ $zip->close();
 }
 
 header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-header('Content-Disposition: attachment; filename="products-' . date('Ymd-His') . '.xlsx"');
+header('Content-Disposition: attachment; filename="products-' . s4TehranDate('Ymd-His') . '.xlsx"');
 header('Content-Length: ' . filesize($tmpFile));
 readfile($tmpFile);
 @unlink($tmpFile);
@@ -30723,7 +30771,7 @@ if (($_POST['action'] ?? '') === 'github_import_products') {
     if (!in_array($ext, ['csv','xls','xlsx','xml'], true)) { echo json_encode(['ok'=>false,'error'=>'فرمت فایل پشتیبانی نمی‌شود'], JSON_UNESCAPED_UNICODE); exit; }
     if (!is_dir(UPLOAD_DIR)) @mkdir(UPLOAD_DIR, 0755, true);
     $safe = preg_replace('~[^A-Za-z0-9_.-]+~', '_', basename($path));
-    $save = UPLOAD_DIR . 'github_' . date('Ymd_His') . '_' . $safe;
+    $save = UPLOAD_DIR . 'github_' . s4TehranDate('Ymd_His') . '_' . $safe;
     @file_put_contents($save, (string)$f['body'], LOCK_EX);
     $parsed = parseUploadedFile($save, $ext);
     if (!empty($parsed['error'])) { echo json_encode(['ok'=>false,'error'=>$parsed['error']], JSON_UNESCAPED_UNICODE); exit; }
@@ -37827,7 +37875,7 @@ if (isset($_GET['backup_status'])) {
     $local = [];
     foreach ((array)glob(BACKUP_DIR . '/backup_*.json') as $f) {
         $local[] = ['name' => basename($f), 'size' => (int)@filesize($f),
-                    'at' => (int)@filemtime($f), 'at_h' => date('Y/m/d H:i', (int)@filemtime($f))];
+                    'at' => (int)@filemtime($f), 'at_h' => s4TehranDate('Y/m/d H:i', (int)@filemtime($f))];
     }
     usort($local, fn($a, $b) => $b['at'] <=> $a['at']);
     $log = is_file(BACKUP_LOG_FILE)
@@ -37932,7 +37980,7 @@ if (isset($_GET['backup_export'])) {
         exit;
     }
     $bundle['kind'] = 'settings-export';
-    $name = 'settings_' . date('Ymd_His') . '.json';
+    $name = 'settings_' . s4TehranDate('Ymd_His') . '.json';
     header('Content-Disposition: attachment; filename="' . $name . '"');
     header('Content-Length: ' . strlen(json_encode($bundle, JSON_UNESCAPED_UNICODE)));
     echo json_encode($bundle, JSON_UNESCAPED_UNICODE);
@@ -38090,9 +38138,9 @@ if (isset($_GET['whoami'])) {
     echo "تاریخ نسخه: " . APP_VERSION_DATE . "\n\n";
     echo "مسیر فایلِ اجراشونده: " . $f . "\n";
     echo "حجم فایل: " . (int)@filesize($f) . " بایت\n";
-    echo "آخرین تغییر فایل: " . date('Y/m/d H:i:s', (int)@filemtime($f)) . "\n";
+    echo "آخرین تغییر فایل: " . s4TehranDate('Y/m/d H:i:s', (int)@filemtime($f)) . "\n";
     echo "اثر انگشت فایل (md5): " . (string)@md5_file($f) . "\n\n";
-    echo "زمان سرور: " . date('Y/m/d H:i:s') . "\n";
+    echo "زمان تهران: " . s4TehranStamp(time(), true) . "\n";
     echo "PHP: " . PHP_VERSION . " · SAPI: " . PHP_SAPI . "\n";
     echo "کش کد (opcache): "
        . (function_exists('opcache_get_status') ? 'در دسترس' : 'ندارد') . "\n";
@@ -38689,7 +38737,7 @@ function ghApi(string $token, string $method, string $url, ?array $body = null):
 function backupBuildBundle(array $cfg, bool $stripImages = false, array $subs = []): array {
     $files = backupFileList($cfg, $subs);
     $bundle = ['app' => 'scraper', 'version' => APP_VERSION,
-               'created_at' => time(), 'created_at_h' => date('Y/m/d H:i:s'),
+               'created_at' => time(), 'created_at_h' => s4TehranDate('Y/m/d H:i:s'),
                'host' => (string)($_SERVER['HTTP_HOST'] ?? 'cli'),
                'files' => []];
     $bytes = 0;
@@ -38713,7 +38761,7 @@ function backupBuildBundle(array $cfg, bool $stripImages = false, array $subs = 
 /** بکاپ محلی (همیشه، حتی وقتی گیت‌هاب تنظیم نشده) */
 function backupWriteLocal(array $bundle): string {
     if (!is_dir(BACKUP_DIR)) @mkdir(BACKUP_DIR, 0775, true);
-    $name = 'backup_' . date('Ymd_His') . '.json';
+    $name = 'backup_' . s4TehranDate('Ymd_His') . '.json';
     @file_put_contents(BACKUP_DIR . '/' . $name,
         json_encode($bundle, JSON_UNESCAPED_UNICODE), LOCK_EX);
     // نگه‌داشتن فقط چند نسخهٔ آخر
@@ -38749,7 +38797,7 @@ function backupPushGithub(array $cfg, array $bundle, string $name): array {
 function backupLog(array $row): void {
     $log = is_file(BACKUP_LOG_FILE)
         ? (json_decode((string)@file_get_contents(BACKUP_LOG_FILE), true) ?: []) : [];
-    $log[] = $row + ['at' => time(), 'at_h' => date('Y/m/d H:i:s')];
+    $log[] = $row + ['at' => time(), 'at_h' => s4TehranDate('Y/m/d H:i:s')];
     if (count($log) > 50) $log = array_slice($log, -50);
     @file_put_contents(BACKUP_LOG_FILE, json_encode($log, JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
@@ -42111,7 +42159,7 @@ if (isset($_GET['digest']) && !isset($_GET['bsl_notify_selected'])) {
             $out['delivery'] = notifSend($cn, $msg);
             $out['sent'] = true;
             $st = digestLoadState();
-            $st['last_date'] = date('Y-m-d'); $st['last_at'] = time();
+            $st['last_date'] = s4TehranDate('Y-m-d'); $st['last_at'] = time();
             digestSaveState($st);
         }
     }
@@ -42246,7 +42294,7 @@ if (isset($_GET['bsl_cats'])) {
     }
     $st = bslCatsStatus();
     $st['ttl'] = (int)BSL_CATS_TTL;
-    $st['at_h'] = !empty($st['at']) ? date('Y/m/d H:i', (int)$st['at']) : '—';
+    $st['at_h'] = !empty($st['at']) ? s4TehranDate('Y/m/d H:i', (int)$st['at']) : '—';
     $st['age_fa'] = !empty($st['at']) ? dedupAgeFa(time() - (int)$st['at']) : '—';
     echo json_encode(['ok' => true] + $st, JSON_UNESCAPED_UNICODE);
     exit;
@@ -42466,7 +42514,7 @@ if (isset($_GET['retire_log'])) {
     foreach (array_slice($items, 0, $limit) as $it) {
         $at = (int)($it['at'] ?? 0);
         $rows[] = $it + ['mode_label' => $modes[(string)($it['mode'] ?? '')] ?? '?',
-                         'at_h' => $at > 0 ? date('Y/m/d H:i', $at) : '—'];
+                         'at_h' => $at > 0 ? s4TehranDate('Y/m/d H:i', $at) : '—'];
     }
     echo json_encode(['ok' => true, 'total' => count($items), 'shown' => count($rows),
         'updated' => (int)($log['updated'] ?? 0),
@@ -42500,7 +42548,7 @@ if (isset($_GET['sync_report'])) {
     foreach (array_slice($items, 0, $limit) as $r) {
         if (!is_array($r)) continue;
         $at = (int)($r['at'] ?? 0);
-        $r['at_h'] = $at > 0 ? date('Y/m/d H:i', $at) : '—';
+        $r['at_h'] = $at > 0 ? s4TehranDate('Y/m/d H:i', $at) : '—';
         $r['text'] = syncReportText($r);
         $rows[] = $r;
     }
@@ -48175,7 +48223,7 @@ function matrixFixAppendReportRows(array $stats): void {
             '📤 ارسال (در مقصد نبود): ' . $sent,
             '🗑 حذف/بایگانی (فقط مقصد): ' . $del,
             'محدوده: ' . $scope,
-            'زمان: ' . date('Y-m-d H:i:s', (int)($stats['at'] ?? time())),
+            'زمان: ' . s4TehranStamp((int)($stats['at'] ?? time()), true),
         ], $destinationLines),
         'fix_at' => time(),
     ];
@@ -49672,7 +49720,7 @@ if (isset($_GET['sync_matrix_start']) || (($_POST['action'] ?? '') === 'sync_mat
            کنار می‌گذاریم و روی مسیر تازه قفل می‌گیریم. signal قدیمی باقی
            می‌ماند تا worker قبلی متوقف شود، ولی اجرای تازه با زمان signal
            آن را نادیده می‌گیرد. */
-        $orphanLock = $lockFile . '.orphan.' . date('Ymd_His') . '.' . substr(md5(uniqid('', true)), 0, 6);
+        $orphanLock = $lockFile . '.orphan.' . s4TehranDate('Ymd_His') . '.' . substr(md5(uniqid('', true)), 0, 6);
         if (!@rename($lockFile, $orphanLock)) {
             echo json_encode(['ok' => false, 'error' => 'قفل متوقف‌شده قابل بازیابی نیست',
                 'running' => false, 'lock_recoverable' => true], JSON_UNESCAPED_UNICODE);
@@ -53997,6 +54045,31 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'attempted' => \$attempted")!==false
         &&strpos($selfSrc,"{v:'10."."731'")!==false
         &&version_compare(APP_VERSION,'10.731','>='));
+    $__tzTs736=strtotime('2026-11-12T08:05:00Z');
+    $__parcel736=bslParcelMsg(['order_id'=>5521,'parcel_id'=>991,'customer'=>'مریم','amount'=>480000,
+        'status'=>'در انتظار ارسال','created_at'=>'2026-11-12 08:05:00','items'=>[['title'=>'ساعت','qty'=>1]]],'🛒 سفارش جدید باسلام');
+    $add('10.736','تمام تایم‌استمپ‌های داخل پیام‌های پیام‌رسان به وقت تهران محاسبه و برچسب‌گذاری می‌شوند',
+        s4TehranDate('Y-m-d H:i',$__tzTs736)==='2026-11-12 11:35'
+        &&s4TehranDate('H:i',$__tzTs736)==='11:35'
+        &&s4ZoneDate('H:i',$__tzTs736,'')==='11:35'
+        &&s4ZoneDate('H:i',$__tzTs736,'UTC')==='08:05'
+        &&s4ZoneDate('H:i',$__tzTs736,'Invalid/Zone')==='11:35'
+        &&s4TehranStamp($__tzTs736)===(s4JalaliDateTime($__tzTs736).' به وقت تهران')
+        &&s4ParseApiTimestamp('2026-11-12 08:05:00')===$__tzTs736
+        &&s4ParseApiTimestamp('2026-11-12T08:05:00Z')===$__tzTs736
+        &&s4ParseApiTimestamp('2026-11-12T11:35:00+03:30')===$__tzTs736
+        &&s4ParseApiTimestamp((string)$__tzTs736)===$__tzTs736
+        &&s4ParseApiTimestamp('')===0
+        &&strpos($__parcel736,'زمان سفارش')!==false
+        &&strpos($__parcel736,'به وقت تهران')!==false
+        &&strpos($__parcel736,'11:35')!==false
+        &&strpos($selfSrc,'function s4TehranDate(')!==false
+        &&strpos($selfSrc,'function s4ZoneDate(')!==false
+        &&strpos($selfSrc,'function s4ParseApiTimestamp(')!==false
+        &&strpos($selfSrc,"'زمان: ' . s4TehranStamp(")!==false
+        &&strpos($selfSrc,'$time_str = s4TehranStamp();')!==false
+        &&strpos($selfSrc,"{v:'10."."736'")!==false
+        &&version_compare(APP_VERSION,'10.736','>='));
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -68119,7 +68192,7 @@ function notifPingLog(array $entry): void {
     $f = __DIR__ . '/notif_ping_log.json';
     $d = json_decode((string)@file_get_contents($f), true);
     $list = (is_array($d) && is_array($d['log'] ?? null)) ? $d['log'] : [];
-    array_unshift($list, $entry + ['at' => time(), 'time' => date('Y-m-d H:i:s')]);
+    array_unshift($list, $entry + ['at' => time(), 'time' => s4TehranDate('Y-m-d H:i:s')]);
     @file_put_contents($f, json_encode(['log' => array_slice($list, 0, 30)], JSON_UNESCAPED_UNICODE), LOCK_EX);
 }
 function notifPingSrc(array $results, bool $force): string {
@@ -69942,6 +70015,9 @@ function bslParcelMsg(array $n, string $head = '🛒 سفارش باسلام'): 
        . "\nمشتری: " . $n['customer']
        . "\nمبلغ: " . number_format($n['amount']) . ' تومان'
        . "\nوضعیت: " . $n['status'];
+    // v10.736: زمان سفارش همیشه به وقت تهران (تقویم شمسی) نمایش داده می‌شود
+    $createdTs = s4ParseApiTimestamp((string)($n['created_at'] ?? ''));
+    if ($createdTs > 0) $s .= "\n🕐 زمان سفارش: " . s4TehranStamp($createdTs);
     if (!empty($n['items'])) {
         $lines = [];
         foreach (array_slice($n['items'], 0, 3) as $it) {
@@ -70873,20 +70949,20 @@ function arAiReplyText(string $text, ?int $timeoutSec = null, array $ctx = []): 
 
 /** شمارندهٔ روزانهٔ هر قاعده — با عوض شدن روز صفر می‌شود */
 function arDailyCount(array &$st, string $ruleId, int $now): int {
-    $today = date('Y-m-d', $now);
+    $today = s4TehranDate('Y-m-d', $now);
     if (($st['day'] ?? '') !== $today) { $st['day'] = $today; $st['daily'] = []; }
     return (int)($st['daily'][$ruleId] ?? 0);
 }
 
 function arDailyBump(array &$st, string $ruleId, int $now): void {
-    $today = date('Y-m-d', $now);
+    $today = s4TehranDate('Y-m-d', $now);
     if (($st['day'] ?? '') !== $today) { $st['day'] = $today; $st['daily'] = []; }
     $st['daily'][$ruleId] = (int)($st['daily'][$ruleId] ?? 0) + 1;
 }
 
 /** آیا این لحظه «بیرون ساعت کاری» است؟ */
 function arIsOffHours(array $cfg, int $now): bool {
-    $h = (int)date('G', $now);
+    $h = (int)s4TehranDate('G', $now);
     $f = $cfg['work_from']; $t = $cfg['work_to'];
     if ($f === $t) return false;                       // ۲۴ ساعته
     if ($f < $t)  return !($h >= $f && $h < $t);       // مثلاً ۹ تا ۲۱
@@ -73814,7 +73890,7 @@ function manualSyncEnqueueSends(string $key, array $profile, array $cn, array $e
 
     /* Serialize products file for queue */
     $qDir = __DIR__;
-    $stamp = date('Ymd_His');
+    $stamp = s4TehranDate('Ymd_His');
     $safeKey = preg_replace('~[^a-zA-Z0-9_\-]+~', '_', $key);
 
     if ($wooOn && $wooProducts && function_exists('wooReadQueue') && function_exists('wooWriteQueue') && ($allowParallel||!manualSyncProfileRunning('woo', $key))) {
@@ -74811,7 +74887,7 @@ function retireReportToSendQueues(array $rt, string $profileKey = '', string $pr
     if (!$items && $nRet <= 0) return $out;
 
     $now = time();
-    $stamp = date('Ymd_His');
+    $stamp = s4TehranDate('Ymd_His');
     $safe = preg_replace('~[^a-zA-Z0-9_\-]+~', '_', $profileKey !== '' ? $profileKey : 'retire') ?: 'retire';
     $name = $profileName !== '' ? $profileName : ($profileKey !== '' ? $profileKey : 'بازنشستگی');
 
@@ -76185,12 +76261,10 @@ function digestSaveState(array $s): void {
 function digestDue(array $cn, int $now): bool {
     if (empty($cn['digest_enabled'])) return false;
     $hour = max(0, min(23, (int)($cn['digest_hour'] ?? 23)));
-    // ساعت محلی سرور؛ اگر منطقهٔ زمانی تنظیم شده باشد همان اعمال می‌شود
+    // v10.736: ساعت تهران مبناست؛ اگر منطقهٔ زمانی دیگری تنظیم شده باشد همان اعمال می‌شود
     $tz = trim((string)($cn['digest_tz'] ?? ''));
-    if ($tz !== '') { $old = @date_default_timezone_get(); @date_default_timezone_set($tz); }
-    $h = (int)date('G', $now);
-    $today = date('Y-m-d', $now);
-    if ($tz !== '' && isset($old)) @date_default_timezone_set($old);
+    $h = (int)s4ZoneDate('G', $now, $tz);
+    $today = s4ZoneDate('Y-m-d', $now, $tz);
 
     if ($h < $hour) return false;                    // هنوز نرسیده
     $st = digestLoadState();
@@ -76329,7 +76403,7 @@ function digestMaybeSend(array $cn, int $now): array {
     $d = digestBuild($cn, max(1, min(168, (int)($cn['digest_hours'] ?? 24))));
     $res = notifSend($cn, digestMsg($d), 'digest');
     $st = digestLoadState();
-    $st['last_date'] = date('Y-m-d', $now);
+    $st['last_date'] = s4ZoneDate('Y-m-d', $now, (string)($cn['digest_tz'] ?? ''));
     $st['last_at'] = $now;
     $st['last_totals'] = ['new' => $d['tot_new'], 'changed' => $d['tot_changed'], 'removed' => $d['tot_removed']];
     digestSaveState($st);
@@ -81829,7 +81903,7 @@ function s4UrgentSyncSingleProductToBasalam(string $profileKey, array $profile, 
     $enqueueUrgentRow = static function (array $extraRow = [], string $status = 'waiting', array $doneSummary = []) use (
         $profileKey, $profile, $productKey, $prepared, $catId, $autoCat, $fallbackCats, $cn, $qDir, $safeKey, $trigger, $sourceMode, $labelExtra, $now
     ): string {
-        $stamp = date('Ymd_His') . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
+        $stamp = s4TehranDate('Ymd_His') . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
         $qFile = $qDir . '/bsl_urgent_' . $safeKey . '_' . $stamp . '.json';
         $json = json_encode([$prepared], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         if (!is_string($json) || @file_put_contents($qFile, $json, LOCK_EX) !== strlen($json)) return '';
@@ -82504,7 +82578,7 @@ function s4UrgentSyncProcurementCandidateToBasalam(array $bestOpt, array $itemHi
     $enqueueRow = static function (array $extraRow = [], string $status = 'waiting', array $doneSummary = []) use (
         $virtualProfKey, $productKey, $prepared, $platLabel, $qDir, $safeKey, $trigger, $labelExtra, $now
     ): string {
-        $stamp = date('Ymd_His') . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
+        $stamp = s4TehranDate('Ymd_His') . '_' . substr(bin2hex(random_bytes(2)), 0, 4);
         $qFile = $qDir . '/bsl_urgent_' . $safeKey . '_' . $stamp . '.json';
         $json = json_encode([$prepared], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
         if (!is_string($json) || @file_put_contents($qFile, $json, LOCK_EX) !== strlen($json)) return '';
@@ -90569,7 +90643,7 @@ $lines=[];
 $lines[]='========================================';
 $lines[]='متن‌های توصیه هوش مصنوعی باسلام — محصولات تأیید نشده';
 $lines[]='تعداد محصول: '.count($allProducts);
-$lines[]='تاریخ تولید: '.date('Y-m-d H:i:s');
+$lines[]='تاریخ تولید: '.s4TehranDate('Y-m-d H:i:s');
 $lines[]='========================================';
 $lines[]='';
 $idx=0;
@@ -90594,7 +90668,7 @@ $lines[]='';
 }
 $output=implode("\n",$lines);
 header('Content-Type: text/plain; charset=UTF-8');
-header('Content-Disposition: attachment; filename="basalam_ai_texts_'.date('Ymd_His').'.txt"');
+header('Content-Disposition: attachment; filename="basalam_ai_texts_'.s4TehranDate('Ymd_His').'.txt"');
 header('Content-Length: '.strlen($output));
 echo $output;
 exit;
@@ -93963,7 +94037,7 @@ if($r['ok']&&(!empty($r['body']['id'])||!empty($r['variant_ids_repaired']))){ bs
 'before_status'=>$exStatusVal,'after_status'=>($newStock<=0?3790:2976),'image_note'=>$updateImgNote,'action'=>'update'],$card);bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚡ آپدیت #{$exId} — ".mb_substr($__chg,0,70));continue;}
 bslBackendProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] PATCH ناموفک → جایگزینی...");
 $rUnpub=bslReq($tk,'PATCH','products/'.$exId,['status'=>3790]);if($rUnpub['code']===404)$rUnpub=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,['status'=>3790]);
-$replaceTitle=$pTitle;if(!$rUnpub['ok'])$replaceTitle=mb_substr($pTitle,0,110).' (v'.date('ymdHi').')';$pTitle=$replaceTitle;
+$replaceTitle=$pTitle;if(!$rUnpub['ok'])$replaceTitle=mb_substr($pTitle,0,110).' (v'.s4TehranDate('ymdHi').')';$pTitle=$replaceTitle;
 }
 
 /* v10.466: پیشگیری قطعی از ۷۰۹۳ — محصول ناموجود را به عنوان کالای جدید در باسلام نساز */
@@ -95316,7 +95390,7 @@ echo json_encode(['ok'=>true,'action'=>'update','key'=>$pKey,'title'=>$pTitle,'r
 
 $rUnpub=bslReq($tk,'PATCH','products/'.$exId,['status'=>3790]);
 if($rUnpub['code']===404)$rUnpub=bslReq($tk,'PATCH','vendors/'.$vid.'/products/'.$exId,['status'=>3790]);
-$replaceTitle=$pTitle;if(!$rUnpub['ok'])$replaceTitle=mb_substr($pTitle,0,110).' (v'.date('ymdHi').')';
+$replaceTitle=$pTitle;if(!$rUnpub['ok'])$replaceTitle=mb_substr($pTitle,0,110).' (v'.s4TehranDate('ymdHi').')';
 
 $pTitle=$replaceTitle;
 }
@@ -95747,7 +95821,7 @@ bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30
 $replaceTitle=$pTitle;
 if(!$unpubOk){
 
-$replaceSuffix=' (v'.date('ymdHi').')';
+$replaceSuffix=' (v'.s4TehranDate('ymdHi').')';
 $replaceTitle=mb_substr($pTitle,0,110).$replaceSuffix;
 bslUpdateProgress($sent,$updated,$skipped,$fail,$total,$n,mb_substr($pTitle,0,30),"[{$n}] ⚠️ غیرفعال ناموفق → عنوان تغییر: ".$replaceTitle);
 }
@@ -101275,7 +101349,7 @@ if (empty($targetShops)) { $defVid=(int)($b['vendor_id']??0); if($defVid>0&&!emp
 $queue = bslReadQueue();
 $profileFiles = [];
 $now = time();
-$stampR = date('Ymd_His');
+$stampR = s4TehranDate('Ymd_His');
 foreach (loadProfiles() as $pk => $profCfg) {
     if (!is_array($profCfg)) continue;
     if (function_exists('s4BasalamBestSellersOverlayProfile')) $profCfg = s4BasalamBestSellersOverlayProfile($profCfg);
@@ -114170,6 +114244,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.736', t:'🕐 یکسان‌سازی ساعت تهران در تمام تایم‌استمپ‌های داخل پیام‌های پیام‌رسان', items:[
+    'افزودن توابع s4TehranDate()، s4ZoneDate()، s4TehranStamp() و s4ParseApiTimestamp() و جایگزینی همهٔ فراخوانی‌های date() سمت سرور با نسخهٔ تهرانی؛ از این پس ساعت سرور (معمولاً UTC) در هیچ پیام، گزارش، لاگ و نام فایلی دیده نمی‌شود.',
+    'پیام‌های پیام‌رسان (پاسخ انسانی ادمین به مشتری، گزارش نتیجهٔ عملیات، ضربان و خلاصهٔ کران، وضعیت سرور) اکنون تاریخ شمسی و برچسب صریح «به وقت تهران» دارند.',
+    'زمان ایجاد سفارش باسلام با تبدیل درست مقادیر بدون منطقهٔ زمانی (به‌عنوان UTC) در پیام سفارش نمایش داده می‌شود و گزارش شبانه، ساعت کاری و شمارنده‌های روزانه بر مبنای روز تهران محاسبه می‌شوند.'
+  ]},
   {v:'10.731', t:'📨 رفع مسیر مقصد و گزارش دقیق نتیجهٔ ارسال جمعی گفتگوها', items:[
     'خلاصهٔ دستی گفتگوها اکنون صریحاً به مقصد «گفتگوها» می‌رود؛ پیش از این از مقصد عمومی «یادآوری» استفاده می‌کرد و در تنظیمِ مقصدهای جداگانه ممکن بود به کانال گفتگو نرسد.',
     'نتیجهٔ ارسال جمعی بر اساس پاسخ واقعی پیام‌رسان‌ها تجمیع می‌شود؛ تعداد ارسال موفق دیگر صرفاً تعداد تلاش‌ها نیست و خطاهای هر کانال در پاسخ باقی می‌مانند.',
