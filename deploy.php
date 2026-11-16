@@ -47,7 +47,7 @@ const MIN_BYTES      = 64;
 const KEEP_BACKUPS   = 20;
 const KEEP_LOGS      = 100;
 const DEPLOY_SELF_REPO   = 'fazilatma/new';
-const DEPLOY_SELF_BRANCH = 'arena/01a0ebf7-new';
+const DEPLOY_SELF_BRANCH = 'arena/ae9391a9-new';
 const DEPLOY_SELF_PATH   = 'deploy.php';
 
 // ==================================================================
@@ -72,8 +72,8 @@ function cfg_default(): array {
     return [
         'password_hash' => '',
         'api_token'     => '',
-        'repo'          => 'fazilatma/code',
-        'branch'        => 'main',
+        'repo'          => 'fazilatma/new',
+        'branch'        => 'arena/ae9391a9-new',
         'github_token'  => '',
         'jobs'          => [],
         'created'       => time(),
@@ -896,7 +896,7 @@ if ($isApi) {
         if (!$isSetup) jout(['ok' => false, 'error' => 'قبلاً راه‌اندازی شده است'], 400);
         $c = cfg_default();
         $c['api_token'] = bin2hex(random_bytes(24));
-        $c['repo']      = trim((string)($_POST['repo'] ?? 'fazilatma/code'));
+        $c['repo']      = trim((string)($_POST['repo'] ?? 'fazilatma/new'));
         if (!cfg_save($c)) jout(['ok' => false, 'error' => 'ذخیرهٔ تنظیمات ناموفق — سطح دسترسی پوشه را بررسی کنید'], 500);
         ensure_self_guard();
         ensure_backup_dir();
@@ -1556,7 +1556,7 @@ code{background:#0f172a;padding:2px 7px;border-radius:5px;font-size:11.5px;
     <div id="msg" class="msg"></div>
     <div class="fld">
       <label>ریپوی پیش‌فرض</label>
-      <input type="text" id="repo" value="fazilatma/code" placeholder="user/repo">
+      <input type="text" id="repo" value="fazilatma/new" placeholder="user/repo">
     </div>
     <button class="btn b-blue" style="width:100%" onclick="doSetup()">راه‌اندازی</button>
     <?php if (!is_writable(__DIR__)): ?>
