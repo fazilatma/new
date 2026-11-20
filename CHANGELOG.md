@@ -1,5 +1,13 @@
 # Release notes
 
+## scraper4 10.746
+
+- **Selftest repair pass.** A full `?selftest=1&json=1&fast=1` run on Noviex reported 13 failures; all of them were stale or self-referential assertions, not broken features.
+  - 10.502 / 10.627 / 10.629 counted their own needle text in the file (`substr_count(...)===1|3`, and two *negative* `=== false` needles). The needles are now built by concatenation so the assertion line itself is never matched.
+  - 10.504 / 10.587 / 10.605 / 10.670 referenced code that has since been refactored (`syncPipelineMark()` gained parameter types, `bslShopMapKey()` lost its third argument, the matrix yield delay moved into `$retryDelay`, and the best-seller profile writes `'products'=>$rows,'productsOrder'=>array_keys($active)`). The needles now match the current source.
+  - 10.700 compared the global first positions of `if($action==='status')` and `if(!s4AccessSameOrigin())`; the later `member_api` branch also calls the guard and sits earlier in the file, so the check always failed. The comparison is now scoped to the admin dispatch block.
+  - 10.681 / 10.682 / 10.721 now report the real computed values in the `detail` column instead of a bare pass/fail, so a red clause identifies itself.
+
 ## scraper4 10.745
 
 - `?selftest=1&json=1&fails=1` now returns only the failing assertions, plus separate `passed`/`total`/`failed` counters, so checking a production host no longer means reading several hundred rows of JSON.

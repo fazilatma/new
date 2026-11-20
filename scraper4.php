@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.745';
+const APP_VERSION = '10.746';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -52728,7 +52728,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"vcParseInstallerReply(r,'نصب‌کنندهٔ داخلی')")!==false
         &&strpos($selfSrc,"vcParseInstallerReply(r,'نصب‌کننده')")!==false
         &&strpos($selfSrc,'_installer_preview')!==false
-        &&substr_count($selfSrc,'function s4NormalizeCropCfg(')===1
+        &&substr_count($selfSrc,'function s4NormalizeCrop'.'Cfg(')===1
         &&strpos($selfSrc,'const useSelfUpdate = !!d.can_self_update && !!(d.token || d.nonce);')!==false
         &&strpos($selfSrc,"{v:'10." . "502'")!==false&&version_compare(APP_VERSION,'10.' . '502','>='));
     $pinStart=strpos($selfSrc,"if (!empty(\$_POST['pin_only']) || !empty(\$_POST['unpin_only']))");
@@ -52757,7 +52757,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'origin_trigger'=>\$originTrigger")!==false
         &&strpos($selfSrc,"'auto_sync'=>\$isPeriodicQueue")!==false
         &&strpos($selfSrc,"'origin_trigger'=>$origin")!==false
-        &&strpos($selfSrc,"syncPipelineMark(\$profileKey,\$profileName,\$stage,\$trigger")!==false
+        &&strpos($selfSrc,'function syncPipeline'.'Mark(string $profileKey,string $profileName,string $stage,string $trigger')!==false
         &&extractNormalizeOriginTrigger('manual','worker')==='manual'
         &&extractNormalizeOriginTrigger('periodic','worker_child')==='periodic'
         &&extractNormalizeOriginTrigger('','worker')==='background'
@@ -53275,7 +53275,7 @@ if (isset($_GET['selftest'])) {
         &&version_compare(APP_VERSION,'10.586','>='));
     $add('10.587','لین ۱ در تعدیل قیمت غرفهٔ اضافی قفل نمی‌شود',
         strpos($selfSrc,"'inflight_stage'=>'extra_shop_price_request'")!==false
-        &&strpos($selfSrc,"bslShopMapKey((string)(\$p['key']??''),\$__sh),false")!==false
+        &&strpos($selfSrc,"bslShopMap"."Key((string)(\$p['key']??''),\$__sh)")!==false
         &&strpos($selfSrc,"\$bslReactivateDenied[\$__reactivateDenyKey]")!==false
         &&strpos($selfSrc,"'reactivate_suppressed'")!==false
         &&strpos($selfSrc,"{v:'10." . "587'")!==false
@@ -53434,7 +53434,7 @@ if (isset($_GET['selftest'])) {
         &&count($__matrixSeed605['rows']??[])===2
         &&strpos($selfSrc,"foreach(\$shops as \$vid=>\$raw)if(is_array(\$raw))\$cpShops[\$vid]=\$raw")!==false
         &&strpos($selfSrc,"reconFetchCursorReplace('bsl_active'")!==false
-        &&strpos($selfSrc,"return \$yieldMatrix('bsl_fetch', \$reason==='http'?15:0);")!==false
+        &&strpos($selfSrc,"return \$yieldMatrix('bsl_fe"."tch',\$retryDelay);")!==false
         &&strpos($selfSrc,"'done'=>false,'yielded'=>true")!==false
         &&strpos($selfSrc,"if (empty(\$res['yielded'])) break;")!==false
         &&strpos($selfSrc,"{v:'10." . "605'")!==false
@@ -53587,8 +53587,8 @@ if (isset($_GET['selftest'])) {
     $add('10.627','ادامهٔ مستقیم و sweep سراسری ownerهای مرده',
         strpos($selfSrc,'function s4CodeUpdateReconcileStaleState(int $staleSec=210):array')!==false
         &&strpos($selfSrc,"'worker_orphans_requeued'")!==false
-        &&strpos($selfSrc,"if(!autoResume&&!confirm(msg))")===false
-        &&strpos($selfSrc,"stale.map((t,i)=>")===false
+        &&strpos($selfSrc,'if(!autoResume&&!con'.'firm(msg))')===false
+        &&strpos($selfSrc,'stale.map((t,'.'i)=>')===false
         &&strpos($selfSrc,"{v:'10." . "627'")!==false
         &&version_compare(APP_VERSION,'10.627','>='));
     $__notifCfg628=['chat_id'=>'legacy','all_same'=>false,'chat_ids'=>['customer_chat'=>'customers','vendor_chat'=>'vendors','orders'=>'orders','visits'=>'visits']];
@@ -53607,7 +53607,7 @@ if (isset($_GET['selftest'])) {
         &&notifMessengerChatId($__notifCfg629,'chat_vendor')==='talk'
         &&notifMessengerChatId(array_merge($__notifCfg629,['all_same'=>true]),'order')==='common'
         &&strpos($selfSrc,"function messengerSameToggle(prefix)")!==false
-        &&substr_count($selfSrc,'AllSame" checked onchange="messengerSameToggle')===3
+        &&substr_count($selfSrc,'AllSame" checked onchange="messengerSame'.'Toggle')===3
         &&strpos($selfSrc,"{v:'10." . "629'")!==false
         &&version_compare(APP_VERSION,'10.629','>='));
     $__togglePos630=strpos($selfSrc,'function messengerSameToggle(prefix)');
@@ -53906,7 +53906,7 @@ if (isset($_GET['selftest'])) {
         &&count(s4BasalamBestSellersProductMap($__bbsPair670))===1
         &&$__bbsPrepared670['title']==='نمونه (کد:9)'
         &&(int)$__bbsPrepared670['final_price']===110000
-        &&strpos($selfSrc,"'products'=>\$productRows,'productsOrder'=>array_keys(\$products)")!==false
+        &&strpos($selfSrc,"'products'=>\$rows,'productsOr"."der'=>array_keys(\$active)")!==false
         &&strpos($selfSrc,"{v:'10." . "670'")!==false
         &&version_compare(APP_VERSION,'10.670','>='));
     $add('10.671','پایان سند یکتا است و محصولات ذخیره‌شده با ترتیب ناقص هم دیده می‌شوند',
@@ -54027,16 +54027,25 @@ if (isset($_GET['selftest'])) {
         ['id'=>12,'name'=>'فرزند ب','level'=>1],['id'=>121,'name'=>'برگ ب یک','level'=>2],['id'=>20,'name'=>'شاخه دیگر','level'=>0]];
     $__leaves681=bslCategoryDescendantLeafIds(10,$__cats681);
     $__safe681=bslFilterSafeManualCategories('محصول آزمایشی',[10],$__cats681,10);
+    $__d681=['leaves'=>json_encode($__leaves681,JSON_UNESCAPED_UNICODE),'safe'=>json_encode($__safe681,JSON_UNESCAPED_UNICODE),
+        'needle'=>strpos($selfSrc,'$childLeafFallbacks=bslCategoryDescendantLeaf'.'Ids($catUsed,$flatCats)')!==false?'1':'0'];
     $add('10.681','خطای دستهٔ دارای فرزند همهٔ برگ‌های همان شاخه را ترتیبی امتحان می‌کند',
         $__leaves681===[111,112,121]
         &&$__safe681===[111,112,121]
-        &&strpos($selfSrc,'$childLeafFallbacks=bslCategoryDescendantLeafIds($catUsed,$flatCats)')!==false
+        &&strpos($selfSrc,'$childLeafFallbacks=bslCategoryDescendantLeaf'.'Ids($catUsed,$flatCats)')!==false
         &&strpos($selfSrc,"{v:'10." . "681'")!==false
-        &&version_compare(APP_VERSION,'10.681','>='));
+        &&version_compare(APP_VERSION,'10.681','>='),
+        'leaves='.$__d681['leaves'].' safe='.$__d681['safe'].' needle='.$__d681['needle']);
     $__bbs682=['a'=>['title'=>'الف','sales_count_exact'=>10,'sales_count_indexed'=>500,'sales_count_week'=>5,'stock'=>2,'basalam_product_id'=>1],'b'=>['title'=>'ب','sales_count_exact'=>100,'sales_count_indexed'=>20,'sales_count_week'=>50,'stock'=>2,'basalam_product_id'=>2],'c'=>['title'=>'پ','sales_count_exact'=>null,'sales_count_indexed'=>1000,'sales_count_week'=>100,'stock'=>2,'basalam_product_id'=>3]];
     $__indexed682=s4BasalamBestSellersFilterProducts($__bbs682,['sales_metric'=>'indexed_sales','min_sales'=>100,'max_products'=>2,'sort'=>'indexed_score','dir'=>'desc']);
     $__exact682=s4BasalamBestSellersFilterProducts($__bbs682,['sales_metric'=>'exact_sales','min_sales'=>50,'max_products'=>1,'sort'=>'exact_sales','dir'=>'desc']);
     $__weekly682=s4BasalamBestSellersFilterProducts($__bbs682,['sales_metric'=>'weekly_sales','min_sales'=>0,'max_products'=>2,'sort'=>'weekly_score','dir'=>'desc']);
+    $__d682='idx='.implode(',',array_keys($__indexed682)).' exact='.implode(',',array_keys($__exact682))
+        .' weekly='.implode(',',array_keys($__weekly682))
+        .' max='.var_export(s4BasalamBestSellersNormalizeFilters([])['max_products'],true)
+        .' cExact='.var_export(s4BasalamBestSellerSalesMetricValue($__bbs682['c'],'exact_sales'),true)
+        .' cIdx='.var_export(s4BasalamBestSellerSalesMetricValue($__bbs682['c'],'indexed_sales'),true)
+        .' slice='.(strpos($selfSrc,"return array_sli"."ce(\$products,0,\$f['max_products'],true)")!==false?'1':'0');
     $add('10.682','سه مبنای فروش و سقف top-N فقط پس از رتبه‌بندی سراسری اعمال می‌شوند',
         array_keys($__indexed682)===['c','a']
         &&array_keys($__exact682)===['b']
@@ -54047,7 +54056,7 @@ if (isset($_GET['selftest'])) {
         &&s4BasalamBestSellerSalesScore($__bbs682['b'],'weekly_sales')>s4BasalamBestSellerSalesScore($__bbs682['a'],'weekly_sales')
         &&strpos($selfSrc,"return array_slice(\$products,0,\$f['max_products'],true)")!==false
         &&strpos($selfSrc,"{v:'10." . "682'")!==false
-        &&version_compare(APP_VERSION,'10.682','>='));
+        &&version_compare(APP_VERSION,'10.682','>='),$__d682);
     $__imports683=s4ThirdPartyExplorerImportEntries("https://basalam.com/shop_one\nhttps://basalam.com/vendor/68301\n68302\nhttps://example.com/not-allowed\nhttps://basalam.com/shop_one");
     $add('10.683','فهرست لینک غرفه‌ها به جدول بازبینی و ساخت دسته‌جمعی پروفایل تبدیل می‌شود',
         count($__imports683)===3
@@ -54229,10 +54238,22 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"member_workspace'=>'order_eligibility'")!==false
         &&strpos($selfSrc,'نشست شما تا زمان خروج فعال می‌ماند')!==false
         &&version_compare(APP_VERSION,'10.699','>='));
+    /* v10.746: compare the two positions inside the admin dispatch only. The
+       member_api branch added later also calls s4AccessSameOrigin(), and it sits
+       earlier in the file, so the old global strpos comparison always failed. */
+    $__adminDispatch700=(function(string $src):string{
+        $needle='دسترسی مدیر لازم است';
+        $i=strpos($src,$needle);
+        if($i===false)return '';
+        return substr($src,$i,4000);
+    })($selfSrc);
+    $__statusPos700=strpos($__adminDispatch700,"if(\$action==='status')");
+    $__originPos700=strpos($__adminDispatch700,'if(!s4AccessSame'.'Origin())');
     $add('10.700','وضعیت خواندنی دسترسی بدون شرط Origin و تمام تغییرات همچنان same-origin هستند',
-        strpos($selfSrc,"if(\$action==='status')")<strpos($selfSrc,"if(!s4AccessSameOrigin())")
-        &&strpos($selfSrc,"origin_mismatch")!==false
-        &&version_compare(APP_VERSION,'10.700','>='));
+        $__statusPos700!==false&&$__originPos700!==false&&$__statusPos700<$__originPos700
+        &&strpos($selfSrc,'origin_mis'.'match')!==false
+        &&version_compare(APP_VERSION,'10.700','>='),
+        'status@'.var_export($__statusPos700,true).' origin@'.var_export($__originPos700,true));
     $add('10.701','کارمزد پیش‌فرض بررسی واجد شرایط باسلام ۱۵ درصد است',
         (float)s4ProcurementDefaults()['settings']['bsl_commission_pct']===15.0
         &&strpos($selfSrc,"default_basalam_commission_pct'=>15")!==false
@@ -54678,7 +54699,11 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'id="s4OutreachTemplate"')!==false
         &&strpos($selfSrc,'X-Client-Info: web')!==false
         &&strpos($selfSrc,"{v:'10."."721'")!==false
-        &&version_compare(APP_VERSION,'10.721','>='));
+        &&version_compare(APP_VERSION,'10.721','>='),
+        'filter='.implode(',',array_keys($__bbsFil721ExName)).' msgOk='.($__outMsg721==='سلام مدیر عسل سبلان، از غرفه فروشگاه سبا (4455) پیام می‌دهم.'?'1':'0')
+        .' tplVendor='.(strpos($__outTpl721,'{غرفه}')!==false?'1':'0').' tplOurs='.(strpos($__outTpl721,'{غرفه_ما}')!==false?'1':'0')
+        .' ownerA='.var_export($__outOwnerA['user_id']??null,true).' hashA='.var_export($__outOwnerA['hash_id']??null,true)
+        .' ownerB='.var_export($__outOwnerB['user_id']??null,true).' chat='.var_export($__outChatPayload['user_id']??null,true));
     $__savedProdCache722=$GLOBALS['_s4ChatProdMemCache']??null;
     $GLOBALS['_s4ChatProdMemCache']=[
         '551122'=>['id'=>551122,'title'=>'عسل کنار طبیعی یک کیلویی','image'=>'https://statics.basalam.com/honey.jpg','url'=>'https://basalam.com/asal-shop/product/551122','price'=>450000,'vendor'=>'غرفه عسل','ok'=>true,'ts'=>time()],
@@ -55344,7 +55369,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
     $add('10.745','خروجی JSON خودآزمون با fails=1 فقط ادعاهای شکست‌خورده را برمی‌گرداند',
         version_compare(APP_VERSION,'10.745','>=')
-        &&strpos($selfSrc,"if (!empty(\$_GET['fai'."."'ls'])) \$outChecks = array_values(array_filter(")!==false
+        &&strpos($selfSrc,"if (!empty(\$_GET['fai"."ls'])) \$outChecks = array_values(array_filter(")!==false
         &&strpos($selfSrc,"'failed' => \$outTotal - \$out"."Passed,")!==false);
     $add('10.744','توابع گمشدهٔ مسیر DoH/پروکسیِ دیجی‌کالا تعریف شدند (خطای کشندهٔ Call to undefined function)',
         version_compare(APP_VERSION,'10.744','>=')
@@ -115685,6 +115710,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.746', t:'🧪 پاک‌سازی ادعاهای کهنهٔ خودآزمون (۱۳ شکست ← صفر هدف)', items:[
+    'چند ادعای قدیمی رشتهٔ جست‌وجوی خودشان را در فایل می‌شمردند (۱۰.۵۰۲، ۱۰.۶۲۷، ۱۰.۶۲۹) و همیشه قرمز بودند؛ حالا رشتهٔ جست‌وجو تکه‌تکه ساخته می‌شود تا خودِ خط آزمون در شمارش نیفتد.',
+    'ادعاهای ۱۰.۵۰۴، ۱۰.۵۸۷، ۱۰.۶۰۵ و ۱۰.۶۷۰ به امضای فعلی همان کد به‌روز شدند (امضای syncPipelineMark، حذف آرگومان سوم bslShopMapKey، متغیر retryDelay در yieldMatrix و کلیدهای products/productsOrder).',
+    'ادعای ۱۰.۷۰۰ فقط داخل بخش دیسپچ مدیر مقایسه می‌شود؛ شاخهٔ member_api که بعداً اضافه شد و زودتر از status در فایل قرار دارد، دیگر نتیجه را وارونه نمی‌کند.',
+    'ادعاهای ۱۰.۶۸۱، ۱۰.۶۸۲ و ۱۰.۷۲۱ اکنون مقدار واقعی هر بند را در ستون detail گزارش می‌کنند تا علت قرمزی بدون حدس‌زدن مشخص باشد.'
+  ]},
   {v:'10.745', t:'🔎 فیلتر «فقط شکست‌ها» در خروجی JSON خودآزمون', items:[
     '?selftest=1&json=1&fails=1 فقط ادعاهای ناموفق را برمی‌گرداند و تعداد کل، تعداد موفق و تعداد شکست‌خورده را جداگانه گزارش می‌کند؛ بررسی سلامت یک هاست دیگر نیازمند خواندن چند صد ردیف خروجی نیست.'
   ]},
