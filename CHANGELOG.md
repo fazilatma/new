@@ -1,5 +1,13 @@
 # Release notes
 
+## scraper4 10.753
+
+- **Non-admin workspaces got an ultra-thin sticky header.** Both the member workspace (`s4AccessMemberWorkspace`) and the vendor workspace (`s4AccessVendorWorkspace`) now use a single-line 34px sticky bar: user name (truncated with an ellipsis instead of wrapping) on one side, a hamburger on the other. It can no longer grow to two rows on narrow screens.
+- **Settings moved into a hamburger menu (☰).** Persian font picker, active version, "check for a new version" and logout now live in a dropdown panel (`role="menu"`, `aria-expanded` on the button) that closes on outside click or `Escape`.
+- **The member workspace's footer is a real tab bar, not three floating buttons.** `role="tablist"` with `role="tab"` / `aria-selected` / roving `tabindex`, tabs splitting the full width, thin dividers between them, and the active tab marked by a cyan top rule plus a fading background — no button pills, shadows or hover lift. Arrow keys move between tabs (RTL-aware) and the selected tab is remembered in `sessionStorage`, so a refresh or a version reload keeps the user where they were.
+- The vendor workspace's top tabs are now attached to their panel (shared bottom rule, active tab opens into the card, coloured top edge) instead of looking like rounded buttons.
+- **Honest wording for the product-view event.** Basalam has no "customer viewed a product" event (its webhook catalogue is `CHAT_RECEIVED_MESSAGE`, `CHAT_SEND_MESSAGE`, order/parcel/product/review events only). The checkbox help text now states the real triggers: a product seen inside the customer's conversation (product card, product link, quote or product code) or an external caller hitting `?product_view_refresh=1`.
+
 ## scraper4 10.752
 
 - **New messenger headline for product conversations.** The explanatory sentence `🛍 پیام مشتری دارای محصول (customer | shop)` is gone. A message now opens with a **role-coloured bullet**, then the **shop name**, then the **customer name** — `🔵 امیران تولید | میترافرجودی` for a customer message, `🟣 …` for a shopkeeper reply (same colour code already used inside the conversation block). Note that shop and customer are in the **reverse order** of the old header.
