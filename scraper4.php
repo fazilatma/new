@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.755';
+const APP_VERSION = '10.756';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -53633,10 +53633,9 @@ if (isset($_GET['selftest'])) {
     $add('10.603','پیام مشتری و غرفه‌دار در پیام‌رسان برچسب و مسیر متمایز دارند',
         strpos($selfSrc,'function bslChatCustomerMessengerMsg(')!==false
         &&strpos($selfSrc,'function bslChatAdminMessengerMsg(')!==false
-        &&strpos($selfSrc,'🔵 پیام مشتری')!==false
-        &&strpos($selfSrc,'مسیر: مشتری به غرفه')!==false
-        &&strpos($selfSrc,'🟣 پیام غرفه‌دار')!==false
-        &&strpos($selfSrc,'مسیر: غرفه‌دار به مشتری')!==false
+        /* v10.756: قالب دو جهت گفتگو با گلولهٔ رنگی متمایز می‌شود، نه با بنر چندخطی. */
+        &&strpos(bslChatAdminMessengerMsg(['who'=>'عرفان','text'=>'سلام'],'امیران تولید'),'🟣 امیران تولید | عرفان')===0
+        &&strpos(bslChatCustomerMessengerMsg(['who'=>'عرفان','text'=>'سلام'],'امیران تولید'),'🔵 امیران تولید | عرفان')===0
         &&strpos($selfSrc,"{v:'10." . "603'")!==false
         &&version_compare(APP_VERSION,'10.603','>='));
     $__restoreProfiles604=['shop_a'=>['url'=>'https://shop-a.test/list'],'shop_b'=>['url'=>'https://shop-b.test/list']];
@@ -55609,6 +55608,28 @@ if (isset($_GET['selftest'])) {
     $__pfGone751 = bslResolveQueueProductsFile(['id'=>'selftest751missing',
         'products_file'=>'/nonexistent/bsl_queue_products_selftest751missing.json']);
     if ($__pf751 !== '') @unlink($__pf751);
+    /* v10.756: سرخطِ گلوله+غرفه+مشتری برای همهٔ پیام‌های گفتگو، نه فقط پیام‌های محصولی. */
+    $__convEntry756 = ['nc'=>['who'=>'عرفان','unseen'=>2],'shop_name'=>'امیران تولید','is_admin'=>false,
+        'why'=>'new','remind_n'=>0,
+        'msgs'=>[['text'=>'سلام، موجوده؟','is_admin'=>false,'at'=>'2026-11-12T08:00:00Z'],
+                 ['text'=>'بله موجود است','is_admin'=>true,'at'=>'2026-11-12T08:02:00Z']]];
+    $__convDigest756 = s4NotifFormatConversationMessage($__convEntry756, ['mode'=>'single_digest']);
+    $__convPlain756  = s4NotifFormatConversationMessage($__convEntry756, ['mode'=>'product_customer']);
+    $__convHead756   = isset($__convDigest756[0]) ? explode("\n", (string)$__convDigest756[0])[0] : '';
+    $__convHeadB756  = isset($__convPlain756[0]) ? explode("\n", (string)$__convPlain756[0])[0] : '';
+    $add('10.756','سرخط همهٔ پیام‌های گفتگو = گلولهٔ رنگی + نام غرفه + نام مشتری',
+        version_compare(APP_VERSION,'10.756','>=')
+        &&count($__convDigest756)===1&&count($__convPlain756)===1
+        &&strpos($__convHead756,'🔵 امیران تولید | عرفان')===0
+        &&strpos($__convHead756,'2 پیام')!==false
+        &&strpos($__convHead756,'2 خوانده‌نشده')!==false
+        &&strpos($__convHeadB756,'🔵 امیران تولید | عرفان')===0
+        &&mb_strpos((string)$__convDigest756[0],'مکالمهٔ غرفه‌دار و '.'مشتری')===false
+        &&mb_strpos((string)$__convDigest756[0],'🔔 رویداد'.': ')===false
+        &&mb_strpos((string)$__convDigest756[0],'🏪 غرفه'.': ')===false
+        &&mb_strpos((string)$__convDigest756[0],'💬 گفتگوی '.'')===false
+        &&substr_count($selfSrc,"'💬 مکالمهٔ غرفه‌دار و ".'مشتری\'')===0
+        &&strpos($selfSrc,"{v:'10."."756'")!==false);
     /* v10.754: ۱) ردیف‌های غرفهٔ خودی (پسوند «(کد:ایکس)») از فهرست نتایج حذف می‌شوند،
        ۲) هر ردیف همان لحظهٔ پیدا شدن به‌صورت NDJSON استریم و رسم می‌شود،
        ۳) مسیر جستجوی ایمالز و نام فروشندهٔ ترب اصلاح شد. */
@@ -72021,16 +72042,17 @@ function bslChatMsg(array $n, string $head = '💬 پیام مشتری باسل�
 /** v10.603: قالب‌های کاملاً متمایز برای دو جهت گفتگو در پیام‌رسان. */
 function bslChatCustomerMessengerMsg(array $n, string $shopName, array $msgs = [], string $why = '', int $remindN = 0): string {
     $shopName = trim($shopName) !== '' ? trim($shopName) : 'غرفهٔ باسلام';
-    $head = "🔵━━━━━━━━━━🔵\n🔵 پیام مشتری\nمسیر: مشتری به غرفه\n🏪 غرفه: " . $shopName . "\n🔵━━━━━━━━━━🔵";
-    if ($why === 'remind') $head = '🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '') . "\n" . $head;
+    /* v10.756: بنرِ چندخطیِ قدیمی حذف شد؛ همان سرخط کوتاه گلوله+غرفه+مشتری. */
+    $head = s4NotifProductHeadline($shopName, trim((string)($n['who'] ?? '')), false)
+          . ($why === 'remind' ? (' · 🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '')) : '');
     return bslChatMsg($n, $head, $msgs);
 }
 function bslChatAdminMessengerMsg(array $n, string $shopName): string {
     $shopName = trim($shopName) !== '' ? trim($shopName) : 'غرفهٔ باسلام';
     $who = trim((string)($n['who'] ?? '')) ?: 'مشتری';
     $text = trim((string)($n['text'] ?? '')) ?: '—';
-    return "🟣━━━━━━━━━━🟣\n🟣 پیام غرفه‌دار\nمسیر: غرفه‌دار به مشتری\n🏪 غرفه: " . $shopName
-         . "\n👤 مخاطب: " . $who . "\n🟣━━━━━━━━━━🟣\nپیام: " . mb_substr($text, 0, 1200);
+    /* v10.756: بنرِ چندخطیِ قدیمی حذف شد؛ همان سرخط کوتاه گلوله+غرفه+مشتری. */
+    return s4NotifProductHeadline($shopName, $who, true) . "\nپیام: " . mb_substr($text, 0, 1200);
 }
 
 /**
@@ -72187,11 +72209,11 @@ function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false, int
     $unseen = (int)($nc['unseen'] ?? 0);
     $hasQuoted = !empty($entry['has_quoted_product']);
 
-    $roleIcon = $isAdmin ? '🟣 پیام غرفه‌دار' : '🔵 پیام مشتری';
-    $hdr = ($why === 'remind' ? ('🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '') . ' · ') : '')
-         . $roleIcon . ' · 👤 ' . $who
-         . ($unseen > 0 ? (' (' . $unseen . ' خوانده‌نشده)') : '')
-         . ' | 🏪 ' . $shopName;
+    /* v10.756: سرخطِ بلوک گفتگو هم همان قالب کوتاه است: گلولهٔ رنگی، نام غرفه،
+       نام مشتری. (در پیام تک‌گفتگویی این خط حذف می‌شود و فقط در تجمیع می‌ماند.) */
+    $hdr = s4NotifProductHeadline($shopName, $who, $isAdmin)
+         . ($unseen > 0 ? (' · ' . $unseen . ' خوانده‌نشده') : '')
+         . ($why === 'remind' ? (' · 🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '')) : '');
     $lines = [$hdr];
 
     // سرنخ محصول و متن نقل‌قول از چت یا تاریخچه پیام‌ها
@@ -72431,35 +72453,23 @@ function s4NotifFormatConversationMessage(array $entry, array $opts = []): array
     $isAdmin = !empty($entry['is_admin']);
     $why = (string)($entry['why'] ?? 'new');
     $remindN = (int)($entry['remind_n'] ?? 0);
-    $hasQuoted = !empty($entry['has_quoted_product']);
     $hasElig = !empty($entry['eligibility']);
     /* v10.752: رویدادِ «مشتری محصول را دید» — تیکِ مستقل در تبِ رویدادها. */
     $isProductView = !empty($entry['product_view_event']);
-    $shortHeadline = false;
     $mode = (string)($opts['mode'] ?? 'single_digest');
     $forSingle = ($mode === 'single_digest' || $mode === 'conversation_merge');
 
-    if ($forSingle) {
-        $cnt = count(array_filter($msgs, 'is_array'));
-        $statusTxt = ($why === 'remind' ? ('🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '') . ' · ') : '')
-            . ($isAdmin ? '🟣 پاسخ غرفه‌دار' : '🔵 پیام مشتری');
-        $hdr = '💬 مکالمهٔ غرفه‌دار و مشتری' . ($cnt > 1 ? (' (' . $cnt . ' پیام ارسالی و دریافتی)') : '')
-             . "
-🏪 غرفه: " . $shopName . ' | 👤 مشتری: ' . $who
-             . ($unseen > 0 ? (' (' . $unseen . ' خوانده‌نشده)') : '')
-             . "
-🔔 رویداد: " . $statusTxt;
-    } elseif ($hasQuoted || $hasElig || !empty($entry['inquiry']) || $isProductView) {
-        /* v10.752: متنِ توضیحیِ قبلی برداشته شد؛ اول گلولهٔ رنگی، بعد نام غرفه و
-           سپس نام مشتری. نتیجهٔ استعلام خطِ مستقلِ خودش را در بدنه دارد. */
-        $shortHeadline = true;
-        $hdr = s4NotifProductHeadline($shopName, $who, $isAdmin)
-             . ($unseen > 0 ? (' · ' . $unseen . ' خوانده‌نشده') : '')
-             . ($why === 'remind' ? (' · 🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '')) : '');
-        if ($isProductView) $hdr .= "\n👀 مشاهدهٔ محصول توسط مشتری";
-    } else {
-        $hdr = '💬 گفتگوی ' . $who . ' | ' . $shopName;
-    }
+    /* v10.756: همهٔ پیام‌های گفتگو یک سرخط دارند — گلولهٔ رنگی (آبی = مشتری،
+       بنفش = غرفه‌دار)، سپس نام غرفه و سپس نام مشتری. قالب چندخطیِ قبلی
+       («💬 مکالمهٔ غرفه‌دار و مشتری» + «🏪 غرفه: … | 👤 مشتری: …» + «🔔 رویداد: …»)
+       کاملاً حذف شد؛ تعداد پیام، خوانده‌نشده‌ها و یادآوری به‌صورت فشرده روی
+       همان خط می‌آیند. */
+    $cnt = count(array_filter($msgs, 'is_array'));
+    $hdr = s4NotifProductHeadline($shopName, $who, $isAdmin)
+         . ($forSingle && $cnt > 1 ? (' · ' . $cnt . ' پیام') : '')
+         . ($unseen > 0 ? (' · ' . $unseen . ' خوانده‌نشده') : '')
+         . ($why === 'remind' ? (' · 🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '')) : '');
+    if ($isProductView) $hdr .= "\n👀 مشاهدهٔ محصول توسط مشتری";
 
     $block = s4NotifFormatChatBlock($entry, $forSingle, $hasElig ? 1600 : 2300);
     if ($block === '') return [];
@@ -72467,7 +72477,7 @@ function s4NotifFormatConversationMessage(array $entry, array $opts = []): array
        و مشتری را دارد، پس همان خط آنجا هم حذف می‌شود تا پیام دو سرخط نداشته باشد. */
     $bLines = explode("
 ", $block);
-    if (($forSingle || $shortHeadline) && count($bLines) > 1) {
+    if (count($bLines) > 1) {
         array_shift($bLines);
         $block = implode("
 ", $bLines);
@@ -116660,6 +116670,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.756', t:'💬 یک سرخط واحد برای همهٔ پیام‌های گفتگو: گلولهٔ رنگی، نام غرفه و نام مشتری', items:[
+    'قالب چندخطیِ قدیمیِ پیام‌های گفتگو («💬 مکالمهٔ غرفه‌دار و مشتری (N پیام ارسالی و دریافتی)» + خط «غرفه | مشتری» + خط «رویداد») که هنوز در حالت‌های single_digest و conversation_merge باقی مانده بود حذف شد؛ اکنون هر پیام گفتگو دقیقاً با همان سرخط کوتاه «🔵/🟣 نام غرفه | نام مشتری» شروع می‌شود.',
+    'تعداد پیام‌های مکالمه، تعداد خوانده‌نشده‌ها و نشان یادآوری به‌صورت فشرده و با جداکنندهٔ · روی همان سرخط می‌آیند و خط تکراری نقش/غرفه/مشتری از ابتدای بلوک گفتگو حذف می‌شود، پس پیام دیگر دو سرخط ندارد.',
+    'حالت گفتگوی ساده (بدون محصول و استعلام) هم که قبلاً «💬 گفتگوی مشتری | غرفه» بود به همین سرخط یکدست تبدیل شد و ترتیب درست «اول غرفه، بعد مشتری» را رعایت می‌کند.'
+  ]},
   {v:'10.755', t:'🛡 سخت‌سازی باز کردن استریم نتایج واجد شرایط', items:[
     'حلقهٔ تخلیهٔ بافرهای خروجی هنگام باز کردن استریم NDJSON با شمارندهٔ محافظ و بررسی کاهش سطح بافر جایگزین شد تا روی میزبانی که بافر zlib/handler قابل بستن نیست، درخواست در حلقهٔ بی‌پایان گیر نکند.'
   ]},

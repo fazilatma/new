@@ -1,5 +1,19 @@
 # Release notes
 
+## scraper4 10.756
+
+- **The old multi-line conversation header is gone for good.** v10.752 replaced it only for product/quote/eligibility messages; plain conversation messages (`single_digest` and `conversation_merge` modes) still printed the three-line block
+
+  ```
+  💬 مکالمهٔ غرفه‌دار و مشتری (14 پیام ارسالی و دریافتی)
+  🏪 غرفه: امیران تولید | 👤 مشتری: عرفان
+  🔔 رویداد: 🔵 پیام مشتری
+  ```
+
+  Every conversation message now opens with the single short headline — **coloured bullet (🔵 customer / 🟣 shopkeeper) + shop name + customer name** — e.g. `🔵 امیران تولید | عرفان · 14 پیام · 2 خوانده‌نشده`. Message count, unread count, the 🔁 reminder marker and the 👀 product-view line are appended compactly to that same headline instead of occupying their own lines.
+- The plain-chat variant that used to read `💬 گفتگوی <customer> | <shop>` now uses the same headline, so the order is always **shop first, customer second**, exactly like the product messages.
+- The duplicated role/shop/customer line that the conversation block prints is stripped in every mode now (it was only stripped for digest and product messages), so no message carries two headers.
+
 ## scraper4 10.755
 
 - **Hardening of the new streaming opener.** Draining the output buffers before the first NDJSON frame used an unbounded `while (ob_get_level() > 0) ob_end_flush();` loop. On a host where a buffer cannot be closed (zlib compression or a non-removable handler) `ob_end_flush()` returns `false` without lowering the level, which would spin that loop forever. It is now a bounded loop (max 16 passes) that stops as soon as a flush fails or the buffer level stops decreasing, falling back to `ob_flush()`.
