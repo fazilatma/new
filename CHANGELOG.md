@@ -1,5 +1,17 @@
 # Release notes
 
+## scraper4 10.743
+
+- **Branch sync.** Applied the newest work from every branch listed in the code-version section. `arena/ae9391a9-new` (10.730) and `arena/be64d982-new` (10.735) were already contained in this branch; `arena/821be8f1-new` (its own 10.731) is ported here in full; the auxiliary `pythonanywhere/` port from `arena/e868e86a-new` and the delivery docs/tests from `arena/821be8f1-new` were imported as well. `arena/9c213522-new` carries the separate storefront site (`amphp/`); only its vendor calculator is adopted, as requested.
+- **New role «غرفه داران» (shopkeepers)** with exactly two tabs: «استعلام قیمت و موجودی» and «محاسبه گر غرفه داران».
+- **Price/availability inquiry tab** reuses the «بررسی واجد شرایط سفارش» form, but results show only price and availability — every supplier/marketplace name, shop name, profile name and source link is stripped server-side before the JSON reaches this role.
+- **Shopkeeper calculator tab** ports the vendor payment calculator from `arena/9c213522-new` (sale price, base price, profit-share %, sample-product commission %, cash vs sample settlement) with the same validation and rounding rules.
+- **Vendor role is locked down server-side.** The eligibility endpoint only accepts `research`, `deep_basalam`, `deep_digikala` and `capabilities` for this role; anything else (price pushes, shop updates) is rejected with HTTP 403.
+- **Noviex queue stall fixed — manual syncs no longer die on a busy marker.** A `busy` answer from the manual-sync guard («یک همگام‌سازی دستی همین حالا در حال اجراست») was returned without `retryable`, so the worker broke out of its segment loop and `s4WebWorkerRunSlice()` finished the job as `failed`. Every queued profile therefore ended as a permanently failed `manual_sync` that never reached the sending stage. A busy answer is now explicitly retryable: the job is requeued through `s4WorkerRequeueForRetry()` with a ≥20s delay and its attempt counter is not consumed.
+- **Dead owners release the manual-sync marker immediately.** The progress marker now records `owner_pid`, and the busy guard treats a marker whose owner process no longer exists as stale instead of waiting out `stall_after` (up to 300s) — which is what made the stall self-sustaining on a host where worker slices end at the request boundary.
+- **Bounded parallel web extraction lanes for hosts without `exec`.** The CLI pool (`s4DispatchParallelExtractJobs`) needs `exec`, so on Noviex every extraction had to run inside the single web-worker slice: one 60-page profile held the only lane while the rest of the queue looked «queued but never starting». Extraction jobs are now claimed atomically and each runs in its own detached loopback request (`?web_extract_lane=1`), respecting the same `extract_task_concurrency` limit, with the pool refilled as each lane finishes.
+- **Lane health is self-correcting.** The main slice hands extraction to the lanes only while a loopback kick has demonstrably succeeded in the last 5 minutes; if loopback breaks, the slice takes extraction back automatically. A lane row is protected from orphan recovery for 60s while its request adopts it. `?worker_status=1` now reports `extract_lanes` (`supported`, `healthy`, `limit`, `running`, `pending`).
+
 ## scraper4 10.742
 
 - Fixed the 10.730 conversation assertion, which still searched for the word «تهران» in the merged chat text and therefore failed once the label was removed. It now checks the exact formatted message time in parentheses and separately asserts that the Tehran word is absent.
@@ -83,3 +95,25 @@
 - Notification polling and auto-replies run near the beginning of `cron_run`, before long sync/extraction tasks, to avoid host request timeouts preventing notifications from being checked.
 - Cron heartbeat and final ping delivery are independent from Basalam shop credentials. Messenger readiness still requires an enabled channel with valid credentials and recipient/chat ID.
 - `?notif_health=1` distinguishes a missing cron run, an incomplete run/lock, disabled ping, missing messenger setup, and notification polling errors. `?notif_test_send=1` tests delivery (and checks Basalam prerequisites).
+
+### Ported from `arena/821be8f1-new` (its 10.731 / Deploy 3.8)
+
+- Updater defaults (scraper4 + deploy.php) now point at this session's branch `arena/01a0ebf7-new`; saved selections/pins of the already-merged session branches migrate to it while keeping other configured branches (within the existing 20-branch limit).
+- Fixed automatic chat notifications being consumed before delivery: persist prepared message payloads together with scan signatures in `last_notification_check.json` (`chat_outbox`). Retry pending work before fetching the next chat page, even with reminders disabled.
+- Acknowledge each destination and text chunk separately. A failed destination no longer gets suppressed by another destination's successful send. Retain failed work and expose errors and queue depth in notification health/cron output.
+- Treat HTTP-200 API rejections, malformed JSON and HTML proxy responses as failures, not delivered messages. Preserve Rubika-style message IDs from `data.message_id`.
+- Use the conversation destination for the chat notification test. Report missing destination/token and disabled-channel errors instead of silently claiming success.
+- Keep `send=false` previews read-only and preserve the existing silent first-scan baseline.
+- Make notification-state writes atomic and return write failures. Exclude the private notification state/outbox from Deploy's workspace-to-repository backup.
+- Added an offline PHP regression suite and [notification troubleshooting guide](docs/notification-delivery.md).
+
+### Delivery guarantees and limitations
+
+The chat outbox provides **at-least-once text delivery**, not exactly-once delivery. If a process dies after the remote API accepts a chunk but before its acknowledgement is saved, that chunk may be sent again. Attachments remain best-effort; attachment failure does not replay successfully delivered text. Retries require the notification scanner/cron to run, an enabled shop route, and an enabled messenger with valid credentials and a destination. Missing destinations or having no enabled messenger retain work; successfully completed jobs are removed. Disabled messengers are not delivery targets, so successful delivery to the remaining enabled destinations can complete a job.
+
+This release does not replay messages already marked as processed by older versions. Order/product notification retry behavior is unchanged. Live site configuration, connectivity and delivery were not verified from the development sandbox.
+
+### Validation
+
+- PHP syntax checks passed for `scraper4.php`, `deploy.php` and the test suite.
+- 53 offline regression checks passed on PHP 8.1 and 8.5 via PHP-WASM. No live network or messenger delivery test was performed.

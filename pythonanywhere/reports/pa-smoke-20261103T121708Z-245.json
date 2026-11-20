@@ -1,0 +1,15 @@
+{
+  "timestamp_utc": "2026-11-03T12:16:46.796551+00:00",
+  "helper_version": "1.0.3",
+  "target_branch": "arena/e868e86a-new",
+  "source_branch": "arena/01a0ebf7-new",
+  "expected_source_version": "10.599",
+  "python_version": "3.10.5",
+  "host": "Fazilatma.pythonanywhere.com",
+  "deployable": false,
+  "errors": [
+    "CalledProcessError: Command '['/home/Fazilatma/.local/bin/python3', '-m', 'venv', '/home/Fazilatma/.virtualenvs/scraper4-pa']' returned non-zero exit status 1."
+  ],
+  "deployed_commit": "912850e8c6daa96a497ace9b35d2d976ea092f48",
+  "passed": false
+}

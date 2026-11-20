@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.742';
+const APP_VERSION = '10.743';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -437,9 +437,278 @@ function s4AccessCurrent(?array $d=null):?array{$d=$d??s4AccessLoad();if(empty($
 function s4AccessIssueSession(array &$d,string $key):string{try{$token=bin2hex(random_bytes(32));}catch(Throwable $e){$token=hash('sha256',uniqid('',true).'|'.microtime(true).'|'.mt_rand());}$d['sessions'][hash('sha256',$token)]=['user_key'=>$key,'created_at'=>time(),'last_seen_at'=>time()];return$token;}
 function s4AccessJson(array $out,int $code=200):void{http_response_code($code);header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');echo json_encode($out,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
 function s4AccessSameOrigin():bool{$origin=(string)($_SERVER['HTTP_ORIGIN']??$_SERVER['HTTP_REFERER']??'');if($origin==='')return true;$oh=strtolower((string)(parse_url($origin,PHP_URL_HOST)?:''));$rh=strtolower(preg_replace('~:\d+$~','',(string)($_SERVER['HTTP_HOST']??'')));return$oh!==''&&hash_equals($rh,$oh);}
-function s4AccessPublicAutomation():bool{if(isset($_GET['s4wt'])&&function_exists('s4WebWorkerTokenValid')&&s4WebWorkerTokenValid((string)$_GET['s4wt']))return true;if(isset($_GET['web_worker'])&&isset($_GET['token'])&&function_exists('s4WebWorkerTokenValid')&&s4WebWorkerTokenValid((string)$_GET['token']))return true;foreach(['code_auto_update','code_update_status','ops_feedback','cron_run','worker_status','sync_matrix_fix_status','matrix_execution_status','matrix_status','selftest']as$k)if(isset($_GET[$k])||isset($_POST[$k]))return true;if(isset($_GET['sw'])&&empty($_POST)&&!array_diff(array_keys($_GET),['sw','app_v','_']))return true;if((string)($_POST['action']??'')==='cron_run')return true;return false;}
+function s4AccessPublicAutomation():bool{if(isset($_GET['s4wt'])&&function_exists('s4WebWorkerTokenValid')&&s4WebWorkerTokenValid((string)$_GET['s4wt']))return true;if(isset($_GET['web_worker'])&&isset($_GET['token'])&&function_exists('s4WebWorkerTokenValid')&&s4WebWorkerTokenValid((string)$_GET['token']))return true;if(isset($_GET['web_extract_lane'])&&isset($_GET['token'])&&function_exists('s4WebWorkerTokenValid')&&s4WebWorkerTokenValid((string)$_GET['token']))return true;foreach(['code_auto_update','code_update_status','ops_feedback','cron_run','worker_status','sync_matrix_fix_status','matrix_execution_status','matrix_status','selftest']as$k)if(isset($_GET[$k])||isset($_POST[$k]))return true;if(isset($_GET['sw'])&&empty($_POST)&&!array_diff(array_keys($_GET),['sw','app_v','_']))return true;if((string)($_POST['action']??'')==='cron_run')return true;return false;}
 function s4AccessPublicUser(array $u):array{return['username'=>(string)($u['username']??''),'display_name'=>(string)($u['display_name']??''),'role'=>(string)($u['role']??'user'),'disabled'=>!empty($u['disabled']),'created_at'=>(int)($u['created_at']??0),'updated_at'=>(int)($u['updated_at']??0),'password_set'=>(string)($u['password_hash']??'')!==''];}
 function s4AccessLoginPage(string $error=''):void{if(!headers_sent()){header('Content-Type: text/html; charset=UTF-8');header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');header('Pragma: no-cache');header('Expires: 0');}$err=htmlspecialchars($error,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');$fontBoot=function_exists('app_font_boot')?app_font_boot():'';echo '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ورود به سامانه</title>'.$fontBoot.'<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at top,#164e63,#07111f 55%);font-family:var(--app-font,\'Vazirmatn\',Vazir,Tahoma,system-ui,sans-serif);color:#e2e8f0}.card{width:min(92vw,420px);background:#0f172aeF;border:1px solid #334155;border-radius:18px;padding:25px;box-shadow:0 24px 70px #0008}.logo{font-size:40px;text-align:center}.card h1{text-align:center;font-size:20px}.card p{color:#94a3b8;text-align:center;font-size:12px;line-height:1.8}label{display:block;margin:12px 0 4px;font-size:12px}input,button{font-family:inherit}input{width:100%;padding:11px;border-radius:9px;border:1px solid #475569;background:#111827;color:#fff}button{width:100%;margin-top:16px;padding:12px;border:0;border-radius:9px;background:linear-gradient(90deg,#0891b2,#2563eb);color:#fff;font-weight:800;cursor:pointer}.msg{min-height:22px;color:#fca5a5;text-align:center;font-size:12px}</style></head><body><form class="card" id="login"><div class="logo">🔐</div><h1>ورود به فضای کاری</h1><p>نام کاربری و کلمه عبور خود را وارد کنید. نشست شما تا زمان خروج فعال می‌ماند.</p><div class="msg" id="msg">'.$err.'</div><label>نام کاربری</label><input name="username" autocomplete="username" autofocus required><label>کلمه عبور</label><input name="password" type="password" autocomplete="current-password"><button>ورود</button></form><script>document.getElementById("login").onsubmit=async e=>{e.preventDefault();const m=document.getElementById("msg"),f=new FormData(e.target);f.append("s4_access_action","login");m.textContent="در حال ورود…";try{const r=await fetch(location.pathname,{method:"POST",body:f,cache:"no-store",credentials:"same-origin"}),d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||"ورود ناموفق");const u=new URL(location.href);u.searchParams.set("_v",Date.now());location.replace(u.toString())}catch(x){m.textContent=x.message}};</script></body></html>';exit;}
+/** v10.743: dedicated workspace for the «غرفه داران» role — exactly two tabs. */
+function s4AccessVendorWorkspace(array $user): void {
+    if (!headers_sent()) {
+        header('Content-Type: text/html; charset=UTF-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+    }
+    $name = htmlspecialchars((string)($user['display_name'] ?? $user['username'] ?? 'غرفه دار'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $loadedVer = htmlspecialchars(APP_VERSION, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $loadedSha = htmlspecialchars(function_exists('s4DiskCodeMeta') ? (string)(s4DiskCodeMeta()['sha'] ?? '') : '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $fontBoot = function_exists('app_font_boot') ? app_font_boot() : '';
+    $html = <<<'VENDORHTML'
+<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>غرفه داران — استعلام قیمت و موجودی</title>{{FONT}}
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at top left,#1e3a8a33,transparent 42%),#07111f;color:#e2e8f0;font-family:var(--app-font,'Vazirmatn',Vazir,Tahoma,system-ui,sans-serif);line-height:1.75}
+button,input,select,textarea{font-family:inherit}
+.top{position:sticky;top:0;z-index:6;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 20px;background:#0f172af2;backdrop-filter:blur(10px);border-bottom:1px solid #334155}
+.top b{color:#7dd3fc}
+.top-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ver-pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:#0b1324;border:1px solid #334155;color:#5eead4;font-size:11px;font-weight:800;direction:ltr}
+.btn{border:0;border-radius:10px;padding:10px 15px;color:#fff;background:#334155;cursor:pointer;transition:.16s;font-weight:700}
+.btn:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.upd-bar{display:none;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 18px;background:linear-gradient(135deg,#f59e0b,#f97316);color:#1c1207;font-size:12.5px;font-weight:800}
+.upd-bar.show{display:flex}
+.upd-bar button{border:0;border-radius:8px;padding:7px 14px;background:#0f172a;color:#fde68a;font-weight:800;cursor:pointer}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;padding:10px 20px 0}
+.tab-btn{flex:1;min-width:180px;border:1.5px solid #334155;border-radius:14px 14px 0 0;padding:12px 16px;background:#0b1324;color:#cbd5e1;font-size:13.5px;font-weight:800;cursor:pointer;transition:.16s}
+.tab-btn.is-active{background:linear-gradient(145deg,#0e7490,#0f172a);border-color:#22d3ee;color:#ecfeff;box-shadow:0 -4px 18px rgba(34,211,238,.18)}
+.wrap{width:min(1100px,96vw);margin:0 auto 40px;padding:0 0 30px}
+.panel{display:none}
+.panel.is-active{display:block}
+.card{background:linear-gradient(145deg,#0b4a5fcc,#0f172af5);border:1px solid #0e7490;border-radius:0 0 18px 18px;padding:20px;box-shadow:0 18px 45px #02061788}
+.card h1{margin:0 0 6px;font-size:20px;font-weight:900;color:#f8fafc}
+.muted{color:#94a3b8;font-size:12.5px;margin:0}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:11px;margin-top:14px}
+.field-wide{grid-column:1 / -1}
+label.fl{display:block;font-size:12px;color:#cbd5e1;font-weight:600}
+label.fl input,label.fl select{display:block;width:100%;margin-top:5px;padding:11px 12px;border:1px solid #475569;border-radius:10px;background:#0b1324;color:#fff;font-size:13px;outline:none;transition:border-color .15s}
+label.fl input:focus,label.fl select:focus{border-color:#2dd4bf}
+.fa-num{direction:ltr;text-align:right;font-variant-numeric:tabular-nums}
+.chk-row{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}
+.chk-pill{display:inline-flex;align-items:center;gap:8px;padding:8px 13px;border-radius:11px;background:#0b1324cc;border:1px solid #334155;color:#e2e8f0;font-size:12px;font-weight:700;cursor:pointer;user-select:none}
+.chk-pill input{width:16px;height:16px;margin:0;accent-color:#22d3ee;cursor:pointer}
+.chk-pill.is-disabled{opacity:.46;cursor:not-allowed;border-style:dashed;color:#94a3b8}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 6px}
+.actions .btn{flex:1;min-width:180px;background:linear-gradient(135deg,#0891b2,#22d3ee);color:#042f2e;font-weight:900;font-size:13px}
+.actions .btn.deep{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff}
+.msg{color:#93c5fd;font-size:12.5px;min-height:20px;margin-top:6px}
+.res{display:grid;gap:12px;margin-top:16px}
+.row{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;justify-content:space-between;background:linear-gradient(155deg,#111827,#0b1324);border:1.5px solid #334155;border-radius:16px;padding:15px;box-shadow:0 10px 28px #02061766}
+.row.ok{border-color:#10b981;background:linear-gradient(155deg,#052e2be6,#0b1324)}
+.row-main{display:flex;gap:12px;align-items:flex-start;flex:1;min-width:240px}
+.thumb,.thumb-empty{width:56px;height:56px;border-radius:12px;background:#0f172a;border:1px solid #334155;flex-shrink:0;object-fit:cover}
+.thumb-empty{display:grid;place-items:center;font-size:22px;color:#64748b}
+.r-title{font-size:14.5px;font-weight:800;color:#f8fafc;line-height:1.6}
+.badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;background:#1e293b;color:#cbd5e1;border:1px solid #334155}
+.badge-exact{background:#0e749055;border-color:#06b6d4;color:#67e8f9}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px;min-width:260px}
+.kpi{background:#08101ecc;border:1px solid #1e293b;border-radius:12px;padding:10px 12px}
+.kpi small{display:block;font-size:10.5px;color:#94a3b8;margin-bottom:3px}
+.kpi strong{font-size:16px;font-weight:900;color:#f8fafc;font-variant-numeric:tabular-nums}
+.kpi.price{border-color:#22d3ee;background:linear-gradient(135deg,rgba(34,211,238,.16),rgba(8,145,178,.08))}
+.kpi.price strong{color:#a5f3fc}
+.kpi.stock-in{border-color:#10b981;background:rgba(16,185,129,.14)}
+.kpi.stock-in strong{color:#6ee7b7}
+.kpi.stock-out{border-color:#f43f5e;background:rgba(244,63,94,.13)}
+.kpi.stock-out strong{color:#fda4af}
+.vars{margin-top:9px;background:#08101e99;border:1px solid #1e293b;border-radius:10px;padding:7px 11px;font-size:11.5px;width:100%}
+.vars summary{cursor:pointer;color:#a5b4fc;font-weight:700}
+.vars div{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px dashed #1e293b}
+.empty{color:#94a3b8;text-align:center;padding:26px;border:1px dashed #334155;border-radius:14px}
+.calc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:14px}
+.calc-help{font-size:11px;color:#94a3b8;margin-top:4px}
+.calc-err{margin-top:12px;padding:10px 13px;border-radius:11px;background:rgba(244,63,94,.14);border:1px solid #f43f5e;color:#fecdd3;font-size:12.5px;font-weight:700}
+.calc-res{margin-top:14px;display:grid;gap:9px}
+.calc-line{display:flex;justify-content:space-between;gap:12px;background:#08101ecc;border:1px solid #1e293b;border-radius:11px;padding:10px 13px;font-size:13px}
+.calc-line b{font-variant-numeric:tabular-nums;color:#e2e8f0}
+.calc-total{background:linear-gradient(135deg,rgba(16,185,129,.22),rgba(34,211,238,.12));border-color:#10b981}
+.calc-total b{color:#6ee7b7;font-size:16px;font-weight:900}
+.calc-empty{color:#94a3b8;font-size:12.5px;margin-top:12px}
+@media(max-width:720px){.grid{grid-template-columns:1fr 1fr}.calc-grid{grid-template-columns:1fr}}
+@media(max-width:480px){.grid{grid-template-columns:1fr}}
+</style></head><body>
+<div class="top"><div>🏬 <b>{{NAME}}</b> · فضای کاری غرفه داران</div>
+<div class="top-tools"><span class="ver-pill" id="vdVer" title="نسخهٔ فعال سامانه">v{{VER}}</span>
+<button class="btn" onclick="vdLogout()">خروج</button></div></div>
+<div class="upd-bar" id="vdUpdBar"><span id="vdUpdTxt">⬆ نسخهٔ جدیدی از سامانه آماده است</span><button type="button" onclick="vdApplyReload()">به‌روزرسانی صفحه</button></div>
+<main class="wrap">
+  <nav class="tabs" role="tablist">
+    <button class="tab-btn is-active" id="vdTabBtn0" role="tab" aria-selected="true" aria-controls="vdPanel0" onclick="vdTab(0)">🔎 استعلام قیمت و موجودی</button>
+    <button class="tab-btn" id="vdTabBtn1" role="tab" aria-selected="false" aria-controls="vdPanel1" onclick="vdTab(1)">🧮 محاسبه گر غرفه داران</button>
+  </nav>
+  <section class="panel is-active" id="vdPanel0" role="tabpanel" aria-labelledby="vdTabBtn0">
+    <div class="card">
+      <h1>🔎 استعلام قیمت و موجودی</h1>
+      <p class="muted">نام محصول (یا کد/لینک محصول) را وارد کنید تا جدیدترین قیمت و موجودی آن استعلام شود. در این بخش فقط قیمت و موجودی نمایش داده می‌شود.</p>
+      <div class="grid">
+        <label class="fl field-wide">نام محصول + کد پسوند<input id="vdTitle" placeholder="مثال: کفش ورزشی (کد:۷)" autocomplete="off"></label>
+        <label class="fl">SKU<input id="vdSku" autocomplete="off"></label>
+        <label class="fl">تنوع<input id="vdVariant" autocomplete="off"></label>
+        <label class="fl">تعداد<input id="vdQty" class="fa-num" type="text" inputmode="numeric" dir="ltr" value="۱" autocomplete="off"></label>
+      </div>
+      <div class="chk-row">
+        <label class="chk-pill" title="فقط محصولاتی با عنوان دقیقاً مطابق فیلد عنوان پیدا شوند"><input id="vdExact" type="checkbox" onchange="vdSyncExact()"><span>تطابق دقیق عنوان</span></label>
+        <label class="chk-pill is-disabled" id="vdAroundWrap" title="وقتی تطابق دقیق فعال است، وجود کلمات اضافی قبل و بعد عنوان مجاز شود"><input id="vdAround" type="checkbox" disabled><span>مجاز بودن کلمات اضافی قبل و بعد عنوان</span></label>
+      </div>
+      <div class="actions">
+        <button class="btn" onclick="vdRun('research')">🔎 استعلام سریع قیمت و موجودی</button>
+        <button class="btn deep" onclick="vdRun('deep_basalam')">🔬 استعلام عمیق قیمت و موجودی</button>
+      </div>
+      <div class="msg" id="vdMsg"></div>
+    </div>
+    <section class="res" id="vdRes"></section>
+  </section>
+  <section class="panel" id="vdPanel1" role="tabpanel" aria-labelledby="vdTabBtn1">
+    <div class="card">
+      <h1>🧮 محاسبه گر غرفه داران</h1>
+      <p class="muted">مبلغ قابل پرداخت به غرفه‌دار را بر اساس قیمت فروش، قیمت پایه و سهم سود محاسبه کنید. در روش «محصول نمونه»، کارمزد به مبلغ اضافه می‌شود تا پس از کسر کارمزد، همان مبلغ نقدی به غرفه‌دار برسد.</p>
+      <div class="calc-grid">
+        <label class="fl">قیمت فروش غرفه‌دار (تومان)<input id="vdcSale" class="fa-num" type="text" inputmode="decimal" dir="ltr" placeholder="۲۵۰٬۰۰۰" autocomplete="off" oninput="vdCalc()"><span class="calc-help">مبلغی که محصول با آن فروخته می‌شود.</span></label>
+        <label class="fl">قیمت پایه محصول (تومان)<input id="vdcBase" class="fa-num" type="text" inputmode="decimal" dir="ltr" placeholder="۲۰۰٬۰۰۰" autocomplete="off" oninput="vdCalc()"><span class="calc-help">قیمت تمام‌شدهٔ محصول؛ سود از تفاضل آن با قیمت فروش به دست می‌آید.</span></label>
+        <label class="fl">درصد سهم غرفه‌دار از سود<input id="vdcShare" class="fa-num" type="text" inputmode="decimal" dir="ltr" placeholder="۵۰" autocomplete="off" oninput="vdCalc()"><span class="calc-help">عددی بین ۰ تا ۱۰۰.</span></label>
+        <label class="fl">روش تسویه<select id="vdcMethod" onchange="vdCalc()"><option value="cash">پرداخت نقدی</option><option value="sample">ارسال محصول نمونه</option></select><span class="calc-help">در روش محصول نمونه، کارمزد فروش به مبلغ افزوده می‌شود.</span></label>
+        <label class="fl" id="vdcFeeWrap">درصد کارمزد محصول نمونه<input id="vdcFee" class="fa-num" type="text" inputmode="decimal" dir="ltr" value="۵" autocomplete="off" oninput="vdCalc()"><span class="calc-help">عددی بین ۰ تا کمتر از ۱۰۰.</span></label>
+      </div>
+      <div id="vdcErr" class="calc-err" style="display:none"></div>
+      <div id="vdcRes" class="calc-res" aria-live="polite"></div>
+      <div id="vdcEmpty" class="calc-empty">برای دیدن نتیجه، قیمت فروش و قیمت پایه را وارد کنید.</div>
+    </div>
+  </section>
+</main>
+<script>
+const VD_VER="{{VER}}",VD_SHA="{{SHA}}";
+const FA="۰۱۲۳۴۵۶۷۸۹";
+function esc(x){return String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function fa(n){return String(n??"").replace(/\d/g,d=>FA[+d]);}
+function money(n){const v=Math.round(Number(n)||0);return fa(v.toLocaleString("en-US"))+" تومان";}
+function vdParseNum(v,def){if(v===undefined||v===null)return def;let t=String(v).replace(/[۰-۹]/g,d=>String("۰۱۲۳۴۵۶۷۸۹".indexOf(d))).replace(/[٠-٩]/g,d=>String("٠١٢٣٤٥٦٧٨٩".indexOf(d))).replace(/٫/g,".").replace(/[٬،,\s]/g,"").trim();if(t==="")return def;if(!/^(\d+(\.\d+)?|\.\d+)$/.test(t))return NaN;const n=Number(t);if(!isFinite(n)||n>1e12)return NaN;return n;}
+function vdTab(i){[0,1].forEach(k=>{const p=document.getElementById("vdPanel"+k),b=document.getElementById("vdTabBtn"+k);if(p)p.classList.toggle("is-active",k===i);if(b){b.classList.toggle("is-active",k===i);b.setAttribute("aria-selected",k===i?"true":"false");}});try{sessionStorage.setItem("vd_tab",String(i));}catch(_){}}
+function vdSyncExact(){const on=document.getElementById("vdExact").checked,w=document.getElementById("vdAroundWrap"),a=document.getElementById("vdAround");a.disabled=!on;w.classList.toggle("is-disabled",!on);if(!on)a.checked=false;}
+async function vdLogout(){const f=new FormData;f.append("s4_access_action","logout");await fetch(location.pathname,{method:"POST",body:f,cache:"no-store",credentials:"same-origin"});const u=new URL(location.href);u.searchParams.delete("_v");location.replace(u.toString());}
+async function vdRun(action){const title=document.getElementById("vdTitle").value.trim(),msg=document.getElementById("vdMsg"),box=document.getElementById("vdRes");if(!title){msg.textContent="نام محصول الزامی است";return;}
+  const exactOn=!!document.getElementById("vdExact").checked,aroundOn=exactOn&&!!document.getElementById("vdAround").checked;
+  const qty=Math.max(1,vdParseNum(document.getElementById("vdQty").value,1)||1);
+  msg.textContent=action==="deep_basalam"?"در حال استعلام عمیق قیمت و موجودی…":"در حال استعلام قیمت و موجودی…";box.innerHTML="";
+  const f=new FormData;f.append("procurement_eligibility_api",action);f.append("title",title);f.append("qty",String(qty));
+  f.append("sku",document.getElementById("vdSku").value||"");f.append("variant",document.getElementById("vdVariant").value||"");
+  f.append("platform","all");f.append("exact_title",exactOn?"1":"0");f.append("exact_title_around",aroundOn?"1":"0");
+  try{const r=await fetch(location.pathname+"?procurement_eligibility_api="+encodeURIComponent(action),{method:"POST",body:f,cache:"no-store",credentials:"same-origin"});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||"عملیات ناموفق");vdRender(d);}catch(e){msg.textContent="خطا: "+e.message;}}
+function vdRender(d){const msg=document.getElementById("vdMsg"),box=document.getElementById("vdRes"),items=(d.items||[]);
+  msg.textContent=fa(items.length)+" نتیجه · "+fa(d.in_stock||0)+" مورد موجود"+(d.exact_title?(d.exact_title_around?" · 🎯 تطابق دقیق عنوان (با کلمات قبل/بعد)":" · 🎯 تطابق دقیق عنوان"):"");
+  if(!items.length){box.innerHTML='<div class="empty">نتیجه‌ای برای این عنوان پیدا نشد.</div>';return;}
+  box.innerHTML=items.map(it=>{const inStock=!!it.in_stock,range=(it.price_min>0&&it.price_max>it.price_min)?('<div class="calc-help">بازهٔ قیمت تنوع‌ها: '+money(it.price_min)+" تا "+money(it.price_max)+"</div>"):"";
+    const vars=(it.variations||[]).filter(v=>v&&(v.price>0||v.label));
+    return '<article class="row '+(inStock?"ok":"")+'">'
+      +'<div class="row-main">'+(it.image?'<img class="thumb" src="'+esc(it.image)+'" loading="lazy" alt="" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'grid\'"><div class="thumb-empty" style="display:none">🛍️</div>':'<div class="thumb-empty">🛍️</div>')
+      +'<div><div class="r-title">'+esc(it.title)+"</div>"
+      +'<div class="badges">'+(it.exact_match?'<span class="badge badge-exact">🎯 تطابق دقیق عنوان</span>':"")+(vars.length?'<span class="badge">🎨 '+fa(vars.length)+" تنوع</span>":"")+"</div>"+range+"</div></div>"
+      +'<div class="kpis"><div class="kpi price"><small>💵 قیمت</small><strong>'+(it.price>0?money(it.price):"—")+'</strong></div>'
+      +'<div class="kpi '+(inStock?"stock-in":"stock-out")+'"><small>📦 موجودی</small><strong>'+(inStock?fa(it.stock)+" عدد":"ناموجود")+"</strong></div></div>"
+      +(vars.length?'<details class="vars"><summary>قیمت و موجودی تنوع‌ها</summary>'+vars.map(v=>"<div><span>"+esc(v.label||"تنوع")+"</span><span>"+(v.price>0?money(v.price):"—")+(v.stock?" · "+fa(v.stock)+" عدد":"")+"</span></div>").join("")+"</details>":"")
+      +"</article>";}).join("");}
+function vdCalc(){const err=document.getElementById("vdcErr"),res=document.getElementById("vdcRes"),empty=document.getElementById("vdcEmpty");
+  const method=document.getElementById("vdcMethod").value,feeWrap=document.getElementById("vdcFeeWrap");
+  feeWrap.style.display=method==="sample"?"":"none";
+  const saleRaw=document.getElementById("vdcSale").value.trim(),baseRaw=document.getElementById("vdcBase").value.trim(),shareRaw=document.getElementById("vdcShare").value.trim(),feeRaw=document.getElementById("vdcFee").value.trim();
+  const show=m=>{err.style.display="block";err.textContent=m;res.innerHTML="";empty.style.display="none";};
+  if(saleRaw===""&&baseRaw===""){err.style.display="none";res.innerHTML="";empty.style.display="";return;}
+  const sale=vdParseNum(saleRaw,NaN),base=vdParseNum(baseRaw,0),share=vdParseNum(shareRaw,0),fee=vdParseNum(feeRaw,0);
+  if(!isFinite(sale)||isNaN(sale)||sale<=0)return show("قیمت فروش غرفه‌دار باید عددی بزرگ‌تر از صفر باشد.");
+  if(isNaN(base)||base<0)return show("قیمت پایه محصول نمی‌تواند منفی باشد.");
+  if(base>sale)return show("قیمت پایه محصول نمی‌تواند از قیمت فروش بیشتر باشد.");
+  if(isNaN(share)||share<0||share>100)return show("درصد سهم غرفه‌دار باید بین ۰ تا ۱۰۰ باشد.");
+  if(method==="sample"&&(isNaN(fee)||fee<0||fee>=100))return show("درصد کارمزد محصول نمونه باید بین ۰ تا کمتر از ۱۰۰ باشد.");
+  const profit=sale-base,vendorShare=Math.round(profit*share/100*100)/100,cash=Math.round((sale-vendorShare)*100)/100;
+  let sample=0,commission=0;
+  if(method==="sample"){sample=Math.ceil(cash/(1-fee/100));if(!isFinite(sample)||sample>1e12)return show("مبلغ نمونه بیش از محدوده قابل محاسبه است؛ درصد کارمزد را کمتر کنید.");commission=Math.round(sample*fee/100*100)/100;}
+  err.style.display="none";empty.style.display="none";
+  const line=(t,v,cls)=>'<div class="calc-line '+(cls||"")+'"><span>'+t+"</span><b>"+money(v)+"</b></div>";
+  res.innerHTML=line("سود محصول",profit)+line("سهم غرفه‌دار از سود",vendorShare)+line("پرداخت نقدی بدون کارمزد",cash)
+    +(method==="sample"?line("کارمزد تقریبی",commission):"")
+    +'<div class="calc-line calc-total" data-testid="vendor-final"><span>مبلغ نهایی قابل پرداخت</span><b>'+money(method==="sample"?sample:cash)+"</b></div>";}
+let vdReloading=false;
+async function vdApplyReload(){if(vdReloading)return;vdReloading=true;try{const u=new URL(location.href);u.searchParams.set("_v",Date.now());location.replace(u.toString());}catch(_){location.reload();}}
+async function vdWatchVersion(){if(vdReloading||document.visibilityState==="hidden")return;try{let d=null;try{const r=await fetch("?code_auto_update=1&_watch="+Date.now(),{cache:"no-store",credentials:"same-origin"});if(r.ok)d=await r.json();}catch(_){}
+  if(!d||!d.ok){try{const r2=await fetch("?code_update_status=1&_watch="+Date.now(),{cache:"no-store",credentials:"same-origin"});if(r2.ok)d=await r2.json();}catch(_){}}
+  if(d&&d.ok){const sha=String(d.disk_sha||""),ver=String(d.disk_version||d.to_version||d.version||"");
+    if((sha&&VD_SHA&&sha!==VD_SHA)||(ver&&ver!==VD_VER)){const bar=document.getElementById("vdUpdBar"),t=document.getElementById("vdUpdTxt");if(t)t.textContent="⬆ نسخهٔ جدید ("+(ver||"جدید")+") روی سرور فعال شد";if(bar)bar.classList.add("show");}}}catch(_){}}
+try{const t=parseInt(sessionStorage.getItem("vd_tab")||"0",10);if(t===1)vdTab(1);}catch(_){}
+vdCalc();setTimeout(vdWatchVersion,2000);setInterval(vdWatchVersion,60000);
+window.addEventListener("focus",vdWatchVersion);
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){const a=document.activeElement;if(a&&a.blur)a.blur();}});
+</script></body></html>
+VENDORHTML;
+    echo strtr($html, ['{{FONT}}' => $fontBoot, '{{NAME}}' => $name, '{{VER}}' => $loadedVer, '{{SHA}}' => $loadedSha]);
+    exit;
+}
+/** v10.743: the «غرفه داران» role may only ever see price and availability.
+ * Supplier, marketplace, shop, profile and link fields are removed on the
+ * server, so no supplier name can reach this role through the API either. */
+function s4VendorRoleActive(): bool {
+    $u = $GLOBALS['_s4CurrentUser'] ?? null;
+    return is_array($u) && (string)($u['role'] ?? '') === 'vendor';
+}
+function s4VendorPriceRow(array $row): ?array {
+    $z = is_array($row['research'] ?? null) ? $row['research'] : $row;
+    $c = is_array($z['candidate'] ?? null) ? $z['candidate'] : [];
+    $title = trim((string)($c['title'] ?? ($row['item']['title'] ?? '')));
+    if ($title === '') return null;
+    $price = (int)round((float)($z['cost_unit'] ?? ($c['price'] ?? 0)));
+    $stock = (int)($z['stock'] ?? ($c['stock'] ?? 0));
+    $varsRaw = is_array($z['variations'] ?? null) && $z['variations'] ? $z['variations']
+        : (is_array($c['variations'] ?? null) ? $c['variations'] : []);
+    $vars = []; $min = 0; $max = 0;
+    foreach ($varsRaw as $v) {
+        if (!is_array($v)) continue;
+        $vp = (int)round((float)($v['price'] ?? 0));
+        $label = trim((string)($v['label'] ?? ($v['title'] ?? '')));
+        if ($vp > 0) { $min = $min === 0 ? $vp : min($min, $vp); $max = max($max, $vp); }
+        $vars[] = ['label' => $label, 'price' => $vp, 'stock' => (int)($v['stock'] ?? 0)];
+        if (count($vars) >= 30) break;
+    }
+    return ['title' => $title, 'image' => (string)($c['image'] ?? ''),
+            'price' => $price, 'price_min' => $min, 'price_max' => $max,
+            'stock' => $stock, 'available' => $stock > 0 || ($stock === 0 && $price > 0 && !empty($z['eligible'])),
+            'in_stock' => $stock > 0,
+            'exact_match' => !empty($c['exact_match']),
+            'score' => round((float)($c['score'] ?? 0), 3),
+            'variations' => $vars];
+}
+/** Project any eligibility payload down to price + availability only. */
+function s4VendorPriceOnlyPayload(array $data): array {
+    $rows = [];
+    foreach ([(array)($data['results'] ?? []), (array)($data['rows'] ?? [])] as $bucket) {
+        foreach ($bucket as $row) { if (is_array($row)) $rows[] = $row; }
+    }
+    if (!$rows && (isset($data['candidate']) || isset($data['cost_unit']))) $rows[] = $data;
+    $items = [];
+    foreach ($rows as $row) {
+        $item = s4VendorPriceRow($row);
+        if ($item !== null) $items[] = $item;
+    }
+    usort($items, static function (array $a, array $b) {
+        $av = ($a['in_stock'] ? 1 : 0); $bv = ($b['in_stock'] ? 1 : 0);
+        if ($av !== $bv) return $bv <=> $av;
+        if ($a['exact_match'] !== $b['exact_match']) return ($b['exact_match'] ? 1 : 0) <=> ($a['exact_match'] ? 1 : 0);
+        $ap = $a['price'] > 0 ? $a['price'] : PHP_INT_MAX; $bp = $b['price'] > 0 ? $b['price'] : PHP_INT_MAX;
+        return $ap <=> $bp;
+    });
+    $inStock = 0;
+    foreach ($items as $it) if (!empty($it['in_stock'])) $inStock++;
+    return ['ok' => !empty($data['ok']) || (bool)$items, 'vendor_view' => true,
+            'checked' => (int)($data['profiles_checked'] ?? ($data['catalog_rows'] ?? count($items))),
+            'found' => count($items), 'in_stock' => $inStock,
+            'exact_title' => !empty($data['exact_title']),
+            'exact_title_around' => !empty($data['exact_title_around']),
+            'items' => $items, 'version' => APP_VERSION];
+}
+/** Single exit point for the eligibility API: strip everything for vendors. */
+function s4EligibilityApiEcho(array $data): void {
+    if (s4VendorRoleActive()) $data = s4VendorPriceOnlyPayload($data);
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
+}
 function s4AccessMemberWorkspace(array $user):void{if(!headers_sent()){header('Content-Type: text/html; charset=UTF-8');header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');header('Pragma: no-cache');header('Expires: 0');}$name=htmlspecialchars((string)($user['display_name']??$user['username']??'کاربر'),ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');$loadedVer=htmlspecialchars(APP_VERSION,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');$loadedSha=htmlspecialchars(function_exists('s4DiskCodeMeta')?(string)(s4DiskCodeMeta()['sha']??''):'',ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');$fontBoot=function_exists('app_font_boot')?app_font_boot():'';$attendanceTab=(($user['role']??'')==='supervisor')?'<button class="btn" onclick="memberTab(2);loadAttendance()">🕒 ثبت حضور</button>':'';echo '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>بررسی واجد شرایط سفارش</title>'.$fontBoot.'<style>*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top right,#064e3b33,transparent 40%),#07111f;color:#e2e8f0;font-family:var(--app-font,\'Vazirmatn\',Vazir,Tahoma,system-ui,sans-serif);line-height:1.7}button,input,select,textarea{font-family:inherit}.top{position:sticky;top:0;z-index:5;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 20px;background:#0f172af2;backdrop-filter:blur(10px);border-bottom:1px solid #334155}.top b{color:#67e8f9}.top-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.ver-pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:#0b1324;border:1px solid #334155;color:#5eead4;font-size:11px;font-weight:800;direction:ltr}.upd-bar{display:none;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 18px;background:linear-gradient(135deg,#f59e0b,#f97316);color:#1c1207;font-size:12.5px;font-weight:800}.upd-bar.show{display:flex}.upd-bar button{border:0;border-radius:8px;padding:7px 14px;background:#0f172a;color:#fde68a;font-weight:800;cursor:pointer}.font-pick{display:inline-flex;align-items:center;gap:6px;background:#111827;border:1px solid #334155;border-radius:10px;padding:4px 9px;font-size:11.5px;color:#cbd5e1}.font-pick select{background:#0b1324;border:1px solid #475569;color:#f8fafc;border-radius:7px;padding:4px 8px;font-size:11.5px}.top button,.btn{border:0;border-radius:10px;padding:10px 15px;color:#fff;background:#334155;cursor:pointer;transition:.16s}.btn:hover{filter:brightness(1.08);transform:translateY(-1px)}.wrap{width:min(1200px,96vw);margin:20px auto;padding-bottom:70px}.hero{background:linear-gradient(145deg,#064e3bcc,#0f172af5);border:1px solid #0f766e;border-radius:18px;padding:20px;box-shadow:0 18px 45px #02061788}.hero h1{margin:0 0 6px;font-size:21px;font-weight:900;color:#f8fafc}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-top:14px}.field-wide{grid-column:1 / -1}.field-span2{grid-column:span 2}.field-lbl{display:block;font-size:12px;color:#cbd5e1;font-weight:600}.field-lbl input,.field-lbl select{display:block;width:100%;margin-top:5px;padding:11px 12px;border:1px solid #475569;border-radius:10px;background:#0b1324;color:#fff;font-size:13px;outline:none;transition:border-color .15s}.field-lbl input:focus,.field-lbl select:focus{border-color:#2dd4bf}.inp-wrap{position:relative;display:block;margin-top:5px}.inp-wrap input{margin-top:0!important;padding-left:30px!important}.clr-btn{position:absolute;left:7px;top:50%;transform:translateY(-50%);width:20px;height:20px;border:0;border-radius:999px;background:#334155;color:#cbd5e1;font-size:11px;line-height:1;display:none;align-items:center;justify-content:center;cursor:pointer;padding:0;z-index:2;touch-action:manipulation}.clr-btn.show{display:inline-flex}.clr-btn:hover{background:#ef4444;color:#fff}.fa-num-inp{direction:ltr;text-align:right;font-variant-numeric:tabular-nums}.exact-row{display:flex;flex-wrap:wrap;gap:9px;margin-top:12px}.chk-pill{display:inline-flex;align-items:center;gap:8px;padding:8px 13px;border-radius:11px;background:#0b1324cc;border:1px solid #334155;color:#e2e8f0;font-size:12px;font-weight:700;cursor:pointer;user-select:none;transition:.16s}.chk-pill:hover{border-color:#2dd4bf}.chk-pill input{width:16px;height:16px;margin:0;accent-color:#10b981;cursor:pointer}.chk-pill.is-disabled{opacity:.46;cursor:not-allowed;border-style:dashed;color:#94a3b8}.chk-pill.is-disabled input{cursor:not-allowed}.mode-group{display:flex;align-items:center;flex-wrap:wrap;gap:9px;padding:9px 12px;border-radius:12px;background:#08101ecc;border:1px solid #1e293b;margin-top:12px}.mode-lbl{font-size:12px;font-weight:800;color:#94a3b8;margin-left:4px}.chk-pill.is-active{border-color:#10b981;background:#064e3b55;color:#ecfdf5;box-shadow:0 0 0 1px rgba(16,185,129,.22)}.chk-pill.is-order-active{border-color:#f59e0b;background:#451a0366;color:#fef3c7;box-shadow:0 0 0 1px rgba(245,158,11,.24)}.field-disabled{opacity:.48;transition:opacity .15s}.field-disabled input{cursor:not-allowed;background:#070d18}.badge-ship{background:#451a0399;border-color:#f59e0b;color:#fde68a}.cost-sub{font-size:10.5px;color:#fbbf24;font-weight:700;margin-top:3px;line-height:1.45}.actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 8px}.actions .btn{flex:1;min-width:170px;background:linear-gradient(135deg,#059669,#10b981);font-weight:800;font-size:13px}.actions .deep{background:linear-gradient(135deg,#7c3aed,#6366f1)}.msg{color:#93c5fd;font-size:12.5px;min-height:20px;margin-top:4px}.result{display:grid;gap:12px;margin-top:16px}.row{position:relative;overflow:hidden;background:linear-gradient(155deg,#111827,#0b1324);border:1.5px solid #334155;border-radius:16px;padding:15px;box-shadow:0 10px 28px #02061766;transition:transform .16s,border-color .16s}.row:hover{transform:translateY(-2px);border-color:#475569}.row.ok{border-color:#10b981;background:linear-gradient(155deg,#052e2be6,#0b1324);box-shadow:0 12px 30px rgba(16,185,129,.14)}.row.deep-hit{border-color:#7c3aed}.row.dk-hit{border-color:#dc2626}.row-head{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}.row-main{display:flex;gap:12px;align-items:flex-start;flex:1;min-width:220px}.thumb{width:54px;height:54px;border-radius:12px;object-fit:cover;background:#0f172a;border:1px solid #334155;flex-shrink:0}.thumb-empty{width:54px;height:54px;border-radius:12px;background:#0f172a;border:1px solid #334155;display:grid;place-items:center;font-size:22px;color:#64748b;flex-shrink:0}.row-title{font-size:14.5px;font-weight:800;color:#f8fafc;line-height:1.55}.badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;background:#1e293b;color:#cbd5e1;border:1px solid #334155}.badge-plat{font-size:13.5px;font-weight:900;padding:4px 12px;border-width:1.5px;box-shadow:0 3px 10px rgba(0,0,0,.28);letter-spacing:.01em}.badge-plat-basalam{background:linear-gradient(135deg,#ea580c,#c2410c);border-color:#fdba74;color:#fff7ed}.badge-plat-digikala{background:linear-gradient(135deg,#dc2626,#991b1b);border-color:#fca5a5;color:#fff1f2}.badge-plat-snappshop{background:linear-gradient(135deg,#9333ea,#6b21a8);border-color:#d8b4fe;color:#faf5ff}.badge-plat-torob{background:linear-gradient(135deg,#0284c7,#0369a1);border-color:#7dd3fc;color:#f0f9ff}.badge-plat-emalls{background:linear-gradient(135deg,#0d9488,#0f766e);border-color:#5eead4;color:#f0fdfa}.badge-plat-other{background:linear-gradient(135deg,#475569,#334155);border-color:#94a3b8;color:#f8fafc}.badge-exact{background:#0e749055;border-color:#06b6d4;color:#67e8f9}.badge-score{background:#1e1b4b99;border-color:#6366f1;color:#c7d2fe}.status-pill{padding:5px 11px;border-radius:999px;font-size:11.5px;font-weight:800;white-space:nowrap}.status-pill.ok{background:#064e3b;border:1px solid #10b981;color:#6ee7b7}.status-pill.warn{background:#451a03aa;border:1px solid #d97706;color:#fcd34d}.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-top:12px}.kpi{background:#08101ecc;border:1px solid #1e293b;border-radius:11px;padding:9px 11px}.kpi small{display:block;font-size:10.5px;color:#94a3b8;margin-bottom:2px}.kpi strong{font-size:13.5px;font-weight:800;color:#e2e8f0}.kpi-cost strong{color:#38bdf8}.kpi-rec{background:linear-gradient(135deg,rgba(236,72,153,.20),rgba(168,85,247,.12));border-color:#ec4899;box-shadow:0 4px 16px rgba(236,72,153,.14)}.kpi-rec small{color:#f9a8d4;font-weight:700}.kpi-rec strong{color:#fbcfe8;font-size:15px;font-weight:900}.kpi-profit{border-width:1.5px;padding:10px 12px}.kpi-profit.pos{background:linear-gradient(135deg,rgba(234,179,8,.18),rgba(16,185,129,.22));border-color:#facc15;box-shadow:0 4px 16px rgba(250,204,21,.12)}.kpi-profit.pos strong{color:#fde047;font-size:15.5px;font-weight:900}.kpi-profit.low{background:rgba(245,158,11,.15);border-color:#f59e0b}.kpi-profit.low strong{color:#fbbf24;font-size:15px;font-weight:900}.kpi-profit.neg{background:rgba(239,68,68,.16);border-color:#f43f5e}.kpi-profit.neg strong{color:#fda4af;font-size:15px;font-weight:900}.kpi-profit .margin-tag{display:inline-block;margin-top:2px;font-size:11px;font-weight:800;opacity:.95}.var-chip{display:inline-block;margin-top:9px;padding:4px 10px;border-radius:8px;background:#312e8155;border:1px solid #6366f188;color:#c7d2fe;font-size:11.5px}.vars-box{margin-top:9px;background:#08101e99;border:1px solid #1e293b;border-radius:10px;padding:7px 11px;font-size:11.5px}.badge-var-diff{background:#4c1d9588;border-color:#a855f7;color:#f3e8ff}.vars-box.has-diff{border-color:#a855f788;background:linear-gradient(155deg,#1e1b4b66,#08101ecc)}.vars-box summary{cursor:pointer;color:#a5b4fc;font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.vars-box.has-diff summary{color:#e9d5ff}.vars-item{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 4px;border-top:1px dashed #1e293b;color:#cbd5e1}.vars-item.is-selected{background:rgba(16,185,129,.12);border-radius:7px;padding:6px 8px}.var-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.var-price-tag{padding:2px 8px;border-radius:7px;background:#0e749044;border:1px solid #06b6d488;color:#7dd3fc;font-weight:800;font-size:11.5px}.var-price-tag.is-diff{background:#4c1d9566;border-color:#a855f7aa;color:#f3e8ff}.var-stock-ok{color:#6ee7b7;font-size:11px;font-weight:700}.var-stock-no{color:#fda4af;font-size:11px;font-weight:700}.var-profit-pill{padding:2px 8px;border-radius:7px;font-size:11px;font-weight:800}.var-profit-pill.pos{background:rgba(16,185,129,.18);border:1px solid #10b98188;color:#fde047}.var-profit-pill.low{background:rgba(245,158,11,.15);border:1px solid #f59e0b88;color:#fbbf24}.var-profit-pill.neg{background:rgba(239,68,68,.15);border:1px solid #f43f5e88;color:#fda4af}.var-rec-tag{padding:2px 8px;border-radius:7px;background:rgba(236,72,153,.18);border:1px solid #ec4899aa;color:#fbcfe8;font-weight:800;font-size:11px}.row-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px;padding-top:9px;border-top:1px dashed #334155}.cta-link{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:9px;background:#0e749033;border:1px solid #0891b2;color:#7dd3fc;text-decoration:none;font-size:12px;font-weight:700}.cta-link:hover{background:#0e749066;color:#e0f2fe}.foot-acts{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap}.upd-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:9px;background:linear-gradient(135deg,#9d174d66,#05966966);border:1px solid #ec4899;color:#fbcfe8;font-size:12px;font-weight:800;cursor:pointer;transition:.16s}.upd-btn:hover:not(:disabled){background:linear-gradient(135deg,#be185d88,#10b98188);color:#fff;transform:translateY(-1px)}.upd-btn:disabled{opacity:.65;cursor:wait}.upd-res{margin-top:9px;padding:9px 11px;border-radius:10px;background:#08101ecc;border:1px solid #334155;font-size:11.5px;line-height:1.7;display:none}.upd-res.ok{border-color:#10b981;background:rgba(6,78,59,.35)}.upd-res.err{border-color:#f43f5e;background:rgba(127,29,29,.3)}.upd-head{font-weight:800;margin-bottom:5px;color:#e2e8f0}.upd-shop{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0;border-top:1px dashed #1e293b;color:#cbd5e1}.upd-adj{padding:2px 8px;border-radius:999px;background:#1e1b4b;border:1px solid #6366f188;color:#c7d2fe;font-size:10.5px;font-weight:700}.err-note{color:#fca5a5;font-size:11.5px;margin-top:6px}.muted{font-size:11.5px;color:#94a3b8}@media(max-width:860px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.field-span2{grid-column:span 2}}@media(max-width:700px){.grid{grid-template-columns:1fr}.field-wide,.field-span2{grid-column:auto}.actions{flex-direction:column}}</style></head><body><div class="top"><div>👤 <b>'.$name.'</b> · فضای کاری بررسی سفارش</div><div class="top-tools"><span class="ver-pill" id="memberAppVer" title="نسخهٔ فعال سامانه">v'.$loadedVer.'</span><label class="font-pick"><span>فونت فارسی:</span><select id="memberFontSel" onchange="setMemberFont(this.value)"></select></label><button onclick="logout()">خروج</button></div></div><div class="upd-bar" id="memberUpdBar"><span id="memberUpdTxt">⬆ نسخهٔ جدیدی از سامانه آماده است</span><button type="button" onclick="applyMemberCodeReload()">به‌روزرسانی صفحه</button></div><main class="wrap"><section class="hero"><h1>🔎 بررسی واجد شرایط بودن سفارش</h1><p class="muted">نام محصول (یا کد/لینک محصول مثل <code>dkp-123</code>) را وارد کنید تا هم در پروفایل‌ها و هم مستقیماً در پلتفرم‌های باسلام، دیجی‌کالا، اسنپ‌شاپ، ترب و ایمالز از نظر قیمت، موجودی، تنوع و سود بررسی شود.</p><div class="grid"><label class="field-lbl field-wide">نام محصول + کد پسوند<input id="title" placeholder="مثال: کفش ورزشی (کد:۷)" autocomplete="off"></label><label class="field-lbl">قیمت فروش (تومان)<input id="sale" class="fa-num-inp" type="text" inputmode="numeric" dir="ltr" placeholder="مثلاً ۲۵۰٬۰۰۰" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label><label class="field-lbl">تعداد<input id="qty" class="fa-num-inp" type="text" inputmode="numeric" dir="ltr" value="۱" placeholder="۱" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label><label class="field-lbl">کارمزد مبلغ (خالی = ۱۵٪)<input id="commission" class="fa-num-inp" type="text" inputmode="numeric" dir="ltr" placeholder="پیش‌فرض: ۱۵٪ قیمت فروش" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label><label class="field-lbl">حاشیه سود پیشنهادی (٪)<input id="targetMargin" class="fa-num-inp" type="text" inputmode="decimal" dir="ltr" value="۱۴" placeholder="۱۴" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label><label class="field-lbl">SKU<input id="sku" autocomplete="off"></label><label class="field-lbl">تنوع<input id="variant" autocomplete="off"></label><label class="field-lbl field-disabled" id="shippingWrap">هزینه ارسال (تومان)<input id="shippingCost" class="fa-num-inp" type="text" inputmode="numeric" dir="ltr" value="۱۵۰٬۰۰۰" placeholder="۱۵۰٬۰۰۰" disabled autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></label><label class="field-lbl">منبع بررسی عمیق<select id="platform" onchange="syncDeepBtnLabel()"><option value="all">همه (باسلام، دیجی‌کالا، اسنپ‌شاپ، ترب، ایمالز)</option><option value="basalam">باسلام</option><option value="digikala">دیجی‌کالا</option><option value="snappshop">اسنپ‌شاپ</option><option value="torob">ترب</option><option value="emalls">ایمالز</option></select></label></div><div class="exact-row"><label class="chk-pill" title="فقط محصولاتی با عنوان دقیقاً مطابق فیلد عنوان پیدا شوند"><input id="exactTitle" type="checkbox" onchange="syncExact()"><span>تطابق دقیق عنوان</span></label><label class="chk-pill is-disabled" id="exactAroundWrap" title="وقتی تطابق دقیق فعال است، وجود کلمات اضافی قبل و بعد عبارت عنوان مجاز شود"><input id="exactTitleAround" type="checkbox" disabled><span>مجاز بودن کلمات اضافی قبل و بعد عنوان</span></label></div><div class="mode-group" role="group" aria-label="نوع بررسی"><span class="mode-lbl">نوع بررسی:</span><label class="chk-pill is-active" id="modeQuestionWrap" title="حالت عادی بدون احتساب هزینه ارسال"><input id="modeQuestion" type="checkbox" checked onchange="syncInquiryMode(\'question\')"><span>💬 سوال مشتری</span></label><label class="chk-pill" id="modeOrderWrap" title="هزینه ارسال به هزینه خرید از تأمین‌کننده اضافه و در محاسبات لحاظ می‌شود"><input id="modeOrder" type="checkbox" onchange="syncInquiryMode(\'order\')"><span>📦 سفارش</span></label></div><div class="actions"><button class="btn" onclick="run(\'research\')">🔎 بررسی همه پروفایل‌ها</button><button class="btn deep" id="deepBtn" onclick="run(\'deep_basalam\')">🔬 بررسی عمیق باسلام، دیجی‌کالا، اسنپ‌شاپ، ترب و ایمالز</button></div><div class="msg" id="msg"></div></section><section class="result" id="result"></section><nav id="memberTabs" style="position:fixed;bottom:0;left:0;right:0;z-index:9;display:flex;justify-content:center;gap:8px;flex-wrap:wrap;padding:9px 12px;background:#0b1324f2;border-top:1px solid #334155;backdrop-filter:blur(10px)"><button class="btn" onclick="memberTab(0)">🔎 بررسی واجد شرایط</button><button class="btn" onclick="memberTab(1);loadPopular()">🏆 پرفروش/پرسش‌پرتکرار</button>'.$attendanceTab.'</nav><section id="memberPopular" style="display:none;background:#0f172a;border:1px solid #334155;border-radius:16px;padding:16px"><h2>🏆 محصولات پرفروش و پرتکرار</h2><p>مرتب‌شده بر اساس تعداد سفارش/پرسش؛ قیمت و پروفایل تأمین‌کننده نمایش داده می‌شود.</p><div id="popularMsg">در حال بارگذاری…</div><div style="overflow:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th>محصول</th><th>تعداد</th><th>قیمت</th><th>تأمین‌کننده</th></tr></thead><tbody id="popularRows"></tbody></table></div></section><section id="memberAttendance" style="display:none;background:#0f172a;border:1px solid #334155;border-radius:16px;padding:16px"><h2>🕒 حضور و ساعات کاری</h2><label>روز شمسی <input type="text" id="attDay" placeholder="۱۴۰۵/۰۸/۲۲"></label> <label>ساعت حضور <input type="number" id="attHours" min="0" max="24" step="0.25"></label> <button class="btn" onclick="saveAttendance()">ذخیره روز</button><div id="attMsg"></div><div id="attRows"></div></section></main><script>const esc=s=>String(s??"").replace(/[&<>"\']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","\'":"&#39;"}[c]));const fa=n=>Number(n||0).toLocaleString("fa-IR");const faPct=n=>Number(Math.round(Number(n||0)*100)/100).toLocaleString("fa-IR");const money=n=>fa(Math.round(Number(n||0)))+" تومان";const toFaDigits=s=>String(s??"").replace(/[0-9]/g,d=>"۰۱۲۳۴۵۶۷۸۹"[d]);const toEnDigits=s=>String(s??"").replace(/[۰-۹]/g,c=>"0123456789"["۰۱۲۳۴۵۶۷۸۹".indexOf(c)]).replace(/[٠-٩]/g,c=>"0123456789"["٠١٢٣٤٥٦٧٨٩".indexOf(c)]);function parseFaInt(val,defVal=0){const s=toEnDigits(val).replace(/[^0-9]/g,"");return s===""?defVal:Number(s);}function parseFaDecimal(val,defVal=14){let s=toEnDigits(val).replace(/[٬\s%٪]/g,"").replace(/[,،٫/]/g,".");const dot=s.indexOf(".");if(dot!==-1)s=s.slice(0,dot+1)+s.slice(dot+1).replace(/\./g,"");s=s.replace(/[^0-9.]/g,"");if(s===""||s===".")return defVal;const n=Number(s);return Number.isFinite(n)?Math.max(0,Math.min(95,n)):defVal;}function bindClearBtn(id){const el=document.getElementById(id);if(!el||el.dataset.clrBound==="1")return;el.dataset.clrBound="1";const wrap=document.createElement("span");wrap.className="inp-wrap";el.parentNode.insertBefore(wrap,el);wrap.appendChild(el);const btn=document.createElement("button");btn.type="button";btn.className="clr-btn";btn.setAttribute("aria-label","پاک کردن");btn.title="پاک کردن";btn.textContent="✕";wrap.appendChild(btn);const sync=()=>btn.classList.toggle("show",String(el.value||"")!=="");const markClr=e=>{e.preventDefault();e.stopPropagation();el.dataset.s4Clearing="1";setTimeout(()=>{if(el.dataset.s4Clearing==="1")delete el.dataset.s4Clearing;},120);};btn.addEventListener("pointerdown",markClr);btn.addEventListener("mousedown",markClr);btn.addEventListener("click",e=>{e.preventDefault();e.stopPropagation();el.dataset.s4Clearing="1";el.value="";el.dispatchEvent(new CustomEvent("s4:cleared"));el.dispatchEvent(new Event("input",{bubbles:true}));sync();try{el.focus({preventScroll:true});}catch(err){try{el.focus();}catch(e2){}}setTimeout(()=>{delete el.dataset.s4Clearing;},120);});el.addEventListener("input",sync);el.addEventListener("change",sync);el.addEventListener("blur",()=>setTimeout(sync,130));el.addEventListener("s4:syncClear",sync);sync();}["title","sale","qty","commission","targetMargin","shippingCost","sku","variant"].forEach(bindClearBtn);function bindFaNumInput(id,opts={}){const el=document.getElementById(id);if(!el)return;const isDecimal=!!opts.decimal,useGrouping=!!opts.thousands,fallback=opts.fallback??"";const normRaw=s=>toEnDigits(s).replace(/[^0-9.,،٫/]/g,"");let prevVal=String(el.value??""),prevNorm=normRaw(prevVal);el.addEventListener("s4:cleared",()=>{prevVal="";prevNorm="";});const formatVal=(focusRestore=true)=>{const raw=String(el.value??""),sel=typeof el.selectionStart==="number"?el.selectionStart:raw.length,atEnd=sel>=raw.length,before=raw.slice(0,sel);let tokensBefore=0;for(const ch of before){if(/[0-9۰-۹٠-٩]/.test(ch))tokensBefore++;else if(isDecimal&&/[.,،٫/]/.test(ch))tokensBefore++;}let clean=toEnDigits(raw),out="";if(isDecimal){clean=clean.replace(/[٬\s%٪]/g,"").replace(/[,،٫/]/g,".");const dot=clean.indexOf(".");if(dot!==-1)clean=clean.slice(0,dot+1)+clean.slice(dot+1).replace(/\./g,"");clean=clean.replace(/[^0-9.]/g,"");if(clean.startsWith("."))clean="0"+clean;out=toFaDigits(clean).replace(".","٫");}else{clean=clean.replace(/[^0-9]/g,"").replace(/^0+(?=\d)/,"");if(clean!==""){out=useGrouping?clean.replace(/\B(?=(\d{3})+(?!\d))/g,"٬"):clean;out=toFaDigits(out);}}if(el.value!==out){el.value=out;if(focusRestore&&!atEnd&&document.activeElement===el&&typeof el.setSelectionRange==="function"){let pos=0,seen=0;if(tokensBefore>0){for(let i=0;i<out.length;i++){const ch=out[i];if(/[۰-۹]/.test(ch)||(isDecimal&&ch==="٫"))seen++;pos=i+1;if(seen>=tokensBefore)break;}}try{el.setSelectionRange(pos,pos);}catch(e){}}}prevVal=String(el.value??"");prevNorm=normRaw(prevVal);el.dispatchEvent(new CustomEvent("s4:syncClear"));};el.addEventListener("input",e=>{if(e&&e.isComposing)return;const raw=String(el.value??""),nowNorm=normRaw(raw),isDel=(e&&typeof e.inputType==="string"&&e.inputType.indexOf("delete")===0)||(raw.length<prevVal.length&&nowNorm.length<=prevNorm.length);if(isDel){prevVal=raw;prevNorm=nowNorm;return;}formatVal(true);});el.addEventListener("compositionend",()=>formatVal(true));el.addEventListener("change",()=>formatVal(false));el.addEventListener("blur",()=>{if(el.dataset.s4Clearing==="1")return;if(fallback!==""&&String(el.value||"").trim()===""){el.value=toFaDigits(String(fallback));prevVal=el.value;prevNorm=normRaw(prevVal);el.dispatchEvent(new CustomEvent("s4:syncClear"));}else formatVal(false);});formatVal(false);}bindFaNumInput("sale",{thousands:true});bindFaNumInput("qty",{fallback:"۱"});bindFaNumInput("commission",{});bindFaNumInput("targetMargin",{decimal:true,fallback:"۱۴"});bindFaNumInput("shippingCost",{thousands:true,fallback:"۱۵۰٬۰۰۰"});let memberLastRes=null;function inquiryState(){const isOrder=!!document.getElementById("modeOrder")?.checked,raw=String(document.getElementById("shippingCost")?.value||"").trim();return{inquiry_mode:isOrder?"order":"question",shipping_cost:isOrder?(raw===""?150000:parseFaInt(raw,150000)):0};}function syncInquiryMode(src){const qEl=document.getElementById("modeQuestion"),oEl=document.getElementById("modeOrder"),qW=document.getElementById("modeQuestionWrap"),oW=document.getElementById("modeOrderWrap"),sEl=document.getElementById("shippingCost"),sW=document.getElementById("shippingWrap");let isOrder=false;if(src==="order"){isOrder=!!oEl?.checked;if(qEl)qEl.checked=!isOrder;}else if(src==="question"){const isQ=!!qEl?.checked;isOrder=!isQ;if(oEl)oEl.checked=isOrder;}else{isOrder=!!oEl?.checked&&!qEl?.checked;if(qEl)qEl.checked=!isOrder;if(oEl)oEl.checked=isOrder;}if(qW)qW.classList.toggle("is-active",!isOrder);if(oW)oW.classList.toggle("is-order-active",isOrder);if(sEl)sEl.disabled=!isOrder;if(sW)sW.classList.toggle("field-disabled",!isOrder);if(src!=="init")recomputeLiveResults();}const shInp=document.getElementById("shippingCost");if(shInp){shInp.addEventListener("input",()=>recomputeLiveResults());shInp.addEventListener("change",()=>recomputeLiveResults());}syncInquiryMode("init");function syncDeepBtnLabel(){const p=document.getElementById("platform")?.value||"all",b=document.getElementById("deepBtn");if(!b)return;const map={all:"🔬 بررسی عمیق باسلام، دیجی‌کالا، اسنپ‌شاپ، ترب و ایمالز",basalam:"🔬 بررسی عمیق کل باسلام",digikala:"🔬 بررسی عمیق کل دیجی‌کالا",snappshop:"🔬 بررسی عمیق کل اسنپ‌شاپ",torob:"🔬 بررسی عمیق کل ترب",emalls:"🔬 بررسی عمیق کل ایمالز"};b.textContent=map[p]||map.all;}syncDeepBtnLabel();const platName=p=>({basalam:"باسلام",digikala:"دیجی‌کالا",snappshop:"اسنپ‌شاپ",torob:"ترب",emalls:"ایمالز",other:"سایر"})[p]||(p||"فروشگاه");function initMemberFont(){const sel=document.getElementById("memberFontSel"),F=window.APP_FONTS||{};if(!sel)return;sel.innerHTML=Object.entries(F).map(([k,v])=>`<option value="${esc(k)}">${esc(v.label||k)}</option>`).join("");let cur=(typeof window.appFontCurrent==="function")?window.appFontCurrent():"vazirmatn";try{const saved=localStorage.getItem("s4_member_font");if(saved&&F[saved]){cur=saved;if(typeof window.appFontApply==="function")window.appFontApply(saved,false);}}catch(e){}sel.value=F[cur]?cur:"vazirmatn";}function setMemberFont(k){try{localStorage.setItem("s4_member_font",k);}catch(e){}if(typeof window.appFontApply==="function")window.appFontApply(k,true);}initMemberFont();function syncExact(){const on=!!document.getElementById("exactTitle").checked,c=document.getElementById("exactTitleAround"),w=document.getElementById("exactAroundWrap");if(c){c.disabled=!on;if(!on)c.checked=false;}if(w)w.classList.toggle("is-disabled",!on);}function calcRecPrice(cost,fixed=0,commPct=15,explicitComm=0,sale=0,targetPct=14){cost=Math.max(0,Number(cost||0));fixed=Math.max(0,Number(fixed||0));commPct=Math.max(0,Math.min(99,Number(commPct??15)));explicitComm=Math.max(0,Number(explicitComm||0));sale=Math.max(0,Number(sale||0));targetPct=Math.max(0,Math.min(99,Number(targetPct??14)));if(cost<=0)return{recommended_price:0,net_profit_unit:0,commission_pct:commPct,commission_amount:0};let useFixed=false,effPct=commPct;if(explicitComm>0){if(sale>0)effPct=(explicitComm/sale)*100;else useFixed=true;}if(useFixed){const denom=Number((100-targetPct).toFixed(6));if(denom<=0)return{recommended_price:0,net_profit_unit:0,commission_pct:0,commission_amount:explicitComm};let rec=Math.ceil(Number((((cost+fixed+explicitComm)*100)/denom).toFixed(4))),net=rec-cost-explicitComm-fixed;for(let i=0;i<10&&rec>0&&((net/rec)*100+1e-9)<targetPct;i++){rec++;net=rec-cost-explicitComm-fixed;}return{recommended_price:rec,net_profit_unit:net,commission_pct:rec>0?Math.round((explicitComm/rec)*10000)/100:0,commission_amount:explicitComm};}const denom=Number((100-effPct-targetPct).toFixed(6));if(denom<=0)return{recommended_price:0,net_profit_unit:0,commission_pct:Math.round(effPct*100)/100,commission_amount:0};let rec=Math.ceil(Number((((cost+fixed)*100)/denom).toFixed(4))),commAmt=Math.round(rec*(effPct/100)),net=rec-cost-commAmt-fixed;for(let i=0;i<10&&rec>0&&((net/rec)*100+1e-9)<targetPct;i++){rec++;commAmt=Math.round(rec*(effPct/100));net=rec-cost-commAmt-fixed;}return{recommended_price:rec,net_profit_unit:net,commission_pct:Math.round(effPct*100)/100,commission_amount:commAmt};}function varStats(z,vars,targetMargin=14){const c=z?.candidate||{},baseCost=Number(z?.cost_unit||c?.price||0),shipUnit=Number(z?.shipping_cost_unit||0),fixed=Number(z?.fixed_cost_unit||0),commPct=Number(z?.commission_pct??15),expComm=Number(z?.explicit_commission_unit||0),sale=Number(z?.sale_unit||0),tMargin=Number(z?.recommended_margin_pct??targetMargin??14),ps=(vars||[]).map(v=>Number(v?.price||0)).filter(n=>n>0),uniq=[...new Set(ps)],minP=ps.length?Math.min(...ps):Number(z?.price_min??c?.price_min??0),maxP=ps.length?Math.max(...ps):Number(z?.price_max??c?.price_max??0),hasDiff=Boolean(z?.price_varies||c?.price_varies)||(uniq.length>1)||(minP>0&&maxP>minP),rps=(vars||[]).map(v=>{const rp=Number(v?.recommended_price||0);if(rp>0)return rp;const ec=Number(v?.price||0)>0?Number(v.price):baseCost,eff=ec>0?(ec+shipUnit):0;return eff>0?calcRecPrice(eff,fixed,commPct,expComm,sale,tMargin).recommended_price:0;}).filter(n=>n>0),recMin=rps.length?Math.min(...rps):Number(z?.recommended_price_min||0),recMax=rps.length?Math.max(...rps):Number(z?.recommended_price_max||0);return{hasDiff,minP,maxP,recMin,recMax};}function fmtVars(vars,z,hasDiff,targetMargin=14){const c=z?.candidate||{},selLbl=String(c?.selected_variant?.label||"").trim(),sale=Number(z?.sale_unit||0),comm=Number(z?.commission_unit||0),fixed=Number(z?.fixed_cost_unit||0),baseCost=Number(z?.cost_unit||c?.price||0),shipUnit=Number(z?.shipping_cost_unit||0),shipTotal=Number(z?.shipping_cost_total||0),qty=Math.max(1,Number(z?.qty||1)),commPct=Number(z?.commission_pct??15),expComm=Number(z?.explicit_commission_unit||0),rowMargin=Number(z?.recommended_margin_pct??targetMargin??14);return (vars||[]).map(v=>{const attrs=Object.entries(v.attributes||{}).map(([k,val])=>`${esc(k)}: <b>${esc(val)}</b>`).join(" · ")||esc(v.label||v.title||"تنوع");const vLbl=String(v.label||Object.entries(v.attributes||{}).map(([k,val])=>`${k}: ${val}`).join(" · ")||"").trim();const isSel=selLbl!==""&&vLbl===selLbl;const vp=Number(v.price||0),rawCost=vp>0?vp:baseCost,effCost=rawCost>0?(rawCost+shipUnit):0,stkNum=Number(v.stock||0),inStk=stkNum>0||v.in_stock===true;const stkHtml=stkNum>0?`<span class="var-stock-ok">موجود (${fa(stkNum)} عدد)</span>`:(inStk?`<span class="var-stock-ok">موجود</span>`:`<span class="var-stock-no">ناموجود</span>`);const vMargin=Number(v?.recommended_margin_pct??rowMargin),vMarginTxt=faPct(vMargin),recObj=Number(v?.recommended_price||0)>0?{recommended_price:Number(v.recommended_price),net_profit_unit:Number(v.recommended_net_profit_unit||0),commission_pct:Number(v.recommended_commission_pct??commPct)}:calcRecPrice(effCost,fixed,commPct,expComm,sale,vMargin);const recHtml=recObj.recommended_price>0?`<span class="var-rec-tag" title="قیمت فروش مناسب با ${vMarginTxt}٪ حاشیه سود خالص (سود: ${money(recObj.net_profit_unit)})">🏷️ پیشنهاد ${vMarginTxt}٪: ${money(recObj.recommended_price)}</span>`:"";let pHtml="";if(sale>0&&vp>0){const vn=v.net_profit_unit!==undefined?Number(v.net_profit_unit):(sale-vp-shipUnit-comm-fixed),vm=v.net_margin_pct!==undefined?Number(v.net_margin_pct):Math.round(((sale*qty-vp*qty-shipTotal-comm*qty-fixed*qty)/(sale*qty))*1000)/10,pc=vn<=0?"neg":(v.eligible===false?"low":"pos");pHtml=`<span class="var-profit-pill ${pc}">سود: ${money(vn)} (${fa(vm)}٪)</span>`;}const shipNote=(shipUnit>0&&vp>0)?`<span class="muted" style="color:#fcd34d;font-weight:700">(با ارسال: ${money(vp+shipUnit)})</span>`:"";return `<div class="vars-item${isSel?" is-selected":""}"><span>${attrs}${isSel?` <span class="badge badge-exact">✓ انتخابی</span>`:""}</span><span class="var-meta"><span class="var-price-tag${hasDiff?" is-diff":""}">${vp>0?money(vp):"قیمت پایه"}</span>${shipNote}${recHtml}${stkHtml}${pHtml}</span></div>`;}).join("");}function recomputeMemberRow(z,inq,rules={}){if(!z||typeof z!=="object")return z;const c=Object.assign({},z.candidate||{}),baseCost=Math.max(0,Number(z.cost_unit||c.price||0)),qty=Math.max(1,Number(z.qty||1)),sale=Math.max(0,Number(z.sale_unit||0)),comm=Math.max(0,Number(z.commission_unit||0)),fixed=Math.max(0,Number(z.fixed_cost_unit||0)),commPct=Number(z.commission_pct??15),expComm=Math.max(0,Number(z.explicit_commission_unit||0)),recMargin=Number(z.recommended_margin_pct??z.profit?.recommended_margin_pct??14),minMargin=Number(rules?.min_margin_pct??10),minNet=Number(rules?.min_net_profit_toman??0),shipTotal=(inq?.inquiry_mode==="order"&&baseCost>0)?Math.max(0,Number(inq.shipping_cost||0)):0,shipUnit=shipTotal>0?Math.round(shipTotal/qty):0,effCost=baseCost>0?(baseCost+shipUnit):0,rec=effCost>0?calcRecPrice(effCost,fixed,commPct,expComm,sale,recMargin):{recommended_price:0,net_profit_unit:0,commission_pct:commPct,commission_amount:0},gross=sale-effCost,net=gross-comm-fixed,netTotal=(sale-baseCost-comm-fixed)*qty-shipTotal,margin=sale>0?Math.round(((sale*qty-baseCost*qty-shipTotal-comm*qty-fixed*qty)/(sale*qty))*10000)/100:0,eligibleProfit=sale>0&&baseCost>0&&margin>=minMargin&&net>=minNet,stock=Number(z.stock??c.stock??0),origVars=Array.isArray(z.variations)&&z.variations.length?z.variations:(Array.isArray(c.variations)?c.variations:[]),recPs=[],newVars=origVars.map(v=>{const nv=Object.assign({},v),vp=Math.max(0,Number(v?.price||0)),vBase=vp>0?vp:baseCost,vShipTotal=(inq?.inquiry_mode==="order"&&vBase>0)?Math.max(0,Number(inq.shipping_cost||0)):0,vShipUnit=vShipTotal>0?Math.round(vShipTotal/qty):0,vEff=vBase>0?(vBase+vShipUnit):0,vMargin=Number(v?.recommended_margin_pct??recMargin),vRec=vEff>0?calcRecPrice(vEff,fixed,commPct,expComm,sale,vMargin):{recommended_price:0,net_profit_unit:0,commission_pct:commPct};if(vRec.recommended_price>0)recPs.push(vRec.recommended_price);nv.base_price=vp;nv.shipping_cost_total=vShipTotal;nv.shipping_cost_unit=vShipUnit;nv.effective_cost_unit=vEff;nv.recommended_price=vRec.recommended_price;nv.recommended_margin_pct=vMargin;nv.recommended_net_profit_unit=vRec.net_profit_unit;nv.recommended_commission_pct=vRec.commission_pct;if(sale>0&&vp>0){const vn=sale-vp-vShipUnit-comm-fixed,vnTot=(sale-vp-comm-fixed)*qty-vShipTotal,vm=Math.round(((sale*qty-vp*qty-vShipTotal-comm*qty-fixed*qty)/(sale*qty))*10000)/100,vSt=Number(v?.stock||0)>0||v?.in_stock===true;nv.net_profit_unit=vn;nv.net_profit_total=vnTot;nv.net_margin_pct=vm;nv.eligible=vSt&&vm>=minMargin&&vn>=minNet;}return nv;}),recMin=recPs.length?Math.min(...recPs):(rec.recommended_price||0),recMax=recPs.length?Math.max(...recPs):(rec.recommended_price||0);c.variations=newVars;c.recommended_price_min=recMin;c.recommended_price_max=recMax;const profit=Object.assign({},z.profit||{},{gross_profit_unit:gross,net_profit_unit:net,net_margin_pct:margin,net_profit_total:netTotal,base_cost_unit:baseCost,shipping_cost_total:shipTotal,shipping_cost_unit:shipUnit,effective_cost_unit:effCost,eligible_profit:eligibleProfit,recommended_price:rec.recommended_price,recommended_margin_pct:recMargin,recommended_net_profit_unit:rec.net_profit_unit,recommended_commission_pct:rec.commission_pct,recommended_commission_amount:rec.commission_amount});return Object.assign({},z,{candidate:c,variations:newVars,shipping_cost_total:shipTotal,shipping_cost_unit:shipUnit,effective_cost_unit:effCost,qty,inquiry_mode:inq?.inquiry_mode==="order"?"order":"question",profit,recommended_price:rec.recommended_price,recommended_margin_pct:recMargin,recommended_net_profit_unit:rec.net_profit_unit,recommended_commission_pct:rec.commission_pct,recommended_price_min:recMin,recommended_price_max:recMax,eligible:Boolean(z.ok!==false&&baseCost>0&&stock>0&&eligibleProfit)});}function renderMemberResults(){if(!memberLastRes||!memberLastRes.data)return;const msg=document.getElementById("msg"),box=document.getElementById("result"),d=memberLastRes.data,action=memberLastRes.action,activeTargetMargin=Number(d.recommended_target_margin_pct??memberLastRes.targetMargin??14),inq=inquiryState(),rules=d.profit_rules||{},rawRows=d.results||d.rows||[],rows=rawRows.map(x=>x.research?Object.assign({},x,{research:recomputeMemberRow(x.research,inq,rules)}):recomputeMemberRow(x,inq,rules)),hasSale=rows.some(x=>Number((x.research||x).sale_unit||0)>0);rows.sort((a,b)=>{const za=a.research||a,zb=b.research||b,c=(zb.eligible?1:0)-(za.eligible?1:0)||((zb.candidate&&zb.candidate.title)?1:0)-((za.candidate&&za.candidate.title)?1:0);if(c!==0)return c;if(hasSale)return Number(zb.profit?.net_profit_unit??-1e15)-Number(za.profit?.net_profit_unit??-1e15)||Number(zb.candidate?.score||0)-Number(za.candidate?.score||0);return (Number(zb.stock||0)>0?1:0)-(Number(za.stock||0)>0?1:0)||(Math.round(Number(zb.candidate?.score||0)*100)-Math.round(Number(za.candidate?.score||0)*100))||(Number(za.cost_unit||1e15)-Number(zb.cost_unit||1e15));});const eligCnt=rows.filter(x=>!!(x.research||x).eligible).length,modeTxt=inq.inquiry_mode==="order"?` · 📦 سفارش (+${money(inq.shipping_cost)} ارسال)`:" · 💬 سوال مشتری",ssTxt=d.source_status?Object.entries(d.source_status).map(([k,v])=>`${platName(k)}: ${fa(v.count||0)}`).join(" · "):"";let summary=(d.profiles_checked!==undefined?`${fa(d.profiles_checked)} پروفایل${Number(d.direct_digikala_count||0)>0?` و ${fa(d.direct_digikala_count)} محصول دیجی‌کالا`:""}${Number(d.direct_torob_count||0)>0?` و ${fa(d.direct_torob_count)} محصول ترب`:""}${Number(d.direct_emalls_count||0)>0?` و ${fa(d.direct_emalls_count)} محصول ایمالز`:""} بررسی شد · ${fa(eligCnt)} واجد شرایط`:`${fa(d.catalog_rows||0)} نتیجه بررسی و جزئیات ${fa(d.details_checked||0)} محصول خوانده شد${ssTxt?` (${ssTxt})`:""} · ${fa(eligCnt)} واجد شرایط`)+modeTxt;if(d.exact_title)summary+=d.exact_title_around?" · 🎯 تطابق دقیق عنوان (با کلمات قبل/بعد)":" · 🎯 تطابق دقیق عنوان";msg.textContent=summary;window._memberCards={};let cardSeq=0;const qTitle=String(memberLastRes.queryTitle||document.getElementById("title")?.value||"").trim();box.innerHTML=rows.map(x=>{const z=x.research||x,c=z.candidate||{},p=z.profit||{},vars=(z.variations&&z.variations.length?z.variations:(c.variations||[])),errs=z.errors||[],net=Number(p.net_profit_unit??0),margin=Number(p.net_margin_pct??0),stock=Number(z.stock??c.stock??0),plat=c.platform||z.source_platform||"",shop=c.vendor_name||z.profile_name||c.shop_name||"فروشنده نامشخص",pCls=net<=0?"neg":(z.eligible?"pos":"low"),scorePct=c.score?Math.round(Number(c.score)*100):0,hasProfit=p.net_profit_unit!==undefined,recMargin=Number(z.recommended_margin_pct??p.recommended_margin_pct??activeTargetMargin??14),recMarginTxt=faPct(recMargin),vs=varStats(z,vars,recMargin),baseCost=Number(z.cost_unit||c.price||0),qty=Math.max(1,Number(z.qty||1)),shipTotal=baseCost>0?Math.max(0,Number(z.shipping_cost_total??p.shipping_cost_total??0)):0,shipUnit=baseCost>0?Math.max(0,Number(z.shipping_cost_unit??p.shipping_cost_unit??0)):0,effCost=baseCost>0?(Number(z.effective_cost_unit??p.effective_cost_unit??0)||(baseCost+shipUnit)):0,recFb=calcRecPrice(effCost,Number(z.fixed_cost_unit||0),Number(z.commission_pct??15),Number(z.explicit_commission_unit||0),Number(z.sale_unit||0),recMargin),recPrice=Number(z.recommended_price??p.recommended_price??0)||recFb.recommended_price,recNet=Number(z.recommended_net_profit_unit??p.recommended_net_profit_unit??0)||recFb.net_profit_unit,recCommPct=Number(z.recommended_commission_pct??p.recommended_commission_pct??z.commission_pct??15),recRangeTxt=(vs.hasDiff&&vs.recMin>0&&vs.recMax>vs.recMin)?`تنوع‌ها: از ${money(vs.recMin)} تا ${money(vs.recMax)}`:(recNet>0?`سود ${recMarginTxt}٪: ${money(recNet)} · کارمزد ${fa(recCommPct)}٪`:""),costKpiHtml=shipTotal>0&&baseCost>0?`<div class="kpi kpi-cost"><small>🛒 خرید با ارسال${qty>1?" (هر عدد)":""}</small><strong>${money(effCost)}</strong><div class="cost-sub">خرید کالا: ${money(baseCost)} + ارسال${qty>1?` (سهم از ${money(shipTotal)})`:""}: ${money(shipUnit)}</div>${vs.hasDiff?`<div class="muted" style="color:#d8b4fe;font-weight:700">تنوع‌ها با ارسال: از ${money(vs.minP+shipUnit)} تا ${money(vs.maxP+shipUnit)}</div>`:""}</div>`:`<div class="kpi kpi-cost"><small>قیمت خرید واحد</small><strong>${money(baseCost)}</strong>${vs.hasDiff?`<div class="muted" style="color:#d8b4fe;font-weight:700">تنوع‌ها: از ${money(vs.minP)} تا ${money(vs.maxP)}</div>`:""}</div>`;const actionRecPrice=Math.round(Number(recPrice||vs.recMin||0));let cardId=0;if(c.title&&actionRecPrice>0){cardId=++cardSeq;const varsPayload=(vars||[]).map(v=>{const vp=Number(v?.price||0),vc=vp>0?vp:baseCost,ve=vc>0?(vc+shipUnit):0,vm=Number(v?.recommended_margin_pct??recMargin),vr=Number(v?.recommended_price||0)>0?Math.round(Number(v.recommended_price)):(ve>0?calcRecPrice(ve,Number(z.fixed_cost_unit||0),Number(z.commission_pct??15),Number(z.explicit_commission_unit||0),Number(z.sale_unit||0),vm).recommended_price:0);return{attributes:v?.attributes||{},label:v?.label||"",title:v?.title||"",sku:v?.sku||"",price:vp,recommended_price:vr};});window._memberCards[cardId]={query_title:qTitle||String(x.item?.title||c.title||""),cand_title:String(c.title||""),profile_key:String(z.profile_key||c.profile_key||""),product_key:String(c.product_key||z.product_key||""),sku:String(c.sku||z.sku||""),cand_vendor_id:Number(c.vendor_id||0),cand_product_id:Number(c.source_product_id||0),recommended_price:actionRecPrice,recommended_margin_pct:recMargin,cost_unit:baseCost,effective_cost_unit:effCost,variations:varsPayload};}return `<article class="row ${z.eligible?"ok":(action==="deep_basalam"?"deep-hit":"")}"><div class="row-head"><div class="row-main">${c.image?`<img class="thumb" src="${esc(c.image)}" loading="lazy" alt="" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'grid\'"><div class="thumb-empty" style="display:none">🛍️</div>`:`<div class="thumb-empty">🛍️</div>`}<div><div class="row-title">${esc(c.title||z.profile_name||x.item?.title||"نتیجه")}</div><div class="badges">${plat?`<span class="badge badge-plat badge-plat-${esc(["basalam","digikala","snappshop","torob","emalls"].includes(plat)?plat:"other")}">${esc(platName(plat))}</span>`:""}<span class="badge">🏪 ${esc(shop)}</span>${shipTotal>0?`<span class="badge badge-ship">📦 سفارش (+${money(shipTotal)} ارسال)</span>`:""}${z.suffix?`<span class="badge">پسوند: ${esc(z.suffix)}</span>`:""}${vs.hasDiff?`<span class="badge badge-var-diff">🎨 ${fa(vars.length)} تنوع با قیمت متفاوت (${money(vs.minP)} تا ${money(vs.maxP)})</span>`:""}${c.exact_match?`<span class="badge badge-exact">🎯 ${c.exact_match_mode==="exact"?"تطابق دقیق":"تطابق دقیق + پیرامون"}</span>`:""}${scorePct?`<span class="badge badge-score">تطابق ${fa(scorePct)}٪</span>`:""}</div></div></div><span class="status-pill ${z.eligible?"ok":"warn"}">${z.eligible?"✅ واجد شرایط":"⚠ نیازمند بررسی"}</span></div>${c.title?`<div class="kpis">${costKpiHtml}${(recPrice>0||vs.recMin>0)?`<div class="kpi kpi-rec"><small>🏷️ قیمت پیشنهادی (${recMarginTxt}٪ سود)</small><strong>${money(recPrice||vs.recMin)}</strong>${recRangeTxt?`<div class="muted" style="color:#f9a8d4;font-weight:700">${recRangeTxt}</div>`:""}</div>`:""}<div class="kpi"><small>موجودی زنده</small><strong style="color:${stock>0?"#6ee7b7":"#fda4af"}">${fa(stock)} عدد</strong></div>${hasProfit?`<div class="kpi kpi-profit ${pCls}"><small>💰 سود خالص واحد</small><strong>${money(net)}</strong><div class="margin-tag">حاشیه سود: ${fa(margin)}٪${Number(p.net_profit_total||0)!==net?` · کل: ${money(p.net_profit_total)}`:""}</div></div>`:""}${z.sale_unit?`<div class="kpi"><small>فروش مبنا / کارمزد</small><strong>${money(z.sale_unit)}</strong><div class="muted">کارمزد: ${money(z.commission_unit||0)}</div></div>`:""}</div>`:`<div class="err-note">محصولی با این مشخصات در این منبع پیدا نشد.</div>`}${c.selected_variant?.label?`<div class="var-chip">🎨 تنوع انتخابی: ${esc(c.selected_variant.label)}</div>`:""}${vars.length?`<details class="vars-box${vs.hasDiff?" has-diff":""}"${vs.hasDiff?" open":""}><summary><span>${vs.hasDiff?`🎨 تنوع‌ها و قیمت‌های مختلف (${fa(vars.length)} مورد · ${money(vs.minP)} تا ${money(vs.maxP)})`:`تنوع‌های موجود (${fa(vars.length)})`}</span>${(vs.recMin>0||recPrice>0)?`<span style="color:#fbcfe8;font-weight:800">🏷️ پیشنهاد ${recMarginTxt}٪: ${(vs.hasDiff&&vs.recMin>0&&vs.recMax>vs.recMin)?`${money(vs.recMin)} تا ${money(vs.recMax)}`:money(vs.recMin||recPrice)}</span>`:""}</summary>${fmtVars(vars,z,vs.hasDiff,recMargin)}</details>`:""}${errs.length?`<div class="err-note">${esc(errs.join(" · "))}</div>`:""}${(c.url||cardId>0)?`<div class="row-foot"><span class="muted">${esc(c.reason||"")}</span><span class="foot-acts">${cardId>0?`<button type="button" class="upd-btn" onclick="updateAllShopsPrice(${cardId},this)">🏷️ آپدیت قیمت همه غرفه‌ها (${money(actionRecPrice)})</button>`:""}${c.url?`<a class="cta-link" href="${esc(c.url)}" target="_blank" rel="noopener">🔗 مشاهده محصول در ${esc(shop)} ↗</a>`:""}</span></div>${cardId>0?`<div id="memberUpdRes_${cardId}" class="upd-res"></div>`:""}`:""}</article>`}).join("")||`<article class="row">${Array.isArray(d.errors)&&d.errors.length?esc(d.errors.join(" · ")):"نتیجه‌ای با این فیلتر یافت نشد."}</article>`;}function fmtShopAdjTag(s){const g=Number(s?.global_pct||0),v=Number(s?.vendor_pct||0),tot=Number(s?.shop_pct||0),parts=[];if(g!==0)parts.push(`باسلام ${g>0?"+":""}${faPct(g)}٪`);if(v!==0)parts.push(`غرفه ${v>0?"+":""}${faPct(v)}٪`);if(!parts.length)return tot!==0?`تعدیل ${tot>0?"+":""}${faPct(tot)}٪`:"بدون تعدیل درصدی";return parts.join(" + ");}function fmtUpdateAllShopsResult(d){const shops=Array.isArray(d?.shops)?d.shops:[],baseP=Number(d?.base_recommended_price||0),rnd=Number(d?.round_step||0),updN=Number(d?.updated_count||0),totN=shops.length;let head=updN>0?`✅ قیمت در ${fa(updN)} از ${fa(totN)} غرفه با موفقیت آپدیت شد`:`⚠️ ${esc(d?.error||"قیمت هیچ غرفه‌ای آپدیت نشد")}`;if(baseP>0)head+=` · مبنای قیمت مناسب: ${money(baseP)}${rnd>0?` · گِرد: ${money(rnd)}`:""}`;const rows=shops.map(s=>{const st=String(s.status||""),icon=s.ok?"✅":(st==="not_found"?"🔎":"⚠️"),bef=Number(s.before_price_toman||0),aft=Number(s.after_price_toman||s.target_price_toman||0),adjTxt=fmtShopAdjTag(s),varTxt=Number(s.variant_count||0)>0?` (${fa(s.variant_count)} تنوع)`:"";let detail="";if(s.ok){const same=bef>0&&bef===aft&&Number(s.variant_count||0)===0;detail=same?`مطابق بود: <b>${money(aft)}</b>`:(bef>0?`${money(bef)} ← <b style="color:#6ee7b7">${money(aft)}</b>`:`<b style="color:#6ee7b7">${money(aft)}</b>`);detail+=varTxt;}else{detail=`<span style="color:#fca5a5">${esc(s.error||"ناموفق")}</span> (هدف: ${money(aft)})`;}return `<div class="upd-shop"><span>${icon} <b>${esc(s.shop_name||("غرفه "+s.vendor_id))}</b> <span style="color:#64748b">#${fa(s.vendor_id||"")}</span></span><span style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap"><span class="upd-adj">${esc(adjTxt)}</span><span>${detail}</span></span></div>`;}).join("");return `<div class="upd-head">${head}</div>${rows}`;}async function updateAllShopsPrice(cardId,btn){const payload=window._memberCards?.[cardId],box=document.getElementById("memberUpdRes_"+cardId);if(!payload||!btn)return;const orig=btn.innerHTML;btn.disabled=true;btn.textContent="⏳ در حال آپدیت قیمت همه غرفه‌ها…";if(box){box.style.display="block";box.className="upd-res";box.innerHTML=`<div style="color:#93c5fd">⏳ در حال یافتن محصول و اعمال تعدیل‌ها در همهٔ غرفه‌های باسلام…</div>`;}const f=new FormData;f.append("procurement_eligibility_api","update_all_shops_price");f.append("payload",JSON.stringify(payload));try{const r=await fetch(location.pathname+"?procurement_eligibility_api=update_all_shops_price",{method:"POST",body:f,cache:"no-store",credentials:"same-origin"});let d={};try{d=await r.json();}catch(_){throw Error("پاسخ نامعتبر سرور");}if(!r.ok||!d.ok)throw Object.assign(Error(d.error||"عملیات ناموفق"),{data:d});if(box){box.className="upd-res ok";box.innerHTML=fmtUpdateAllShopsResult(d);}}catch(e){const d=e?.data;if(box){box.className="upd-res err";box.innerHTML=(d&&Array.isArray(d.shops)&&d.shops.length)?fmtUpdateAllShopsResult(d):`<div style="color:#fca5a5">❌ ${esc(e?.message||"خطا در آپدیت قیمت")}</div>`;}}finally{btn.disabled=false;btn.innerHTML=orig;}}function recomputeLiveResults(){if(memberLastRes&&memberLastRes.data)renderMemberResults();}async function logout(){const f=new FormData;f.append("s4_access_action","logout");await fetch(location.pathname,{method:"POST",body:f,cache:"no-store",credentials:"same-origin"});const u=new URL(location.href);u.searchParams.delete("_v");location.replace(u.toString())}async function run(action){const title=document.getElementById("title").value.trim(),msg=document.getElementById("msg"),box=document.getElementById("result");if(!title){msg.textContent="نام محصول الزامی است";return}const exactOn=!!document.getElementById("exactTitle").checked,aroundOn=exactOn&&!!document.getElementById("exactTitleAround").checked,inq=inquiryState();const reqPlat=(document.getElementById("platform")||{}).value||"all";const waitMap={all:"در حال جستجوی عمیق باسلام، دیجی‌کالا، اسنپ‌شاپ، ترب و ایمالز…",basalam:"در حال جستجوی عمیق کل باسلام…",digikala:"در حال جستجوی عمیق کل دیجی‌کالا…",snappshop:"در حال جستجوی عمیق کل اسنپ‌شاپ…",torob:"در حال جستجوی عمیق کل ترب…",emalls:"در حال جستجوی عمیق کل ایمالز…"};msg.textContent=action==="deep_basalam"?(waitMap[reqPlat]||waitMap.all):"در حال بررسی پروفایل‌ها و پلتفرم انتخابی…";box.innerHTML="";memberLastRes=null;const targetMargin=parseFaDecimal((document.getElementById("targetMargin")||{}).value,14),saleVal=parseFaInt((document.getElementById("sale")||{}).value,0),qtyVal=Math.max(1,parseFaInt((document.getElementById("qty")||{}).value,1)),commVal=parseFaInt((document.getElementById("commission")||{}).value,0);const f=new FormData;f.append("procurement_eligibility_api",action);f.append("title",title);f.append("sale_price",saleVal?String(saleVal):"0");f.append("qty",String(qtyVal));f.append("commission",commVal?String(commVal):"0");f.append("target_margin_pct",String(targetMargin));f.append("inquiry_mode",inq.inquiry_mode);f.append("shipping_cost",String(inq.shipping_cost));for(const [k,id] of [["sku","sku"],["variant","variant"],["platform","platform"]])f.append(k,document.getElementById(id).value||"");f.append("exact_title",exactOn?"1":"0");f.append("exact_title_around",aroundOn?"1":"0");try{const r=await fetch(location.pathname+"?procurement_eligibility_api="+encodeURIComponent(action),{method:"POST",body:f,cache:"no-store",credentials:"same-origin"}),d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||"عملیات ناموفق");memberLastRes={action,data:d,targetMargin,queryTitle:title};renderMemberResults();}catch(e){msg.textContent="خطا: "+e.message}}function memberTab(which){const main=document.querySelector(\'main.wrap>.hero\');const result=document.getElementById(\'result\');if(main)main.style.display=which===0?\'\':\'none\';if(result)result.style.display=which===0?\'\':\'none\';[\'memberPopular\',\'memberAttendance\'].forEach((id,i)=>{const el=document.getElementById(id);if(el)el.style.display=which===i+1?\'\':\'none\';});}async function memberApi(action,extra={}){const f=new FormData;f.append(\'s4_access_action\',\'member_api\');f.append(\'member_action\',action);Object.entries(extra).forEach(([k,v])=>f.append(k,String(v)));const r=await fetch(location.pathname,{method:\'POST\',body:f,credentials:\'same-origin\',cache:\'no-store\'}),d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||\'خطا\');return d;}async function loadPopular(){const box=document.getElementById(\'popularMsg\');try{const d=await memberApi(\'popular\');document.getElementById(\'popularRows\').innerHTML=(d.items||[]).map(x=>\'<tr><td>\'+esc(x.title)+\'</td><td>\'+fa(x.count)+\'</td><td>\'+fa(x.price)+\' تومان</td><td>\'+esc(x.supplier)+(x.shop?\' (\'+esc(x.shop)+\')\':\'\')+\'</td></tr>\').join(\'\')||\'<tr><td colspan="4">هنوز آمار محصولی ثبت نشده است.</td></tr>\';box.textContent=\'\';}catch(e){box.textContent=e.message;}}async function loadAttendance(){try{const day=document.getElementById(\'attDay\').value,d=await memberApi(\'attendance\',day?{day}:{});if(d.day)document.getElementById(\'attDay\').value=d.day;document.getElementById(\'attRows\').innerHTML=\'<table>\'+Object.entries(d.days||{}).map(([k,v])=>\'<tr><td>\'+esc(k)+\'</td><td>\'+fa(v.hours||0)+\' ساعت</td></tr>\').join(\'\')+\'</table>\';}catch(e){document.getElementById(\'attMsg\').textContent=e.message;}}async function saveAttendance(){try{await memberApi(\'attendance\',{day:document.getElementById(\'attDay\').value,hours:document.getElementById(\'attHours\').value});document.getElementById(\'attMsg\').textContent=\'ثبت شد\';loadAttendance();}catch(e){document.getElementById(\'attMsg\').textContent=e.message;}}const S4_LOADED_VERSION="'.$loadedVer.'",S4_LOADED_SHA="'.$loadedSha.'";let memberSwPromise=null,memberCodeReloading=false,memberCapsChecked=false;function registerMemberShellWorker(){if(memberSwPromise)return memberSwPromise;if(typeof navigator==="undefined"||!("serviceWorker"in navigator)||!window.isSecureContext)return Promise.resolve(null);memberSwPromise=navigator.serviceWorker.register("?sw=1&app_v="+encodeURIComponent(S4_LOADED_VERSION),{updateViaCache:"none"}).then(reg=>Promise.race([navigator.serviceWorker.ready.then(()=>reg),new Promise(r=>setTimeout(()=>r(reg),1500))])).catch(()=>null);return memberSwPromise;}function refreshMemberShell(nextVer){return registerMemberShellWorker().then(reg=>{if(!reg)return false;const w=reg.active||reg.waiting||reg.installing||navigator.serviceWorker?.controller;if(!w||typeof MessageChannel==="undefined")return false;return new Promise(resolve=>{const ch=new MessageChannel();let done=false;const fin=ok=>{if(done)return;done=true;clearTimeout(tm);resolve(!!ok);};const tm=setTimeout(()=>fin(false),8000);ch.port1.onmessage=e=>fin(!!(e.data&&e.data.ok));try{w.postMessage({type:"refreshAppShell",targetVersion:String(nextVer||"")},[ch.port2]);}catch(_){fin(false);}});}).catch(()=>false);}async function applyMemberCodeReload(nextVer){if(memberCodeReloading)return;memberCodeReloading=true;await refreshMemberShell(nextVer);try{const u=new URL(location.href);u.searchParams.set("_v",Date.now());location.replace(u.toString());}catch(_){location.reload();}}function handleMemberVersionMismatch(nextVer){const label=String(nextVer||"جدید");const bar=document.getElementById("memberUpdBar"),txt=document.getElementById("memberUpdTxt");if(txt)txt.textContent="⬆ نسخهٔ جدید ("+label+") روی سرور فعال شد";const hasRes=!!(document.getElementById("result")&&document.getElementById("result").children.length);let autoOk=!hasRes;if(autoOk){try{const k="s4_member_reload_guard",prev=JSON.parse(sessionStorage.getItem(k)||"null")||{},sig=S4_LOADED_VERSION+":"+S4_LOADED_SHA,now=Date.now(),same=prev.from===sig&&String(prev.target||"")===label&&(now-(prev.ts||0))<60000,cnt=same?((prev.count||0)+1):1;sessionStorage.setItem(k,JSON.stringify({from:sig,target:label,ts:now,count:cnt}));if(cnt>=2)autoOk=false;}catch(_){}}if(autoOk){applyMemberCodeReload(label);return;}if(bar)bar.classList.add("show");}async function watchMemberCodeVersion(){if(memberCodeReloading||document.visibilityState==="hidden")return;try{let d=null;try{const r=await fetch("?code_auto_update=1&_watch="+Date.now(),{cache:"no-store",credentials:"same-origin"});if(r.ok)d=await r.json();}catch(_){}if(!d||!d.ok){try{const r2=await fetch("?code_update_status=1&_watch="+Date.now(),{cache:"no-store",credentials:"same-origin"});if(r2.ok)d=await r2.json();}catch(_){}}if(d&&d.ok){if(d.disk_sha&&S4_LOADED_SHA&&String(d.disk_sha)!==String(S4_LOADED_SHA)){handleMemberVersionMismatch(d.disk_version||d.to_version||d.version||"جدید");return;}const dv=String(d.disk_version||d.to_version||d.version||"");if(dv&&dv!==String(S4_LOADED_VERSION)){handleMemberVersionMismatch(dv);return;}}if(!memberCapsChecked){memberCapsChecked=true;try{const rc=await fetch(location.pathname+"?procurement_eligibility_api=capabilities&_="+Date.now(),{cache:"no-store",credentials:"same-origin"});if(rc.ok){const dc=await rc.json();if(dc&&dc.version&&String(dc.version)!==String(S4_LOADED_VERSION)){handleMemberVersionMismatch(dc.version);}}}catch(_){}}}catch(_){}}setTimeout(()=>{registerMemberShellWorker();watchMemberCodeVersion();},1800);setInterval(watchMemberCodeVersion,60000);window.addEventListener("focus",watchMemberCodeVersion);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")watchMemberCodeVersion();});</script></body></html>';exit;}
 function s4AccessTodayJalali():string{$tz=new DateTimeZone('Asia/Tehran');$now=new DateTimeImmutable('now',$tz);$gy=(int)$now->format('Y');$start=new DateTimeImmutable(sprintf('%04d-03-20 00:00:00',$gy),$tz);$jy=$gy-621;if($now<$start){$jy--;$start=new DateTimeImmutable(sprintf('%04d-03-20 00:00:00',$gy-1),$tz);}$days=(int)$start->diff($now)->format('%a');$jm=1;while($jm<=6&&$days>=31){$days-=31;$jm++;}while($jm<=11&&$days>=30){$days-=30;$jm++;}if($days>29)$days=29;return sprintf('%04d/%02d/%02d',$jy,$jm,$days+1);}
 function s4MemberProductStatBump(string $title,int $qty,string $kind,int $productId=0,string $shop='',int $price=0):void{$title=trim($title);if($title==='')return;$dir=__DIR__.'/.s4_private';if(!is_dir($dir))@mkdir($dir,0700,true);if(is_dir($dir)&&!is_file($dir.'/.htaccess'))@file_put_contents($dir.'/.htaccess',"Require all denied\nDeny from all\n",LOCK_EX);$f=$dir.'/member_product_stats.json';$lock=@fopen($f.'.lock','c');if(!$lock||!@flock($lock,LOCK_EX)){if($lock)@fclose($lock);return;}try{$d=json_decode((string)@file_get_contents($f),true);if(!is_array($d))$d=[];$key=$productId>0?'p'.$productId:'t'.sha1(mb_strtolower(preg_replace('/\s+/u',' ',$title),'UTF-8'));$r=is_array($d[$key]??null)?$d[$key]:['title'=>$title,'product_id'=>$productId,'orders'=>0,'asked'=>0,'price'=>0,'shop'=>''];$r['title']=$title;$r['product_id']=$productId?:((int)($r['product_id']??0));$r[$kind]=max(0,(int)($r[$kind]??0))+max(1,$qty);if($shop!=='')$r['shop']=$shop;if($price>0)$r['price']=$price;$r['updated_at']=time();$d[$key]=$r;@file_put_contents($f,json_encode($d,JSON_UNESCAPED_UNICODE|JSON_INVALID_UTF8_SUBSTITUTE),LOCK_EX);}finally{@flock($lock,LOCK_UN);@fclose($lock);}}
@@ -466,15 +735,15 @@ function s4AccessHandle():void{if(!isset($_REQUEST['s4_access_action']))return;$
         }
         s4AccessJson(['ok'=>false,'error'=>'عملیات ناشناخته'],400);
     }
-    if(!$current||($current['role']??'')!=='admin')s4AccessJson(['ok'=>false,'error'=>'دسترسی مدیر لازم است'],403);if($action==='status'){$users=[];foreach($d['users']as$u)if(is_array($u))$users[]=s4AccessPublicUser($u);s4AccessJson(['ok'=>true,'enabled'=>!empty($d['enabled']),'current'=>s4AccessPublicUser($current),'users'=>$users,'roles'=>['admin','user','supervisor'],'persistent_sessions'=>true,'member_workspace'=>'order_eligibility']);}if(!s4AccessSameOrigin())s4AccessJson(['ok'=>false,'error'=>'origin_mismatch'],403);
+    if(!$current||($current['role']??'')!=='admin')s4AccessJson(['ok'=>false,'error'=>'دسترسی مدیر لازم است'],403);if($action==='status'){$users=[];foreach($d['users']as$u)if(is_array($u))$users[]=s4AccessPublicUser($u);s4AccessJson(['ok'=>true,'enabled'=>!empty($d['enabled']),'current'=>s4AccessPublicUser($current),'users'=>$users,'roles'=>['admin','user','supervisor','vendor'],'persistent_sessions'=>true,'member_workspace'=>'order_eligibility']);}if(!s4AccessSameOrigin())s4AccessJson(['ok'=>false,'error'=>'origin_mismatch'],403);
     $lock=@fopen(s4AccessFile().'.lock','c');if(!$lock||!@flock($lock,LOCK_EX)){if($lock)@fclose($lock);s4AccessJson(['ok'=>false,'error'=>'access_lock_failed'],503);}try{$d=s4AccessLoad();$current=s4AccessCurrent($d);if(!$current||($current['role']??'')!=='admin')s4AccessJson(['ok'=>false,'error'=>'دسترسی مدیر لازم است'],403);
         if($action==='settings'){$enabled=!empty($_POST['enabled']);$d['enabled']=$enabled;if($enabled&&empty($current['session_hash'])){$adminKey=s4AccessUserKey((string)$current['username']);$token=s4AccessIssueSession($d,$adminKey);s4AccessSetCookie($token);}if(!s4AccessSave($d))s4AccessJson(['ok'=>false,'error'=>'ذخیره تنظیمات ناموفق بود'],500);s4AccessJson(['ok'=>true,'enabled'=>$enabled]);}
-        if($action==='save_user'){$original=s4AccessUserKey((string)($_POST['original_username']??''));$username=trim((string)($_POST['username']??''));$key=s4AccessUserKey($username);$display=trim((string)($_POST['display_name']??''));$role=(string)($_POST['role']??'user');$password=(string)($_POST['password']??'');if($key===''||s4AccessTextLen($username)<3||s4AccessTextLen($username)>64)s4AccessJson(['ok'=>false,'error'=>'نام کاربری باید ۳ تا ۶۴ نویسه باشد'],422);if(!in_array($role,['admin','user','supervisor'],true))$role='user';$old=$original!==''&&isset($d['users'][$original])?(array)$d['users'][$original]:[];if(!$old&&isset($d['users'][$key]))s4AccessJson(['ok'=>false,'error'=>'نام کاربری تکراری است'],409);$allowBlank=$role==='admin'&&!empty($_POST['allow_blank_password']);if(!$old&&$password===''&&!$allowBlank)s4AccessJson(['ok'=>false,'error'=>'برای کاربر جدید کلمه عبور تعیین کنید'],422);if($password!==''&&s4AccessTextLen($password)<4)s4AccessJson(['ok'=>false,'error'=>'کلمه عبور حداقل ۴ نویسه باشد'],422);$adminOthers=array_filter($d['users'],fn($u,$uk)=>is_array($u)&&($u['role']??'')==='admin'&&$uk!==$original,ARRAY_FILTER_USE_BOTH);if($old&&($old['role']??'')==='admin'&&!$adminOthers&&($role!=='admin'||!empty($_POST['disabled'])))s4AccessJson(['ok'=>false,'error'=>'آخرین مدیر باید فعال و با نقش مدیر باقی بماند'],422);$hash=array_key_exists('password_hash',$old)?(string)$old['password_hash']:'';if($password!==''||$allowBlank)$hash=$password===''?'':password_hash($password,PASSWORD_DEFAULT);$u=array_replace($old,['username'=>$username,'display_name'=>$display!==''?$display:$username,'role'=>$role,'password_hash'=>$hash,'disabled'=>!empty($_POST['disabled']),'created_at'=>(int)($old['created_at']??time()),'updated_at'=>time()]);if($original!==''&&$original!==$key){if(isset($d['users'][$key]))s4AccessJson(['ok'=>false,'error'=>'نام کاربری تکراری است'],409);unset($d['users'][$original]);foreach($d['sessions']as&$sess)if(($sess['user_key']??'')===$original)$sess['user_key']=$key;unset($sess);}$d['users'][$key]=$u;if($password!==''||$allowBlank)foreach(array_keys($d['sessions'])as$sh)if(($d['sessions'][$sh]['user_key']??'')===$key&&$sh!==($current['session_hash']??''))unset($d['sessions'][$sh]);if(!s4AccessSave($d))s4AccessJson(['ok'=>false,'error'=>'ذخیره کاربر ناموفق بود'],500);s4AccessJson(['ok'=>true,'user'=>s4AccessPublicUser($u)]);}
+        if($action==='save_user'){$original=s4AccessUserKey((string)($_POST['original_username']??''));$username=trim((string)($_POST['username']??''));$key=s4AccessUserKey($username);$display=trim((string)($_POST['display_name']??''));$role=(string)($_POST['role']??'user');$password=(string)($_POST['password']??'');if($key===''||s4AccessTextLen($username)<3||s4AccessTextLen($username)>64)s4AccessJson(['ok'=>false,'error'=>'نام کاربری باید ۳ تا ۶۴ نویسه باشد'],422);if(!in_array($role,['admin','user','supervisor','vendor'],true))$role='user';$old=$original!==''&&isset($d['users'][$original])?(array)$d['users'][$original]:[];if(!$old&&isset($d['users'][$key]))s4AccessJson(['ok'=>false,'error'=>'نام کاربری تکراری است'],409);$allowBlank=$role==='admin'&&!empty($_POST['allow_blank_password']);if(!$old&&$password===''&&!$allowBlank)s4AccessJson(['ok'=>false,'error'=>'برای کاربر جدید کلمه عبور تعیین کنید'],422);if($password!==''&&s4AccessTextLen($password)<4)s4AccessJson(['ok'=>false,'error'=>'کلمه عبور حداقل ۴ نویسه باشد'],422);$adminOthers=array_filter($d['users'],fn($u,$uk)=>is_array($u)&&($u['role']??'')==='admin'&&$uk!==$original,ARRAY_FILTER_USE_BOTH);if($old&&($old['role']??'')==='admin'&&!$adminOthers&&($role!=='admin'||!empty($_POST['disabled'])))s4AccessJson(['ok'=>false,'error'=>'آخرین مدیر باید فعال و با نقش مدیر باقی بماند'],422);$hash=array_key_exists('password_hash',$old)?(string)$old['password_hash']:'';if($password!==''||$allowBlank)$hash=$password===''?'':password_hash($password,PASSWORD_DEFAULT);$u=array_replace($old,['username'=>$username,'display_name'=>$display!==''?$display:$username,'role'=>$role,'password_hash'=>$hash,'disabled'=>!empty($_POST['disabled']),'created_at'=>(int)($old['created_at']??time()),'updated_at'=>time()]);if($original!==''&&$original!==$key){if(isset($d['users'][$key]))s4AccessJson(['ok'=>false,'error'=>'نام کاربری تکراری است'],409);unset($d['users'][$original]);foreach($d['sessions']as&$sess)if(($sess['user_key']??'')===$original)$sess['user_key']=$key;unset($sess);}$d['users'][$key]=$u;if($password!==''||$allowBlank)foreach(array_keys($d['sessions'])as$sh)if(($d['sessions'][$sh]['user_key']??'')===$key&&$sh!==($current['session_hash']??''))unset($d['sessions'][$sh]);if(!s4AccessSave($d))s4AccessJson(['ok'=>false,'error'=>'ذخیره کاربر ناموفق بود'],500);s4AccessJson(['ok'=>true,'user'=>s4AccessPublicUser($u)]);}
         if($action==='delete_user'){$key=s4AccessUserKey((string)($_POST['username']??''));if($key===s4AccessUserKey((string)$current['username']))s4AccessJson(['ok'=>false,'error'=>'مدیر نمی‌تواند حساب فعال خودش را حذف کند'],422);if(($d['users'][$key]['role']??'')==='admin'&&count(array_filter($d['users'],fn($u)=>is_array($u)&&($u['role']??'')==='admin'))<=1)s4AccessJson(['ok'=>false,'error'=>'آخرین مدیر قابل حذف نیست'],422);unset($d['users'][$key]);foreach(array_keys($d['sessions'])as$sh)if(($d['sessions'][$sh]['user_key']??'')===$key)unset($d['sessions'][$sh]);s4AccessSave($d);s4AccessJson(['ok'=>true]);}
         s4AccessJson(['ok'=>false,'error'=>'عملیات ناشناخته'],400);
     }finally{@flock($lock,LOCK_UN);@fclose($lock);}}
 s4AccessHandle();
-if(PHP_SAPI!=='cli'){$__s4Access=s4AccessLoad();if(!empty($__s4Access['enabled'])&&!s4AccessPublicAutomation()){$__s4User=s4AccessCurrent($__s4Access);if(!$__s4User){$isMain=empty($_POST)&&!array_diff(array_keys($_GET),['_v','s4_shell_cache','_']);if($isMain)s4AccessLoginPage();s4AccessJson(['ok'=>false,'error'=>'login_required'],401);}if(($__s4User['role']??'user')!=='admin'){$isEligibility=isset($_GET['procurement_eligibility_api'])||isset($_POST['procurement_eligibility_api']);$isMemberApi=isset($_POST['s4_access_action'])&&$_POST['s4_access_action']==='member_api';$isSw=isset($_GET['sw'])&&empty($_POST)&&!array_diff(array_keys($_GET),['sw','app_v','_']);$isShell=empty($_POST)&&!array_diff(array_keys($_GET),['_v','s4_shell_cache','_']);if($isEligibility||$isMemberApi||$isSw){/* authenticated member endpoint */}elseif($isShell)s4AccessMemberWorkspace($__s4User);else s4AccessJson(['ok'=>false,'error'=>'workspace_restricted'],403);}}unset($__s4Access,$__s4User);}
+if(PHP_SAPI!=='cli'){$__s4Access=s4AccessLoad();if(!empty($__s4Access['enabled'])&&!s4AccessPublicAutomation()){$__s4User=s4AccessCurrent($__s4Access);$GLOBALS['_s4CurrentUser']=is_array($__s4User)?$__s4User:null;if(!$__s4User){$isMain=empty($_POST)&&!array_diff(array_keys($_GET),['_v','s4_shell_cache','_']);if($isMain)s4AccessLoginPage();s4AccessJson(['ok'=>false,'error'=>'login_required'],401);}if(($__s4User['role']??'user')!=='admin'){$isEligibility=isset($_GET['procurement_eligibility_api'])||isset($_POST['procurement_eligibility_api']);$isMemberApi=isset($_POST['s4_access_action'])&&$_POST['s4_access_action']==='member_api';$isSw=isset($_GET['sw'])&&empty($_POST)&&!array_diff(array_keys($_GET),['sw','app_v','_']);$isShell=empty($_POST)&&!array_diff(array_keys($_GET),['_v','s4_shell_cache','_']);if($isEligibility||$isMemberApi||$isSw){/* authenticated member endpoint */}elseif($isShell){if(($__s4User['role']??'')==='vendor')s4AccessVendorWorkspace($__s4User);s4AccessMemberWorkspace($__s4User);}else s4AccessJson(['ok'=>false,'error'=>'workspace_restricted'],403);}}unset($__s4Access,$__s4User);}
 
 
 if (!function_exists('str_starts_with')) {
@@ -1429,7 +1698,8 @@ function s4WorkerBackendExtractRowIsDeadOrphan(array $e): bool {
     if ((string)($e['type'] ?? '') !== 'backend_extract' || (string)($e['status'] ?? '') !== 'running') return false;
     $pid = (int)($e['worker_pid'] ?? 0);
     $age = time() - (int)($e['updated_at'] ?? $e['started_at'] ?? 0);
-    $pidDead = ($pid > 0 && !s4WorkerPidAlive($pid)) || ($pid <= 0 && $age > 25);
+    $laneGrace = (string)($e['lane'] ?? '') === 'web' && (time() - (int)($e['lane_claimed_at'] ?? 0)) < 60;
+    $pidDead = ($pid > 0 && !s4WorkerPidAlive($pid)) || ($pid <= 0 && $age > 25 && !$laneGrace);
     if (!$pidDead) return false;
     $eqId = trim((string)($e['payload']['extract_queue_id'] ?? ''));
     if ($eqId !== '' && function_exists('extractLockHeldForQueue') && extractLockHeldForQueue($eqId)) return false;
@@ -1575,6 +1845,10 @@ function s4WorkerClaimJob(): ?array {
     $ret = s4WorkerQueueMutate(function (&$q) {
         $now = time();$pick=-1;$pickRank=PHP_INT_MAX;$pickClass='';
         $parallelExtract=s4ParallelExtractSupported()&&(extractTaskConcurrency()>=1||s4WorkerParallelExtractRunning()>0);
+        /* v10.743: on exec-free hosts the bounded web lanes own extraction while
+           they are proven healthy, so one long extraction can no longer hold the
+           single web-worker slice and starve every other queued job. */
+        if(!$parallelExtract&&function_exists('s4WebExtractLanesHealthy')&&s4WebExtractLanesHealthy())$parallelExtract=true;
         /* v10.693: strict alternation prevents both starvation directions. A
            matrix build/fix may wait for at most one serialized manual job, and
            manual work gets one turn between recycled matrix segments. Parallel
@@ -2359,7 +2633,7 @@ function s4WorkerRunManualSyncChild(string $profileKey, bool $resume, string $or
         'error'         => (!$logicalOk ? (string)($payload['error'] ?? 'manual_sync_rejected') : ($rc !== 0 ? 'manual_sync_child_exit_' . $rc : '')),
         'busy'          => is_array($payload) && !empty($payload['busy']),
         'resume_needed' => is_array($payload) && !empty($payload['resume_needed']),
-        'retryable'     => is_array($payload) && !empty($payload['retryable']),
+        'retryable'     => is_array($payload) && (!empty($payload['retryable']) || !empty($payload['busy'])),
         'retry_delay'   => is_array($payload) ? max(3,(int)($payload['retry_delay']??10)) : 10,
         'ran_out'       => is_array($payload) && !empty($payload['ran_out']),
         'resume_page'   => is_array($payload) ? (int)($payload['resume_page'] ?? 0) : 0,
@@ -2782,6 +3056,164 @@ function s4UseHttpChild(): bool {
 }
 
 /** Fire-and-forget loopback request; returns without waiting for the slice. */
+/** v10.743: fire-and-forget loopback request shared by the web worker and the
+ * bounded web extraction lanes. The target detaches server-side, so a timeout
+ * still means "accepted". */
+function s4WebLoopbackKick(string $qs): array {
+    $caps = s4RuntimeCaps();
+    $url = s4SelfUrl();
+    if ($url === '') return ['ok' => false, 'error' => 'self_url_unknown'];
+    $target = $url . $qs;
+    $curlErr = null;
+    if (!empty($caps['curl'])) {
+        $ch = @curl_init($target);
+        if ($ch) {
+            @curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true, CURLOPT_NOSIGNAL => 1,
+                CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT_MS => 1500,
+                CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_HTTPHEADER => ['X-S4-Web-Worker: 1'],
+            ]);
+            $body = (string)@curl_exec($ch);
+            $errno = (int)@curl_errno($ch);
+            $code = (int)@curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            @curl_close($ch);
+            if ($errno === 0 || $errno === CURLE_OPERATION_TIMEDOUT) {
+                return ['ok' => true, 'via' => 'curl', 'http' => $code, 'detached' => $errno !== 0,
+                        'body' => mb_substr($body, 0, 200)];
+            }
+            $curlErr = $errno;
+        }
+    }
+    $parts = parse_url($target);
+    $host = (string)($parts['host'] ?? '');
+    if ($host === '') return ['ok' => false, 'error' => 'self_url_unparsable'];
+    $https = (string)($parts['scheme'] ?? 'http') === 'https';
+    $port = (int)($parts['port'] ?? ($https ? 443 : 80));
+    $path = (string)($parts['path'] ?? '/') . (isset($parts['query']) ? ('?' . $parts['query']) : '');
+    $remote = ($https ? 'ssl://' : 'tcp://') . $host . ':' . $port;
+    $fp = @stream_socket_client($remote, $eno, $estr, 5, STREAM_CLIENT_CONNECT,
+        stream_context_create(['ssl' => ['verify_peer' => false, 'verify_peer_name' => false]]));
+    if (!$fp) return ['ok' => false, 'error' => 'socket_failed', 'detail' => (string)$estr, 'curl_errno' => $curlErr];
+    @fwrite($fp, "GET $path HTTP/1.1\r\nHost: $host\r\nX-S4-Web-Worker: 1\r\nConnection: close\r\n\r\n");
+    @stream_set_timeout($fp, 2);
+    @fgets($fp, 128);
+    @fclose($fp);
+    return ['ok' => true, 'via' => 'socket'];
+}
+
+/* =====================================================================
+ *  v10.743: bounded parallel extraction lanes for hosts without exec.
+ *
+ *  The CLI pool (s4DispatchParallelExtractJobs) needs exec. On Noviex every
+ *  extraction therefore queued behind the single web-worker slice: one 60-page
+ *  profile could hold the only lane for hours while the rest of the queue
+ *  looked "pending and never starting". These lanes claim extraction jobs
+ *  atomically and run each one inside its own detached loopback request, with
+ *  the same concurrency bound the CLI pool uses.
+ * ===================================================================== */
+function s4WebExtractLanesSupported(): bool {
+    if (function_exists('s4RuntimeCanSpawnCli') && s4RuntimeCanSpawnCli()) return false;
+    if (defined('WORKER_STOP_FILE') && is_file(WORKER_STOP_FILE)) return false;
+    $caps = s4RuntimeCaps();
+    return !empty($caps['can_self_http']);
+}
+function s4WebExtractPendingCount(): int {
+    $now = time(); $n = 0;
+    foreach ((array)(s4WorkerLoadQueue()['entries'] ?? []) as $e) {
+        if (!is_array($e) || (string)($e['type'] ?? '') !== 'backend_extract') continue;
+        if ((string)($e['status'] ?? '') !== 'pending' || (int)($e['retry_after'] ?? 0) > $now) continue;
+        $n++;
+    }
+    return $n;
+}
+/** Claim exactly one pending extraction job for a lane. */
+function s4WebExtractClaimJob(): ?array {
+    $ret = s4WorkerQueueMutate(function (&$q) {
+        $now = time();
+        foreach ($q['entries'] as &$e) {
+            if (!is_array($e) || (string)($e['type'] ?? '') !== 'backend_extract') continue;
+            if ((string)($e['status'] ?? '') !== 'pending' || (int)($e['retry_after'] ?? 0) > $now) continue;
+            $e['status'] = 'running'; $e['started_at'] = $now; $e['updated_at'] = $now;
+            $e['attempts'] = (int)($e['attempts'] ?? 0) + 1; $e['worker_pid'] = 0;
+            $e['lane'] = 'web'; $e['lane_claimed_at'] = $now;
+            $job = $e; unset($e);
+            return ['ok' => true, 'job' => $job];
+        }
+        unset($e);
+        return ['ok' => true, 'job' => null];
+    });
+    return is_array($ret['job'] ?? null) ? $ret['job'] : null;
+}
+/** Return a lane job to the queue when its request could not be started. */
+function s4WebExtractReleaseJob(string $jobId, string $reason, int $delay = 15): void {
+    if ($jobId === '') return;
+    if (function_exists('s4WorkerRequeueForRetry')) s4WorkerRequeueForRetry($jobId, $reason, $delay);
+}
+/** Lanes are only trusted while a recent loopback kick actually worked; when the
+ * loopback breaks the main web-worker slice takes extraction back automatically. */
+function s4WebExtractLanesHealthy(): bool {
+    if (!s4WebExtractLanesSupported()) return false;
+    $at = (int)(s4WebWorkerStateLoad()['lane_ok_at'] ?? 0);
+    return $at > 0 && (time() - $at) < 300;
+}
+function s4WebExtractLaneKick(string $jobId): array {
+    $qs = '?web_extract_lane=1&token=' . rawurlencode(s4WebWorkerToken())
+        . '&job=' . rawurlencode($jobId) . '&_=' . time();
+    return s4WebLoopbackKick($qs);
+}
+/** Fill free extraction slots with detached loopback lanes. */
+function s4WebExtractDispatch(string $source = 'auto'): array {
+    if (!s4WebExtractLanesSupported()) return ['ok' => false, 'skipped' => 'lanes_unsupported'];
+    if (function_exists('s4SettingsPriorityActive') && s4SettingsPriorityActive())
+        return ['ok' => true, 'skipped' => 'foreground_settings_priority'];
+    $limit = max(1, extractTaskConcurrency());
+    $running = function_exists('s4WorkerParallelExtractRunning') ? s4WorkerParallelExtractRunning() : 0;
+    $free = $limit - $running;
+    if ($free < 1) return ['ok' => true, 'skipped' => 'lanes_busy', 'running' => $running, 'limit' => $limit];
+    $pending = s4WebExtractPendingCount();
+    if ($pending < 1) return ['ok' => true, 'skipped' => 'no_pending_extract', 'running' => $running, 'limit' => $limit];
+    $started = []; $failed = [];
+    for ($i = 0; $i < $free; $i++) {
+        $job = s4WebExtractClaimJob();
+        if (!$job) break;
+        $jid = (string)($job['id'] ?? '');
+        $kick = s4WebExtractLaneKick($jid);
+        if (!empty($kick['ok'])) { $started[] = $jid; s4WebWorkerStateWrite(['lane_ok_at' => time()]); continue; }
+        s4WebExtractReleaseJob($jid, 'web_lane_kick_failed', 20);
+        $failed[] = ['job' => $jid, 'error' => (string)($kick['error'] ?? 'kick_failed')];
+        break;                              // a broken loopback must not burn the queue
+    }
+    s4WebWorkerStateWrite(['last_lane_dispatch_at' => time(), 'last_lane_source' => $source,
+        'last_lane_started' => count($started), 'lane_limit' => $limit, 'lane_running' => $running]);
+    return ['ok' => true, 'engine' => 'web_worker', 'limit' => $limit, 'running_before' => $running,
+            'pending' => $pending, 'started' => $started, 'failed' => $failed, 'source' => $source];
+}
+/** One extraction job inside its own detached request. */
+function s4WebExtractLaneRun(string $jobId): array {
+    @set_time_limit(0);
+    @ignore_user_abort(true);
+    if ($jobId === '') return ['ok' => false, 'error' => 'lane_job_missing'];
+    $claimed = s4WorkerQueueMutate(function (&$q) use ($jobId) {
+        foreach ($q['entries'] as &$e) {
+            if (!is_array($e) || (string)($e['id'] ?? '') !== $jobId) continue;
+            if ((string)($e['status'] ?? '') !== 'running') { $st = (string)($e['status'] ?? ''); unset($e); return ['ok' => false, 'status' => $st]; }
+            $e['worker_pid'] = (int)@getmypid(); $e['updated_at'] = time();
+            unset($e);
+            return ['ok' => true];
+        }
+        unset($e);
+        return ['ok' => false, 'status' => 'missing'];
+    });
+    if (empty($claimed['ok'])) return ['ok' => false, 'error' => 'lane_job_not_claimable', 'status' => (string)($claimed['status'] ?? '')];
+    $GLOBALS['_s4WebExtractLane'] = $jobId;
+    $res = s4RunParallelExtractJob($jobId);
+    unset($GLOBALS['_s4WebExtractLane']);
+    /* Keep the pool full: finishing one job immediately offers its slot to the
+       next queued extraction. */
+    $res['lane_next'] = s4WebExtractDispatch('lane_finish');
+    return $res;
+}
 function s4WebWorkerKick(string $source = 'auto', int $chain = 0): array {
     $caps = s4RuntimeCaps();
     $url = s4SelfUrl();
@@ -2925,6 +3357,7 @@ function s4WebWorkerRunSlice(string $source = 'auto', int $chain = 0): array {
     /* Chain only after real progress: a slice that claimed nothing must not
        spawn an endless series of no-op loopback requests. Re-arming then falls
        back to the next enqueue, cron pulse or page load. */
+    $laneDispatch = s4WebExtractDispatch('slice_end');
     $next = ['ok' => false, 'skipped' => 'no_chain'];
     if ($done > 0 && $chain < $maxChain && !is_file(WORKER_STOP_FILE)) {
         if ($pending > 0) {
@@ -2938,7 +3371,7 @@ function s4WebWorkerRunSlice(string $source = 'auto', int $chain = 0): array {
     }
     return ['ok' => true, 'engine' => 'web_worker', 'jobs_done' => $done, 'pending_after' => $pending,
             'elapsed_sec' => $elapsed, 'chain' => $chain, 'next' => $next, 'errors' => $errors,
-            'last_job' => $lastJob];
+            'extract_lanes' => $laneDispatch, 'last_job' => $lastJob];
 }
 
 /** Jobs that can be claimed right now. */
@@ -2966,7 +3399,8 @@ function s4WorkerPendingSoonCount(int $within = 90): int {
 /** Throttled web-worker arming: never create a herd of loopback slices. */
 function s4WebWorkerEnsure(string $source = 'auto', bool $force = false): array {
     if (function_exists('s4WorkerIsActive') && s4WorkerIsActive())
-        return ['ok' => true, 'already_active' => true, 'engine' => 'web_worker'];
+        return ['ok' => true, 'already_active' => true, 'engine' => 'web_worker',
+                'extract_lanes' => s4WebExtractDispatch($source . ':active')];
     if (is_file(WORKER_STOP_FILE)) return ['ok' => false, 'error' => 'worker_stop_requested'];
     $pending = s4WorkerPendingCount();
     if (!$force && $pending < 1) return ['ok' => true, 'skipped' => 'no_pending_work', 'engine' => 'web_worker'];
@@ -2975,6 +3409,7 @@ function s4WebWorkerEnsure(string $source = 'auto', bool $force = false): array 
     if (!$force && $lastKick > 0 && (time() - $lastKick) < 8)
         return ['ok' => true, 'skipped' => 'kick_throttled', 'engine' => 'web_worker', 'age' => time() - $lastKick];
     $kick = s4WebWorkerKick($source);
+    $kick['extract_lanes'] = s4WebExtractDispatch($source);
     return $kick + ['engine' => 'web_worker', 'pending' => $pending];
 }
 
@@ -3131,7 +3566,17 @@ function s4WorkerRunJob(array $job): array {
             s4WorkerStateWrite(['phase' => 'manual_sync', 'job_type' => 'manual_sync', 'job_profile' => $pk, 'job_segment' => $msSeg, 'heartbeat' => time()]);
             $msLast = s4WorkerRunManualSyncChild($pk, $msResume, $msOrigin);
             $msLast['worker_segments'] = $msSeg;
-            if (!empty($msLast['retryable'])) { $msLast['retry_delay'] = 10; break; }
+            /* v10.743: a busy manual-sync marker is a transient condition, never a
+               permanent failure. Failing the job here is what left Noviex with a
+               queue of dead manual syncs that never reached the sending stage. */
+            if (!empty($msLast['busy'])) {
+                $msLast['retryable'] = true;
+                $msLast['resume_needed'] = true;
+                $msLast['retry_reason'] = 'manual_sync_busy';
+                $msLast['retry_delay'] = max(20, (int)($msLast['retry_delay'] ?? 20));
+                break;
+            }
+            if (!empty($msLast['retryable'])) { $msLast['retry_delay'] = max(10,(int)($msLast['retry_delay'] ?? 10)); break; }
             if (empty($msLast['ok']) || empty($msLast['resume_needed'])) break;
             if(s4WorkerMatrixPending()){$msLast['daemon_recycle']=true;$msLast['preempted_for_matrix']=true;break;}
             if (function_exists('s4DiskCodeMeta') && ((string)(s4DiskCodeMeta()['version'] ?? APP_VERSION) !== APP_VERSION)) {
@@ -3256,6 +3701,10 @@ function s4WorkerRecoverOrphanJobs(int $newPid): int {
     foreach((array)(s4WorkerLoadQueue()['entries']??[])as $_pe){
         if(!is_array($_pe)||(string)($_pe['status']??'')!=='running')continue;
         $_old=(int)($_pe['worker_pid']??0);
+        /* v10.743: a web lane row is claimed with pid 0 for the handful of
+           milliseconds before its own request adopts it; recovering it there
+           would run the same extraction twice. */
+        if($_old<=0&&(string)($_pe['lane']??'')==='web'&&(time()-(int)($_pe['lane_claimed_at']??0))<60)continue;
         if($_old<=0||($_old!==$newPid&&!s4WorkerPidAlive($_old))){$hasDeadRunning=true;break;}
     }
     if(!$hasDeadRunning)return 0;
@@ -3265,6 +3714,7 @@ function s4WorkerRecoverOrphanJobs(int $newPid): int {
     try{$extractRows=(array)(extractReadQueue()['entries']??[]);}catch(Throwable $_e){}
     s4WorkerQueueMutate(function(&$q)use($newPid,&$n,$extractCheckpoint,$extractProfiles,$extractRows){$now=time();foreach($q['entries'] as &$e){
         if(!is_array($e)||(string)($e['status']??'')!=='running')continue;$old=(int)($e['worker_pid']??0);if($old>0&&$old!==$newPid&&s4WorkerPidAlive($old))continue;
+        if($old<=0&&(string)($e['lane']??'')==='web'&&($now-(int)($e['lane_claimed_at']??0))<60)continue;
         $attempts=(int)($e['attempts']??0);$type=(string)($e['type']??'');
         $isCheckpointFix=$type==='matrix_fix'&&((int)($e['recycles']??0)>0||!empty($e['payload']['resume']));
         $isCheckpointBuild=$type==='matrix_build';
@@ -21668,8 +22118,8 @@ function vc_defaults(): array {
     return [
         'check_on_load'   => false,
         'repo'            => 'fazilatma/new',
-        'branch'          => 'arena/ae9391a9-new',
-        'branches'        => ['arena/ae9391a9-new'],
+        'branch'          => 'arena/01a0ebf7-new',
+        'branches'        => ['arena/01a0ebf7-new'],
         'pinned_branch'   => '',
         'pinned_at'       => 0,
         'pinned_max_unix' => 0,
@@ -21686,39 +22136,44 @@ function vc_defaults(): array {
 /** Update branches are compared by their exact configured names. */
 function vc_is_allowed_update_branch(string $branch,array $configured):bool{
     $branch=trim($branch);
-    $fixed=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/ae9391a9-new';
+    $fixed=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
     return $branch!==''&&($branch===$fixed||in_array($branch,vc_normalize_branches($configured),true));
 }
-/** Migrate the previously transferred session branch to this checkout's updater branch. */
+/** Migrate a previously transferred session branch to this checkout's updater branch. */
 function vc_migrate_legacy_branch_config(array $c): array {
+    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new';
     $keepLegacy='arena/e868e86a-new';
-    $prevSession='arena/01a0ebf7-new';
-    $canonical=defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/ae9391a9-new';
+    /* v10.743: sessions whose work is already merged into the canonical branch.
+       Their saved selection is transferred without discarding custom branches. */
+    $sourceSessions=array_values(array_diff(['arena/ae9391a9-new','arena/821be8f1-new','arena/be64d982-new'],[$canonical]));
+    $before=$c;
     $branches=vc_normalize_branches((array)($c['branches']??[]));
     $pin=trim((string)($c['pinned_branch']??''));
     $curBranch=trim((string)($c['branch']??''));
-    $hasKeepLegacy=$curBranch===$keepLegacy||$pin===$keepLegacy||in_array($keepLegacy,$branches,true);
-    $hasPrevSession=$curBranch===$prevSession||$pin===$prevSession||in_array($prevSession,$branches,true);
-    if(!$hasKeepLegacy&&!$hasPrevSession)return ['config'=>$c,'changed'=>false];
-    $before=$c;$next=$branches;
-    $addBranch=static function(string $branch)use(&$next):void{
+    $addBranch=static function(string $branch,array &$next):void{
         if($branch===''||in_array($branch,$next,true))return;
         if(count($next)>=20)array_pop($next);
         $next[]=$branch;
     };
-    /* Keep the user's legacy entry visible, but ensure the actual session
-       branch is also available as its canonical install target. */
-    if($curBranch===$keepLegacy||$pin===$keepLegacy)$addBranch($keepLegacy);
-    if($curBranch===$prevSession||$pin===$prevSession)$addBranch($prevSession);
-    $addBranch($canonical);
-    $c['branches']=$next;
-    if($hasPrevSession&&!$hasKeepLegacy){
-        if($curBranch===''||$curBranch===$prevSession)$c['branch']=$canonical;
-        if($pin===$prevSession){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
-    }else{
-        $c['branch']=in_array($curBranch,$next,true)?$curBranch:$canonical;
-        if($pin!==''&&!in_array($pin,$next,true)){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
+    if(in_array($curBranch,$sourceSessions,true)||in_array($pin,$sourceSessions,true)){
+        $next=$branches;
+        if(in_array($curBranch,$sourceSessions,true))$c['branch']=$canonical;
+        if(in_array($pin,$sourceSessions,true)){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
+        $addBranch($canonical,$next);
+        $c['branches']=vc_normalize_branches($next);
+        return ['config'=>$c,'changed'=>$c!==$before];
     }
+    $hasKeepLegacy=$curBranch===$keepLegacy||$pin===$keepLegacy||in_array($keepLegacy,$branches,true);
+    $hasCanonical=$curBranch===$canonical||$pin===$canonical||in_array($canonical,$branches,true);
+    if(!$hasKeepLegacy&&!$hasCanonical)return ['config'=>$c,'changed'=>false];
+    $next=$branches;
+    /* Keep the user's legacy entry visible, but ensure the session branch is
+       also available as its canonical install target. */
+    if($hasKeepLegacy)$addBranch($keepLegacy,$next);
+    $addBranch($canonical,$next);
+    $c['branches']=vc_normalize_branches($next);
+    $c['branch']=in_array($curBranch,$c['branches'],true)?$curBranch:$canonical;
+    if($pin!==''&&!in_array($pin,$c['branches'],true)){$c['pinned_branch']='';$c['pinned_at']=0;$c['pinned_max_unix']=0;}
     return ['config'=>$c,'changed'=>$c!==$before];
 }
 
@@ -21741,7 +22196,7 @@ function vc_load(): array {
     $rawBranches=array_key_exists('branches',$j)&&is_array($j['branches'])
         ? $j['branches'] : [(string)($c['branch']??'')];
     $c['branches']=vc_normalize_branches($rawBranches);
-    if(!$c['branches'])$c['branches']=[defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/ae9391a9-new'];
+    if(!$c['branches'])$c['branches']=[defined('S4_CODE_UPDATE_BRANCH')?(string)S4_CODE_UPDATE_BRANCH:'arena/01a0ebf7-new'];
     if(!in_array((string)$c['branch'],$c['branches'],true))$c['branch']=$c['branches'][0];
     $pin=trim((string)($c['pinned_branch']??''));
     if($pin!==''&&!in_array($pin,$c['branches'],true)){
@@ -21897,7 +22352,7 @@ function vc_get_json(string $url, string $token = '', int $timeout = 25): array 
  * مدیر وردپرس + nonce، به‌صورت POST و جایگزینی اتمیک انجام می‌شود.
  * ===================================================================== */
 const S4_CODE_UPDATE_REPO='fazilatma/new';
-const S4_CODE_UPDATE_BRANCH='arena/ae9391a9-new';
+const S4_CODE_UPDATE_BRANCH='arena/01a0ebf7-new';
 const S4_CODE_UPDATE_PATH='scraper4.php';
 const S4_CODE_UPDATE_STATE_FILE=__DIR__.'/.scraper4-auto-update.json';
 const S4_CODE_UPDATE_INTERVAL=120;
@@ -35514,6 +35969,9 @@ $q=s4WorkerLoadQueue();
 $st=s4WorkerStateLoad();
 echo json_encode(['ok'=>true,'active'=>s4WorkerIsActive(),'engine'=>s4RuntimeEngine(),
     'exec_available'=>!empty(s4RuntimeCaps()['exec_works']),'pending'=>s4WorkerPendingCount(),
+    'extract_lanes'=>['supported'=>s4WebExtractLanesSupported(),'healthy'=>s4WebExtractLanesHealthy(),
+        'limit'=>extractTaskConcurrency(),'running'=>s4WorkerParallelExtractRunning(),
+        'pending'=>s4WebExtractPendingCount()],
     'web_worker'=>s4WebWorkerStateLoad(),'state'=>$st,'queue'=>$q],JSON_UNESCAPED_UNICODE);exit;
 }
 
@@ -35529,6 +35987,20 @@ exit;
 /* v10.741: loopback worker slice — the exec-free equivalent of the CLI daemon.
    Authenticated with a rotating HMAC token, answered immediately, then the
    request detaches and drains the job queue for one bounded slice. */
+if(isset($_GET['web_extract_lane'])){
+    header('Content-Type: application/json; charset=UTF-8');
+    if(!s4WebWorkerTokenValid((string)($_GET['token']??''))){
+        http_response_code(403);
+        echo json_encode(['ok'=>false,'error'=>'bad_web_worker_token'],JSON_UNESCAPED_UNICODE);exit;
+    }
+    $laneJob=trim((string)($_GET['job']??''));
+    finishRequestNow(json_encode(['ok'=>true,'accepted'=>true,'engine'=>'web_worker',
+        'lane'=>'extract','job'=>$laneJob],JSON_UNESCAPED_UNICODE));
+    try{s4WebExtractLaneRun($laneJob);}catch(Throwable $__laneErr){
+        if($laneJob!=='')s4WorkerFinishJob($laneJob,'failed',['ok'=>false,'engine'=>'web_worker','lane'=>'extract'],$__laneErr->getMessage());
+    }
+    exit;
+}
 if(isset($_GET['web_worker'])){
     header('Content-Type: application/json; charset=UTF-8');
     if(!s4WebWorkerTokenValid((string)($_GET['token']??''))){
@@ -39936,18 +40408,26 @@ if (isset($_GET['manual_sync'])) {
        مستقیم اجازه دارد نشانگر queued متعلق به worker را تحویل بگیرد. */
     $_msOwnsQueuedMarker = !empty($_GET['direct'])
         && !empty($_msPrev['worker']) && !empty($_msPrev['queued']);
+    /* v10.743: the owner of a running marker can be gone without any progress
+       write (worker slice killed at the request boundary). A dead owner frees the
+       marker immediately instead of blocking every queued sync for stall_after. */
+    $_msOwnerPid = (int)($_msPrev['owner_pid'] ?? 0);
+    $_msOwnerDead = $_msOwnerPid > 0 && function_exists('s4WorkerPidAlive') && !s4WorkerPidAlive($_msOwnerPid);
     if (!empty($_msPrev['running']) && empty($_msPrev['done'])
         && empty($_GET['takeover']) && !$_msOwnsQueuedMarker) {
         $_msMaxD = max(120, (int)(loadConnections()['stall_after'] ?? 300));
-        if ($_msAge >= $_msMaxD) {
+        if ($_msOwnerDead || $_msAge >= $_msMaxD) {
             $_msPrev['running'] = false; $_msPrev['done'] = true;
             $_msPrev['phase'] = 'نیمه‌کاره ماند';
-            $_msPrev['error'] = 'اجرای قبلی نیمه‌کاره ماند (' . $_msAge . 'ث) — بسته شد.';
+            $_msPrev['error'] = $_msOwnerDead
+                ? ('اجرای قبلی بدون پایان بسته شد (پردازهٔ ' . $_msOwnerPid . ' دیگر زنده نیست).')
+                : ('اجرای قبلی نیمه‌کاره ماند (' . $_msAge . 'ث) — بسته شد.');
             $_msPrev['ts'] = time(); $_msPrev['last_progress_ts'] = time();
             writeProgress(MANUAL_SYNC_PROGRESS_FILE, $_msPrev);
         } else {
             header('Content-Type: application/json; charset=UTF-8');
-            echo json_encode(['ok' => false, 'busy' => true,
+            echo json_encode(['ok' => false, 'busy' => true, 'retryable' => true, 'retry_delay' => 20,
+                'owner_pid' => $_msOwnerPid, 'marker_age' => $_msAge,
                 'error' => 'یک همگام‌سازی دستی همین حالا در حال اجراست'], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -40011,6 +40491,8 @@ if (isset($_GET['manual_sync'])) {
     $_msInitialPhase = $_msResumeQueueDone ? 'صف ارسال تمام' : ($_msResumeExtractDone ? 'استخراج تمام' : 'استخراج بک‌اند');
     writeProgress(MANUAL_SYNC_PROGRESS_FILE, [
         'running' => true, 'done' => false, 'cancelled' => false,
+        /* v10.743: name the owner so a dead process never blocks the queue. */
+        'owner_pid' => (int)@getmypid(),
         'phase' => $_msInitialPhase, 'started_at' => (int)($_msResumeCp['started_at'] ?? time()), 'ts' => time(),
         'last_progress_ts' => time(),
         'total' => 4, 'current' => $_msInitialCurrent,
@@ -42470,6 +42952,11 @@ if (isset($_GET['notif_health'])) {
     $out['last_notif_found'] = is_array($stH['last_notif_found'] ?? null) ? $stH['last_notif_found'] : null;
     $out['last_notif_pending'] = (int)($stH['last_notif_pending'] ?? 0); /* v10.47 (۶۱) */
 
+    $out['queued_chats'] = count((array)($stH['chat_outbox'] ?? []));
+    $out['last_notif_errors'] = array_values((array)($stH['last_notif_errors'] ?? []));
+    $add('chat_outbox', $out['queued_chats'] === 0,
+         $out['queued_chats'] === 0 ? 'صف ارسال پیام‌ها خالی است'
+             : $out['queued_chats'] . ' اعلان گفتگو منتظر ارسال مجدد؛ خطا و مقصد پیام‌رسان را بررسی کنید');
     $out['healthy'] = empty($out['problems']);
     echo json_encode($out, JSON_UNESCAPED_UNICODE);
     exit;
@@ -52210,7 +52697,7 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"isset(\$_GET['tasks_stop_all_status'])")!==false
         &&strpos($selfSrc,"fetch('?tasks_stop_all_status=1&_v='")!==false
         &&strpos($selfSrc,"['auto_resume_all_cron']=false")!==false
-        &&S4_CODE_UPDATE_BRANCH==='arena/ae9391a9-new'
+        &&S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'
         &&strpos($selfSrc,"{v:'10." . "501'")!==false&&version_compare(APP_VERSION,'10.501','>='));
     $add('10.502','پاسخ غیر JSON نصب‌کننده با HTTP، نوع محتوا و پیش‌نمایش امن گزارش می‌شود',
         strpos($selfSrc,'function vcParseInstallerReply(response, source)')!==false
@@ -53087,7 +53574,7 @@ if (isset($_GET['selftest'])) {
         &&notifMessengerChatId($__notifCfg628,'order')==='orders'
         &&notifMessengerChatId($__notifCfg628,'site_visit')==='visits'
         &&notifMessengerChatId(['chat_id'=>'legacy','chat_ids'=>[]],'order')==='legacy'
-        &&strpos($selfSrc,"s4NotifFormatConversationMessage(\$f, ['mode' => 'product_customer'])")!==false
+        &&strpos($selfSrc,"function notifDrainChatOutbox(")!==false
         &&strpos($selfSrc,"{v:'10." . "628'")!==false
         &&version_compare(APP_VERSION,'10.628','>='));
     $__notifCfg629=['chat_id'=>'common','all_same'=>false,'chat_ids'=>['conversations'=>'talk','orders'=>'orders','visits'=>'visits']];
@@ -54575,15 +55062,15 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,'.badge-plat{')!==false
         &&strpos($selfSrc,"{v:'10."."728'")!==false
         &&version_compare(APP_VERSION,'10.728','>='));
-    $__mig729=vc_migrate_legacy_branch_config(['branch'=>'arena/01a0ebf7-new','branches'=>['arena/01a0ebf7-new'],'pinned_branch'=>'arena/01a0ebf7-new','pinned_at'=>123,'pinned_max_unix'=>456]);
+    $__mig729=vc_migrate_legacy_branch_config(['branch'=>'arena/ae9391a9-new','branches'=>['arena/ae9391a9-new'],'pinned_branch'=>'arena/ae9391a9-new','pinned_at'=>123,'pinned_max_unix'=>456]);
     $__migCfg729=(array)($__mig729['config']??[]);
     $add('10.729','رفع کش قدیمی در سرویس‌ورکر، فعال‌سازی رفرش خودکار و ضدکش در فضای کاری غیرادمین، و هم‌راستاسازی شاخهٔ آپدیتر',
         !empty($__mig729['changed'])
-        &&($__migCfg729['branch']??'')==='arena/ae9391a9-new'
-        &&in_array('arena/ae9391a9-new',(array)($__migCfg729['branches']??[]),true)
+        &&($__migCfg729['branch']??'')==='arena/01a0ebf7-new'
         &&in_array('arena/01a0ebf7-new',(array)($__migCfg729['branches']??[]),true)
+        &&in_array('arena/ae9391a9-new',(array)($__migCfg729['branches']??[]),true)
         &&($__migCfg729['pinned_branch']??'')===''
-        &&S4_CODE_UPDATE_BRANCH==='arena/ae9391a9-new'
+        &&S4_CODE_UPDATE_BRANCH==='arena/01a0ebf7-new'
         &&strpos($selfSrc,"Cache-Control: no-store, no-cache, must-revalidate, max-age=0")!==false
         &&strpos($selfSrc,"watchMemberCodeVersion")!==false
         &&strpos($selfSrc,"code_auto_update=1")!==false
@@ -54640,7 +55127,7 @@ if (isset($_GET['selftest'])) {
         &&s4FormatTehranChatTime('2026-11-12 11:35:00',strtotime('2026-11-12T12:00:00Z'))==='11:35'
         &&s4FormatTehranChatTime((string)strtotime('2026-11-12T08:05:00Z'),strtotime('2026-11-12T12:00:00Z'))==='11:35'
         &&strpos($selfSrc,"function s4NotifFormatConversationMessage(")!==false
-        &&strpos($selfSrc,"s4NotifFormatConversationMessage(\$f, ['mode' => 'product_customer'])")!==false
+        &&strpos($selfSrc,"function notifDrainChatOutbox(")!==false
         &&strpos($selfSrc,"{v:'10."."730'")!==false
         &&version_compare(APP_VERSION,'10.730','>='));
     $__chatRoute731=['chat_id'=>'general','all_same'=>false,'chat_ids'=>['conversations'=>'talk']];
@@ -54780,6 +55267,71 @@ if (isset($_GET['selftest'])) {
         &&s4FormatTehranChatTime('2026-11-12T08:00:00Z')!==''
         &&strpos($selfSrc,"{v:'10."."742'")!==false
         &&version_compare(APP_VERSION,'10.742','>='));
+    $add('10.743','صف پایدار اعلان گفتگو، رسید مستقل هر پیام‌رسان و تشخیص خطای واقعی پاسخ API',
+        msgrResponseAccepted(200,'{"ok":true,"result":{"message_id":1}}')
+        &&!msgrResponseAccepted(200,'{"ok":false,"description":"Forbidden"}')
+        &&!msgrResponseAccepted(200,'<html>proxy error</html>')
+        &&!msgrResponseAccepted(200,'{}')
+        &&msgrResponseAccepted(200,'{"status":"OK","data":{"message_id":"1"}}')
+        &&count(notifDeliveryErrors(['telegram'=>'fail','telegram_err'=>'test']))===1
+        &&count(notifDeliveryErrors(['telegram'=>'sent']))===0
+        &&strpos($selfSrc,'function notifDrainChatOutbox(')!==false
+        &&strpos($selfSrc,"\$st['chat_outbox'][\$conv['delivery_id']]")!==false
+        &&strpos($selfSrc,"'delivery_id' => sha1(")!==false
+        &&version_compare(APP_VERSION,'10.743','>='));
+    /* v10.743: the «غرفه داران» role must never see supplier/marketplace
+       identity — the projection happens server-side, so the JSON itself is
+       clean even if a browser inspects it. */
+    $__vendorRow743=['candidate'=>['title'=>'کفش راحتی','price'=>480000,'stock'=>7,'in_stock'=>true,
+        'exact_match'=>true,'score'=>91,'vendor_name'=>'غرفهٔ نمونه','shop_name'=>'فروشگاه نمونه',
+        'platform'=>'basalam','url'=>'https://basalam.com/x/1','profile_name'=>'basalam.com_s_products',
+        'variations'=>[['label'=>'سایز ۴۰','price'=>480000,'stock'=>3,'vendor_name'=>'غرفهٔ نمونه']]]];
+    $__vendorPayload743=s4VendorPriceOnlyPayload(['ok'=>true,'checked'=>1,'results'=>[$__vendorRow743]]);
+    $__vendorJson743=json_encode($__vendorPayload743,JSON_UNESCAPED_UNICODE);
+    $__vendorItem743=(array)($__vendorPayload743['items'][0]??[]);
+    $add('10.743','نقش «غرفه داران»: فقط قیمت و موجودی، بدون هیچ نام فروشگاه یا بازارگاه در پاسخ سرور',
+        !empty($__vendorPayload743['vendor_view'])
+        &&count($__vendorPayload743['items']??[])===1
+        &&(int)($__vendorItem743['price']??0)===480000
+        &&(int)($__vendorItem743['stock']??0)===7
+        &&count($__vendorItem743['variations']??[])===1
+        &&!array_key_exists('vendor_name',$__vendorItem743)
+        &&!array_key_exists('shop_name',$__vendorItem743)
+        &&!array_key_exists('platform',$__vendorItem743)
+        &&!array_key_exists('url',$__vendorItem743)
+        &&!array_key_exists('profile_name',$__vendorItem743)
+        &&!array_key_exists('vendor_name',(array)($__vendorItem743['variations'][0]??[]))
+        &&mb_strpos((string)$__vendorJson743,'basa'.'lam')===false
+        &&mb_strpos((string)$__vendorJson743,'غرفهٔ نمونه')===false
+        &&mb_strpos((string)$__vendorJson743,'فروشگاه نمونه')===false
+        &&strpos($selfSrc,'function s4AccessVendor'.'Workspace(')!==false
+        &&strpos($selfSrc,'function s4EligibilityApi'.'Echo(')!==false
+        &&strpos($selfSrc,"'admin','user','supervisor','ven"."dor'")!==false
+        &&strpos($selfSrc,'محاسبه گر غرفه داران')!==false
+        &&strpos($selfSrc,'استعلام قیمت و موجودی')!==false);
+    /* v10.743: a busy manual-sync marker must be retried, never failed — that is
+       exactly what left Noviex with queued jobs that never reached sending. */
+    $add('10.743','صف نوویکس: پاسخ busy همگام‌سازی دستی به‌جای failed دوباره زمان‌بندی می‌شود',
+        strpos($selfSrc,"\$msLast['retry_reason'] = 'manual_sync_"."busy';")!==false
+        &&strpos($selfSrc,"!empty(\$payload['retrya"."ble']) || !empty(\$payload['busy'])")!==false
+        &&strpos($selfSrc,"'busy' => true, 'retrya"."ble' => true")!==false
+        &&strpos($selfSrc,"'owner_pid' => (int)@getmy"."pid()")!==false
+        &&strpos($selfSrc,'$_msOwnerDead = $_msOwner'.'Pid > 0')!==false
+        &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
+    /* v10.743: bounded web extraction lanes for exec-free hosts. */
+    $__laneCaps743=s4RuntimeCaps();
+    $add('10.743','خطوط استخراج موازی وب روی هاست بدون exec، با همان سقف هم‌زمانی و خودتشخیصی سلامت',
+        function_exists('s4WebExtractDispatch')
+        &&function_exists('s4WebExtractClaimJob')
+        &&function_exists('s4WebExtractLaneRun')
+        &&function_exists('s4WebExtractLanesHealthy')
+        &&(s4WebExtractLanesSupported()===(empty($__laneCaps743['can_spawn_cli'])&&!empty($__laneCaps743['can_self_http'])&&!(defined('WORKER_STOP_FILE')&&is_file(WORKER_STOP_FILE))))
+        &&s4WebExtractPendingCount()>=0
+        &&strpos($selfSrc,"isset(\$_GET['web_extract_la"."ne'])")!==false
+        &&strpos($selfSrc,"\$qs = '?web_extract_la"."ne=1&token='")!==false
+        &&strpos($selfSrc,"\$e['la"."ne'] = 'web'")!==false
+        &&strpos($selfSrc,"s4WebExtractLanesHealthy())\$parallelExtr"."act=true;")!==false
+        &&strpos($selfSrc,"'extract_lanes'=>['supported'=>s4WebExtractLanes"."Supported()")!==false);
     $__matrixFixture510=['generated_at'=>time(),'rows'=>[
         ['title'=>'محصول فعال','shops'=>[987655=>['id'=>245,'title'=>'Active Product','status'=>2976,'price'=>125000,'stock'=>4]]],
         ['title'=>'محصول غیرفعال','shops'=>[987655=>['id'=>246,'title'=>'Inactive Product','status'=>3790,'price'=>90000,'stock'=>0]]],
@@ -68927,9 +69479,9 @@ function notifLoadState(): array {
     return is_array($d) ? $d : [];
 }
 
-function notifSaveState(array $st): void {
+function notifSaveState(array $st): bool {
     $lfp = @fopen(NOTIF_STATE_FILE . '.lock', 'c');
-    if ($lfp) @flock($lfp, LOCK_EX);
+    if (!$lfp || !@flock($lfp, LOCK_EX)) { if ($lfp) @fclose($lfp); return false; }
     try {
         if (empty($st['items']) && is_file(NOTIF_STATE_FILE) && @filesize(NOTIF_STATE_FILE) > 64) {
             $prev = json_decode((string)@file_get_contents(NOTIF_STATE_FILE), true);
@@ -68938,17 +69490,11 @@ function notifSaveState(array $st): void {
             }
         }
         $json = json_encode($st, JSON_UNESCAPED_UNICODE);
-        if ($json !== false) {
-            $tmp = NOTIF_STATE_FILE . '.tmp.' . (int)@getmypid();
-            if (@file_put_contents($tmp, $json, LOCK_EX) !== false) {
-                if (!@rename($tmp, NOTIF_STATE_FILE)) {
-                    @file_put_contents(NOTIF_STATE_FILE, $json, LOCK_EX);
-                    @unlink($tmp);
-                }
-            } else {
-                @file_put_contents(NOTIF_STATE_FILE, $json, LOCK_EX);
-            }
-        }
+        if ($json === false) return false;
+        $tmp = NOTIF_STATE_FILE . '.tmp.' . (int)@getmypid();
+        if (@file_put_contents($tmp, $json, LOCK_EX) !== strlen($json)) { @unlink($tmp); return false; }
+        if (!@rename($tmp, NOTIF_STATE_FILE)) { @unlink($tmp); return false; }
+        return true;
     } finally {
         if ($lfp) { @flock($lfp, LOCK_UN); @fclose($lfp); }
     }
@@ -69565,9 +70111,9 @@ function notifRecordAutoSent(string $coreMsg, ?string $feed): void {
     }
 }
 
-function notifSend(array $cn, string $msg, ?string $feed = null, array $media = [], ?string $route = null): array {
+function notifSend(array $cn, string $msg, ?string $feed = null, array $media = [], ?string $route = null, bool $deduplicate = true): array {
     $_coreMsgForDedup = $msg;
-    if (notifShouldSuppressAutoDuplicate($cn, $_coreMsgForDedup, $feed)) {
+    if ($deduplicate && notifShouldSuppressAutoDuplicate($cn, $_coreMsgForDedup, $feed)) {
         return ['suppressed_duplicate' => 'sent_before'];
     }
     /* Add exactly the saved textbox text; no website URL, instance ID, or version. */
@@ -69585,7 +70131,7 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
     if ($sendBaleh)  { $rb = bslSendToBaleh($bt, $bc, $msg, $wantPreview); $out['baleh'] = $rb['ok'] ? 'sent' : 'fail'; if (!$rb['ok'] && $rb['error'] !== '') $out['baleh_err'] = $rb['error']; if ($rb['ok'] && ($rb['message_id'] ?? '') !== '') { $out['baleh_msg_id'] = $rb['message_id']; msgrSaveMsg('bale', $rb['message_id'], 0, 0); } }   // v10.79 (93)
     if ($sendRubika)  { $rr = bslSendToRubika($rt, $rc, $msg); $out['rubika'] = $rr['ok'] ? 'sent' : 'fail'; if (!$rr['ok'] && $rr['error'] !== '') $out['rubika_err'] = $rr['error']; if ($rr['ok'] && ($rr['message_id'] ?? '') !== '') { $out['rubika_msg_id'] = $rr['message_id']; msgrSaveMsg('rubika', $rr['message_id'], 0, 0); } }
     if ($sendTelegram)  { $tr = bslSendToTelegram($tt, $tc, $msg, $wantPreview); $out['telegram'] = $tr['ok'] ? 'sent' : 'fail'; if (!$tr['ok'] && $tr['error'] !== '') $out['telegram_err'] = $tr['error']; if ($tr['ok'] && ($tr['message_id'] ?? '') !== '') { $out['telegram_msg_id'] = $tr['message_id']; msgrSaveMsg('telegram', $tr['message_id'], 0, 0); } }
-    if (in_array('sent', [$out['baleh'] ?? '', $out['rubika'] ?? '', $out['telegram'] ?? ''], true)) {
+    if ($deduplicate && in_array('sent', [$out['baleh'] ?? '', $out['rubika'] ?? '', $out['telegram'] ?? ''], true)) {
         notifRecordAutoSent($_coreMsgForDedup, $feed);
     }
     /* v10.109: فوروارد چندرسانه‌ای (عکس/ویدیو/گیف/فایل/لینک) بعد از متن */
@@ -69610,7 +70156,15 @@ function notifSend(array $cn, string $msg, ?string $feed = null, array $media = 
         if ($mediaSent > 0) $out['media_sent'] = $mediaSent;
         if ($mediaFail > 0) $out['media_fail'] = $mediaFail;
     }
-    if (!$out) $out['none'] = 'no_messenger';
+    foreach (['baleh', 'rubika', 'telegram'] as $channel) {
+        $mc = (array)($cn[$channel] ?? []);
+        if (!filter_var($mc['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN)) continue;
+        if (trim((string)($mc['token'] ?? '')) === '' || notifMessengerChatId($mc, $destinationClass) === '') {
+            $out[$channel] = 'fail';
+            $out[$channel . '_err'] = trim((string)($mc['token'] ?? '')) === '' ? 'توکن پیام‌رسان تنظیم نشده' : 'Chat ID مسیر اعلان تنظیم نشده';
+        }
+    }
+    if (!$out) { $out['none'] = 'no_messenger'; $out['none_err'] = 'هیچ پیام‌رسان فعالی برای این مسیر وجود ندارد'; }
     if ($feed !== null) liveFeedPush($feed, $msg);   /* v10.66 (۸۰) */
     /* v10.72 (86): Web Push — در کنارِ پیام‌رسان، به دستگاهِ کاربر.
        رویدادها چه «لحظه‌ای» (درخواستِ مرورگر) باشند چه «کران‌جاب» —
@@ -72457,6 +73011,104 @@ function s4NotifDrainDeferredOrderEligibility(array $cn): int {
  * جبران می‌شود تا بلافاصله بعد از به‌روزرسانی سیلی پیام «تغییر وضعیت»
  * فرستاده نشود.
  */
+/** v10.731: delivery errors must reach the cron/test health report. */
+function notifDeliveryErrors(array $delivery): array {
+    $errors = [];
+    foreach (['baleh', 'rubika', 'telegram', 'none'] as $channel) {
+        if (isset($delivery[$channel]) && !in_array($delivery[$channel], ['sent', 'already_sent'], true)) {
+            $errors[] = $channel . ': ' . (string)($delivery[$channel . '_err'] ?? $delivery[$channel]);
+        }
+    }
+    if (!empty($delivery['media_fail'])) $errors[] = 'ارسال برخی پیوست‌های پیام ناموفق بود';
+    return $errors;
+}
+
+/**
+ * Durable, per-destination text acknowledgements. Called under NOTIF_SCAN_LOCK_FILE.
+ * Payloads survive API list pagination, disabled reminders, and worker timeouts.
+ * At-least-once: a crash after remote acceptance but before the local ACK may replay
+ * that one chunk. Media remain best-effort and do not cause successful text to replay.
+ */
+function notifDrainChatOutbox(array $cn, array &$st, array $ids): array {
+    $errors = []; $sent = [];
+    foreach ($ids as $id) {
+        if (!is_array($st['chat_outbox'][$id] ?? null)) continue;
+        $job = $st['chat_outbox'][$id];
+        $nc = (array)($job['nc'] ?? []);
+        $route = (string)($job['route'] ?? 'chat_customer');
+        $shopRoute = bslChatRouteForShop($cn, (int)($nc['vendor_id'] ?? 0));
+        $digest = notifEventOn((array)($cn['notif_events'] ?? []), 'chat_digest_single');
+        if ($digest && (!empty($shopRoute['customer']) || !empty($shopRoute['admin']) || !bslAnyChatRouteOn($cn))) {
+            $shopRoute = ['customer' => true, 'admin' => true];
+        }
+        if (empty($shopRoute[$route === 'chat_vendor' ? 'admin' : 'customer'])) {
+            $errors[] = 'مسیر اعلان غرفه خاموش است؛ پیام در صف باقی ماند';
+            continue;
+        }
+        $complete = true; $enabled = 0;
+        foreach (['baleh', 'rubika', 'telegram'] as $channel) {
+            $cfg = (array)($cn[$channel] ?? []);
+            if (!filter_var($cfg['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN)) continue;
+            $enabled++;
+            $dest = notifMessengerChatId($cfg, $route);
+            if (!notifMessengerReady($cn, $channel) || $dest === '') {
+                $complete = false;
+                $errors[] = $channel . ': توکن یا Chat ID مسیر گفتگو تنظیم نشده؛ پیام در صف باقی ماند';
+                continue;
+            }
+            // Never persist a raw token in notification state.
+            $target = hash('sha256', $channel . '|' . (string)$cfg['token'] . '|' . $dest);
+            $one = $cn;
+            foreach (['baleh', 'rubika', 'telegram'] as $other) $one[$other]['enabled'] = ($other === $channel);
+            foreach ((array)($job['chunks'] ?? []) as $index => $text) {
+                if (!empty($st['chat_outbox'][$id]['acked'][$target][$index])) continue;
+                try {
+                    // The outbox owns deduplication. Content-only dedup would suppress
+                    // failed channels after another channel received the same message.
+                    $delivery = notifSend($one, (string)$text, null, [], $route, false);
+                } catch (Throwable $e) {
+                    $delivery = [$channel => 'fail', $channel . '_err' => 'خطای داخلی ارسال پیام'];
+                }
+                $sent = array_merge($sent, $delivery);
+                $errors = array_merge($errors, notifDeliveryErrors($delivery));
+                if (($delivery[$channel] ?? '') !== 'sent') { $complete = false; break; }
+                $msgId = (string)($delivery[$channel . '_msg_id'] ?? '');
+                if ($msgId !== '') msgrSaveMsg($channel === 'baleh' ? 'bale' : $channel, $msgId,
+                    (int)($nc['chat_id'] ?? 0), (int)($nc['shop'] ?? 1), (string)($nc['who'] ?? ''));
+                $st['chat_outbox'][$id]['acked'][$target][$index] = time();
+                if (!notifSaveState($st)) {
+                    $errors[] = 'ذخیره رسید ارسال ناموفق؛ احتمال ارسال مجدد در بررسی بعدی';
+                    return ['sent' => $sent, 'errors' => array_values(array_unique($errors))];
+                }
+                if ($index === 0) {
+                    foreach ((array)($job['media'] ?? []) as $media) {
+                        try { $mr = bslSendMediaToMessenger($channel, (string)$cfg['token'], $dest, (array)$media); }
+                        catch (Throwable $e) { $mr = ['ok' => false]; }
+                        if (empty($mr['ok'])) $errors[] = $channel . ': ارسال پیوست ناموفق بود (متن ارسال شد)';
+                    }
+                }
+            }
+        }
+        if ($enabled === 0) {
+            $complete = false;
+            $errors[] = 'هیچ پیام‌رسان فعالی وجود ندارد؛ پیام‌ها در صف باقی ماندند';
+        }
+        if ($complete) {
+            $chatKey = (string)($job['chat_key'] ?? '');
+            if (isset($st['items'][$chatKey]) && (string)($st['items'][$chatKey]['sig'] ?? '') === (string)($job['sig'] ?? '')) {
+                // Reminder time starts at successful delivery, not the failed attempt.
+                $st['items'][$chatKey]['last'] = time();
+            }
+            unset($st['chat_outbox'][$id]);
+            if (!notifSaveState($st)) {
+                $errors[] = 'ذخیره وضعیت صف اعلان ناموفق';
+                break;
+            }
+        }
+    }
+    return ['sent' => $sent, 'errors' => array_values(array_unique($errors))];
+}
+
 function notifCheckChats(array $cn, bool $test = false, bool $send = true): array {
     $shops = array_values(array_filter(bslAllShops($cn),
         fn($s) => trim((string)($s['token'] ?? '')) !== ''));
@@ -72475,6 +73127,17 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
     $productCustomerBucket = [];
     $individualBucket = [];
     $testPreviewEntries = [];
+    $attemptedOutbox = [];
+    if (!$test && $send) {
+        $attemptedOutbox = array_keys((array)($st['chat_outbox'] ?? []));
+        $retry = notifDrainChatOutbox($cn, $st, $attemptedOutbox);
+        $errors = array_merge($errors, $retry['errors']);
+        $sentTo = $retry['sent'];
+    }
+    $queuedSignatures = [];
+    foreach ((array)($st['chat_outbox'] ?? []) as $queued) {
+        $queuedSignatures[(string)($queued['chat_key'] ?? '') . '|' . (string)($queued['sig'] ?? '')] = true;
+    }
 
     foreach ($shops as $sh) {
         $tk = trim((string)$sh['token']); $vid = (int)$sh['vendor_id'];
@@ -72627,6 +73290,8 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
         $suffix = $multi ? ' — ' . $name : '';
         $shopFound = 0; $shopRemind = 0;
         foreach ($norm as $f) {
+            // Do not enqueue another reminder for an event still awaiting delivery.
+            if (isset($queuedSignatures[$f['key'] . '|' . $f['sig']])) continue;
             $why = notifDecide($st, $f['key'], $f['sig'], $f['pending'], $cfg, $now, (int)$f['ts'], $since);
             if ($why === '') continue;
             $n = (int)($st['items'][$f['key']]['n'] ?? 1);
@@ -72644,6 +73309,8 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
             $inqRes = null; $eligRes = null;
 
             $bucketItem = [
+                'chat_key' => $f['key'], 'sig' => $f['sig'],
+                'delivery_id' => sha1($f['key'] . '|' . $f['sig'] . '|' . $why . '|' . $n),
                 'nc' => $f['nc'],
                 'raw_chat' => $f['raw_chat'],
                 'shop_name' => $name,
@@ -72696,55 +73363,49 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                 $lines[] = $rawSample;
             }
             if ($samples) { $lines[] = '━━━ نمونه:'; $lines[] = mb_substr((string)$samples[0], 0, 900); }
-            $sentTo = notifSend($cn, implode("\n", $lines));
+            $sentTo = notifSend($cn, implode("\n", $lines), null, [], 'chat_customer');
+            $errors = array_merge($errors, notifDeliveryErrors($sentTo));
         }
-        return ['ok' => true, 'found' => $testFound, 'total_seen' => $totalSeen, 'pending' => $pendingNow, /* v10.47 (۶۱) */
+        return ['ok' => !$errors, 'error' => implode('؛ ', $errors), 'found' => $testFound, 'total_seen' => $totalSeen, 'pending' => $pendingNow, /* v10.47 (۶۱) */
                 'sent' => $sentTo, 'sample' => $samples[0] ?? '',
                 'shops' => $shopRows, 'errors' => $errors];
     }
 
-    if ($send && ($singleDigestBucket || $productCustomerBucket || $individualBucket)) {
-        /* Commit all chat signatures before slow messenger/media calls to prevent replay after timeout. */
-        notifSaveState($st);
-    }
-
-    $sendPerConversation = static function (array $bucket, string $mode) use ($cn, $send, &$samples, &$sentTo): void {
-        if (!$bucket) return;
+    /* v10.731: persist immutable payloads WITH the scan signatures, before sending.
+       A timeout can no longer consume a chat event without leaving retry work. */
+    foreach ([[$singleDigestBucket, 'single_digest'], [$productCustomerBucket, 'product_customer'], [$individualBucket, 'individual']] as [$bucket, $mode]) {
         foreach ($bucket as $conv) {
             $isQuotedCustomer = !empty($conv['has_quoted_product']) && empty($conv['is_admin']);
             // A quoted-product conversation is dispatched once, after the eligibility
             // lookup, so its text, quoted link, and result arrive as one integrated post.
-            if ($isQuotedCustomer) continue;
-            $chunks = s4NotifFormatConversationMessage($conv, ['mode' => $mode]);
-            $routeCls = !empty($conv['is_admin']) ? 'chat_vendor' : 'chat_customer';
-            foreach ($chunks as $cIdx => $chunkText) {
-                $samples[] = $chunkText;
-                if (!$send) continue;
-                $sentTo = notifSend($cn, $chunkText, null, [], $routeCls);
-                $_ncCh85 = (int)($conv['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($conv['nc']['shop'] ?? 1); $_ncWh85 = (string)($conv['nc']['who'] ?? '');
-                foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
-                    if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
-                }
-            }
+            if ($isQuotedCustomer && $mode !== 'individual') continue;
+            $chunks = s4NotifFormatConversationMessage($conv, ['mode' => $mode === 'individual' ? 'product_customer' : $mode]);
+            $chunks = array_values(array_filter((array)$chunks, static fn($c) => trim((string)$c) !== ''));
+            if (!$chunks) continue;
+            foreach ($chunks as $chunk) $samples[] = $chunk;
+            if (!$send) continue;
+            /* v10.743: the payload is persisted before any network call, so a timeout
+               can no longer consume a chat event without leaving retry work behind.
+               Media references stay inline in the text (v10.730), so no attachment
+               post is queued next to the conversation message. */
+            $st['chat_outbox'][$conv['delivery_id']] = [
+                'chat_key' => $conv['chat_key'], 'sig' => $conv['sig'],
+                'created_at' => $now, 'nc' => $conv['nc'], 'chunks' => $chunks,
+                'media' => [],
+                'route' => !empty($conv['is_admin']) ? 'chat_vendor' : 'chat_customer',
+                'acked' => [],
+            ];
         }
-    };
-
-    $sendPerConversation($singleDigestBucket, 'single_digest');
-    $sendPerConversation($productCustomerBucket, 'product_customer');
-
-    foreach ($individualBucket as $f) {
-        $convMsgs = s4NotifFormatConversationMessage($f, ['mode' => 'product_customer']);
-        $msg = $convMsgs[0] ?? '';
-        if ($msg === '') continue;
-        $samples[] = $msg;
-        if ($send) {
-            // Keep media references inline instead of sending separate attachment posts.
-            $routeCls = !empty($f['is_admin']) ? 'chat_vendor' : 'chat_customer';
-            $sentTo = notifSend($cn, $msg, null, [], $routeCls);
-            $_ncCh85 = (int)($f['nc']['chat_id'] ?? 0); $_ncSh85 = (int)($f['nc']['shop'] ?? 1); $_ncWh85 = (string)($f['nc']['who'] ?? '');
-            foreach (['bale_msg_id' => 'bale', 'baleh_msg_id' => 'bale', 'rubika_msg_id' => 'rubika', 'telegram_msg_id' => 'telegram'] as $_kM85 => $_mM85) {
-                if (!empty($sentTo[$_kM85])) msgrSaveMsg($_mM85, (string)$sentTo[$_kM85], $_ncCh85, $_ncSh85, $_ncWh85);
-            }
+    }
+    if ($send) {
+        notifPrune($st, $now);
+        if (!notifSaveState($st)) {
+            $errors[] = 'ذخیره صف اعلان پیام‌ها ناموفق؛ دسترسی نوشتن و فضای دیسک را بررسی کنید';
+        } else {
+            $newIds = array_values(array_diff(array_keys((array)($st['chat_outbox'] ?? [])), $attemptedOutbox));
+            $delivery = notifDrainChatOutbox($cn, $st, $newIds);
+            $errors = array_merge($errors, $delivery['errors']);
+            if ($delivery['sent']) $sentTo = $delivery['sent'];
         }
     }
 
@@ -72752,6 +73413,7 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
 
     // Slow product/source inquiries are intentionally deferred until all initial chat notifications are sent.
     if ($send) {
+        $deferredIds = [];
         foreach ([$singleDigestBucket, $productCustomerBucket] as $deferredBucket) {
             foreach ($deferredBucket as $conv) {
                 if (empty($conv['has_quoted_product']) || !empty($conv['is_admin'])) continue;
@@ -72764,7 +73426,19 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                     $eligSummary=is_array($deferElig)&&array_key_exists('eligible',$deferElig)?(!empty($deferElig['eligible'])?'🟢 نتیجهٔ تأمین: واجد شرایط':'🔴 نتیجهٔ تأمین: غیرواجد شرایط'):'🔎 نتیجهٔ استعلام: در دسترس نیست';
                     $updatedMsgs=[rtrim(mb_substr((string)$updatedMsgs[0],0,2800))."\n…\n".$eligSummary];
                 }
-                foreach($updatedMsgs as $updatedMsg){$samples[]=$updatedMsg;$sentTo=notifSend($cn,$updatedMsg,null,[], 'chat_customer');}
+                $updatedMsgs=array_values(array_filter((array)$updatedMsgs,static fn($c)=>trim((string)$c)!==''));
+                if($updatedMsgs){
+                    foreach($updatedMsgs as $updatedMsg)$samples[]=$updatedMsg;
+                    /* The deferred post reuses the conversation's delivery id: the queue,
+                       not the scan, owns the single integrated message for this event. */
+                    $deferId=(string)($conv['delivery_id']??'');
+                    if($deferId!==''){
+                        $st['chat_outbox'][$deferId]=['chat_key'=>$conv['chat_key'],'sig'=>$conv['sig'],
+                            'created_at'=>$now,'nc'=>$conv['nc'],'chunks'=>$updatedMsgs,'media'=>[],
+                            'route'=>'chat_customer','acked'=>[]];
+                        $deferredIds[]=$deferId;
+                    }
+                }
                 // Optional customer reply uses the token of the shop that received this message.
                 $neReply=(array)($cn['notif_events']??[]);
                 if(notifEventOn($neReply,'quoted_product_reply')&&$deferTk!==''&&(int)($nc['chat_id']??0)>0){
@@ -72777,14 +73451,21 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                 }
             }
         }
+        if ($deferredIds) {
+            notifPrune($st, $now);
+            if (!notifSaveState($st)) {
+                $errors[] = 'ذخیره صف اعلان استعلام‌های محصول ناموفق';
+            } else {
+                $deferredDelivery = notifDrainChatOutbox($cn, $st, $deferredIds);
+                $errors = array_merge($errors, $deferredDelivery['errors']);
+                if ($deferredDelivery['sent']) $sentTo = $deferredDelivery['sent'];
+            }
+        }
     }
-
-
-    notifPrune($st, $now);
-    notifSaveState($st);
-    return ['ok' => true, 'found' => $found, 'reminded' => $reminded, 'pending' => $pendingNow, /* v10.47 (۶۱) */
+    return ['ok' => !$errors, 'found' => $found, 'reminded' => $reminded, 'pending' => $pendingNow,
             'total_seen' => $totalSeen, 'sent' => $sentTo, 'sample' => $samples[0] ?? '',
-            'shops' => $shopRows, 'errors' => $errors];
+            'queued' => count((array)($st['chat_outbox'] ?? [])),
+            'shops' => $shopRows, 'errors' => array_values(array_unique($errors))];
 }
 
 /**
@@ -80196,6 +80877,7 @@ function bslCheckNotifications(array $cn): array {
         $pending += (int)($r['pending'] ?? 0);
         if ($found['chats'] > 0) $out['chats'] = $found['chats'];
         if (!empty($r['errors'])) $errors = array_merge($errors, (array)$r['errors']);
+        $out['queued_chats'] = (int)($r['queued'] ?? 0);
     }
     // Fallback when there were no chat notifications to deliver.
     if (!empty($GLOBALS['_s4DeferredOrderEligibility'])) s4NotifDrainDeferredOrderEligibility($cn);
@@ -85144,7 +85826,7 @@ function s4ProcurementUpdateAllShopsByRecommendedPrice(array $input, ?array $cn 
     ];
 }
 
-if(isset($_GET['procurement_eligibility_api'])||isset($_POST['procurement_eligibility_api'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');$act=(string)($_POST['procurement_eligibility_api']??$_GET['procurement_eligibility_api']??'capabilities');if($act==='capabilities'){echo json_encode(['ok'=>true,'version'=>APP_VERSION,'research_action'=>'research','deep_basalam_action'=>'deep_basalam','deep_digikala_action'=>'deep_digikala','update_all_shops_price_action'=>'update_all_shops_price','method'=>'POST','fields'=>['title','sale_price','qty','commission','target_margin_pct','inquiry_mode','shipping_cost','platform','exact_title','exact_title_around'],'platforms'=>['all','basalam','digikala','snappshop','torob','emalls'],'default_basalam_commission_pct'=>15,'recommended_margin_pct'=>14,'default_order_shipping_cost'=>150000,'callable'=>'s4ProcurementResearchItem','storefront_plugin'=>true],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}s4RequireAuthenticatedMutation();if($act==='update_all_shops_price'){$rawPayload=(string)($_POST['payload']??'');$payload=$rawPayload!==''?json_decode($rawPayload,true):[];if(!is_array($payload))$payload=[];$input=array_merge(['query_title'=>(string)($_POST['query_title']??$_POST['title']??''),'cand_title'=>(string)($_POST['cand_title']??''),'profile_key'=>(string)($_POST['profile_key']??''),'product_key'=>(string)($_POST['product_key']??''),'sku'=>(string)($_POST['sku']??''),'cand_vendor_id'=>(int)($_POST['cand_vendor_id']??0),'cand_product_id'=>(int)($_POST['cand_product_id']??0),'recommended_price'=>(int)($_POST['recommended_price']??0),'recommended_margin_pct'=>(float)($_POST['recommended_margin_pct']??14),'cost_unit'=>(int)($_POST['cost_unit']??0),'effective_cost_unit'=>(int)($_POST['effective_cost_unit']??0)],$payload);$res=s4ProcurementUpdateAllShopsByRecommendedPrice($input);if(empty($res['ok'])&&empty($res['shops']))http_response_code(422);echo json_encode($res,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}$exactTitleFlag=!empty($_POST['exact_title'])&&!in_array(strtolower(trim((string)$_POST['exact_title'])),['0','false','off','no',''],true);$exactAroundFlag=$exactTitleFlag&&!empty($_POST['exact_title_around'])&&!in_array(strtolower(trim((string)$_POST['exact_title_around'])),['0','false','off','no',''],true);$settings=s4ProcurementLoad()['settings'];$saleVal=max(0,s4ProcurementParseIntInput($_POST['sale_price']??0,0));$qtyVal=max(1,s4ProcurementParseIntInput($_POST['qty']??1,1));$commVal=max(0,s4ProcurementParseIntInput($_POST['commission']??0,0));$rawMargin=trim((string)($_POST['target_margin_pct']??''));$targetMargin=$rawMargin===''?s4ProcurementItemTargetMargin([],$settings):s4ProcurementItemTargetMargin(['target_margin_pct'=>$rawMargin],$settings);$rawInqMode=strtolower(trim((string)($_POST['inquiry_mode']??(!empty($_POST['is_order_inquiry'])?'order':'question'))));$inquiryMode=$rawInqMode==='order'?'order':'question';$rawShip=trim((string)($_POST['shipping_cost']??''));$defaultShipCost=max(0,(int)($settings['default_order_shipping_cost']??150000));$shippingVal=$inquiryMode==='order'?($rawShip===''?$defaultShipCost:max(0,s4ProcurementParseIntInput($rawShip,$defaultShipCost))):0;if($act==='deep_basalam'||$act==='deep_digikala'){$reqPlatform=$act==='deep_digikala'?'digikala':(string)($_POST['platform']??'all');$order=json_decode((string)($_POST['order']??''),true);if(is_array($order)){$rows=[];foreach(array_slice(array_values((array)($order['items']??[])),0,10)as$i=>$it){if(!is_array($it))continue;if(!isset($it['target_margin_pct'])&&$rawMargin!=='')$it['target_margin_pct']=$targetMargin;if(!isset($it['inquiry_mode'])&&isset($_POST['inquiry_mode']))$it['inquiry_mode']=$inquiryMode;if(!isset($it['shipping_cost'])&&isset($_POST['shipping_cost']))$it['shipping_cost']=$shippingVal;if($exactTitleFlag){$it['exact_title']=true;$it['exact_title_around']=$exactAroundFlag;}$rows[]=['index'=>$i,'item'=>$it,'research'=>s4ProcurementDeepPlatformSearch($it,$settings,$reqPlatform)];}echo json_encode(['ok'=>true,'order'=>true,'platform'=>$reqPlatform,'recommended_target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingVal,'rows'=>$rows,'version'=>APP_VERSION],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}$title=trim((string)($_POST['title']??''));if($title===''){http_response_code(422);echo json_encode(['ok'=>false,'error'=>'نام محصول الزامی است'],JSON_UNESCAPED_UNICODE);exit;}$item=['title'=>$title,'sku'=>(string)($_POST['sku']??''),'variant'=>(string)($_POST['variant']??''),'unit_price'=>$saleVal,'qty'=>$qtyVal,'commission'=>$commVal,'target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingVal,'exact_title'=>$exactTitleFlag,'exact_title_around'=>$exactAroundFlag];echo json_encode(s4ProcurementDeepPlatformSearch($item,$settings,$reqPlatform),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}if($act!=='research'){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'عملیات ناشناخته']);exit;}$title=trim((string)($_POST['title']??''));if($title===''){http_response_code(422);echo json_encode(['ok'=>false,'error'=>'نام محصول همراه کد پسوند الزامی است'],JSON_UNESCAPED_UNICODE);exit;}$reqPlatformResearch=trim((string)($_POST['platform']??'all'));if(!in_array($reqPlatformResearch,['all','basalam','digikala','snappshop','torob','emalls'],true))$reqPlatformResearch='all';$item=['title'=>$title,'sku'=>(string)($_POST['sku']??''),'variant'=>(string)($_POST['variant']??''),'unit_price'=>$saleVal,'qty'=>$qtyVal,'commission'=>$commVal,'target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingVal,'platform_filter'=>$reqPlatformResearch,'exact_title'=>$exactTitleFlag,'exact_title_around'=>$exactAroundFlag];echo json_encode(s4ProcurementResearchItem($item,$settings,true,50),JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
+if(isset($_GET['procurement_eligibility_api'])||isset($_POST['procurement_eligibility_api'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');$act=(string)($_POST['procurement_eligibility_api']??$_GET['procurement_eligibility_api']??'capabilities');if($act==='capabilities'){echo json_encode(['ok'=>true,'version'=>APP_VERSION,'research_action'=>'research','deep_basalam_action'=>'deep_basalam','deep_digikala_action'=>'deep_digikala','update_all_shops_price_action'=>'update_all_shops_price','method'=>'POST','fields'=>['title','sale_price','qty','commission','target_margin_pct','inquiry_mode','shipping_cost','platform','exact_title','exact_title_around'],'platforms'=>['all','basalam','digikala','snappshop','torob','emalls'],'default_basalam_commission_pct'=>15,'recommended_margin_pct'=>14,'default_order_shipping_cost'=>150000,'callable'=>'s4ProcurementResearchItem','storefront_plugin'=>true],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);exit;}s4RequireAuthenticatedMutation();if(s4VendorRoleActive()&&!in_array($act,['research','deep_basalam','deep_digikala','capabilities'],true)){http_response_code(403);echo json_encode(['ok'=>false,'error'=>'این عملیات برای نقش غرفه دار فعال نیست'],JSON_UNESCAPED_UNICODE);exit;}if($act==='update_all_shops_price'){$rawPayload=(string)($_POST['payload']??'');$payload=$rawPayload!==''?json_decode($rawPayload,true):[];if(!is_array($payload))$payload=[];$input=array_merge(['query_title'=>(string)($_POST['query_title']??$_POST['title']??''),'cand_title'=>(string)($_POST['cand_title']??''),'profile_key'=>(string)($_POST['profile_key']??''),'product_key'=>(string)($_POST['product_key']??''),'sku'=>(string)($_POST['sku']??''),'cand_vendor_id'=>(int)($_POST['cand_vendor_id']??0),'cand_product_id'=>(int)($_POST['cand_product_id']??0),'recommended_price'=>(int)($_POST['recommended_price']??0),'recommended_margin_pct'=>(float)($_POST['recommended_margin_pct']??14),'cost_unit'=>(int)($_POST['cost_unit']??0),'effective_cost_unit'=>(int)($_POST['effective_cost_unit']??0)],$payload);$res=s4ProcurementUpdateAllShopsByRecommendedPrice($input);if(empty($res['ok'])&&empty($res['shops']))http_response_code(422);echo json_encode($res,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}$exactTitleFlag=!empty($_POST['exact_title'])&&!in_array(strtolower(trim((string)$_POST['exact_title'])),['0','false','off','no',''],true);$exactAroundFlag=$exactTitleFlag&&!empty($_POST['exact_title_around'])&&!in_array(strtolower(trim((string)$_POST['exact_title_around'])),['0','false','off','no',''],true);$settings=s4ProcurementLoad()['settings'];$saleVal=max(0,s4ProcurementParseIntInput($_POST['sale_price']??0,0));$qtyVal=max(1,s4ProcurementParseIntInput($_POST['qty']??1,1));$commVal=max(0,s4ProcurementParseIntInput($_POST['commission']??0,0));$rawMargin=trim((string)($_POST['target_margin_pct']??''));$targetMargin=$rawMargin===''?s4ProcurementItemTargetMargin([],$settings):s4ProcurementItemTargetMargin(['target_margin_pct'=>$rawMargin],$settings);$rawInqMode=strtolower(trim((string)($_POST['inquiry_mode']??(!empty($_POST['is_order_inquiry'])?'order':'question'))));$inquiryMode=$rawInqMode==='order'?'order':'question';$rawShip=trim((string)($_POST['shipping_cost']??''));$defaultShipCost=max(0,(int)($settings['default_order_shipping_cost']??150000));$shippingVal=$inquiryMode==='order'?($rawShip===''?$defaultShipCost:max(0,s4ProcurementParseIntInput($rawShip,$defaultShipCost))):0;if($act==='deep_basalam'||$act==='deep_digikala'){$reqPlatform=$act==='deep_digikala'?'digikala':(string)($_POST['platform']??'all');$order=json_decode((string)($_POST['order']??''),true);if(is_array($order)){$rows=[];foreach(array_slice(array_values((array)($order['items']??[])),0,10)as$i=>$it){if(!is_array($it))continue;if(!isset($it['target_margin_pct'])&&$rawMargin!=='')$it['target_margin_pct']=$targetMargin;if(!isset($it['inquiry_mode'])&&isset($_POST['inquiry_mode']))$it['inquiry_mode']=$inquiryMode;if(!isset($it['shipping_cost'])&&isset($_POST['shipping_cost']))$it['shipping_cost']=$shippingVal;if($exactTitleFlag){$it['exact_title']=true;$it['exact_title_around']=$exactAroundFlag;}$rows[]=['index'=>$i,'item'=>$it,'research'=>s4ProcurementDeepPlatformSearch($it,$settings,$reqPlatform)];}s4EligibilityApiEcho(['ok'=>true,'order'=>true,'platform'=>$reqPlatform,'recommended_target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingVal,'rows'=>$rows,'version'=>APP_VERSION]);}$title=trim((string)($_POST['title']??''));if($title===''){http_response_code(422);echo json_encode(['ok'=>false,'error'=>'نام محصول الزامی است'],JSON_UNESCAPED_UNICODE);exit;}$item=['title'=>$title,'sku'=>(string)($_POST['sku']??''),'variant'=>(string)($_POST['variant']??''),'unit_price'=>$saleVal,'qty'=>$qtyVal,'commission'=>$commVal,'target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingVal,'exact_title'=>$exactTitleFlag,'exact_title_around'=>$exactAroundFlag];s4EligibilityApiEcho((array)s4ProcurementDeepPlatformSearch($item,$settings,$reqPlatform));}if($act!=='research'){http_response_code(400);echo json_encode(['ok'=>false,'error'=>'عملیات ناشناخته']);exit;}$title=trim((string)($_POST['title']??''));if($title===''){http_response_code(422);echo json_encode(['ok'=>false,'error'=>'نام محصول همراه کد پسوند الزامی است'],JSON_UNESCAPED_UNICODE);exit;}$reqPlatformResearch=trim((string)($_POST['platform']??'all'));if(!in_array($reqPlatformResearch,['all','basalam','digikala','snappshop','torob','emalls'],true))$reqPlatformResearch='all';$item=['title'=>$title,'sku'=>(string)($_POST['sku']??''),'variant'=>(string)($_POST['variant']??''),'unit_price'=>$saleVal,'qty'=>$qtyVal,'commission'=>$commVal,'target_margin_pct'=>$targetMargin,'inquiry_mode'=>$inquiryMode,'shipping_cost'=>$shippingVal,'platform_filter'=>$reqPlatformResearch,'exact_title'=>$exactTitleFlag,'exact_title_around'=>$exactAroundFlag];s4EligibilityApiEcho((array)s4ProcurementResearchItem($item,$settings,true,50));}
 
 if(isset($_GET['procurement_api'])||isset($_POST['procurement_api'])){header('Content-Type: application/json; charset=UTF-8');header('Cache-Control: no-store');$act=(string)($_POST['procurement_api']??$_GET['procurement_api']??'list');$state=s4ProcurementLoad();
     if($act==='list'){$tasks=array_values($state['tasks']);usort($tasks,fn($a,$b)=>(int)($b['updated_at']??0)<=>(int)($a['updated_at']??0));$filter=(string)($_GET['status']??'all');if($filter!=='all')$tasks=array_values(array_filter($tasks,fn($t)=>(string)($t['status']??'')===$filter));echo json_encode(['ok'=>true,'tasks'=>$tasks,'stats'=>s4ProcurementStats($state['tasks']),'settings'=>$state['settings'],'audit'=>array_slice(array_reverse($state['audit']),0,30),'version'=>APP_VERSION],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);exit;}
@@ -86037,6 +86719,16 @@ function msgrBodyCorrupted(int $code, string $resp): bool {
     IP ثابت ← (اگر هنوز نرسید) proxy.phpِ خودِ سایت.
     v10.81 (95): هر تلاش در لاگِ ارسال ثبت می‌شود و خطایِ نهایی
     فهرستِ تلاش‌ها را دارد. برمی‌گرداند {ok, code, error, via}. */
+/** v10.731: an HTTP-200 error or an HTML proxy page is not a delivered message. */
+function msgrResponseAccepted(int $code, string $response): bool {
+    if ($code < 200 || $code >= 300) return false;
+    $body = json_decode($response, true);
+    if (!is_array($body)) return false;
+    if (array_key_exists('ok', $body)) return $body['ok'] === true;
+    if (isset($body['status'])) return strtoupper((string)$body['status']) === 'OK';
+    if (!empty($body['error']) || !empty($body['error_code'])) return false;
+    return !empty($body['message_id']) || !empty($body['result']['message_id']) || !empty($body['data']['message_id']);
+}
 function msgrSend(string $url, string $postJson): array {
     try {
     $host = (string)(parse_url($url, PHP_URL_HOST) ?? '');
@@ -86113,19 +86805,19 @@ function msgrSend(string $url, string $postJson): array {
             $code = $c3; $resp = $r3; $err = $e3;
         }
     }
-    msgrSendLog($host, ['via' => $via, 'code' => $code, 'ok' => ($code >= 200 && $code < 300),
+    msgrSendLog($host, ['via' => $via, 'code' => $code, 'ok' => msgrResponseAccepted($code, $resp),
         'attempts' => implode(' | ', $attempts), 'resp' => mb_substr((string)$resp, 0, 300)]);
-    if ($code >= 200 && $code < 300) {
+    if (msgrResponseAccepted($code, $resp)) {
         /* v10.85 (99): شناسهٔ پیام برای رجیستری webhook */
         $_jR85 = json_decode((string)$resp, true);
-        $_mId85 = is_array($_jR85) ? (string)(($_jR85['result']['message_id'] ?? ($_jR85['message_id'] ?? ($_jR85['result']['id'] ?? '')))) : '';
+        $_mId85 = is_array($_jR85) ? (string)(($_jR85['result']['message_id'] ?? ($_jR85['message_id'] ?? ($_jR85['data']['message_id'] ?? ($_jR85['result']['id'] ?? ''))))) : '';
         return ['ok' => true, 'code' => $code, 'error' => '', 'via' => $via, 'message_id' => $_mId85];
     }
     $j = json_decode($resp, true);
     $detail = '';
-    if (is_array($j)) $detail = (string)($j['description'] ?? ($j['error'] ?? ($j['message'] ?? ($j['detail'] ?? ''))));
+    if (is_array($j)) $detail = (string)($j['description'] ?? ($j['error'] ?? ($j['message'] ?? ($j['detail'] ?? ($j['status'] ?? '')))));
     if ($detail === '' && is_array($j) && isset($j['error_code'])) $detail = 'error_code=' . $j['error_code'];
-    if ($detail === '') $detail = mb_substr($resp, 0, 200);
+    if ($detail === '') $detail = $code >= 200 && $code < 300 ? 'پاسخ نامعتبر پیام‌رسان؛ تأیید ارسال دریافت نشد' : mb_substr($resp, 0, 200);
     $e = $err !== '' ? 'خطای شبکه: ' . $err : ($detail !== '' ? $detail : 'پاسخی نیامد');
     $tr = count($attempts) > 1 ? ' — تلاش‌ها: ' . mb_substr(implode(' | ', $attempts), 0, 400) : '';
     /* v10.82 (96): راهنمایِ خطای Cloudflare روی مسیرِ غیرمستقیم */
@@ -103070,11 +103762,11 @@ html[data-skin="gloss"] .progress-bar{
 <label class="clbl" style="display:flex;align-items:center;gap:7px;margin:9px 0"><input id="s4uaEnabled" type="checkbox" style="width:auto"> فعال‌سازی ورود با نام کاربری و کلمه عبور</label>
 <div class="tpe-actions"><button class="btn btn-green" onclick="s4uaSaveSettings()">ذخیره وضعیت ورود</button><button class="btn btn-gray" onclick="s4uaLoad()">تازه‌سازی</button><button class="btn btn-red" onclick="s4uaLogout()">خروج مدیر</button></div>
 <div id="s4uaMsg" class="tpe-note"></div>
-<div class="tpe-box" style="margin-top:8px"><b id="s4uaFormTitle">تعریف کاربر</b><input id="s4uaOriginal" type="hidden"><div class="tpe-grid" style="margin-top:7px"><label>نام نمایشی<input id="s4uaDisplay" autocomplete="off"></label><label>نام کاربری<input id="s4uaUsername" autocomplete="off"></label><label>کلمه عبور<input id="s4uaPassword" type="password" autocomplete="new-password" placeholder="خالی = بدون تغییر"></label><label>نقش<select id="s4uaRole"><option value="user">کاربر — فقط بررسی واجد شرایط</option><option value="admin">مدیر — دسترسی کامل</option></select></label><label style="display:flex;gap:6px;align-items:center"><input id="s4uaDisabled" type="checkbox" style="width:auto"> حساب غیرفعال</label><label style="display:flex;gap:6px;align-items:center"><input id="s4uaBlank" type="checkbox" style="width:auto"> تنظیم کلمه عبور خالی برای مدیر</label></div><div class="tpe-actions"><button class="btn btn-cyan" onclick="s4uaSaveUser()">ذخیره کاربر</button><button class="btn btn-gray" onclick="s4uaClearForm()">کاربر جدید</button></div></div>
+<div class="tpe-box" style="margin-top:8px"><b id="s4uaFormTitle">تعریف کاربر</b><input id="s4uaOriginal" type="hidden"><div class="tpe-grid" style="margin-top:7px"><label>نام نمایشی<input id="s4uaDisplay" autocomplete="off"></label><label>نام کاربری<input id="s4uaUsername" autocomplete="off"></label><label>کلمه عبور<input id="s4uaPassword" type="password" autocomplete="new-password" placeholder="خالی = بدون تغییر"></label><label>نقش<select id="s4uaRole"><option value="user">کاربر — فقط بررسی واجد شرایط</option><option value="vendor">غرفه دار — استعلام قیمت و موجودی + محاسبه‌گر</option><option value="admin">مدیر — دسترسی کامل</option></select></label><label style="display:flex;gap:6px;align-items:center"><input id="s4uaDisabled" type="checkbox" style="width:auto"> حساب غیرفعال</label><label style="display:flex;gap:6px;align-items:center"><input id="s4uaBlank" type="checkbox" style="width:auto"> تنظیم کلمه عبور خالی برای مدیر</label></div><div class="tpe-actions"><button class="btn btn-cyan" onclick="s4uaSaveUser()">ذخیره کاربر</button><button class="btn btn-gray" onclick="s4uaClearForm()">کاربر جدید</button></div></div>
 <div class="tpe-table-wrap" style="margin-top:8px"><table class="tpe-table"><thead><tr><th>نام</th><th>نام کاربری</th><th>نقش</th><th>وضعیت</th><th>عملیات</th></tr></thead><tbody id="s4uaRows"><tr><td colspan="5">در انتظار بارگذاری…</td></tr></tbody></table></div>
 </div></div>
 <script>
-let s4uaUsers=[];function s4uaEsc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}async function s4uaReq(action,data={}){const f=new FormData();f.append('s4_access_action',action);Object.entries(data).forEach(([k,v])=>f.append(k,String(v)));const r=await fetch('',{method:'POST',body:f}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'عملیات ناموفق');return d;}async function s4uaLoad(){const msg=document.getElementById('s4uaMsg');try{const d=await s4uaReq('status');s4uaUsers=d.users||[];document.getElementById('s4uaEnabled').checked=!!d.enabled;const b=document.getElementById('s4uaBadge');b.textContent=d.enabled?'فعال':'غیرفعال';b.className='cst '+(d.enabled?'on':'off');document.getElementById('s4uaRows').innerHTML=s4uaUsers.length?s4uaUsers.map((u,i)=>`<tr><td>${s4uaEsc(u.display_name)}</td><td><code>${s4uaEsc(u.username)}</code></td><td>${u.role==='admin'?'مدیر':'کاربر'}</td><td>${u.disabled?'غیرفعال':'فعال'}${u.password_set?'':' · رمز خالی'}</td><td><button class="btn btn-cyan" onclick="s4uaEdit(${i})">ویرایش</button> <button class="btn btn-red" onclick="s4uaDelete(${i})">حذف</button></td></tr>`).join(''):'<tr><td colspan="5">کاربری وجود ندارد</td></tr>';msg.textContent=`کاربر جاری: ${d.current?.display_name||d.current?.username||'مدیر'} · نشست تا خروج ماندگار است.`;}catch(e){msg.textContent='خطا: '+e.message;}}async function s4uaSaveSettings(){try{await s4uaReq('settings',{enabled:document.getElementById('s4uaEnabled').checked?1:0});await s4uaLoad();document.getElementById('s4uaMsg').textContent='وضعیت ورود ذخیره شد.';}catch(e){document.getElementById('s4uaMsg').textContent='خطا: '+e.message;}}function s4uaEdit(i){const u=s4uaUsers[i];if(!u)return;document.getElementById('s4uaOriginal').value=u.username;document.getElementById('s4uaDisplay').value=u.display_name||'';document.getElementById('s4uaUsername').value=u.username||'';document.getElementById('s4uaPassword').value='';document.getElementById('s4uaRole').value=u.role||'user';document.getElementById('s4uaDisabled').checked=!!u.disabled;document.getElementById('s4uaBlank').checked=false;document.getElementById('s4uaFormTitle').textContent='ویرایش '+(u.display_name||u.username);}function s4uaClearForm(){['s4uaOriginal','s4uaDisplay','s4uaUsername','s4uaPassword'].forEach(id=>document.getElementById(id).value='');document.getElementById('s4uaRole').value='user';document.getElementById('s4uaDisabled').checked=false;document.getElementById('s4uaBlank').checked=false;document.getElementById('s4uaFormTitle').textContent='تعریف کاربر';}async function s4uaSaveUser(){try{await s4uaReq('save_user',{original_username:document.getElementById('s4uaOriginal').value,display_name:document.getElementById('s4uaDisplay').value,username:document.getElementById('s4uaUsername').value,password:document.getElementById('s4uaPassword').value,role:document.getElementById('s4uaRole').value,disabled:document.getElementById('s4uaDisabled').checked?1:0,allow_blank_password:document.getElementById('s4uaBlank').checked?1:0});s4uaClearForm();await s4uaLoad();document.getElementById('s4uaMsg').textContent='کاربر ذخیره شد.';}catch(e){document.getElementById('s4uaMsg').textContent='خطا: '+e.message;}}async function s4uaDelete(i){const u=s4uaUsers[i];if(!u||!confirm('کاربر '+u.username+' حذف شود؟'))return;try{await s4uaReq('delete_user',{username:u.username});await s4uaLoad();}catch(e){document.getElementById('s4uaMsg').textContent='خطا: '+e.message;}}async function s4uaLogout(){try{await s4uaReq('logout');location.reload();}catch(e){document.getElementById('s4uaMsg').textContent='خطا: '+e.message;}}
+let s4uaUsers=[];function s4uaEsc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}async function s4uaReq(action,data={}){const f=new FormData();f.append('s4_access_action',action);Object.entries(data).forEach(([k,v])=>f.append(k,String(v)));const r=await fetch('',{method:'POST',body:f}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'عملیات ناموفق');return d;}async function s4uaLoad(){const msg=document.getElementById('s4uaMsg');try{const d=await s4uaReq('status');s4uaUsers=d.users||[];document.getElementById('s4uaEnabled').checked=!!d.enabled;const b=document.getElementById('s4uaBadge');b.textContent=d.enabled?'فعال':'غیرفعال';b.className='cst '+(d.enabled?'on':'off');document.getElementById('s4uaRows').innerHTML=s4uaUsers.length?s4uaUsers.map((u,i)=>`<tr><td>${s4uaEsc(u.display_name)}</td><td><code>${s4uaEsc(u.username)}</code></td><td>${u.role==='admin'?'مدیر':(u.role==='vendor'?'غرفه دار':'کاربر')}</td><td>${u.disabled?'غیرفعال':'فعال'}${u.password_set?'':' · رمز خالی'}</td><td><button class="btn btn-cyan" onclick="s4uaEdit(${i})">ویرایش</button> <button class="btn btn-red" onclick="s4uaDelete(${i})">حذف</button></td></tr>`).join(''):'<tr><td colspan="5">کاربری وجود ندارد</td></tr>';msg.textContent=`کاربر جاری: ${d.current?.display_name||d.current?.username||'مدیر'} · نشست تا خروج ماندگار است.`;}catch(e){msg.textContent='خطا: '+e.message;}}async function s4uaSaveSettings(){try{await s4uaReq('settings',{enabled:document.getElementById('s4uaEnabled').checked?1:0});await s4uaLoad();document.getElementById('s4uaMsg').textContent='وضعیت ورود ذخیره شد.';}catch(e){document.getElementById('s4uaMsg').textContent='خطا: '+e.message;}}function s4uaEdit(i){const u=s4uaUsers[i];if(!u)return;document.getElementById('s4uaOriginal').value=u.username;document.getElementById('s4uaDisplay').value=u.display_name||'';document.getElementById('s4uaUsername').value=u.username||'';document.getElementById('s4uaPassword').value='';document.getElementById('s4uaRole').value=u.role||'user';document.getElementById('s4uaDisabled').checked=!!u.disabled;document.getElementById('s4uaBlank').checked=false;document.getElementById('s4uaFormTitle').textContent='ویرایش '+(u.display_name||u.username);}function s4uaClearForm(){['s4uaOriginal','s4uaDisplay','s4uaUsername','s4uaPassword'].forEach(id=>document.getElementById(id).value='');document.getElementById('s4uaRole').value='user';document.getElementById('s4uaDisabled').checked=false;document.getElementById('s4uaBlank').checked=false;document.getElementById('s4uaFormTitle').textContent='تعریف کاربر';}async function s4uaSaveUser(){try{await s4uaReq('save_user',{original_username:document.getElementById('s4uaOriginal').value,display_name:document.getElementById('s4uaDisplay').value,username:document.getElementById('s4uaUsername').value,password:document.getElementById('s4uaPassword').value,role:document.getElementById('s4uaRole').value,disabled:document.getElementById('s4uaDisabled').checked?1:0,allow_blank_password:document.getElementById('s4uaBlank').checked?1:0});s4uaClearForm();await s4uaLoad();document.getElementById('s4uaMsg').textContent='کاربر ذخیره شد.';}catch(e){document.getElementById('s4uaMsg').textContent='خطا: '+e.message;}}async function s4uaDelete(i){const u=s4uaUsers[i];if(!u||!confirm('کاربر '+u.username+' حذف شود؟'))return;try{await s4uaReq('delete_user',{username:u.username});await s4uaLoad();}catch(e){document.getElementById('s4uaMsg').textContent='خطا: '+e.message;}}async function s4uaLogout(){try{await s4uaReq('logout');location.reload();}catch(e){document.getElementById('s4uaMsg').textContent='خطا: '+e.message;}}
 </script>
 
 <!-- v10.665: persistent marketplace best-seller collection -->
@@ -114952,6 +115644,19 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.743', t:'📨 صف پایدار ارسال اعلان گفتگو + 🏬 نقش «غرفه داران» + رفع گیر کردن صف نوویکس', items:[
+    'پورت کامل کار شاخهٔ arena/821be8f1-new روی نسخهٔ جاری: متن اعلان هر گفتگو همراه امضای رویداد پیش از هر تماس شبکه در chat_outbox ذخیره می‌شود؛ قطع پردازه، خطای شبکه یا timeout دیگر رویداد گفتگو را بدون ارسال مصرف نمی‌کند و صف در ابتدای بررسی بعدی دوباره تلاش می‌شود.',
+    'رسید مستقل برای هر پیام‌رسان، هر مقصد و هر بخش پیام ذخیره می‌شود؛ شکست یک پیام‌رسان نه باعث ارسال تکراری به مقصد موفق می‌شود و نه تلاش مجدد را سرکوب می‌کند.',
+    'msgrResponseAccepted(): پاسخ HTTP 200 که داخلش خطای API یا صفحهٔ HTML واسط است، دیگر «ارسال موفق» شمرده نمی‌شود؛ خطاهای واقعی در ?notif_health=1، گزارش کران و خروجی تست دیده می‌شوند و تعداد پیام‌های منتظر صف گزارش می‌گردد.',
+    'مسیر تأخیری «محصول نقل‌قول‌شده» هم از همان صف پایدار عبور می‌کند؛ پیام یکپارچهٔ متن + نتیجهٔ استعلام دقیقاً یک‌بار و با رسید ارسال می‌شود.',
+    'نقش جدید «غرفه دار»: فضای کاری اختصاصی با دقیقاً دو تب — «استعلام قیمت و موجودی» (همان فرم بررسی واجد شرایط سفارش) و «محاسبه گر غرفه داران».',
+    'در نتایج استعلامِ نقش غرفه دار فقط قیمت و موجودی (و قیمت/موجودی هر تنوع) نمایش داده می‌شود؛ نام هیچ فروشگاه، غرفه یا بازارگاهی (باسلام، اسنپ‌شاپ، دیوار، دیجی‌کالا و …) نه در صفحه و نه در پاسخ JSON سرور وجود ندارد — حذف در سمت سرور انجام می‌شود، نه با پنهان‌سازی در مرورگر.',
+    'عملیات حساس اندپوینت استعلام برای نقش غرفه دار بسته است؛ فقط استعلام سریع، جست‌وجوی عمیق و خواندن تنظیمات پایه مجاز است.',
+    'رفع گیر کردن صف روی نوویکس: پاسخ «یک همگام‌سازی دستی همین حالا در حال اجراست» دیگر شکست دائمی نیست؛ کار با تأخیر کوتاه دوباره به صف برمی‌گردد (retry) به‌جای آنکه failed شود و هرگز به مرحلهٔ ارسال نرسد.',
+    'نشانگر اجرای همگام‌سازی دستی اکنون شناسهٔ پردازهٔ مالک را ذخیره می‌کند؛ اگر مالک مرده باشد نشانگر بلافاصله آزاد می‌شود و دیگر لازم نیست تا پایان stall_after منتظر بمانیم.',
+    'خطوط استخراج موازی وب برای هاست بدون exec: هر کار استخراج در درخواست loopback مستقل خودش اجرا می‌شود (با همان سقف هم‌زمانی extract_task_concurrency)، بنابراین یک استخراج طولانی دیگر تنها برش web worker را اشغال نمی‌کند و بقیهٔ صف گرسنه نمی‌ماند.',
+    'سلامت خطوط خودتشخیص است: اگر loopback کار نکند، برش اصلی web worker دوباره خودش کارهای استخراج را برمی‌دارد؛ وضعیت در ?worker_status=1 زیر extract_lanes گزارش می‌شود.'
+  ]},
   {v:'10.742', t:'🧪 اصلاح ادعای ساعت در آزمون ۱۰.۷۳۰ پس از حذف کلمهٔ «تهران»', items:[
     'آزمون ۱۰.۷۳۰ هنوز دنبال کلمهٔ «تهران» در متن گفتگو می‌گشت و پس از حذف برچسب، شکست می‌خورد؛ حالا دقیقاً همان ساعتِ قالب‌بندی‌شدهٔ پیام (داخل پرانتز) بررسی می‌شود و نبودِ کلمهٔ «تهران» هم جداگانه ادعا می‌گردد.'
   ]},
@@ -121516,6 +122221,7 @@ function renderNotifHealth(){
     }else{
       bits.push('هنوز دورِ بررسی‌ای ثبت نشده — منتظرِ اجرای بعدیِ کران‌جاب');
     }
+    if(d.queued_chats>0)bits.push('در صف ارسال مجدد: '+toFa(d.queued_chats));
     if(d.healthy){
       line.style.color='#4ade80';
       line.innerHTML='🩺 <b>همه چیز درست است</b> — '+esc(bits.join(' · '));
