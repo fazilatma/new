@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.747';
+const APP_VERSION = '10.748';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -2359,7 +2359,10 @@ function s4WorkerRunMatrixFixChild(array $payload): array {
         $raw=json_encode($payload,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
         $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
         $out=[];$rc=0;
-        if($httpChild){$hc=s4HttpChildExec(['matrix_fix_cli'=>'1','matrix_fix_payload'=>$arg],900);$out=(array)$hc['out'];$rc=(int)$hc['rc'];}
+        /* v10.748: the base64 checkpoint payload easily exceeds the URL limit of
+           LiteSpeed/Apache, which answered 414/400 — the parent saw rc=2 and
+           reported matrix_child_exit_2 forever. Carry it in the request body. */
+        if($httpChild){$hc=s4HttpChildExec(['matrix_fix_cli'=>'1'],900,['matrix_fix_payload'=>$arg]);$out=(array)$hc['out'];$rc=(int)$hc['rc'];$hcHttp=(int)($hc['http']??0);}
         else{$cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_fix '.escapeshellarg($arg).' 2>&1';@exec($cmd,$out,$rc);}
         $decoded=null;
         for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
@@ -2490,12 +2493,12 @@ function s4WorkerRunMatrixChild(array $payload): array {
     $php=$httpChild?'':s4CliPhpBinary();$mem=(string)@ini_get('memory_limit');if($mem==='')$mem='512M';
     $segments=0;$retries=0;$resume=!empty($payload['resume']);
     do{
-        $segments++;$part=$payload;$part['one_segment']=true;$part['resume']=$resume;
+        $segments++;$part=$payload;$part['one_segment']=true;$part['resume']=$resume;$hcHttp=0;
         if(bslSendResourcePressureActive())$part['slice_seconds']=min(3,max(2,(int)($part['slice_seconds']??3)));
         $raw=json_encode($part,JSON_UNESCAPED_UNICODE);if($raw===false)return ['ok'=>false,'error'=>'payload_encode_failed'];
         $arg=rtrim(strtr(base64_encode($raw),'+/','-_'),'=');
         $out=[];$rc=0;
-        if($httpChild){$hc=s4HttpChildExec(['matrix_build_cli'=>'1','matrix_payload'=>$arg],900);$out=(array)$hc['out'];$rc=(int)$hc['rc'];}
+        if($httpChild){$hc=s4HttpChildExec(['matrix_build_cli'=>'1'],900,['matrix_payload'=>$arg]);$out=(array)$hc['out'];$rc=(int)$hc['rc'];$hcHttp=(int)($hc['http']??0);}
         else{$cmd=s4CliPhpCommand($php,$mem).' '.escapeshellarg(__FILE__).' matrix_build '.escapeshellarg($arg).' 2>&1';@exec($cmd,$out,$rc);}
         $tail=trim(implode("\n",array_slice($out,-20)));$decoded=null;
         for($i=count($out)-1;$i>=0;$i--){$j=json_decode((string)$out[$i],true);if(is_array($j)){$decoded=$j;break;}}
@@ -2506,7 +2509,8 @@ function s4WorkerRunMatrixChild(array $payload): array {
             matrixProgress(['running'=>true,'done'=>false,'yielded'=>false,'worker'=>true,'phase'=>'بازیابی برش worker',
                 'log_add'=>['⚠️ برش '.$segments.' با exit '.(int)$rc.' قطع شد؛ حافظه آزاد و از checkpoint تکرار می‌شود']]);
             if($retries<=2){usleep(500000);continue;}
-            return ['ok'=>false,'error'=>'matrix_child_exit_'.$rc,'tail'=>mb_substr($tail,-2000),'child_exit_code'=>$rc,'worker_segments'=>$segments];
+            return ['ok'=>false,'error'=>'matrix_child_exit_'.$rc.(!empty($hcHttp)?('_http'.$hcHttp):''),
+                'tail'=>mb_substr($tail,-2000),'child_exit_code'=>$rc,'child_http'=>$hcHttp??0,'worker_segments'=>$segments];
         }
         $decoded['child_exit_code']=$rc;$decoded['worker_segments']=$segments;$retries=0;
         if(empty($decoded['yielded']))return $decoded;
@@ -40188,8 +40192,8 @@ if(isset($_GET['worker_extract_job'])){
     echo json_encode($resParallel,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES).PHP_EOL;
     exit(!empty($resParallel['ok'])?0:1);
 }
-if (isset($_GET['matrix_build_cli'])) {
-    $enc=trim((string)($_GET['matrix_payload']??''));
+if (isset($_GET['matrix_build_cli'])||isset($_POST['matrix_build_cli'])) {
+    $enc=trim((string)($_POST['matrix_payload']??($_GET['matrix_payload']??'')));
     $enc=strtr($enc,'-_','+/');$pad=strlen($enc)%4;if($pad)$enc.=str_repeat('=',4-$pad);
     $payload=json_decode((string)base64_decode($enc,true),true);
     if(!is_array($payload)){$resMxCli=['ok'=>false,'error'=>'invalid_matrix_payload'];}
@@ -40200,8 +40204,8 @@ if (isset($_GET['matrix_build_cli'])) {
     $matrixSliceOk=!empty($resMxCli['ok'])||!empty($resMxCli['yielded'])||!empty($resMxCli['resume_needed']);
     exit($matrixSliceOk?0:1);
 }
-if (isset($_GET['matrix_fix_cli'])) {
-    $enc=trim((string)($_GET['matrix_fix_payload']??''));$enc=strtr($enc,'-_','+/');$pad=strlen($enc)%4;if($pad)$enc.=str_repeat('=',4-$pad);
+if (isset($_GET['matrix_fix_cli'])||isset($_POST['matrix_fix_cli'])) {
+    $enc=trim((string)($_POST['matrix_fix_payload']??($_GET['matrix_fix_payload']??'')));$enc=strtr($enc,'-_','+/');$pad=strlen($enc)%4;if($pad)$enc.=str_repeat('=',4-$pad);
     $payload=json_decode((string)base64_decode($enc,true),true);$resFixCli=is_array($payload)?s4WorkerRunMatrixFix($payload):['ok'=>false,'error'=>'invalid_matrix_fix_payload'];
     echo json_encode($resFixCli,JSON_UNESCAPED_UNICODE).PHP_EOL;exit(!empty($resFixCli['ok'])?0:1);
 }
@@ -55400,6 +55404,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'owner_pid' => (int)@getmy"."pid()")!==false
         &&strpos($selfSrc,'$_msOwnerDead = $_msOwner'.'Pid > 0')!==false
         &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
+    $add('10.748','payload سنگین ماتریس روی هاست بدون exec از body عبور می‌کند، نه از آدرس',
+        version_compare(APP_VERSION,'10.748','>=')
+        &&strpos($selfSrc,"s4HttpChildExec(['matrix_build_cli'=>'1'],900,['matrix_pay"."load'=>\$arg])")!==false
+        &&strpos($selfSrc,"s4HttpChildExec(['matrix_fix_cli'=>'1'],900,['matrix_fix_pay"."load'=>\$arg])")!==false
+        &&strpos($selfSrc,"isset(\$_GET['matrix_build_cli'])||isset(\$_POST['matrix_build_"."cli'])")!==false
+        &&strpos($selfSrc,"isset(\$_GET['matrix_fix_cli'])||isset(\$_POST['matrix_fix_"."cli'])")!==false
+        &&strpos($selfSrc,"'child_http'=>\$hcHt"."tp??0")!==false);
     $add('10.745','خروجی JSON خودآزمون با fails=1 فقط ادعاهای شکست‌خورده را برمی‌گرداند',
         version_compare(APP_VERSION,'10.745','>=')
         &&strpos($selfSrc,"if (!empty(\$_GET['fai"."ls'])) \$outChecks = array_values(array_filter(")!==false
@@ -115744,6 +115755,11 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.748', t:'🧱 رفع خطای تکرارشوندهٔ matrix_child_exit_2 روی هاست بدون exec', items:[
+    'برش‌های ساخت و اصلاح ماتریس روی هاست بدون exec، payload فشردهٔ checkpoint را داخل آدرس (query string) می‌فرستادند؛ این رشته به‌سادگی از سقف طول URL وب‌سرور عبور می‌کرد و پاسخ 4xx می‌گرفت. والد آن را rc=2 می‌دید و هر بار matrix_child_exit_2 ثبت می‌شد.',
+    'اکنون payload در بدنهٔ درخواست POST ارسال می‌شود و اندپوینت‌های matrix_build_cli و matrix_fix_cli آن را از POST (و در صورت نبود، از GET) می‌خوانند.',
+    'کد وضعیت HTTP فرزند در متن خطا و در خروجی گزارش می‌شود (مثلاً matrix_child_exit_2_http414) تا تشخیص بعدی بدون حدس انجام شود.'
+  ]},
   {v:'10.747', t:'🗂️ رفع نقص واقعی تشخیص سلسله‌مراتب دستهٔ باسلام + اصلاح سه ادعای کهنه', items:[
     'لیست واقعی دسته‌های باسلام (bslCatsFlatten) فقط id، name و level دارد و هیچ parent_id یا children ندارد؛ بنابراین bslBuildCategoryMetaIndex() همیشه has_hierarchy=false می‌داد و همهٔ دسته‌ها — حتی والدها — «برگ» شمرده می‌شدند. نتیجه: امکان گسترش دستهٔ والد به برگ‌هایش هرگز اجرا نمی‌شد و ارسال محصول روی دستهٔ والد با خطای «دسته بندی انتخابی دارای فرزند می باشد» می‌ماند.',
     'اکنون اگر پیوند صریح والد/فرزند وجود نداشته باشد، والد هر دسته از توالی پیش‌ترتیب level استنتاج می‌شود؛ زنجیرهٔ تلاش مجدد روی همهٔ برگ‌های همان شاخه دوباره فعال است.',

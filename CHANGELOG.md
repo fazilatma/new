@@ -1,5 +1,10 @@
 # Release notes
 
+## scraper4 10.748
+
+- **Fixed the repeating `matrix_child_exit_2` on Noviex.** Matrix build/fix slices on exec-free hosts passed the base64 checkpoint payload in the query string; it routinely exceeded the web server's URL limit, the request came back 4xx, the parent mapped that to `rc = 2` and logged `matrix_child_exit_2` on every attempt. The payload now travels in the POST body, and `matrix_build_cli` / `matrix_fix_cli` read it from POST first (GET stays as a fallback).
+- The child's HTTP status is now part of the error text and the result (`matrix_child_exit_2_http414`, `child_http`), so the next transport failure identifies itself.
+
 ## scraper4 10.747
 
 - **Real fix found by the selftest repair: Basalam parent categories were never expanded.** The live category list (`bslCatsFlatten()`) only carries `id`, `name` and `level` — no `parent_id`, no `children` — so `bslBuildCategoryMetaIndex()` always reported `has_hierarchy = false` and marked every category, parents included, as a leaf. `bslFilterSafeManualCategories()` therefore never expanded a chosen parent into its leaves, and sending a product on a parent category kept failing with «دسته بندی انتخابی دارای فرزند می باشد». The index now derives the parent from the pre-order `level` sequence when no explicit link exists, which restores the 10.681 retry chain over every leaf of the branch.
