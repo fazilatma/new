@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.744';
+const APP_VERSION = '10.745';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -55342,6 +55342,10 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'owner_pid' => (int)@getmy"."pid()")!==false
         &&strpos($selfSrc,'$_msOwnerDead = $_msOwner'.'Pid > 0')!==false
         &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
+    $add('10.745','خروجی JSON خودآزمون با fails=1 فقط ادعاهای شکست‌خورده را برمی‌گرداند',
+        version_compare(APP_VERSION,'10.745','>=')
+        &&strpos($selfSrc,"if (!empty(\$_GET['fai'."."'ls'])) \$outChecks = array_values(array_filter(")!==false
+        &&strpos($selfSrc,"'failed' => \$outTotal - \$out"."Passed,")!==false);
     $add('10.744','توابع گمشدهٔ مسیر DoH/پروکسیِ دیجی‌کالا تعریف شدند (خطای کشندهٔ Call to undefined function)',
         version_compare(APP_VERSION,'10.744','>=')
         &&function_exists('srcNetResolveViaDoh')
@@ -69414,9 +69418,14 @@ $add('10.109', 'نسخهٔ ۱۰.۱۰۹',
             $outChecks = array_values(array_filter($checks, static fn($c) => strpos((string)($c['ver'] ?? ''), $vf) === 0));
         }
         $outPassed = count(array_filter($outChecks, static fn($c) => !empty($c['ok'])));
+        $outTotal = count($outChecks);
+        /* v10.745: ?fails=1 returns only the failing checks. The full JSON is
+           several hundred rows, which made «which assertions are red?» an
+           expensive question to ask of a production host. */
+        if (!empty($_GET['fails'])) $outChecks = array_values(array_filter($outChecks, static fn($c) => empty($c['ok'])));
         $__selftestFinished = true;
-        echo json_encode(['ok' => $outPassed === count($outChecks), 'version' => APP_VERSION,
-            'passed' => $outPassed, 'total' => count($outChecks),
+        echo json_encode(['ok' => $outPassed === $outTotal, 'version' => APP_VERSION,
+            'passed' => $outPassed, 'total' => $outTotal, 'failed' => $outTotal - $outPassed,
             'checks' => $outChecks, 'config' => $cfgNow], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
         exit;
     }
@@ -115676,6 +115685,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.745', t:'🔎 فیلتر «فقط شکست‌ها» در خروجی JSON خودآزمون', items:[
+    '?selftest=1&json=1&fails=1 فقط ادعاهای ناموفق را برمی‌گرداند و تعداد کل، تعداد موفق و تعداد شکست‌خورده را جداگانه گزارش می‌کند؛ بررسی سلامت یک هاست دیگر نیازمند خواندن چند صد ردیف خروجی نیست.'
+  ]},
   {v:'10.744', t:'🛠️ رفع خطای کشندهٔ مسیر DoH/پروکسی در کلاینت دیجی‌کالا', items:[
     'توابع srcNetResolveViaDoh() و srcNetApplyProxy() در کد فراخوانی می‌شدند ولی هیچ‌جا تعریف نشده بودند؛ اولین درخواست دیجی‌کالا که به حالت DoH یا پروکسی می‌افتاد با خطای Call to undefined function کشته می‌شد و اجرای کامل ?selftest=1 روی نوویکس را هم قطع می‌کرد.',
     'هر دو تابع اکنون تعریف شده‌اند و از همان منطق موجود aiDohResolve و تنظیمات پروکسی (نوع و احراز هویت) استفاده می‌کنند.'

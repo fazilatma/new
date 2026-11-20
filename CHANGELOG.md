@@ -1,5 +1,9 @@
 # Release notes
 
+## scraper4 10.745
+
+- `?selftest=1&json=1&fails=1` now returns only the failing assertions, plus separate `passed`/`total`/`failed` counters, so checking a production host no longer means reading several hundred rows of JSON.
+
 ## scraper4 10.744
 
 - **Fixed a latent fatal in the Digikala API client.** `srcNetResolveViaDoh()` and `srcNetApplyProxy()` were called but never defined anywhere in the file, so the first Digikala request that fell back to DoH or proxy mode died with `Call to undefined function` — which also aborted the whole `?selftest=1` run on Noviex. Both helpers now exist and reuse the established `aiDohResolve()` resolver and the proxy type/auth settings.
