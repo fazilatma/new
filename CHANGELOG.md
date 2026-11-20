@@ -1,5 +1,9 @@
 # Release notes
 
+## scraper4 10.744
+
+- **Fixed a latent fatal in the Digikala API client.** `srcNetResolveViaDoh()` and `srcNetApplyProxy()` were called but never defined anywhere in the file, so the first Digikala request that fell back to DoH or proxy mode died with `Call to undefined function` — which also aborted the whole `?selftest=1` run on Noviex. Both helpers now exist and reuse the established `aiDohResolve()` resolver and the proxy type/auth settings.
+
 ## scraper4 10.743
 
 - **Branch sync.** Applied the newest work from every branch listed in the code-version section. `arena/ae9391a9-new` (10.730) and `arena/be64d982-new` (10.735) were already contained in this branch; `arena/821be8f1-new` (its own 10.731) is ported here in full; the auxiliary `pythonanywhere/` port from `arena/e868e86a-new` and the delivery docs/tests from `arena/821be8f1-new` were imported as well. `arena/9c213522-new` carries the separate storefront site (`amphp/`); only its vendor calculator is adopted, as requested.
@@ -10,7 +14,6 @@
 - **Noviex queue stall fixed — manual syncs no longer die on a busy marker.** A `busy` answer from the manual-sync guard («یک همگام‌سازی دستی همین حالا در حال اجراست») was returned without `retryable`, so the worker broke out of its segment loop and `s4WebWorkerRunSlice()` finished the job as `failed`. Every queued profile therefore ended as a permanently failed `manual_sync` that never reached the sending stage. A busy answer is now explicitly retryable: the job is requeued through `s4WorkerRequeueForRetry()` with a ≥20s delay and its attempt counter is not consumed.
 - **Dead owners release the manual-sync marker immediately.** The progress marker now records `owner_pid`, and the busy guard treats a marker whose owner process no longer exists as stale instead of waiting out `stall_after` (up to 300s) — which is what made the stall self-sustaining on a host where worker slices end at the request boundary.
 - **Bounded parallel web extraction lanes for hosts without `exec`.** The CLI pool (`s4DispatchParallelExtractJobs`) needs `exec`, so on Noviex every extraction had to run inside the single web-worker slice: one 60-page profile held the only lane while the rest of the queue looked «queued but never starting». Extraction jobs are now claimed atomically and each runs in its own detached loopback request (`?web_extract_lane=1`), respecting the same `extract_task_concurrency` limit, with the pool refilled as each lane finishes.
-- **Fixed a latent fatal in the Digikala API client.** `srcNetResolveViaDoh()` and `srcNetApplyProxy()` were called but never defined anywhere in the file, so the first Digikala request that fell back to DoH or proxy mode died with `Call to undefined function` — which also aborted the whole `?selftest=1` run on Noviex. Both helpers now exist and reuse the established resolver/proxy logic.
 - **Lane health is self-correcting.** The main slice hands extraction to the lanes only while a loopback kick has demonstrably succeeded in the last 5 minutes; if loopback breaks, the slice takes extraction back automatically. A lane row is protected from orphan recovery for 60s while its request adopts it. `?worker_status=1` now reports `extract_lanes` (`supported`, `healthy`, `limit`, `running`, `pending`).
 
 ## scraper4 10.742

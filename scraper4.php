@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.743';
+const APP_VERSION = '10.744';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -55342,8 +55342,9 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'owner_pid' => (int)@getmy"."pid()")!==false
         &&strpos($selfSrc,'$_msOwnerDead = $_msOwner'.'Pid > 0')!==false
         &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
-    $add('10.743','توابع گمشدهٔ مسیر DoH/پروکسیِ دیجی‌کالا تعریف شدند (خطای کشندهٔ Call to undefined function)',
-        function_exists('srcNetResolveViaDoh')
+    $add('10.744','توابع گمشدهٔ مسیر DoH/پروکسیِ دیجی‌کالا تعریف شدند (خطای کشندهٔ Call to undefined function)',
+        version_compare(APP_VERSION,'10.744','>=')
+        &&function_exists('srcNetResolveViaDoh')
         &&function_exists('srcNetApplyProxy')
         &&srcNetResolveViaDoh('','')===''
         &&srcNetApplyProxy(null,'')===false
@@ -115675,6 +115676,10 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.744', t:'🛠️ رفع خطای کشندهٔ مسیر DoH/پروکسی در کلاینت دیجی‌کالا', items:[
+    'توابع srcNetResolveViaDoh() و srcNetApplyProxy() در کد فراخوانی می‌شدند ولی هیچ‌جا تعریف نشده بودند؛ اولین درخواست دیجی‌کالا که به حالت DoH یا پروکسی می‌افتاد با خطای Call to undefined function کشته می‌شد و اجرای کامل ?selftest=1 روی نوویکس را هم قطع می‌کرد.',
+    'هر دو تابع اکنون تعریف شده‌اند و از همان منطق موجود aiDohResolve و تنظیمات پروکسی (نوع و احراز هویت) استفاده می‌کنند.'
+  ]},
   {v:'10.743', t:'📨 صف پایدار ارسال اعلان گفتگو + 🏬 نقش «غرفه داران» + رفع گیر کردن صف نوویکس', items:[
     'پورت کامل کار شاخهٔ arena/821be8f1-new روی نسخهٔ جاری: متن اعلان هر گفتگو همراه امضای رویداد پیش از هر تماس شبکه در chat_outbox ذخیره می‌شود؛ قطع پردازه، خطای شبکه یا timeout دیگر رویداد گفتگو را بدون ارسال مصرف نمی‌کند و صف در ابتدای بررسی بعدی دوباره تلاش می‌شود.',
     'رسید مستقل برای هر پیام‌رسان، هر مقصد و هر بخش پیام ذخیره می‌شود؛ شکست یک پیام‌رسان نه باعث ارسال تکراری به مقصد موفق می‌شود و نه تلاش مجدد را سرکوب می‌کند.',
