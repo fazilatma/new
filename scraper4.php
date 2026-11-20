@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.750';
+const APP_VERSION = '10.751';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -1857,6 +1857,9 @@ function s4WorkerClaimJob(): ?array {
         foreach($q['entries'] as $i=>$e){
             if(!is_array($e)||(string)($e['status']??'')!=='pending'||(int)($e['retry_after']??0)>$now)continue;
             $type=(string)($e['type']??'');if($parallelExtract&&$type==='backend_extract')continue;
+            /* v10.751: a user pressed Continue on a send row. Nothing queued may
+               delay it, and the lane flock already prevents a second runner. */
+            if($type==='queue_backend'){$pick=$i;$pickRank=-1;$pickClass='manual';break;}
             $class=in_array($type,['matrix_build','matrix_fix'],true)?'matrix':'manual';
             $rank=$lastClass==='matrix'?($class==='manual'?0:1):($class==='matrix'?0:1);
             if($rank<$pickRank){$pick=$i;$pickRank=$rank;$pickClass=$class;if($rank===0)break;}
@@ -2176,6 +2179,24 @@ function s4WorkerEnqueueManualSync(string $profileKey, bool $resume, string $ori
 /** Cancel only not-yet-started recovery jobs after an equivalent direct run
  * has already completed. This prevents a delayed busy worker from re-extracting
  * after the successful run cleared its checkpoint. */
+/**
+ * v10.751: روی میزبان بدون exec، «ادامه»ی صف ارسال به جای اتکا به اتصالِ
+ * مرورگر، به صورت یک job ماندگار در صفِ worker وب ثبت می‌شود.
+ */
+function s4WorkerEnqueueQueueBackend(string $action, string $lane = '', string $queueId = '', array $post = []): array {
+    $action = $action === 'woo_backend' ? 'woo_backend' : 'bsl_backend';
+    $lane = trim($lane); $queueId = trim($queueId);
+    if (!isset($post['from_file'])) $post['from_file'] = '1';
+    if ($lane !== '') $post['lane'] = $lane;
+    if ($queueId !== '') $post['queue_id'] = $queueId;
+    $dedup = 'queue_backend|' . $action . '|' . ($lane !== '' ? $lane : 'legacy') . '|' . $queueId;
+    $label = $action === 'woo_backend' ? 'ادامهٔ صف ارسال ووکامرس' : 'ادامهٔ صف ارسال باسلام';
+    return s4WorkerEnqueue('queue_backend', [
+        'action' => $action, 'lane' => $lane, 'queue_id' => $queueId,
+        'post' => $post, 'dedup_key' => $dedup, 'requested_at' => time(),
+    ], $label);
+}
+
 function s4WorkerCancelPendingManualSync(string $profileKey,string $reason='pipeline_already_done'):int{
     if($profileKey===''||!function_exists('s4WorkerQueueMutate'))return 0;$cancelled=0;
     s4WorkerQueueMutate(function(&$q)use($profileKey,$reason,&$cancelled){$now=time();
@@ -3592,6 +3613,60 @@ function s4WorkerRunJob(array $job): array {
     if(s4WorkerJobIsCancelled($jobId))return ['ok'=>false,'cancelled'=>true,'error'=>'job_cancelled_before_start'];
     $type = (string)($job['type'] ?? '');
     $payload = is_array($job['payload'] ?? null) ? $job['payload'] : [];
+    if ($type === 'queue_backend') {
+        /* v10.751: the send backend is an endpoint, not a function, so the only
+           in-process way to run it is a loopback child. Unlike the browser POST
+           it used to depend on, this one is owned by the durable worker. */
+        $qbAction = (string)($payload['action'] ?? 'bsl_backend');
+        if ($qbAction !== 'woo_backend') $qbAction = 'bsl_backend';
+        $qbLane = trim((string)($payload['lane'] ?? ''));
+        $qbQueueId = trim((string)($payload['queue_id'] ?? ''));
+        $qbPost = is_array($payload['post'] ?? null) ? $payload['post'] : [];
+        if (!isset($qbPost['from_file'])) $qbPost['from_file'] = '1';
+        if ($qbLane !== '') $qbPost['lane'] = $qbLane;
+        if ($qbQueueId !== '') $qbPost['queue_id'] = $qbQueueId;
+        s4WorkerStateWrite(['phase' => 'queue_backend', 'job_type' => 'queue_backend',
+            'job_lane' => $qbLane, 'job_queue_id' => $qbQueueId, 'heartbeat' => time()]);
+        $qbGet = ['action' => $qbAction];
+        if ($qbLane !== '') $qbGet['lane'] = $qbLane;
+        if ($qbQueueId !== '') $qbGet['queue_id'] = $qbQueueId;
+        $qbHc = s4HttpChildExec($qbGet, 900, $qbPost);
+        $qbOut = (array)($qbHc['out'] ?? []); $qbRc = (int)($qbHc['rc'] ?? 0);
+        $qbReply = null;
+        for ($i = count($qbOut) - 1; $i >= 0; $i--) {
+            $qbCand = json_decode(trim((string)$qbOut[$i]), true);
+            if (is_array($qbCand) && array_key_exists('ok', $qbCand)) { $qbReply = $qbCand; break; }
+        }
+        if (is_array($qbReply)) {
+            /* Another owner already holds the lane flock — the send is running,
+               so this durable job succeeded in its only purpose. */
+            if (!empty($qbReply['skipped']) || !empty($qbReply['delegated_to_cli'])) {
+                return ['ok' => true, 'already_running' => true, 'engine' => 'web_worker',
+                    'msg' => (string)($qbReply['msg'] ?? $qbReply['error'] ?? 'already_running')];
+            }
+            if (!empty($qbReply['stopped'])) return ['ok' => true, 'stopped' => true, 'engine' => 'web_worker'];
+            if (!empty($qbReply['ok'])) {
+                return ['ok' => true, 'engine' => 'web_worker', 'queue_id' => (string)($qbReply['queue_id'] ?? $qbQueueId),
+                    'msg' => (string)($qbReply['msg'] ?? '')];
+            }
+            $qbRetry = !empty($qbReply['retryable']);
+            return ['ok' => false, 'engine' => 'web_worker',
+                'error' => (string)($qbReply['error'] ?? 'queue_backend_failed'),
+                'retryable' => $qbRetry, 'retry_reason' => 'queue_backend_retryable',
+                'retry_delay' => max(15, (int)($qbReply['retry_delay'] ?? 20))];
+        }
+        /* No JSON verdict means the web server cut the child (503/504/timeout),
+           not that the send refused to run. Retry a bounded number of times. */
+        $qbTries = (int)($job['retry_count'] ?? 0);
+        if ($qbTries < 3) {
+            return ['ok' => false, 'retryable' => true, 'retry_delay' => 30,
+                'retry_reason' => 'queue_backend_http_' . (int)($qbHc['http'] ?? 0),
+                'error' => 'queue_backend_child_exit_' . $qbRc];
+        }
+        return ['ok' => false, 'engine' => 'web_worker',
+            'error' => 'queue_backend_child_exit_' . $qbRc . '_http' . (int)($qbHc['http'] ?? 0),
+            'tail' => mb_substr(trim(implode("\n", $qbOut)), -500)];
+    }
     if ($type === 'manual_sync') {
         $pk = trim((string)($payload['profile_key'] ?? ''));
         $msResume = !empty($payload['resume']);
@@ -55501,6 +55576,33 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'owner_pid' => (int)@getmy"."pid()")!==false
         &&strpos($selfSrc,'$_msOwnerDead = $_msOwner'.'Pid > 0')!==false
         &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
+    /* v10.751: دکمهٔ «ادامه» ردیف‌های متوقف‌شدهٔ صف ارسال روی میزبانِ بدون exec.
+       قبلاً تنها راه‌انداز، spawnِ CLI بود که بدون exec بی‌درنگ false می‌داد. */
+    $__pf751 = (string)@tempnam(sys_get_temp_dir(), 's4pf');
+    if ($__pf751 !== '') @file_put_contents($__pf751, '[{"id":1}]');
+    $__pfFound751 = $__pf751 !== '' ? bslResolveQueueProductsFile(['id'=>'selftest751','products_file'=>$__pf751]) : 'x';
+    $__pfGone751 = bslResolveQueueProductsFile(['id'=>'selftest751missing',
+        'products_file'=>'/nonexistent/bsl_queue_products_selftest751missing.json']);
+    if ($__pf751 !== '') @unlink($__pf751);
+    $add('10.751','ادامهٔ ردیف متوقف‌شدهٔ صف ارسال روی میزبان بدون exec هم اعزام سمت سرور دارد',
+        version_compare(APP_VERSION,'10.751','>=')
+        &&function_exists('s4DispatchQueueBackend')
+        &&function_exists('s4WorkerEnqueueQueueBackend')
+        &&strpos($selfSrc,'$_bslResDisp=s4DispatchQueue'.'Backend(')!==false
+        &&strpos($selfSrc,"if (\$execLess && function_exists('s4WorkerEnqueueQueue"."Backend')) {")!==false
+        &&strpos($selfSrc,"\$out['mode'] = 'web_worker_"."job';")!==false
+        &&substr_count($selfSrc,'fireAndForgetCliQueueBackend($qids'.'[0]')===0);
+    $add('10.751','نوع job «queue_backend» در worker اجرا و بدون تأخیر زمان‌بندی می‌شود',
+        strpos($selfSrc,"if (\$type === 'queue_back"."end') {")!==false
+        &&strpos($selfSrc,"if(\$type==='queue_back"."end'){\$pick=\$i;\$pickRank=-1;")!==false
+        &&strpos($selfSrc,"\$qbHc = s4HttpChildExec(\$qbGet, 900, \$qb"."Post);")!==false
+        &&strpos($selfSrc,"'queue_backend_child_"."exit_'")!==false
+        &&strpos($selfSrc,"'dedup_key' => \$dedup, 'requested_at' => time()")!==false);
+    $add('10.751','فایل محصولات ردیف صف با نام جایگزین پیدا می‌شود و POST مرورگر فقط آخرین چاره است',
+        $__pf751!==''&&$__pfFound751===$__pf751
+        &&$__pfGone751===''
+        &&substr_count($selfSrc,'!(d.worker_pid>0)&&!d.server_'.'started')===3
+        &&strpos($selfSrc,"'reason_code'=>'products_file_"."missing'")!==false);
     /* v10.750: ۱) غرفهٔ معتبر دیگر «نامعتبر» گزارش نمی‌شود، ۲) بازدید/نقل‌قول محصول
        پیش از پاسخ، از پروفایل حل و از مبدأ تازه می‌شود. */
     $__cn750 = ['basalam' => ['token' => 'tok-def', 'vendor_id' => 7501, 'shop_name' => 'غرفهٔ یک',
@@ -74613,6 +74715,64 @@ function fireAndForget(string $qs, int $timeoutMs = 1200, ?array $post = null): 
     return true;
 }
 
+/**
+ * v10.751: تنها مسیر اعزامِ backendِ صف ارسال.
+ *
+ * «ادامه» روی میزبانِ بدون exec شکست می‌خورد چون fireAndForgetCliQueueBackend()
+ * بدون exec بلافاصله false برمی‌گرداند و هیچ fallbackی پشت آن نبود؛ پس پاسخ
+ * worker_pid=0 می‌شد و تنها راه‌اندازِ باقیمانده POSTِ خودِ مرورگر بود که با
+ * بسته‌شدنِ اتصالِ کاربر می‌مرد. ترتیب اینجا: spawnِ CLI → jobِ ماندگارِ worker
+ * وب (فقط روی میزبان بدون exec) → handoffِ HTTP حلقهٔ برگشتی.
+ */
+function s4DispatchQueueBackend(array $get, ?array $post = null): array {
+    $action = (string)($get['action'] ?? '');
+    if ($action !== 'woo_backend') $action = 'bsl_backend';
+    $get['action'] = $action;
+    $postArr = is_array($post) ? $post : [];
+    $lane = trim((string)($get['lane'] ?? $postArr['lane'] ?? ''));
+    $queueId = trim((string)($postArr['queue_id'] ?? $get['queue_id'] ?? ''));
+    $out = ['ok' => false, 'pid' => 0, 'mode' => '', 'queued' => false, 'server_started' => false,
+            'action' => $action, 'lane' => $lane, 'queue_id' => $queueId];
+    if (function_exists('fireAndForgetCliQueueBackend') && fireAndForgetCliQueueBackend($get, $postArr ?: null)) {
+        $out['ok'] = true; $out['server_started'] = true;
+        $out['pid'] = (int)($GLOBALS['_queueDispatchPid'] ?? 0);
+        $out['mode'] = (string)($GLOBALS['_queueDispatchMode'] ?? 'cli_spawn');
+        return $out;
+    }
+    $cliMode = (string)($GLOBALS['_queueDispatchMode'] ?? '');
+    $execLess = function_exists('s4RuntimeCanSpawnCli') ? !s4RuntimeCanSpawnCli() : !function_exists('exec');
+    /* Durable first on exec-less hosts: the loopback kick below is still at the
+       mercy of the web server (a 503 drops it silently), and then only this
+       queued job survives to finish the row. */
+    if ($execLess && function_exists('s4WorkerEnqueueQueueBackend')) {
+        $enq = s4WorkerEnqueueQueueBackend($action, $lane, $queueId, $postArr);
+        if (!empty($enq['ok'])) {
+            $out['ok'] = true; $out['queued'] = true; $out['server_started'] = true;
+            $out['mode'] = 'web_worker_job';
+            $out['job_id'] = (string)($enq['job_id'] ?? '');
+            $out['duplicate'] = !empty($enq['duplicate']);
+            $out['worker_engine'] = (string)($enq['engine'] ?? '');
+            $out['worker_ensure'] = !empty($enq['web_worker']['ok']);
+            $GLOBALS['_queueDispatchMode'] = 'web_worker_job';
+        } else {
+            $out['enqueue_error'] = (string)($enq['error'] ?? 'worker_enqueue_failed');
+        }
+    }
+    $qs = 'action=' . $action . ($lane !== '' ? '&lane=' . rawurlencode($lane) : '');
+    /* The loopback request is a server-to-server call: without the worker token
+       an enabled login wall would answer it with 401 instead of running it. */
+    if (function_exists('s4WebWorkerToken')) $qs .= '&s4wt=' . rawurlencode(s4WebWorkerToken());
+    if (function_exists('fireAndForget') && fireAndForget($qs, 1800, $postArr ?: null)) {
+        $httpMode = (string)($GLOBALS['_queueDispatchMode'] ?? 'http_curl');
+        $out['mode'] = $out['mode'] !== '' ? $out['mode'] . '+' . $httpMode : $httpMode;
+        $out['ok'] = true; $out['server_started'] = true;
+        return $out;
+    }
+    if (!empty($GLOBALS['_queueDispatchStopped'])) $out['stopped'] = true;
+    if ($out['mode'] === '' && $cliMode !== '') $out['mode'] = $cliMode;
+    return $out;
+}
+
 /** قفل مشترکِ worker و mutationهای حساسِ صف؛ فایل عمداً حذف نمی‌شود. */
 function queueBackendLock(string $which) {
     $file = __DIR__ . ($which === 'bsl' ? '/bsl_backend.lock' : '/woo_backend.lock');
@@ -83795,8 +83955,11 @@ function s4UrgentSyncSingleProductToBasalam(string $profileKey, array $profile, 
         ], $qids[0], true);
         if (function_exists('bslKickParallelProfileLanes')) {
             $kicked = bslKickParallelProfileLanes();
-        } elseif (function_exists('fireAndForgetCliQueueBackend')) {
-            fireAndForgetCliQueueBackend($qids[0], 'urgent');
+        } elseif (function_exists('s4DispatchQueueBackend')) {
+            /* v10.751: this used to pass (string,string) into (array,?array) —
+               a PHP 8 TypeError that killed the whole urgent dispatch. */
+            s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>'urgent'],
+                ['from_file'=>'1','queue_id'=>(string)$qids[0],'resume'=>'1','lane'=>'urgent']);
             $kicked = ['urgent' => $qids[0]];
         }
     }
@@ -84438,8 +84601,11 @@ function s4UrgentSyncProcurementCandidateToBasalam(array $bestOpt, array $itemHi
         ], $qids[0], true);
         if (function_exists('bslKickParallelProfileLanes')) {
             $kicked = bslKickParallelProfileLanes();
-        } elseif (function_exists('fireAndForgetCliQueueBackend')) {
-            fireAndForgetCliQueueBackend($qids[0], 'urgent');
+        } elseif (function_exists('s4DispatchQueueBackend')) {
+            /* v10.751: this used to pass (string,string) into (array,?array) —
+               a PHP 8 TypeError that killed the whole urgent dispatch. */
+            s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>'urgent'],
+                ['from_file'=>'1','queue_id'=>(string)$qids[0],'resume'=>'1','lane'=>'urgent']);
             $kicked = ['urgent' => $qids[0]];
         }
     }
@@ -91563,8 +91729,8 @@ $entry=['id'=>$queueId,'status'=>$status,'products_file'=>$qFile,'total'=>$total
 $queue['entries'][]=$entry;
 wooWriteQueue($queue);
 $_wooSpawnedPid=0;
-if($startImm&&function_exists('fireAndForgetCliQueueBackend')){
-$_wooSpawnedPid=fireAndForgetCliQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])?(int)($GLOBALS['_queueDispatchPid']??0):0;
+if($startImm){
+$_wooSpawnedPid=(int)(s4DispatchQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])['pid']??0);
 }
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'status'=>$status,'total'=>$total,'worker_pid'=>$_wooSpawnedPid,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
@@ -91611,7 +91777,7 @@ $queue['entries'][$nextIdx]['started_at']=time();
 $nextEntry=$queue['entries'][$nextIdx];
 wooWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_wooNextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_wooNextPid=(int)(s4DispatchQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1'])['pid']??0);
 echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'total'=>$nextEntry['total'],'worker_pid'=>$_wooNextPid,'msg'=>'شروع فرآیند بعدی از صف ووکامرس'],JSON_UNESCAPED_UNICODE);
 }else{
 wooWriteQueue($queue);
@@ -91700,7 +91866,7 @@ $entry['resume_requested_at']=0;
 unset($entry['paused_by'],$entry['stopped_by_user'],$entry['fail_reason'],$entry['resume_exhausted'],$entry['done_at']);
 wooWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_wooSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$_wooStartCur,'resume'=>'1']))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$_wooSrvPid=(int)(s4DispatchQueueBackend(['action'=>'woo_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$_wooStartCur,'resume'=>'1'])['pid']??0);
 
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>(int)($entry['total']??0),'current'=>$_wooStartCur,'worker_pid'=>$_wooSrvPid,'msg'=>'شروع پردازش سرورساید'],JSON_UNESCAPED_UNICODE);
 exit;
@@ -93074,8 +93240,8 @@ function bslCronPumpProfileLanes(): array {
         if(is_resource($probe))@fclose($probe);
         if(!$free){$out['lanes'][$lane]=array_merge((array)($out['lanes'][$lane]??[]),['queued'=>true,'queue_id'=>$qid,'idle'=>$idle,'running'=>true]);continue;}
         $post=['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane,'cron_lane_pump'=>'1'];
-        $ok=fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],$post);
-        if(!$ok)$ok=fireAndForget('action=bsl_backend&lane='.$lane,1800,$post);
+        $__pumpDisp=function_exists('s4DispatchQueueBackend')?s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$lane],$post):['ok'=>fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],$post)];
+        $ok=!empty($__pumpDisp['ok']);
         $out['lanes'][$lane]=array_merge((array)($out['lanes'][$lane]??[]),['queued'=>true,'queue_id'=>$qid,'idle'=>$idle,'dispatched'=>$ok,'worker_pid'=>(int)($GLOBALS['_queueDispatchPid']??0)]);
     }
     @flock($gate,LOCK_UN);@fclose($gate);return $out;
@@ -93096,8 +93262,8 @@ function bslKickParallelProfileLanes(?array $queue=null): array {
             $pick=$r;break;
         }
         if(!$pick)return;$qid=(string)($pick['id']??'');
-        $ok=fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
-        if(!$ok)$ok=fireAndForget('action=bsl_backend&lane='.$lane,1800,['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
+        $__laneDisp=function_exists('s4DispatchQueueBackend')?s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]):['ok'=>fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane])];
+        $ok=!empty($__laneDisp['ok']);
         $out[$lane]=['ok'=>$ok,'queue_id'=>$qid,'worker_pid'=>(int)($GLOBALS['_queueDispatchPid']??0)];
     };
     /* Lane 3 (urgent inquiry/order sync) has unconditional top priority and is exempt from fast/detail profile lock. */
@@ -93113,8 +93279,8 @@ function bslKickParallelProfileLanes(?array $queue=null): array {
             $pk=trim((string)($r['profile_key']??''));if($pk!==''&&isset($claimedProfiles[$pk]))continue;$pick=$r;break;
         }
         if(!$pick)continue;$qid=(string)($pick['id']??'');$pickPk=trim((string)($pick['profile_key']??''));if($pickPk!=='')$claimedProfiles[$pickPk]=true;
-        $ok=fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
-        if(!$ok)$ok=fireAndForget('action=bsl_backend&lane='.$lane,1800,['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]);
+        $__laneDisp=function_exists('s4DispatchQueueBackend')?s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane]):['ok'=>fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$lane],['from_file'=>'1','queue_id'=>$qid,'resume'=>'1','lane'=>$lane])];
+        $ok=!empty($__laneDisp['ok']);
         $out[$lane]=['ok'=>$ok,'queue_id'=>$qid,'worker_pid'=>(int)($GLOBALS['_queueDispatchPid']??0)];
     }
     /* Lane 4 (Start-table destination equalization) also runs independently of fast/detail profile lock. */
@@ -93183,6 +93349,32 @@ function bslNormalizeRecoverableQueueRows(array &$queue, ?callable $loader=null)
         if((string)$row['status']==='done')$row['done_at']=time();
     }
     unset($row);return $stats;
+}
+
+/**
+ * v10.751: مسیرِ واقعیِ فایلِ محصولاتِ یک ردیفِ صف.
+ *
+ * «ادامه» وقتی مسیرِ ثبت‌شده دیگر معتبر نبود (جابه‌جایی نصب، ردیفِ fan-out
+ * غرفه‌ها، یا مسیرِ مطلقِ قدیمی) با «فایل محصولات این ردیف یافت نشد» رد می‌شد
+ * در حالی که snapshot کنارِ اسکریپت موجود بود.
+ */
+function bslResolveQueueProductsFile(array $row): string {
+    $cands=[];$recorded=trim((string)($row['products_file']??''));
+    if($recorded!=='')$cands[]=$recorded;
+    $rid=trim((string)($row['id']??''));
+    if($rid!==''){
+        $cands[]=__DIR__.'/bsl_queue_products_'.basename($rid).'.json';
+        /* Shop fan-out rows carry an `_s<vendorId>` suffix over one shared file. */
+        if(preg_match('~^(.+)_s\d+$~',$rid,$__m))$cands[]=__DIR__.'/bsl_queue_products_'.basename($__m[1]).'.json';
+    }
+    if($recorded!=='')$cands[]=__DIR__.'/'.basename($recorded);
+    $anyFile='';
+    foreach($cands as $cand){
+        if($cand===''||!is_file($cand))continue;
+        if($anyFile==='')$anyFile=$cand;
+        if((int)@filesize($cand)>2)return $cand;
+    }
+    return $anyFile;
 }
 
 function bslReadQueue(): array {
@@ -94062,7 +94254,7 @@ $fanFirst=false;
 bslWriteQueue($queue);
 $_bslLaneKicks=bslParallelProfileLanesEnabled($cn)?bslKickParallelProfileLanes($queue):[];
 $_bslFanPid=(int)($_bslLaneKicks[$_bslLane]['worker_pid']??0);
-if(!bslParallelProfileLanesEnabled($cn)&&$startImm&&function_exists('fireAndForgetCliQueueBackend'))$_bslFanPid=fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])?(int)($GLOBALS['_queueDispatchPid']??0):0;
+if(!bslParallelProfileLanesEnabled($cn)&&$startImm)$_bslFanPid=(int)(s4DispatchQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])['pid']??0);
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'lane'=>$_bslLane,'status'=>$fanStatus,'total'=>$total,'worker_pid'=>$_bslFanPid,'shop_send_mode'=>$_reqShopSendMode,'shops'=>array_map(function($__x){return (string)$__x['shop_name'];},$fanoutShops),'shop_count'=>count($fanoutShops),'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
@@ -94071,7 +94263,7 @@ $queue['entries'][]=$entry;
 bslWriteQueue($queue);
 $_bslLaneKicks=bslParallelProfileLanesEnabled($cn)?bslKickParallelProfileLanes($queue):[];
 $_bslAddPid=(int)($_bslLaneKicks[$_bslLane]['worker_pid']??0);
-if(!bslParallelProfileLanesEnabled($cn)&&$startImm&&function_exists('fireAndForgetCliQueueBackend'))$_bslAddPid=fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])?(int)($GLOBALS['_queueDispatchPid']??0):0;
+if(!bslParallelProfileLanesEnabled($cn)&&$startImm)$_bslAddPid=(int)(s4DispatchQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1'])['pid']??0);
 echo json_encode(['ok'=>true,'queue_id'=>$queueId,'lane'=>$_bslLane,'status'=>$status,'total'=>$total,'worker_pid'=>$_bslAddPid,'position'=>count($queue['entries']),'start_now'=>$startImm,'queue_count'=>count($queue['entries'])],JSON_UNESCAPED_UNICODE);
 exit;
 }
@@ -94161,10 +94353,12 @@ if($nextIdx>=0){
     @copy($nextEntry['products_file'],$nextProducts);
     $queue['entries'][$nextIdx]['status']='running';$queue['entries'][$nextIdx]['started_at']=time();
     $nextEntry=$queue['entries'][$nextIdx];bslWriteQueue($queue);queueBackendUnlock($__nextLock);
-    $nextPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$nextLane],
-        ['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1','lane'=>$nextLane]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+    $__nextDisp=s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$nextLane],
+        ['from_file'=>'1','queue_id'=>(string)$nextEntry['id'],'resume'=>'1','lane'=>$nextLane]);
+    $nextPid=(int)($__nextDisp['pid']??0);
     queueBackendUnlock($__laneProbe);
     echo json_encode(['ok'=>true,'next_id'=>$nextEntry['id'],'lane'=>$nextLane,'total'=>$nextEntry['total'],'worker_pid'=>$nextPid,
+        'server_started'=>!empty($__nextDisp['server_started']),'dispatch_mode'=>(string)($__nextDisp['mode']??''),
         'products_file'=>$nextEntry['products_file'],'config'=>$nextEntry['config'],'shop_coverage_upgrade'=>$__laneCoverageUpgrade,'reclaimed_stale_pid'=>$__reclaimedLanePid,'msg'=>'شروع فرآیند بعدی همین لین از صف'],JSON_UNESCAPED_UNICODE);
 }else{
     bslWriteQueue($queue);echo json_encode(['ok'=>true,'next_id'=>null,'lane'=>$__requestedNextLane,'msg'=>'صف این لین خالی است'],JSON_UNESCAPED_UNICODE);
@@ -94380,9 +94574,14 @@ $current=max(0,(int)($row['current']??0));$total=max(0,(int)($row['total']??0));
 if((string)($row['status']??'')==='done'&&($total===0||$current>=$total)){
     queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'complete'=>true,'error'=>'این ردیف کامل شده است'],JSON_UNESCAPED_UNICODE);exit;
 }
-$productsFile=(string)($row['products_file']??'');
-if($productsFile===''||!is_file($productsFile)){
-    queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات این ردیف یافت نشد'],JSON_UNESCAPED_UNICODE);exit;
+$productsFile=bslResolveQueueProductsFile($row);
+if($productsFile===''){
+    queueBackendUnlock($resumeFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات این ردیف یافت نشد',
+        'reason_code'=>'products_file_missing','queue_id'=>$queueId,
+        'products_file'=>(string)($row['products_file']??'')],JSON_UNESCAPED_UNICODE);exit;
+}
+if($productsFile!==(string)($row['products_file']??'')){
+    $queue['entries'][$idx]['products_file']=$productsFile;$row=$queue['entries'][$idx];
 }
 if($total<=0){
     $_resActual=json_decode((string)@file_get_contents($productsFile)?:'[]',true)?:[];
@@ -94409,8 +94608,12 @@ writeProgress(bslLaneProgressFile(bslLaneForQueueId($queueId,$queue??null)),['ru
     'sent_details'=>$row['sent_details']??[],'updated_details'=>$row['updated_details']??[],'skipped_details'=>$row['skipped_details']??[],'failed_details'=>$row['failed_details']??[],
     'checkpoint'=>['queue_id'=>$queueId,'current'=>$current,'total'=>$total,'sent'=>(int)($row['sent']??0),'updated'=>(int)($row['updated']??0),'skipped'=>(int)($row['skipped']??0),'failed'=>(int)($row['failed']??0),'started_at'=>$now]]);
 bslWriteQueue($queue);queueResumeBook('bsl',$queueId,['tries'=>0,'at'=>$now,'from'=>$current,'status'=>'manual_continue']);queueBackendUnlock($resumeFp);
-$_bslResPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
-echo json_encode(['ok'=>true,'dispatch_ready'=>true,'worker_pid'=>$_bslResPid,'queue_id'=>$queueId,'current'=>$current,'total'=>$total],JSON_UNESCAPED_UNICODE);exit;
+$_bslResDisp=s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$__resumeLane],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1','lane'=>$__resumeLane]);
+$_bslResPid=(int)($_bslResDisp['pid']??0);
+echo json_encode(['ok'=>true,'dispatch_ready'=>!empty($_bslResDisp['ok']),'worker_pid'=>$_bslResPid,
+    'server_started'=>!empty($_bslResDisp['server_started']),'dispatch_mode'=>(string)($_bslResDisp['mode']??''),
+    'worker_job'=>(string)($_bslResDisp['job_id']??''),'worker_queued'=>!empty($_bslResDisp['queued']),
+    'lane'=>$__resumeLane,'queue_id'=>$queueId,'current'=>$current,'total'=>$total],JSON_UNESCAPED_UNICODE);exit;
 }
 
 if(isset($_GET['bsl_queue_detail'])){
@@ -94520,8 +94723,9 @@ foreach((array)($queue['entries']??[]) as $i=>$row){if(is_array($row)&&(string)(
 if($idx<0){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'ورودی یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
 $row=&$queue['entries'][$idx];$st=(string)($row['status']??'');
 if(!in_array($st,['done','failed','cancelled'],true)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'فقط ردیف پایان‌یافته قابل بازیابی است'],JSON_UNESCAPED_UNICODE);exit;}
-$pf=(string)($row['products_file']??'');
-if($pf===''||!is_file($pf)){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
+$pf=bslResolveQueueProductsFile($row);
+if($pf===''){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد','reason_code'=>'products_file_missing'],JSON_UNESCAPED_UNICODE);exit;}
+$row['products_file']=$pf;
 $products=json_decode((string)@file_get_contents($pf),true);$actual=is_array($products)?count($products):0;
 if($actual<=0){queueBackendUnlock($retryFp);echo json_encode(['ok'=>false,'error'=>'snapshot محصولات خالی است'],JSON_UNESCAPED_UNICODE);exit;}
 localTaskDbForget(BSL_PROGRESS_FILE);@unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
@@ -94532,8 +94736,11 @@ foreach(['sent_details','updated_details','skipped_details','failed_details','re
 foreach((array)($row['shop_stats']??[]) as $si=>$ss){foreach(['sent','updated','skipped','failed'] as $k)$row['shop_stats'][$si][$k]=0;}
 unset($row['superseded_by'],$row['cancel_reason'],$row['fail_reason'],$row['error'],$row['paused_by'],$row['stopped_by_user']);
 bslWriteQueue($queue);queueBackendUnlock($retryFp);
-$pid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>'0','resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$actual,'worker_pid'=>$pid,'restarted_from'=>0],JSON_UNESCAPED_UNICODE);exit;
+$__retryLane=bslLaneForQueueId($queueId,$queue??null);
+$__retryDisp=s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$__retryLane],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>'0','resume'=>'1','lane'=>$__retryLane]);
+$pid=(int)($__retryDisp['pid']??0);
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$actual,'worker_pid'=>$pid,'restarted_from'=>0,
+    'server_started'=>!empty($__retryDisp['server_started']),'dispatch_mode'=>(string)($__retryDisp['mode']??'')],JSON_UNESCAPED_UNICODE);exit;
 }
 
 if(isset($_GET['bsl_queue_start_server'])){
@@ -94554,8 +94761,10 @@ if($entry['status']!=='waiting'&&$entry['status']!=='paused'&&$entry['status']!=
 foreach($queue['entries'] as $qiOther=>&$qeR){if($qiOther!==$entryIdx&&($qeR['status']??'')==='running'){$qeR['status']='waiting';$qeR['resume_requested_at']=0;}}unset($qeR);
 // شروع دستی یعنی کاربر واقعاً می‌خواهد؛ پس نگه‌داشتِ توقف برداشته می‌شود
 localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
-if(!file_exists($entry['products_file'])){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
-@copy($entry['products_file'],BSL_PRODUCTS_FILE);
+$__srvPf=bslResolveQueueProductsFile($entry);
+if($__srvPf===''){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد','reason_code'=>'products_file_missing'],JSON_UNESCAPED_UNICODE);exit;}
+$entry['products_file']=$__srvPf;$queue['entries'][$entryIdx]['products_file']=$__srvPf;
+@copy($__srvPf,BSL_PRODUCTS_FILE);
 $_bslSrvCnt=count(json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'[]',true)?:[]);
 if((int)($entry['total']??0)<=0&&$_bslSrvCnt>0){$entry['total']=$_bslSrvCnt;$queue['entries'][$entryIdx]['total']=$_bslSrvCnt;}
 $queue['entries'][$entryIdx]['status']='running';$queue['entries'][$entryIdx]['started_at']=time();
@@ -94563,9 +94772,12 @@ unset($queue['entries'][$entryIdx]['paused_by'],$queue['entries'][$entryIdx]['st
 $queue['entries'][$entryIdx]['resume_requested_at']=0;
 bslWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_bslSrvPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$__srvLane=bslLaneForQueueId($queueId,$queue??null);
+$__srvDisp=s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$__srvLane],['from_file'=>'1','queue_id'=>$queueId,'resume'=>'1','lane'=>$__srvLane]);
+$_bslSrvPid=(int)($__srvDisp['pid']??0);
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود — ارسال‌کننده از config همین ردیف می‌خواند
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslSrvPid],JSON_UNESCAPED_UNICODE);exit;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslSrvPid,
+    'server_started'=>!empty($__srvDisp['server_started']),'dispatch_mode'=>(string)($__srvDisp['mode']??'')],JSON_UNESCAPED_UNICODE);exit;
 }
 
 if(isset($_GET['bsl_queue_restart_server'])){
@@ -94586,16 +94798,21 @@ $progress=readProgress(BSL_PROGRESS_FILE);
 $current=(int)($progress['current']??$entry['current']??0);
 $sent=(int)($progress['sent']??$entry['sent']??0);$updated=(int)($progress['updated']??$entry['updated']??0);$skipped=(int)($progress['skipped']??$entry['skipped']??0);$failed=(int)($progress['failed']??$entry['failed']??0);
 localTaskDbForget(BSL_PROGRESS_FILE); @unlink(BSL_PROGRESS_FILE);@unlink(BSL_STOP_FILE);@unlink(BSL_PRODUCTS_FILE);
-if(!file_exists($entry['products_file'])){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد'],JSON_UNESCAPED_UNICODE);exit;}
-@copy($entry['products_file'],BSL_PRODUCTS_FILE);
+$__rstPf=bslResolveQueueProductsFile($entry);
+if($__rstPf===''){echo json_encode(['ok'=>false,'error'=>'فایل محصولات یافت نشد','reason_code'=>'products_file_missing'],JSON_UNESCAPED_UNICODE);exit;}
+$entry['products_file']=$__rstPf;$queue['entries'][$entryIdx]['products_file']=$__rstPf;
+@copy($__rstPf,BSL_PRODUCTS_FILE);
 $_bslRstCnt=count(json_decode(@file_get_contents(BSL_PRODUCTS_FILE)?:'[]',true)?:[]);
 if((int)($entry['total']??0)<=0&&$_bslRstCnt>0){$entry['total']=$_bslRstCnt;$queue['entries'][$entryIdx]['total']=$_bslRstCnt;}
 $queue['entries'][$entryIdx]['status']='running';$queue['entries'][$entryIdx]['started_at']=time();
 bslWriteQueue($queue);
 queueBackendUnlock($__queueRouteFp);
-$_bslRstPid=(function_exists('fireAndForgetCliQueueBackend')&&fireAndForgetCliQueueBackend(['action'=>'bsl_backend'],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1','lane'=>bslLaneForQueueId($queueId,$queue??null)]))?(int)($GLOBALS['_queueDispatchPid']??0):0;
+$__rstLane=bslLaneForQueueId($queueId,$queue??null);
+$__rstDisp=s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$__rstLane],['from_file'=>'1','queue_id'=>$queueId,'start_index'=>(string)$current,'resume'=>'1','lane'=>$__rstLane]);
+$_bslRstPid=(int)($__rstDisp['pid']??0);
 // v8.57: تنظیمات عمومی بازنویسی نمی‌شود
-echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslRstPid,'current'=>$current,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$failed],JSON_UNESCAPED_UNICODE);exit;
+echo json_encode(['ok'=>true,'queue_id'=>$queueId,'total'=>$entry['total'],'worker_pid'=>$_bslRstPid,
+    'server_started'=>!empty($__rstDisp['server_started']),'dispatch_mode'=>(string)($__rstDisp['mode']??''),'current'=>$current,'sent'=>$sent,'updated'=>$updated,'skipped'=>$skipped,'failed'=>$failed],JSON_UNESCAPED_UNICODE);exit;
 }
 
 function bslFormatRemaining(int $seconds): string {
@@ -96924,9 +97141,9 @@ if($e2['status']==='waiting'&&bslRowLane($e2)===$_bslLane){ $hasMore=true; break
 
 /* v10.53 (۶۷): ردیفِ «در انتظار» دیگری هست → همین‌جا ردیفِ بعد را به نوبت شروع کن. */
 if ($hasMore && $bslEntryRound + 1 < BSL_MAX_ENTRIES_PER_RUN) continue;
-if ($hasMore && !queueHasFreshUserStop('bsl') && function_exists('fireAndForgetCliQueueBackend')) {
+if ($hasMore && !queueHasFreshUserStop('bsl') && function_exists('s4DispatchQueueBackend')) {
     @flock($bslLockFp, LOCK_UN);
-    fireAndForgetCliQueueBackend(['action'=>'bsl_backend','lane'=>$_bslLane],['from_file'=>'1','resume'=>'1','lane'=>$_bslLane]);
+    s4DispatchQueueBackend(['action'=>'bsl_backend','lane'=>$_bslLane],['from_file'=>'1','resume'=>'1','lane'=>$_bslLane]);
 }
 
 header('Content-Type: application/json; charset=UTF-8');
@@ -116034,6 +116251,14 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.751', t:'▶ رفع خطاهای دکمهٔ «ادامه» ردیف‌های متوقف‌شدهٔ صف ارسال (میزبان بدون exec)', items:[
+    'باگ: روی نوویکس (میزبانی که exec غیرفعال دارد) کلیک روی «ادامه» ردیف متوقف‌شده خطا می‌داد و ردیف ادامه پیدا نمی‌کرد. علت ریشه‌ای: fireAndForgetCliQueueBackend() بدون exec بی‌درنگ false برمی‌گرداند و اندپوینت ?bsl_queue_resume هیچ fallbackی نداشت؛ پس worker_pid=0 برمی‌گشت و تنها راه‌اندازِ باقیمانده POSTِ خود مرورگر بود که با بسته‌شدن تب/اتصال کاربر می‌مرد.',
+    'تابع تازهٔ s4DispatchQueueBackend() تنها مسیر اعزام backend صف شد: اول spawn CLI، بعد (فقط روی میزبان بدون exec) ثبت job ماندگار در صف worker وب، و در پایان handoff HTTP حلقهٔ برگشتی با توکن worker. همهٔ اندپوینت‌های صف باسلام و ووکامرس (resume / retry / start_server / restart_server / start_next / add / fan-out / زنجیرهٔ ردیف بعدی) و هر دو pumpِ کران از همین مسیر می‌روند.',
+    'نوع job تازهٔ queue_backend به worker اضافه شد؛ زمان‌بند آن را بدون نوبت‌گذاری برمی‌دارد (کاربر دکمه زده) و اجرای واقعی با child حلقهٔ برگشتی انجام می‌شود. پاسخ «already running» موفقیت است، قطع‌شدن توسط وب‌سرور حداکثر ۳ بار دوباره زمان‌بندی می‌شود و هیچ‌وقت ردیف را بی‌صاحب رها نمی‌کند.',
+    'باگ: دو فراخوانی fireAndForgetCliQueueBackend با آرگومان اول رشته‌ای (شناسهٔ ردیف) و آرگومان دوم \'urgent\' امضای اشتباه داشتند (string به‌جای array) و در PHP 8 کل مسیر لین فوری را با TypeError می‌کشتند؛ هر دو اصلاح شدند.',
+    'bslResolveQueueProductsFile(): «فایل محصولات این ردیف یافت نشد» دیگر برای snapshotِ موجود رخ نمی‌دهد — نام قراردادی ردیف، ردیف‌های fan-out غرفه (پسوند _s<vendorId>) و مسیرهای مطلق قدیمی هم بررسی می‌شوند. خطاها اکنون reason_code دارند و در توست نمایش داده می‌شوند.',
+    'POSTِ مرورگر به ?action=bsl_backend فقط وقتی فرستاده می‌شود که سرور هیچ اعزامی نکرده باشد (server_started=false)؛ پاسخ اندپوینت‌ها اکنون server_started و dispatch_mode و worker_job را هم برمی‌گرداند.',
+  ]},
   {v:'10.750', t:'🔄 پاسخ به مشتری فقط با قیمت و موجودی تازه + رفع «غرفهٔ نامعتبر» بعد از سفارش', items:[
     'قانون تازه: هر بار مشتری محصولی را ببیند یا پیامی با محصول نقل‌قول‌شده بفرستد، همان محصول ابتدا از پروفایل ذخیره‌شده پیدا می‌شود و سپس قیمت و موجودی‌اش از مبدأ تأمین به‌روزرسانی و روی غرفهٔ باسلام نشانده می‌شود؛ پاسخ گفتگو پس از همین تازه‌سازی ارسال می‌گردد.',
     'کشِ ۷ روزهٔ متای محصول باسلام برای این دو محرک دور زده می‌شود (bslChatLookupProductMeta با forceFresh) تا پاسخ هیچ‌گاه با قیمت کهنه بیرون نرود.',
@@ -134536,16 +134761,19 @@ function pauseBslQueue(qid){
 function resumeBslQueue(qid){
     $('bSS').textContent='ادامهٔ ارسال...';
     fetch('?bsl_queue_resume=1&queue_id='+encodeURIComponent(qid)).then(r=>r.json()).then(d=>{
-        if(!d.ok){showToast('خطا در ادامه: '+(d.error||'ردیف تکمیل‌نشده یافت نشد'),1);return;}
+        if(!d.ok){showToast('خطا در ادامه: '+(d.error||'ردیف تکمیل‌نشده یافت نشد')+(d.reason_code?' ['+d.reason_code+']':''),1);return;}
         if(d.already_running){showToast(d.queued?'⏳ ردیف در صف است و خودکار ادامه می‌یابد':'✅ worker این ردیف هنوز زنده است؛ worker تکراری ساخته نشد');checkBslQueue();setTimeout(pollBslProgress,700);return;}
-        showToast('▶ ادامه از محصول '+toFa((d.current||0)+1));
+        showToast('▶ ادامه از محصول '+toFa((d.current||0)+1)+(d.worker_job?' — به worker پس‌زمینه سپرده شد':''));
         bSend=true;
         window._currentBslQueueId=qid;
         bslReportData={sent:[],updated:[],skipped:[],failed:[],retired:[]};
         bslLastLogCount=0;bslLastCardCount=0;bslLastUpdateTime=0;
         $('bSB').textContent='🚀 + افزودن به صف';$('bSB').classList.remove('hidden');$('bSBlegacy').classList.add('hidden');$('bST').classList.remove('hidden');
         $('bP').classList.remove('hidden');$('bR').classList.remove('hidden');$('bSM').classList.remove('hidden');
-        if(!(d.worker_pid>0)){
+        /* v10.751: روی میزبانِ بدون exec، اعزامِ سمتِ سرور (job ماندگارِ worker یا
+           handoffِ HTTP) معتبر است هرچند pid ندارد؛ POSTِ مرورگر فقط آخرین
+           چارهٔ واقعی است، چون با بسته‌شدنِ تبِ کاربر می‌میرد. */
+        if(!(d.worker_pid>0)&&!d.server_started){
             const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));fd2.append('resume','1');
             fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
         }
@@ -134570,7 +134798,7 @@ function startBslServer(qid){
         if(!d.ok){showToast('\u062e\u0637\u0627: '+d.error,1);bSend=false;return;}
         $('bT').textContent=toFa(d.total||0);
         $('bSS').textContent='\u2713 \u0634\u0631\u0648\u0631 \u0633\u0631\u0648\u0631...';
-        if(!(d.worker_pid>0)){
+        if(!(d.worker_pid>0)&&!d.server_started){
             const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('resume','1');
             fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
         }
@@ -134592,7 +134820,7 @@ function restartBslServer(qid){
         if(!d.ok){showToast('\u062e\u0637\u0627: '+d.error,1);bSend=false;return;}
         $('bT').textContent=toFa(d.total||0);
         $('bO').textContent=toFa(d.sent||0);$('bU').textContent=toFa(d.updated||0);$('bK').textContent=toFa(d.skipped||0);$('bF').textContent=toFa(d.failed||0);
-        if(!(d.worker_pid>0)){
+        if(!(d.worker_pid>0)&&!d.server_started){
             const fd2=new FormData();fd2.append('from_file','1');fd2.append('queue_id',qid);fd2.append('start_index',String(d.current||0));fd2.append('resume','1');
             fetch('?action=bsl_backend',{method:'POST',body:fd2}).catch(()=>{});
         }
