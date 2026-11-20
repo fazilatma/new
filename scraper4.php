@@ -18360,6 +18360,30 @@ function emallsPhpStreamFetch(string $url, int $timeout = 25): array {
         'url'=>$url,'html'=>$body===false?'':(string)$body,'mode'=>'emalls-php-stream'];
 }
 
+/* v10.743: the Digikala API path called srcNetResolveViaDoh()/srcNetApplyProxy()
+   which were never defined anywhere — the first request routed through DoH or a
+   proxy died with "Call to undefined function" (it also aborted the selftest
+   run). Both are now thin wrappers over the existing resolver/proxy logic. */
+function srcNetResolveViaDoh(string $host, string $dohUrl = '', int $timeout = 10): string {
+    $host = strtolower(trim($host));
+    if ($host === '' || !function_exists('aiDohResolve')) return '';
+    if (trim($dohUrl) === '') $dohUrl = 'https://cloudflare-dns.com/dns-query';
+    try { $r = aiDohResolve($host, $dohUrl, max(2, min(20, $timeout))); }
+    catch (Throwable $e) { return ''; }
+    return !empty($r['ok']) ? (string)($r['ip'] ?? '') : '';
+}
+function srcNetApplyProxy($ch, string $proxy, string $type = 'http', string $auth = ''): bool {
+    $proxy = trim($proxy);
+    if (!$ch || $proxy === '') return false;
+    @curl_setopt($ch, CURLOPT_PROXY, $proxy);
+    $map = ['http' => CURLPROXY_HTTP,
+            'https' => CURLPROXY_HTTP,
+            'socks5' => defined('CURLPROXY_SOCKS5_HOSTNAME') ? CURLPROXY_SOCKS5_HOSTNAME : CURLPROXY_SOCKS5,
+            'socks4' => defined('CURLPROXY_SOCKS4') ? CURLPROXY_SOCKS4 : CURLPROXY_HTTP];
+    @curl_setopt($ch, CURLOPT_PROXYTYPE, $map[strtolower($type)] ?? CURLPROXY_HTTP);
+    if (trim($auth) !== '') @curl_setopt($ch, CURLOPT_PROXYUSERPWD, trim($auth));
+    return true;
+}
 function srcNetFetchAttempt(string $url, int $timeout, array $net, string $mode): array {
     $parsed = parse_url($url); $origin = ($parsed['scheme'] ?? 'https') . '://' . ($parsed['host'] ?? '');
     $host = strtolower((string)($parsed['host'] ?? ''));
@@ -20728,7 +20752,7 @@ function digikalaApiHttpRequest(string $endpoint, int $timeout = 25): array {
             if ($dohIp === '') { curl_close($ch); continue; }
             curl_setopt($ch, CURLOPT_RESOLVE, ['api.digikala.com:443:' . $dohIp]);
         } elseif ($via === 'proxy') {
-            srcNetApplyProxy($ch, (string)($net['proxy'] ?? ''));
+            srcNetApplyProxy($ch, (string)($net['proxy'] ?? ''), (string)($net['proxy_type'] ?? 'http'), (string)($net['proxy_auth'] ?? ''));
         }
         $raw = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -55318,6 +55342,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'owner_pid' => (int)@getmy"."pid()")!==false
         &&strpos($selfSrc,'$_msOwnerDead = $_msOwner'.'Pid > 0')!==false
         &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
+    $add('10.743','توابع گمشدهٔ مسیر DoH/پروکسیِ دیجی‌کالا تعریف شدند (خطای کشندهٔ Call to undefined function)',
+        function_exists('srcNetResolveViaDoh')
+        &&function_exists('srcNetApplyProxy')
+        &&srcNetResolveViaDoh('','')===''
+        &&srcNetApplyProxy(null,'')===false
+        &&strpos($selfSrc,'function srcNetResolveVia'.'Doh(string $host')!==false
+        &&strpos($selfSrc,'function srcNetApply'.'Proxy($ch, string $proxy')!==false);
     /* v10.743: bounded web extraction lanes for exec-free hosts. */
     $__laneCaps743=s4RuntimeCaps();
     $add('10.743','خطوط استخراج موازی وب روی هاست بدون exec، با همان سقف هم‌زمانی و خودتشخیصی سلامت',
