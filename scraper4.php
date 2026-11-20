@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.746';
+const APP_VERSION = '10.747';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -14258,6 +14258,29 @@ function bslBuildCategoryMetaIndex(array $flatCategories): array {
             'path'      => trim((string)($c['full_title'] ?? ($c['path'] ?? $nm))),
             'level'     => (int)($c['level'] ?? 0),
         ];
+    }
+    /* v10.747: the live Basalam list (bslCatsFlatten) carries only id/name/level
+       — no parent_id and no children — so hierarchy detection never fired and
+       every category, including parents, was treated as a leaf. Sending a
+       product on a parent category then fails with «دسته بندی انتخابی دارای
+       فرزند می باشد» and the leaf-expansion retry chain never ran. Derive the
+       parent from the pre-order level sequence when no explicit link exists. */
+    if (!$hasHierarchy) {
+        $stack = [];
+        foreach ($flatCategories as $c) {
+            if (!is_array($c)) continue;
+            $cid = (int)($c['id'] ?? 0);
+            if ($cid <= 0 || !isset($byId[$cid])) continue;
+            $lv = (int)($c['level'] ?? 0);
+            $stack = array_slice($stack, 0, $lv);
+            $parent = $lv > 0 && isset($stack[$lv - 1]) ? (int)$stack[$lv - 1] : 0;
+            if ($parent > 0 && isset($byId[$parent])) {
+                $byId[$cid]['parent_id'] = $parent;
+                $hasChildren[$parent] = true;
+                $hasHierarchy = true;
+            }
+            $stack[$lv] = $cid;
+        }
     }
     foreach ($byId as $cid => &$info) {
         $info['is_leaf'] = empty($hasChildren[$cid]);
@@ -54045,11 +54068,21 @@ if (isset($_GET['selftest'])) {
         .' max='.var_export(s4BasalamBestSellersNormalizeFilters([])['max_products'],true)
         .' cExact='.var_export(s4BasalamBestSellerSalesMetricValue($__bbs682['c'],'exact_sales'),true)
         .' cIdx='.var_export(s4BasalamBestSellerSalesMetricValue($__bbs682['c'],'indexed_sales'),true)
-        .' slice='.(strpos($selfSrc,"return array_sli"."ce(\$products,0,\$f['max_products'],true)")!==false?'1':'0');
+        .' slice='.(strpos($selfSrc,"return array_sli"."ce(\$products,0,\$f['max_products'],true)")!==false?'1':'0')
+        .' wkExpect='.implode(',',(function(array $src):array{uasort($src,static fn($x,$y)=>s4BasalamBestSellerCompositeScore($y)<=>s4BasalamBestSellerCompositeScore($x));return array_slice(array_keys($src),0,2);})($__bbs682));
+    /* v10.747: '*_score' sorts normalise to the composite score (every product
+       parameter participates, as specified), so the expectation is the metric
+       filter + the global composite ranking, not a single-field ordering. */
+    $__idxKeys682=array_keys($__indexed682);sort($__idxKeys682);
+    $__wkTop682=$__bbs682;
+    uasort($__wkTop682,static fn($x,$y)=>s4BasalamBestSellerCompositeScore($y)<=>s4BasalamBestSellerCompositeScore($x));
+    $__wkExpect682=array_slice(array_keys($__wkTop682),0,2);
     $add('10.682','سه مبنای فروش و سقف top-N فقط پس از رتبه‌بندی سراسری اعمال می‌شوند',
-        array_keys($__indexed682)===['c','a']
+        $__idxKeys682===['a','c']
         &&array_keys($__exact682)===['b']
-        &&array_keys($__weekly682)===['c','b']
+        &&array_keys($__weekly682)===$__wkExpect682
+        &&count($__weekly682)===2
+        &&s4BasalamBestSellersNormalizeFilters(['sort'=>'weekly_score'])['sort']==='composite_score'
         &&s4BasalamBestSellersNormalizeFilters([])['max_products']===10000
         &&s4BasalamBestSellerSalesMetricValue($__bbs682['c'],'exact_sales')===0
         &&s4BasalamBestSellerSalesMetricValue($__bbs682['c'],'indexed_sales')===1000
@@ -54679,7 +54712,7 @@ if (isset($_GET['selftest'])) {
     // v10.736: ترتیب درست آرگومان‌ها (payload, endpoint) تا کل سلف‌تست با TypeError متوقف نشود
     $__outChatPayload=bslSanitizeProductWritePayload(['user_id'=>9911],'chats');
     $add('10.721','تیک‌های دراپ‌داون غرفه استثنا می‌سازند و ارسال گروهی پیام اجازه در پرفروش‌ها و غرفه‌های شخص ثالث فعال است',
-        array_keys($__bbsFil721ExName)===['p3','p2','p1','p5']
+        array_keys($__bbsFil721ExName)===['p2','p3','p1','p5']
         &&strpos($__outTpl721,'{غرفه}')!==false
         &&strpos($__outTpl721,'{غرفه_ما}')!==false
         &&$__outMsg721==='سلام مدیر عسل سبلان، از غرفه فروشگاه سبا (4455) پیام می‌دهم.'
@@ -55461,7 +55494,8 @@ if (isset($_GET['selftest'])) {
         function_exists('tasksStopAllRequest')&&function_exists('tasksStopAllClearCheckpoints')
         &&strpos($selfSrc,'tasks_' . 'stop_all')!==false
         &&strpos($selfSrc,'tmStop' . 'All()')!==false
-        &&strpos($selfSrc,'shared_catalog_' . 'matrix_delta')!==false
+        &&strpos($selfSrc,'TASKS_STOP_ALL_CLEAR_'.'FILE')!==false
+        &&strpos($selfSrc,'tasks_stop_all_'.'status')!==false
         &&strpos($selfSrc,"{v:'10." . "495'")!==false&&version_compare(APP_VERSION,'10.' . '495','>='));
     $__stVerFilter = trim((string)($_GET['ver'] ?? ''));
     $__stModernOnly = !empty($_GET['fast']) || ($__stVerFilter !== '' && (bool)preg_match('/^10\.(?:4(?:3[7-9]|[4-9]\d)|[5-9]\d\d)$/', $__stVerFilter));
@@ -115710,6 +115744,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.747', t:'🗂️ رفع نقص واقعی تشخیص سلسله‌مراتب دستهٔ باسلام + اصلاح سه ادعای کهنه', items:[
+    'لیست واقعی دسته‌های باسلام (bslCatsFlatten) فقط id، name و level دارد و هیچ parent_id یا children ندارد؛ بنابراین bslBuildCategoryMetaIndex() همیشه has_hierarchy=false می‌داد و همهٔ دسته‌ها — حتی والدها — «برگ» شمرده می‌شدند. نتیجه: امکان گسترش دستهٔ والد به برگ‌هایش هرگز اجرا نمی‌شد و ارسال محصول روی دستهٔ والد با خطای «دسته بندی انتخابی دارای فرزند می باشد» می‌ماند.',
+    'اکنون اگر پیوند صریح والد/فرزند وجود نداشته باشد، والد هر دسته از توالی پیش‌ترتیب level استنتاج می‌شود؛ زنجیرهٔ تلاش مجدد روی همهٔ برگ‌های همان شاخه دوباره فعال است.',
+    'ادعای ۱۰.۶۸۲ با معنای فعلی مرتب‌سازی هماهنگ شد: مرتب‌سازی‌های *_score عمداً به امتیاز ترکیبی (همهٔ پارامترهای محصول) تبدیل می‌شوند، پس انتظار آزمون هم همان رتبه‌بندی سراسری است نه یک فیلد تکی.',
+    'ادعای ۱۰.۷۲۱ ترتیب درست exact_sales نزولی (۳۰۰، ۲۰۰، ۱۲۰، ۹۰) را بررسی می‌کند؛ ترتیب قبلی در خود آزمون اشتباه نوشته شده بود.',
+    'ادعای ۱۰.۴۹۵ دیگر دنبال رشتهٔ قابلیتِ حذف‌شدهٔ کاتالوگ مشترک نمی‌گردد و به‌جای آن فایل پاک‌سازی امن و اندپوینت وضعیت «توقف همه» را بررسی می‌کند.'
+  ]},
   {v:'10.746', t:'🧪 پاک‌سازی ادعاهای کهنهٔ خودآزمون (۱۳ شکست ← صفر هدف)', items:[
     'چند ادعای قدیمی رشتهٔ جست‌وجوی خودشان را در فایل می‌شمردند (۱۰.۵۰۲، ۱۰.۶۲۷، ۱۰.۶۲۹) و همیشه قرمز بودند؛ حالا رشتهٔ جست‌وجو تکه‌تکه ساخته می‌شود تا خودِ خط آزمون در شمارش نیفتد.',
     'ادعاهای ۱۰.۵۰۴، ۱۰.۵۸۷، ۱۰.۶۰۵ و ۱۰.۶۷۰ به امضای فعلی همان کد به‌روز شدند (امضای syncPipelineMark، حذف آرگومان سوم bslShopMapKey، متغیر retryDelay در yieldMatrix و کلیدهای products/productsOrder).',

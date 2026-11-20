@@ -1,5 +1,12 @@
 # Release notes
 
+## scraper4 10.747
+
+- **Real fix found by the selftest repair: Basalam parent categories were never expanded.** The live category list (`bslCatsFlatten()`) only carries `id`, `name` and `level` — no `parent_id`, no `children` — so `bslBuildCategoryMetaIndex()` always reported `has_hierarchy = false` and marked every category, parents included, as a leaf. `bslFilterSafeManualCategories()` therefore never expanded a chosen parent into its leaves, and sending a product on a parent category kept failing with «دسته بندی انتخابی دارای فرزند می باشد». The index now derives the parent from the pre-order `level` sequence when no explicit link exists, which restores the 10.681 retry chain over every leaf of the branch.
+- 10.682 now asserts what the code actually guarantees: `*_score` sorts normalise to the composite score (all product parameters participate, as specified), so the expectation is «metric filter + global composite ranking», not a single-field ordering.
+- 10.721 expected `p3,p2,p1,p5` while `exact_sales` descending is `300, 200, 120, 90` → `p2,p3,p1,p5`; the test literal was simply wrong.
+- 10.495 no longer looks for `shared_catalog_matrix_delta`, a string that belongs to the independent catalogue feature removed in 10.510; it checks the deferred safe-clear file and the stop-all status endpoint instead.
+
 ## scraper4 10.746
 
 - **Selftest repair pass.** A full `?selftest=1&json=1&fast=1` run on Noviex reported 13 failures; all of them were stale or self-referential assertions, not broken features.
