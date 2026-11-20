@@ -1,5 +1,15 @@
 # Release notes
 
+## scraper4 10.750
+
+- **New rule — a customer never gets answered with stale data.** Whenever a customer *views* a product or sends a message that **quotes** a product, that product is now first resolved from the **saved profile** (`s4UrgentResolveProfileAndProduct`), then its **price and stock are re-fetched live from the supplier** (`s4UrgentFetchSourceProductFresh`) and pushed to the Basalam shop before the conversation reply/notification is composed. Both triggers go through one path: `s4UrgentHandleChatInquiry(..., ['trigger_kind' => 'quoted'|'view'])`.
+- `s4ChatProductRefreshKind()` classifies a conversation as `quoted`, `view` or neither, and the notification scan now defers **both** kinds so each is dispatched exactly once, after the refresh — previously only quoted conversations were refreshed, and a product the customer had merely opened was answered from cache.
+- `bslChatLookupProductMeta()` gained a `forceFresh` flag (plus `bslChatProductCacheForget()`): the 7-day product-meta cache is bypassed for these two triggers, with a guaranteed network budget, so the reply can never carry a week-old price.
+- Heavy work stays bounded: eligibility research still runs only for quoted products, live refresh for *views* is capped at 6 per pulse, and conversations beyond the cap are still delivered (no event is dropped).
+- New endpoint `?product_view_refresh=1` (`product_id` / `url` / `sku` / `title` / `vendor_id`, authenticated) runs the same resolve → live supplier fetch → Basalam update chain for any external "product viewed" event and returns the refreshed price/stock.
+- **Bug fix — «⚠️ آپدیت باسلام: غرفهٔ نامعتبر» for a perfectly valid shop.** Post-order product updates picked their target shop from `bslFanoutShops()`, which deliberately returns only `vendor_id` / `shop_name` / `is_default` (no token, because its output is persisted in the queue). That tokenless row was handed to `bslUpsertToShop()`, which rejects `$tk === ''` with «غرفهٔ نامعتبر». Ironically the error only appeared when the order's shop **was** in the fan-out list; an unknown vendor fell through to `bslAllShops()` and worked.
+- `bslFanoutShopsFull()` now returns the complete shop rows (token + per-shop price layer) under the same send-selection filter, and `s4UrgentResolveTargetShop()` is the single place that chooses an update target — it always yields a shop with a usable token (preferred vendor → fan-out → all shops → default credentials). As a side effect the per-shop price mode is applied correctly on urgent updates, which the tokenless row silently skipped.
+
 ## scraper4 10.749
 
 - **Web extraction lanes now prove themselves by running, not by being kicked.** A successful loopback kick only means the request left the building; on Noviex the lane requests were claiming extraction jobs and never adopting them, so each job was claimed, left with `worker_pid = 0`, and recycled by orphan recovery. `lane_ok_at` is now stamped by the lane request itself at the moment it starts.

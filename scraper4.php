@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.749';
+const APP_VERSION = '10.750';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -36632,6 +36632,63 @@ function bslFanoutShops(?array $cn): array {
     }
     return $out;
 }
+/** v10.750: همان انتخابِ bslFanoutShops اما با ردیف کاملِ غرفه (توکن + تنظیمات قیمت).
+ *  bslFanoutShops() عمداً توکن برنمی‌گرداند چون خروجی‌اش در صف ذخیره می‌شود؛ اما هر
+ *  مسیری که مستقیماً bslUpsertToShop() را صدا می‌زند به توکن نیاز دارد. */
+function bslFanoutShopsFull(?array $cn): array {
+    $cn = $cn ?: loadConnections();
+    $bslCfg = is_array($cn['basalam'] ?? null) ? $cn['basalam'] : [];
+    $hasSelection = is_array($bslCfg['send_shop_ids'] ?? null);
+    $selected = array_fill_keys(array_map('intval', (array)($bslCfg['send_shop_ids'] ?? [])), true);
+    $out = [];
+    foreach (bslAllShops($cn) as $sh) {
+        $vid = (int)($sh['vendor_id'] ?? 0);
+        if ($vid <= 0 || trim((string)($sh['token'] ?? '')) === '') continue;
+        if ($hasSelection && !isset($selected[$vid])) continue;
+        $out[] = $sh;
+    }
+    return $out;
+}
+/** v10.750: غرفهٔ مقصدِ آپدیت فوری — همیشه ردیفی با توکنِ معتبر برمی‌گردد.
+ *  باگ: مسیرهای آپدیتِ بعد از سفارش ردیفِ بدون توکنِ bslFanoutShops() را به
+ *  bslUpsertToShop() می‌دادند و آن تابع با $tk==='' خطای «غرفهٔ نامعتبر» می‌داد،
+ *  در حالی‌که همان غرفه کاملاً معتبر و متصل بود. */
+function s4UrgentResolveTargetShop(?array $cn, int $preferVendorId, array $hintShops = []): ?array {
+    $cn = $cn ?: (function_exists('loadConnections') ? loadConnections() : []);
+    $full = function_exists('bslFanoutShopsFull') ? bslFanoutShopsFull($cn) : [];
+    $all  = function_exists('bslAllShops') ? bslAllShops($cn) : [];
+    $usable = static function ($row): bool {
+        return is_array($row) && (int)($row['vendor_id'] ?? 0) > 0 && trim((string)($row['token'] ?? '')) !== '';
+    };
+    if ($preferVendorId > 0) {
+        foreach ([$full, $all] as $pool) {
+            foreach ((array)$pool as $sh) {
+                if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId && $usable($sh)) return $sh;
+            }
+        }
+    }
+    /* ردیف‌های بدون توکن با نسخهٔ کاملِ همان vendor_id جایگزین می‌شوند. */
+    foreach ($hintShops as $hint) {
+        if (!is_array($hint)) continue;
+        if ($usable($hint)) return $hint;
+        $hv = (int)($hint['vendor_id'] ?? 0);
+        if ($hv <= 0) continue;
+        foreach ($all as $sh) {
+            if ((int)($sh['vendor_id'] ?? 0) === $hv && $usable($sh)) return $sh;
+        }
+    }
+    foreach ($full as $sh) { if ($usable($sh)) return $sh; }
+    foreach ($all as $sh)  { if ($usable($sh)) return $sh; }
+    $b = is_array($cn['basalam'] ?? null) ? $cn['basalam'] : [];
+    $defVid = (int)($b['vendor_id'] ?? 0);
+    $defTok = trim((string)($b['token'] ?? ''));
+    if ($defVid > 0 && $defTok !== '') {
+        $defName = trim((string)($b['shop_name'] ?? ''));
+        return ['vendor_id' => $defVid, 'token' => $defTok,
+                'shop_name' => $defName !== '' ? $defName : 'غرفهٔ پیش‌فرض', 'is_default' => true];
+    }
+    return null;
+}
 /** Explicit queue requests must not be narrowed by a stale persisted picker.
  * null means all configured/tokened shops; an array means exactly that subset. */
 function bslFanoutShopsForSelection(?array $cn,?array $vendorIds):array{
@@ -55444,6 +55501,42 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'owner_pid' => (int)@getmy"."pid()")!==false
         &&strpos($selfSrc,'$_msOwnerDead = $_msOwner'.'Pid > 0')!==false
         &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
+    /* v10.750: ۱) غرفهٔ معتبر دیگر «نامعتبر» گزارش نمی‌شود، ۲) بازدید/نقل‌قول محصول
+       پیش از پاسخ، از پروفایل حل و از مبدأ تازه می‌شود. */
+    $__cn750 = ['basalam' => ['token' => 'tok-def', 'vendor_id' => 7501, 'shop_name' => 'غرفهٔ یک',
+        'vendors' => [['token' => 'tok-two', 'vendor_id' => 7502, 'shop_name' => 'غرفهٔ دو']]]];
+    $__full750 = bslFanoutShopsFull($__cn750);
+    $__lean750 = bslFanoutShops($__cn750);
+    $__pick750 = s4UrgentResolveTargetShop($__cn750, 7502, $__lean750);
+    $__pickAny750 = s4UrgentResolveTargetShop($__cn750, 0, $__lean750);
+    $__pickLean750 = s4UrgentResolveTargetShop($__cn750, 0, [['vendor_id' => 7502, 'shop_name' => 'غرفهٔ دو']]);
+    $add('10.750','آپدیت محصول پس از ثبت سفارش دیگر برای غرفهٔ معتبر خطای «غرفهٔ نامعتبر» نمی‌دهد',
+        version_compare(APP_VERSION,'10.750','>=')
+        &&count($__full750)===2
+        &&trim((string)($__full750[0]['token']??''))!==''
+        &&trim((string)($__lean750[0]['token']??''))===''
+        &&is_array($__pick750)&&(int)$__pick750['vendor_id']===7502&&(string)$__pick750['token']==='tok-two'
+        &&is_array($__pickAny750)&&trim((string)$__pickAny750['token'])!==''
+        &&is_array($__pickLean750)&&(int)$__pickLean750['vendor_id']===7502&&(string)$__pickLean750['token']==='tok-two'
+        &&strpos($selfSrc,'$targetShop = s4UrgentResolveTarget'.'Shop($cn, $preferVendorId, $allShops);')!==false
+        &&substr_count($selfSrc,'$allShops = function_exists(\'bslFanoutShopsFull\') ? bslFanoutShopsF'.'ull($cn) : [];')===2);
+    $__convQ750 = ['is_admin'=>false,'has_quoted_product'=>true,'nc'=>['chat_id'=>11],'msgs'=>[],'raw_chat'=>[]];
+    $__convV750 = ['is_admin'=>false,'has_quoted_product'=>false,'has_product'=>true,'nc'=>['chat_id'=>12,'product_id'=>9001],'msgs'=>[],'raw_chat'=>[]];
+    $__convN750 = ['is_admin'=>false,'has_quoted_product'=>false,'has_product'=>false,'nc'=>['chat_id'=>13,'text'=>'سلام، سفارشم کی ارسال می‌شود؟'],'msgs'=>[],'raw_chat'=>[]];
+    $__convA750 = ['is_admin'=>true,'has_quoted_product'=>true,'nc'=>['chat_id'=>14],'msgs'=>[],'raw_chat'=>[]];
+    $add('10.750','بازدید محصول و محصول نقل‌قول‌شده هر دو پیش از پاسخ از پروفایل حل و از مبدأ تازه می‌شوند',
+        s4ChatProductRefreshKind($__convQ750)==='quoted'
+        &&s4ChatProductRefreshKind($__convV750)==='view'
+        &&s4ChatProductRefreshKind($__convN750)===''
+        &&s4ChatProductRefreshKind($__convA750)===''
+        &&function_exists('s4UrgentRefreshViewedProduct')
+        &&function_exists('bslChatProductCacheForget')
+        &&strpos($selfSrc,'$isQuotedCustomer = s4ChatProductRefresh'.'Kind($conv) !== \'\';')!==false
+        &&strpos($selfSrc,'$refreshKind = s4ChatProductRefresh'.'Kind($conv);')!==false
+        &&strpos($selfSrc,'bslChatLookupProductMeta($prodId, $tk, true, '.'true)')!==false
+        &&strpos($selfSrc,'bool $allowNetwork = true, bool $forceF'.'resh = false): array {')!==false
+        &&strpos($selfSrc,"isset(\$_GET['product_view_ref"."resh'])")!==false
+        &&strpos($selfSrc,"'trigger' => \$triggerKind === 'view' ? 'urgent_product_v"."iew' : 'urgent_chat_inquiry',")!==false);
     $add('10.749','سلامت خطوط استخراج وب با اجرای واقعی اثبات می‌شود و ردیف پذیرفته‌نشده بازپس گرفته می‌شود',
         version_compare(APP_VERSION,'10.749','>=')
         &&function_exists('s4WebExtractReclaimUnadopted')
@@ -70846,10 +70939,26 @@ function bslChatProductParseApiPayload(array $raw, int $fallbackId = 0): array {
 /**
  * v10.722: واکشی و کش متادیتای محصول (عنوان، عکس، قیمت، لینک) از روی product_id.
  */
-function bslChatLookupProductMeta(int $productId, string $tk = '', bool $allowNetwork = true): array {
+/** v10.750: دور ریختن کشِ متای یک محصول — پیش‌نیاز «پاسخ با دادهٔ تازه». */
+function bslChatProductCacheForget(int $productId): void {
+    if ($productId <= 0) return;
+    $key = (string)$productId;
+    $cache = bslChatProductCacheLoad();
+    if (isset($cache[$key])) {
+        unset($cache[$key]);
+        bslChatProductCacheSave($cache);
+    }
+}
+function bslChatLookupProductMeta(int $productId, string $tk = '', bool $allowNetwork = true, bool $forceFresh = false): array {
     if ($productId <= 0) return [];
     $now = time();
     $key = (string)$productId;
+    /* v10.750: دیدنِ محصول یا نقل‌قولِ آن باید قیمت/موجودی تازه بدهد؛ کشِ ۷ روزه
+       برای همین شناسه نادیده گرفته و بودجهٔ شبکه تضمین می‌شود. */
+    if ($forceFresh && $allowNetwork) {
+        bslChatProductCacheForget($productId);
+        $GLOBALS['_s4ChatProdNetBudget'] = max(2, (int)($GLOBALS['_s4ChatProdNetBudget'] ?? 0));
+    }
     $cache = bslChatProductCacheLoad();
     if (isset($cache[$key]) && is_array($cache[$key])) {
         $ent = $cache[$key];
@@ -71748,6 +71857,23 @@ function s4QuoteHasProductMeta(array $q): bool {
     return false;
 }
 
+/**
+ * v10.750: آیا این گفتگوی مشتری باید «پیش از پاسخ» محصولش از پروفایل حل شود و
+ * قیمت/موجودی‌اش از مبدأ تأمین تازه شود؟
+ *   'quoted' = پیامِ دارای محصولِ نقل‌قول‌شده، 'view' = مشتری محصول را دیده است
+ *   (کارت محصول/لینک محصول در گفتگو)، '' = نیازی نیست.
+ */
+function s4ChatProductRefreshKind(array $conv): string {
+    if (!empty($conv['is_admin'])) return '';
+    $nc = is_array($conv['nc'] ?? null) ? $conv['nc'] : [];
+    $msgs = is_array($conv['msgs'] ?? null) ? $conv['msgs'] : [];
+    $raw = is_array($conv['raw_chat'] ?? null) ? $conv['raw_chat'] : [];
+    if (!empty($conv['has_quoted_product'])) return 'quoted';
+    if (function_exists('s4ChatItemHasQuotedProduct') && s4ChatItemHasQuotedProduct($nc, $msgs, $raw)) return 'quoted';
+    if (array_key_exists('has_product', $conv)) return !empty($conv['has_product']) ? 'view' : '';
+    if (function_exists('s4ChatItemHasProduct') && s4ChatItemHasProduct($nc, $msgs, $raw)) return 'view';
+    return '';
+}
 function s4ChatItemHasProduct(array $nc, array $msgs = [], array $rawChat = []): bool {
     if ((int)($nc['product_id'] ?? 0) > 0) return true;
     if (trim((string)($nc['product_title'] ?? '')) !== '') return true;
@@ -72762,7 +72888,9 @@ function autoReplyRunForShop(array $cn, bool $dry = false, bool $ignoreGrace = f
             $row['skip'] = 'پیام متنی نیست (' . $mt . ')'; $out['items'][] = $row; $out['skipped']++; continue;
         }
         if (!$dry && $hasProdInLm && function_exists('s4UrgentHandleChatInquiry')) {
-            $__urgRes = s4UrgentHandleChatInquiry($tk, (int)($cn['basalam']['vendor_id'] ?? 0), $nc, $c, [], $cn);
+            /* v10.750: محصولِ دیده‌شده در پیام هم مثل نقل‌قول، پیش از پاسخ تازه می‌شود. */
+            $__urgKind = !empty($nc['has_quoted_product']) ? 'quoted' : 'view';
+            $__urgRes = s4UrgentHandleChatInquiry($tk, (int)($cn['basalam']['vendor_id'] ?? 0), $nc, $c, [], $cn, ['trigger_kind' => $__urgKind]);
             if (!empty($__urgRes['ok']) && !empty($__urgRes['live_product_meta']) && is_array($__urgRes['live_product_meta'])) {
                 $__lp = $__urgRes['live_product_meta'];
                 if ((int)($__lp['price'] ?? 0) > 0) $effProd['price'] = (int)$__lp['price'];
@@ -73477,6 +73605,7 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                 'why' => $why,
                 'remind_n' => $n - 1,
                 'has_quoted_product' => $hasQuotedProd,
+                'has_product' => $hasProd,
                 'inquiry' => $inqRes,
                 'eligibility' => $eligRes,
             ];
@@ -73533,8 +73662,10 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
        A timeout can no longer consume a chat event without leaving retry work. */
     foreach ([[$singleDigestBucket, 'single_digest'], [$productCustomerBucket, 'product_customer'], [$individualBucket, 'individual']] as [$bucket, $mode]) {
         foreach ($bucket as $conv) {
-            $isQuotedCustomer = !empty($conv['has_quoted_product']) && empty($conv['is_admin']);
-            // A quoted-product conversation is dispatched once, after the eligibility
+            /* v10.750: نقل‌قول محصول و محصولِ دیده‌شده هر دو یک‌بار و پس از
+               «حل از پروفایل + تازه‌سازی قیمت/موجودی از مبدأ» ارسال می‌شوند. */
+            $isQuotedCustomer = s4ChatProductRefreshKind($conv) !== '';
+            // A quoted/viewed-product conversation is dispatched once, after the eligibility
             // lookup, so its text, quoted link, and result arrive as one integrated post.
             if ($isQuotedCustomer && $mode !== 'individual') continue;
             $chunks = s4NotifFormatConversationMessage($conv, ['mode' => $mode === 'individual' ? 'product_customer' : $mode]);
@@ -73572,12 +73703,18 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
     // Slow product/source inquiries are intentionally deferred until all initial chat notifications are sent.
     if ($send) {
         $deferredIds = [];
+        /* v10.750: بازدیدها می‌توانند پرشمار باشند؛ تازه‌سازی سنگینِ آن‌ها در هر پالس
+           سقف دارد، اما پیامِ گفتگو در هر حال ارسال می‌شود (هیچ رویدادی گم نمی‌شود). */
+        $viewRefreshBudget = 6;
         foreach ([$singleDigestBucket, $productCustomerBucket] as $deferredBucket) {
             foreach ($deferredBucket as $conv) {
-                if (empty($conv['has_quoted_product']) || !empty($conv['is_admin'])) continue;
+                $refreshKind = s4ChatProductRefreshKind($conv);
+                if ($refreshKind === '') continue;
+                $heavyRefresh = ($refreshKind === 'quoted') || ($viewRefreshBudget-- > 0);
                 $nc=(array)($conv['nc']??[]);$deferTk=(string)($nc['_s4_shop_token']??'');$deferVid=(int)($nc['vendor_id']??0);
-                $deferInq=function_exists('s4UrgentHandleChatInquiry')?s4UrgentHandleChatInquiry($deferTk,$deferVid,$nc,(array)($conv['raw_chat']??[]),(array)($conv['msgs']??[]),$cn):null;
-                $deferElig=function_exists('s4UrgentEvaluateChatProductEligibility')?s4UrgentEvaluateChatProductEligibility($deferTk,$deferVid,(string)($conv['shop_name']??''),$nc,(array)($conv['msgs']??[]),(array)($conv['raw_chat']??[]),$cn,$deferInq):null;
+                $deferInq=($heavyRefresh&&function_exists('s4UrgentHandleChatInquiry'))?s4UrgentHandleChatInquiry($deferTk,$deferVid,$nc,(array)($conv['raw_chat']??[]),(array)($conv['msgs']??[]),$cn,['trigger_kind'=>$refreshKind]):null;
+                /* گزارش واجد شرایط بودن فقط برای نقل‌قول است؛ بازدید فقط تازه‌سازی قیمت/موجودی می‌خواهد. */
+                $deferElig=($heavyRefresh&&$refreshKind==='quoted'&&function_exists('s4UrgentEvaluateChatProductEligibility'))?s4UrgentEvaluateChatProductEligibility($deferTk,$deferVid,(string)($conv['shop_name']??''),$nc,(array)($conv['msgs']??[]),(array)($conv['raw_chat']??[]),$cn,$deferInq):null;
                 $conv['inquiry']=$deferInq;$conv['eligibility']=$deferElig;
                 $updatedMsgs=s4NotifFormatConversationMessage($conv,['mode'=>'product_customer']);
                 if(count($updatedMsgs)>1){
@@ -81451,11 +81588,12 @@ if (isset($_GET['bsl_notify_selected'])) {
             $hasQuotedSel = empty($n['_is_admin']) && s4ChatItemHasQuotedProduct($n, $body, $rawC);
             $inqSel = null;
             $eligSel = null;
-            if ($hasQuotedSel && $eligSelCount < 5) {
+            /* v10.750: محصولِ دیده‌شده هم مثل نقل‌قول، پیش از پاسخ تازه می‌شود. */
+            if (($hasQuotedSel || $hasProdSel) && $eligSelCount < 5) {
                 if (function_exists('s4UrgentHandleChatInquiry')) {
-                    $inqSel = s4UrgentHandleChatInquiry($chatTk, $chatVid, $n, $rawC, $body, $cn);
+                    $inqSel = s4UrgentHandleChatInquiry($chatTk, $chatVid, $n, $rawC, $body, $cn, ['trigger_kind' => $hasQuotedSel ? 'quoted' : 'view']);
                 }
-                if (function_exists('s4UrgentEvaluateChatProductEligibility')) {
+                if ($hasQuotedSel && function_exists('s4UrgentEvaluateChatProductEligibility')) {
                     $eligSel = s4UrgentEvaluateChatProductEligibility($chatTk, $chatVid, $shopNm, $n, $body, $rawC, $cn, $inqSel);
                 }
                 $eligSelCount++;
@@ -81468,6 +81606,7 @@ if (isset($_GET['bsl_notify_selected'])) {
                 'why' => 'new',
                 'remind_n' => 0,
                 'has_quoted_product' => $hasQuotedSel,
+                'has_product' => $hasProdSel,
                 'inquiry' => $inqSel,
                 'eligibility' => $eligSel,
             ];
@@ -83433,7 +83572,8 @@ function s4UrgentSyncSingleProductToBasalam(string $profileKey, array $profile, 
     $catId = (int)($profile['bslCategoryId'] ?? $profile['syncConfig']['bslCategoryId'] ?? 0);
     $autoCat = !empty($profile['syncConfig']['bslAutoCategory']);
     $fallbackCats = is_array($profile['bslFallbackCatIds'] ?? null) ? $profile['bslFallbackCatIds'] : [];
-    $allShops = function_exists('bslFanoutShops') ? bslFanoutShops($cn) : [];
+    /* v10.750: ردیف کامل (با توکن) لازم است؛ ردیف بدون توکن باعث «غرفهٔ نامعتبر» می‌شد. */
+    $allShops = function_exists('bslFanoutShopsFull') ? bslFanoutShopsFull($cn) : [];
     $now = time();
 
     if (empty($cn['basalam']['parallel_profile_lanes']) && function_exists('saveConnections')) {
@@ -83521,18 +83661,8 @@ function s4UrgentSyncSingleProductToBasalam(string $profileKey, array $profile, 
     };
 
     if ($mode === 'immediate_for_order') {
-        $targetShop = null;
-        if ($preferVendorId > 0) {
-            foreach ($allShops as $sh) {
-                if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId) { $targetShop = $sh; break; }
-            }
-            if (!$targetShop) {
-                foreach ((array)(function_exists('bslAllShops') ? bslAllShops($cn) : []) as $sh) {
-                    if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId) { $targetShop = $sh; break; }
-                }
-            }
-        }
-        if (!$targetShop && $allShops) $targetShop = $allShops[0];
+        /* v10.750: مقصد همیشه از مسیرِ واحدِ «غرفهٔ دارای توکن» انتخاب می‌شود. */
+        $targetShop = s4UrgentResolveTargetShop($cn, $preferVendorId, $allShops);
 
         $upsertRes = ['ok' => false, 'error' => 'غرفه باسلام در دسترس نیست'];
         $shopPriceInfo = null;
@@ -83969,16 +84099,8 @@ function s4UrgentPickBestProcurementOption(array $itemHint, array $cn, array $pr
         $recPrice = max(0, (int)($recArr['recommended_price'] ?? 0));
     }
 
-    $targetShop = null;
-    if (function_exists('bslFanoutShops')) {
-        foreach ((array)bslFanoutShops($cn) as $sh) {
-            if ($vendorId <= 0 || (int)($sh['vendor_id'] ?? 0) === $vendorId) { $targetShop = $sh; break; }
-        }
-        if (!$targetShop) {
-            $allF = bslFanoutShops($cn);
-            if ($allF) $targetShop = $allF[0];
-        }
-    }
+    /* v10.750: ردیف کامل غرفه لازم است تا لایهٔ قیمتِ همان غرفه هم اعمال شود. */
+    $targetShop = function_exists('s4UrgentResolveTargetShop') ? s4UrgentResolveTargetShop($cn, $vendorId) : null;
     if ($recPrice <= 0 && $costUnit > 0 && $targetShop && function_exists('bslShopPriceFor')) {
         $spRes = bslShopPriceFor($costUnit, $targetShop, (int)($cn['basalam']['price_round'] ?? $cn['basalam']['round'] ?? 0));
         $recPrice = max(0, (int)($spRes['price'] ?? $costUnit));
@@ -84108,7 +84230,8 @@ function s4UrgentSyncProcurementCandidateToBasalam(array $bestOpt, array $itemHi
         'stock' => (int)($prepared['stock'] ?? 0),
     ];
 
-    $allShops = function_exists('bslFanoutShops') ? bslFanoutShops($cn) : [];
+    /* v10.750: ردیف کامل (با توکن) لازم است؛ ردیف بدون توکن باعث «غرفهٔ نامعتبر» می‌شد. */
+    $allShops = function_exists('bslFanoutShopsFull') ? bslFanoutShopsFull($cn) : [];
     $now = time();
 
     if (empty($cn['basalam']['parallel_profile_lanes']) && function_exists('saveConnections')) {
@@ -84196,18 +84319,8 @@ function s4UrgentSyncProcurementCandidateToBasalam(array $bestOpt, array $itemHi
     };
 
     if ($mode === 'immediate_for_order') {
-        $targetShop = null;
-        if ($preferVendorId > 0) {
-            foreach ($allShops as $sh) {
-                if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId) { $targetShop = $sh; break; }
-            }
-            if (!$targetShop) {
-                foreach ((array)(function_exists('bslAllShops') ? bslAllShops($cn) : []) as $sh) {
-                    if ((int)($sh['vendor_id'] ?? 0) === $preferVendorId) { $targetShop = $sh; break; }
-                }
-            }
-        }
-        if (!$targetShop && $allShops) $targetShop = $allShops[0];
+        /* v10.750: مقصد همیشه از مسیرِ واحدِ «غرفهٔ دارای توکن» انتخاب می‌شود. */
+        $targetShop = s4UrgentResolveTargetShop($cn, $preferVendorId, $allShops);
 
         $upsertRes = ['ok' => false, 'error' => 'غرفه باسلام در دسترس نیست'];
         if ($targetShop) {
@@ -84447,7 +84560,14 @@ function s4UrgentExtractChatProductHint(string $tk, int $vendorId, array $nc, ar
     ];
 }
 
-function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $rawChat = [], array $messages = [], ?array $cn = null): array {
+function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $rawChat = [], array $messages = [], ?array $cn = null, array $opts = []): array {
+    /* v10.750: دو محرک یکسان رفتار می‌کنند — «مشتری محصول را دید» و «پیام با
+       محصول نقل‌قول‌شده»: اول محصول از پروفایلِ ذخیره‌شده حل می‌شود، بعد قیمت و
+       موجودیِ تازه از مبدأ تأمین گرفته و روی باسلام نشانده می‌شود. */
+    $triggerKind = strtolower(trim((string)($opts['trigger_kind'] ?? 'quoted')));
+    if (!in_array($triggerKind, ['quoted', 'view', 'manual'], true)) $triggerKind = 'quoted';
+    $forceRefresh = !empty($opts['force']);
+    $kindFa = $triggerKind === 'view' ? 'بازدید محصول توسط مشتری' : ($triggerKind === 'manual' ? 'تازه‌سازی دستی محصول' : 'استعلام پیام مشتری');
     $chatId = (int)($nc['chat_id'] ?? $rawChat['id'] ?? 0);
     if ($chatId <= 0) return ['ok' => false, 'skipped' => 'invalid_chat_id'];
     $lastMsgId = (int)($nc['last_msg_id'] ?? $rawChat['last_message']['id'] ?? 0);
@@ -84468,12 +84588,12 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
     $dedupKey = 'c' . $chatId . '_p' . $dedupSeed;
     $now = time();
     $already = false;
-    s4UrgentInquiryStateUpdate(function (array &$st) use ($dedupKey, $lastMsgId, $now, &$already) {
+    s4UrgentInquiryStateUpdate(function (array &$st) use ($dedupKey, $lastMsgId, $now, $forceRefresh, &$already) {
         $prev = $st['chats'][$dedupKey] ?? null;
         if (is_array($prev)) {
             $prevMid = (int)($prev['msg_id'] ?? 0);
             $prevAt = (int)($prev['at'] ?? 0);
-            if (($lastMsgId > 0 && $prevMid === $lastMsgId) || ($now - $prevAt) < 60) {
+            if (!$forceRefresh && ((($lastMsgId > 0 && $prevMid === $lastMsgId) || ($now - $prevAt) < 60))) {
                 $already = true;
                 return;
             }
@@ -84484,6 +84604,15 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
 
     $cn = $cn ?? (function_exists('loadConnections') ? loadConnections() : []);
     $customerName = trim((string)($nc['customer'] ?? $nc['name'] ?? $rawChat['contact']['name'] ?? ''));
+    /* v10.750: کشِ ۷ روزهٔ متای محصول نباید به بازدید/نقل‌قول پاسخِ کهنه بدهد. */
+    if ($prodId > 0 && function_exists('bslChatLookupProductMeta')) {
+        $freshMeta = bslChatLookupProductMeta($prodId, $tk, true, true);
+        if (is_array($freshMeta)) {
+            $fmTitle = trim((string)($freshMeta['title'] ?? ''));
+            if ($prodTitle === '' && $fmTitle !== '') $prodTitle = $fmTitle;
+            if ($prodUrl === '' && trim((string)($freshMeta['url'] ?? '')) !== '') $prodUrl = trim((string)$freshMeta['url']);
+        }
+    }
     $resolved = s4UrgentResolveProfileAndProduct([
         'product_id' => $prodId,
         'title' => $prodTitle,
@@ -84509,12 +84638,12 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
                 'vendor_id' => $vendorId,
             ], $cn, [
                 'mode' => 'urgent_lane_queue',
-                'trigger' => 'urgent_chat_procurement',
+                'trigger' => $triggerKind === 'view' ? 'urgent_product_view_procurement' : 'urgent_chat_procurement',
                 'report_kind' => 'chat',
                 'report_ref' => 'گفتگو #' . $chatId,
                 'customer' => $customerName,
                 'prefer_vendor_id' => $vendorId,
-                'label_extra' => 'استعلام پیام مشتری #' . $chatId,
+                'label_extra' => $kindFa . ' #' . $chatId,
             ]);
 
             s4UrgentInquiryStateUpdate(function (array &$st) use ($dedupKey, $lastMsgId, $now, $chatId, $prodId, $bestOpt, $sync) {
@@ -84545,6 +84674,7 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
             $platLabelOpt = (string)($bestOpt['platform_label'] ?? '');
             return [
                 'ok' => !empty($sync['ok']),
+                'trigger_kind' => $triggerKind,
                 'source_mode' => 'procurement_best',
                 'best_option' => $bestOpt,
                 'sync' => $sync,
@@ -84599,7 +84729,7 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
         $cn,
         [
             'mode' => 'urgent_lane_queue',
-            'trigger' => 'urgent_chat_inquiry',
+            'trigger' => $triggerKind === 'view' ? 'urgent_product_view' : 'urgent_chat_inquiry',
             'report_kind' => 'chat',
             'report_ref' => 'گفتگو #' . $chatId,
             'customer' => $customerName,
@@ -84607,7 +84737,7 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
             'source_mode' => (string)$fresh['source_mode'],
             'source_platform' => (string)($fresh['platform'] ?? ''),
             'prefer_vendor_id' => $vendorId,
-            'label_extra' => 'استعلام پیام مشتری #' . $chatId,
+            'label_extra' => $kindFa . ' #' . $chatId,
         ]
     );
 
@@ -84637,6 +84767,7 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
     if ($metaEstPrice <= 0) $metaEstPrice = (int)($sync['raw_price'] ?? 0);
     return [
         'ok' => !empty($sync['ok']),
+        'trigger_kind' => $triggerKind,
         'resolved' => $resolved['profile_key'] . '/' . $resolved['product_key'],
         'resolved_profile_key' => (string)$resolved['profile_key'],
         'resolved_profile_name' => (string)($resolved['profile']['name'] ?? $resolved['profile_key']),
@@ -84647,6 +84778,8 @@ function s4UrgentHandleChatInquiry(string $tk, int $vendorId, array $nc, array $
         'sync' => $sync,
         'live_product_meta' => [
             'matched' => true,
+            'refreshed_from_source' => !empty($fresh['live_ok']),
+            'trigger_kind' => $triggerKind,
             'title' => (string)($fresh['product']['title'] ?? $prodTitle),
             'price' => $metaEstPrice,
             'source_cost_toman' => (int)($sync['raw_price'] ?? 0),
@@ -85397,6 +85530,105 @@ function s4NotifHandleNewBasalamOrder(array $rawParcel, array $np, array $shop, 
     });
 
     return ['ok' => true, 'eligible' => !empty($eval['eligible']), 'refresh' => $itemRefreshLogs, 'evaluation' => $eval, 'cancel_customer_msg' => $cancelResult, 'elig_notif_sent' => $eligSent];
+}
+
+/**
+ * v10.750: هستهٔ مشترک «پاسخ با دادهٔ تازه» برای رویدادِ بازدید محصول.
+ * ۱) محصول از پروفایلِ ذخیره‌شده حل می‌شود، ۲) قیمت و موجودی تازه از مبدأ تأمین
+ * خوانده می‌شود، ۳) همان مقادیر روی غرفهٔ باسلام نشانده می‌شوند.
+ */
+function s4UrgentRefreshViewedProduct(array $hint, ?array $cn = null, string $triggerKind = 'view'): array {
+    $cn = $cn ?? (function_exists('loadConnections') ? loadConnections() : []);
+    $prodId = (int)($hint['product_id'] ?? 0);
+    $title = trim((string)($hint['title'] ?? ''));
+    $url = trim((string)($hint['url'] ?? ''));
+    $sku = trim((string)($hint['sku'] ?? ''));
+    $vendorId = (int)($hint['vendor_id'] ?? 0);
+    if ($prodId <= 0 && $title === '' && $url === '' && $sku === '') {
+        return ['ok' => false, 'error' => 'مشخصات محصول ارسال نشد'];
+    }
+    if ($prodId <= 0 && $url !== '' && function_exists('bslExtractProductIdFromUrl')) {
+        $prodId = (int)bslExtractProductIdFromUrl($url);
+    }
+    if ($prodId > 0 && function_exists('bslChatLookupProductMeta')) {
+        $metaFresh = bslChatLookupProductMeta($prodId, (string)($cn['basalam']['token'] ?? ''), true, true);
+        if (is_array($metaFresh) && $title === '') $title = trim((string)($metaFresh['title'] ?? ''));
+    }
+    $need = ['product_id' => $prodId, 'title' => $title, 'url' => $url, 'sku' => $sku, 'vendor_id' => $vendorId];
+    $profiles = function_exists('loadProfiles') ? loadProfiles() : [];
+    $resolved = s4UrgentResolveProfileAndProduct($need, $profiles, $cn);
+    if (empty($resolved['ok'])) {
+        $bestOpt = s4UrgentPickBestProcurementOption($need, $cn);
+        if (empty($bestOpt['ok'])) {
+            return ['ok' => false, 'error' => (string)($bestOpt['error'] ?? 'محصول در پروفایل‌ها پیدا نشد'),
+                    'trigger_kind' => $triggerKind, 'product_id' => $prodId];
+        }
+        $syncP = s4UrgentSyncProcurementCandidateToBasalam($bestOpt, $need, $cn, [
+            'mode' => 'immediate_for_order',
+            'trigger' => 'urgent_product_view_procurement',
+            'report_kind' => 'chat',
+            'report_ref' => 'بازدید محصول' . ($prodId > 0 ? (' #' . $prodId) : ''),
+            'prefer_vendor_id' => $vendorId,
+            'label_extra' => 'بازدید محصول توسط مشتری',
+        ]);
+        return ['ok' => !empty($syncP['ok']), 'trigger_kind' => $triggerKind, 'source_mode' => 'procurement_best',
+                'product_id' => $prodId, 'sync' => $syncP,
+                'price' => (int)($bestOpt['target_price_toman'] ?? 0),
+                'source_cost_toman' => (int)($bestOpt['cost_unit'] ?? 0),
+                'in_stock' => !empty($bestOpt['in_stock']), 'stock' => (int)($bestOpt['stock'] ?? 0)];
+    }
+    $fresh = s4UrgentFetchSourceProductFresh((string)$resolved['profile_key'], (array)$resolved['profile'],
+        (string)$resolved['product_key'], (array)$resolved['product'], 16);
+    $sync = s4UrgentSyncSingleProductToBasalam((string)$resolved['profile_key'], (array)$resolved['profile'],
+        (string)$resolved['product_key'], (array)$fresh['product'], $cn, [
+            'mode' => 'immediate_for_order',
+            'trigger' => 'urgent_product_view',
+            'report_kind' => 'chat',
+            'report_ref' => 'بازدید محصول' . ($prodId > 0 ? (' #' . $prodId) : ''),
+            'product_id' => $prodId,
+            'source_mode' => (string)$fresh['source_mode'],
+            'source_platform' => (string)($fresh['platform'] ?? ''),
+            'prefer_vendor_id' => $vendorId,
+            'label_extra' => 'بازدید محصول توسط مشتری',
+        ]);
+    $priceOut = (int)($sync['shop_price']['price'] ?? $sync['shop_price_est'] ?? 0);
+    if ($priceOut <= 0) $priceOut = (int)($sync['raw_price'] ?? 0);
+    return [
+        'ok' => !empty($sync['ok']),
+        'trigger_kind' => $triggerKind,
+        'profile_key' => (string)$resolved['profile_key'],
+        'profile_name' => (string)($resolved['profile']['name'] ?? $resolved['profile_key']),
+        'product_key' => (string)$resolved['product_key'],
+        'product_id' => $prodId,
+        'title' => (string)($fresh['product']['title'] ?? $title),
+        'source_mode' => (string)$fresh['source_mode'],
+        'refreshed_from_source' => !empty($fresh['live_ok']),
+        'source_url' => (string)($fresh['source_url'] ?? ''),
+        'source_cost_toman' => (int)($sync['raw_price'] ?? 0),
+        'price' => $priceOut,
+        'in_stock' => !empty($sync['in_stock']),
+        'stock' => (int)($fresh['product']['stock'] ?? (!empty($sync['in_stock']) ? 1 : 0)),
+        'sync' => $sync,
+    ];
+}
+
+/* v10.750: رویدادِ «مشتری محصول را دید» از هر منبعی می‌تواند این اندپوینت را صدا بزند. */
+if (isset($_GET['product_view_refresh']) || isset($_POST['product_view_refresh'])) {
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store');
+    s4RequireAuthenticatedMutation();
+    $cnPV = loadConnections();
+    $hintPV = [
+        'product_id' => (int)($_POST['product_id'] ?? $_GET['product_id'] ?? 0),
+        'title' => trim((string)($_POST['title'] ?? $_GET['title'] ?? '')),
+        'url' => trim((string)($_POST['url'] ?? $_GET['url'] ?? '')),
+        'sku' => trim((string)($_POST['sku'] ?? $_GET['sku'] ?? '')),
+        'vendor_id' => (int)($_POST['vendor_id'] ?? $_GET['vendor_id'] ?? 0),
+    ];
+    $resPV = s4UrgentRefreshViewedProduct($hintPV, $cnPV, 'view');
+    if (empty($resPV['ok']) && trim((string)($resPV['error'] ?? '')) !== '') http_response_code(404);
+    echo json_encode($resPV + ['version' => APP_VERSION], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
 }
 
 if (isset($_GET['urgent_product_sync']) || isset($_POST['urgent_product_sync'])) {
@@ -115802,6 +116034,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.750', t:'🔄 پاسخ به مشتری فقط با قیمت و موجودی تازه + رفع «غرفهٔ نامعتبر» بعد از سفارش', items:[
+    'قانون تازه: هر بار مشتری محصولی را ببیند یا پیامی با محصول نقل‌قول‌شده بفرستد، همان محصول ابتدا از پروفایل ذخیره‌شده پیدا می‌شود و سپس قیمت و موجودی‌اش از مبدأ تأمین به‌روزرسانی و روی غرفهٔ باسلام نشانده می‌شود؛ پاسخ گفتگو پس از همین تازه‌سازی ارسال می‌گردد.',
+    'کشِ ۷ روزهٔ متای محصول باسلام برای این دو محرک دور زده می‌شود (bslChatLookupProductMeta با forceFresh) تا پاسخ هیچ‌گاه با قیمت کهنه بیرون نرود.',
+    'اندپوینت تازهٔ product_view_refresh اجازه می‌دهد رویداد «بازدید محصول» از هر منبعی همین زنجیره را اجرا کند و قیمت/موجودی به‌روزشده را برگرداند.',
+    'باگ: آپدیت محصول پس از ثبت سفارش گاهی «⚠️ آپدیت باسلام: غرفهٔ نامعتبر» می‌داد در حالی‌که غرفه کاملاً معتبر بود. علت: مقصد آپدیت از bslFanoutShops() گرفته می‌شد که عمداً توکن برنمی‌گرداند، و bslUpsertToShop() با توکن خالی غرفه را نامعتبر می‌دید.',
+    'اکنون bslFanoutShopsFull() ردیف کامل غرفه (توکن + تنظیمات قیمت) را می‌دهد و s4UrgentResolveTargetShop() همیشه غرفه‌ای با توکن معتبر انتخاب می‌کند؛ لایهٔ قیمتِ همان غرفه هم درست اعمال می‌شود.'
+  ]},
   {v:'10.749', t:'🛡️ سلامت خطوط استخراج وب با «اجرای واقعی» اثبات می‌شود', items:[
     'پیش از این، موفق بودن درخواست کیک به‌تنهایی خط را «سالم» نشان می‌داد؛ اگر خودِ درخواست خط اجرا نمی‌شد، کار استخراج فقط claim و سپس بازیابی می‌شد و عملاً هیچ‌وقت پیش نمی‌رفت.',
     'حالا lane_ok_at را خودِ درخواست خط در لحظهٔ شروع اجرا ثبت می‌کند؛ اگر ردیفی پس از ۷۵ ثانیه هنوز پذیرفته نشده باشد به صف برمی‌گردد و شمارندهٔ lane_adopt_fails بالا می‌رود. با سه شکست، خطوط ناسالم اعلام می‌شوند و برش اصلی web worker دوباره خودش استخراج را برمی‌دارد.',
