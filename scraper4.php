@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.748';
+const APP_VERSION = '10.749';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -3158,8 +3158,33 @@ function s4WebExtractReleaseJob(string $jobId, string $reason, int $delay = 15):
  * loopback breaks the main web-worker slice takes extraction back automatically. */
 function s4WebExtractLanesHealthy(): bool {
     if (!s4WebExtractLanesSupported()) return false;
-    $at = (int)(s4WebWorkerStateLoad()['lane_ok_at'] ?? 0);
-    return $at > 0 && (time() - $at) < 300;
+    /* v10.749: `lane_ok_at` is now stamped by the lane request itself, not by
+       the kick. A kick that leaves the building but never runs (connection
+       aborted, request rejected) must not convince the scheduler that lanes
+       work, or extraction jobs get claimed and then recycled forever. */
+    $st = s4WebWorkerStateLoad();
+    $at = (int)($st['lane_ok_at'] ?? 0);
+    if ($at <= 0 || (time() - $at) >= 300) return false;
+    return (int)($st['lane_adopt_fails'] ?? 0) < 3;
+}
+/** A lane row whose request never adopted it is returned to the queue, and
+ * repeated adoption failures turn the lanes off so the main web-worker slice
+ * takes extraction back. */
+function s4WebExtractReclaimUnadopted(int $graceSec = 75): array {
+    $now = time(); $stale = [];
+    foreach ((array)(s4WorkerLoadQueue()['entries'] ?? []) as $e) {
+        if (!is_array($e) || (string)($e['type'] ?? '') !== 'backend_extract') continue;
+        if ((string)($e['status'] ?? '') !== 'running' || (string)($e['lane'] ?? '') !== 'web') continue;
+        if ((int)($e['worker_pid'] ?? 0) > 0) continue;
+        if ($now - (int)($e['lane_claimed_at'] ?? 0) < $graceSec) continue;
+        $stale[] = (string)($e['id'] ?? '');
+    }
+    if (!$stale) return [];
+    foreach ($stale as $jid) s4WebExtractReleaseJob($jid, 'web_lane_not_adopted', 10);
+    $st = s4WebWorkerStateLoad();
+    s4WebWorkerStateWrite(['lane_adopt_fails' => (int)($st['lane_adopt_fails'] ?? 0) + count($stale),
+        'lane_last_unadopted_at' => $now, 'lane_ok_at' => 0]);
+    return $stale;
 }
 function s4WebExtractLaneKick(string $jobId): array {
     $qs = '?web_extract_lane=1&token=' . rawurlencode(s4WebWorkerToken())
@@ -3171,6 +3196,7 @@ function s4WebExtractDispatch(string $source = 'auto'): array {
     if (!s4WebExtractLanesSupported()) return ['ok' => false, 'skipped' => 'lanes_unsupported'];
     if (function_exists('s4SettingsPriorityActive') && s4SettingsPriorityActive())
         return ['ok' => true, 'skipped' => 'foreground_settings_priority'];
+    $stale = s4WebExtractReclaimUnadopted();
     $limit = max(1, extractTaskConcurrency());
     $running = function_exists('s4WorkerParallelExtractRunning') ? s4WorkerParallelExtractRunning() : 0;
     $free = $limit - $running;
@@ -3183,7 +3209,13 @@ function s4WebExtractDispatch(string $source = 'auto'): array {
         if (!$job) break;
         $jid = (string)($job['id'] ?? '');
         $kick = s4WebExtractLaneKick($jid);
-        if (!empty($kick['ok'])) { $started[] = $jid; s4WebWorkerStateWrite(['lane_ok_at' => time()]); continue; }
+        if (!empty($kick['ok'])) {
+            $started[] = $jid;
+            s4WebWorkerStateWrite(['last_lane_kick' => ['at' => time(), 'job' => $jid,
+                'via' => (string)($kick['via'] ?? ''), 'http' => (int)($kick['http'] ?? 0),
+                'detached' => !empty($kick['detached'])]]);
+            continue;
+        }
         s4WebExtractReleaseJob($jid, 'web_lane_kick_failed', 20);
         $failed[] = ['job' => $jid, 'error' => (string)($kick['error'] ?? 'kick_failed')];
         break;                              // a broken loopback must not burn the queue
@@ -3191,12 +3223,15 @@ function s4WebExtractDispatch(string $source = 'auto'): array {
     s4WebWorkerStateWrite(['last_lane_dispatch_at' => time(), 'last_lane_source' => $source,
         'last_lane_started' => count($started), 'lane_limit' => $limit, 'lane_running' => $running]);
     return ['ok' => true, 'engine' => 'web_worker', 'limit' => $limit, 'running_before' => $running,
-            'pending' => $pending, 'started' => $started, 'failed' => $failed, 'source' => $source];
+            'pending' => $pending, 'started' => $started, 'failed' => $failed,
+            'reclaimed' => $stale, 'source' => $source];
 }
 /** One extraction job inside its own detached request. */
 function s4WebExtractLaneRun(string $jobId): array {
     @set_time_limit(0);
     @ignore_user_abort(true);
+    s4WebWorkerStateWrite(['lane_ok_at' => time(), 'lane_adopt_fails' => 0,
+        'lane_last_run_at' => time(), 'lane_last_run_job' => $jobId, 'lane_last_run_pid' => (int)@getmypid()]);
     if ($jobId === '') return ['ok' => false, 'error' => 'lane_job_missing'];
     $claimed = s4WorkerQueueMutate(function (&$q) use ($jobId) {
         foreach ($q['entries'] as &$e) {
@@ -36022,7 +36057,10 @@ echo json_encode(['ok'=>true,'active'=>s4WorkerIsActive(),'engine'=>s4RuntimeEng
     'exec_available'=>!empty(s4RuntimeCaps()['exec_works']),'pending'=>s4WorkerPendingCount(),
     'extract_lanes'=>['supported'=>s4WebExtractLanesSupported(),'healthy'=>s4WebExtractLanesHealthy(),
         'limit'=>extractTaskConcurrency(),'running'=>s4WorkerParallelExtractRunning(),
-        'pending'=>s4WebExtractPendingCount()],
+        'pending'=>s4WebExtractPendingCount(),
+        'adopt_fails'=>(int)(s4WebWorkerStateLoad()['lane_adopt_fails']??0),
+        'last_run_at'=>(int)(s4WebWorkerStateLoad()['lane_last_run_at']??0),
+        'last_kick'=>s4WebWorkerStateLoad()['last_lane_kick']??null],
     'web_worker'=>s4WebWorkerStateLoad(),'state'=>$st,'queue'=>$q],JSON_UNESCAPED_UNICODE);exit;
 }
 
@@ -36039,6 +36077,8 @@ exit;
    Authenticated with a rotating HMAC token, answered immediately, then the
    request detaches and drains the job queue for one bounded slice. */
 if(isset($_GET['web_extract_lane'])){
+    @ignore_user_abort(true);
+    @set_time_limit(0);
     header('Content-Type: application/json; charset=UTF-8');
     if(!s4WebWorkerTokenValid((string)($_GET['token']??''))){
         http_response_code(403);
@@ -55404,6 +55444,13 @@ if (isset($_GET['selftest'])) {
         &&strpos($selfSrc,"'owner_pid' => (int)@getmy"."pid()")!==false
         &&strpos($selfSrc,'$_msOwnerDead = $_msOwner'.'Pid > 0')!==false
         &&strpos($selfSrc,'function s4WorkerRequeueFor'.'Retry(')!==false);
+    $add('10.749','سلامت خطوط استخراج وب با اجرای واقعی اثبات می‌شود و ردیف پذیرفته‌نشده بازپس گرفته می‌شود',
+        version_compare(APP_VERSION,'10.749','>=')
+        &&function_exists('s4WebExtractReclaimUnadopted')
+        &&strpos($selfSrc,"s4WebWorkerStateWrite(['lane_ok_at' => time(), 'lane_adopt_fai"."ls' => 0,")!==false
+        &&strpos($selfSrc,"'lane_adopt_fails' => (int)(\$st['lane_adopt_fails'] ?? 0) + count(\$sta"."le),")!==false
+        &&strpos($selfSrc,"s4WebExtractReleaseJob(\$jid, 'web_lane_not_ado"."pted', 10)")!==false
+        &&strpos($selfSrc,"return (int)(\$st['lane_adopt_fails'] ?? 0) < "."3;")!==false);
     $add('10.748','payload سنگین ماتریس روی هاست بدون exec از body عبور می‌کند، نه از آدرس',
         version_compare(APP_VERSION,'10.748','>=')
         &&strpos($selfSrc,"s4HttpChildExec(['matrix_build_cli'=>'1'],900,['matrix_pay"."load'=>\$arg])")!==false
@@ -115755,6 +115802,12 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.749', t:'🛡️ سلامت خطوط استخراج وب با «اجرای واقعی» اثبات می‌شود', items:[
+    'پیش از این، موفق بودن درخواست کیک به‌تنهایی خط را «سالم» نشان می‌داد؛ اگر خودِ درخواست خط اجرا نمی‌شد، کار استخراج فقط claim و سپس بازیابی می‌شد و عملاً هیچ‌وقت پیش نمی‌رفت.',
+    'حالا lane_ok_at را خودِ درخواست خط در لحظهٔ شروع اجرا ثبت می‌کند؛ اگر ردیفی پس از ۷۵ ثانیه هنوز پذیرفته نشده باشد به صف برمی‌گردد و شمارندهٔ lane_adopt_fails بالا می‌رود. با سه شکست، خطوط ناسالم اعلام می‌شوند و برش اصلی web worker دوباره خودش استخراج را برمی‌دارد.',
+    'اندپوینت خط پیش از هر خروجی ignore_user_abort و set_time_limit(0) می‌گیرد تا قطع اتصال کیک کوتاه، اجرای آن را نکشد.',
+    'خروجی ?worker_status=1 اکنون adopt_fails، last_run_at و مشخصات آخرین کیک (مسیر، کد HTTP) را هم نشان می‌دهد.'
+  ]},
   {v:'10.748', t:'🧱 رفع خطای تکرارشوندهٔ matrix_child_exit_2 روی هاست بدون exec', items:[
     'برش‌های ساخت و اصلاح ماتریس روی هاست بدون exec، payload فشردهٔ checkpoint را داخل آدرس (query string) می‌فرستادند؛ این رشته به‌سادگی از سقف طول URL وب‌سرور عبور می‌کرد و پاسخ 4xx می‌گرفت. والد آن را rc=2 می‌دید و هر بار matrix_child_exit_2 ثبت می‌شد.',
     'اکنون payload در بدنهٔ درخواست POST ارسال می‌شود و اندپوینت‌های matrix_build_cli و matrix_fix_cli آن را از POST (و در صورت نبود، از GET) می‌خوانند.',

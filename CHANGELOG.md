@@ -1,5 +1,12 @@
 # Release notes
 
+## scraper4 10.749
+
+- **Web extraction lanes now prove themselves by running, not by being kicked.** A successful loopback kick only means the request left the building; on Noviex the lane requests were claiming extraction jobs and never adopting them, so each job was claimed, left with `worker_pid = 0`, and recycled by orphan recovery. `lane_ok_at` is now stamped by the lane request itself at the moment it starts.
+- A lane row that is still unadopted after 75s is returned to the queue (`web_lane_not_adopted`) and increments `lane_adopt_fails`; after three failures the lanes are declared unhealthy and the main web-worker slice takes extraction back, so this mechanism can never starve the queue.
+- The lane endpoint sets `ignore_user_abort(true)` and `set_time_limit(0)` before any output, so the deliberately short kick timeout cannot kill it.
+- `?worker_status=1` reports `adopt_fails`, `last_run_at` and the last kick's transport/HTTP status under `extract_lanes`.
+
 ## scraper4 10.748
 
 - **Fixed the repeating `matrix_child_exit_2` on Noviex.** Matrix build/fix slices on exec-free hosts passed the base64 checkpoint payload in the query string; it routinely exceeded the web server's URL limit, the request came back 4xx, the parent mapped that to `rc = 2` and logged `matrix_child_exit_2` on every attempt. The payload now travels in the POST body, and `matrix_build_cli` / `matrix_fix_cli` read it from POST first (GET stays as a fallback).
