@@ -1,5 +1,9 @@
 # Release notes
 
+## scraper4 10.755
+
+- **Hardening of the new streaming opener.** Draining the output buffers before the first NDJSON frame used an unbounded `while (ob_get_level() > 0) ob_end_flush();` loop. On a host where a buffer cannot be closed (zlib compression or a non-removable handler) `ob_end_flush()` returns `false` without lowering the level, which would spin that loop forever. It is now a bounded loop (max 16 passes) that stops as soon as a flush fails or the buffer level stops decreasing, falling back to `ob_flush()`.
+
 ## scraper4 10.754
 
 - **Own-shop listings are no longer shown in the eligibility («استعلام واجد شرایط بودن») result list.** Any result whose title carries our own code suffix — `(کد:۵)`, `(کد: 12)`, `[code: A7]`, `(SKU: …)` — or that belongs to one of our own Basalam shops (vendor id / shop name from `bslAllShops()`) or carries a configured profile `titleSuffix`, is dropped before it reaches the list. The new helpers are `s4ProcurementIsOwnShopTitle()`, `s4ProcurementIsOwnShopRow()` and `s4ProcurementOwnShopIdentity()` (identity cached per request). The filter runs in all three result producers — `s4ProcurementDirectSiteSearch()` (before the expensive live-detail pass, so skipped rows cost nothing), `s4ProcurementDeepPlatformSearch()` and `s4ProcurementResearchItem()` — and every payload now reports how many rows were hidden in `own_shop_filtered`.

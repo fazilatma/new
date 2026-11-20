@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.754';
+const APP_VERSION = '10.755';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -55624,6 +55624,11 @@ if (isset($_GET['selftest'])) {
         &&!s4ProcurementIsOwnShopRow(['candidate'=>['title'=>'کفش ورزشی نایکی']])
         &&strpos($selfSrc,'s4ProcurementIsOwnShopTitle($candRaw'.'Title)')!==false
         &&strpos($selfSrc,'s4ProcurementIsOwnShopRow($row)'.'){s4ProcurementOwnShopSkip();')!==false);
+    $add('10.755','باز کردن استریم هرگز در حلقهٔ بافر خروجی گیر نمی‌کند',
+        version_compare(APP_VERSION,'10.755','>=')
+        &&strpos($selfSrc,'for ($guard = 0; $guard < 16; $guard'.'++)')!==false
+        &&strpos($selfSrc,'if (ob_get_level() >= $lvl) '.'break;')!==false
+        &&substr_count($selfSrc,'while (ob_get_level() > 0) { @ob_end_'.'flush(); }')===0);
     $add('10.754','هر ردیف واجد شرایط همان لحظهٔ یافته‌شدن استریم می‌شود',
         function_exists('s4EligibilityStreamStart')&&function_exists('s4EligibilityStreamRow')
         &&function_exists('s4EligibilityStreamSend')&&function_exists('s4EligibilityStreamOn')
@@ -83149,7 +83154,13 @@ function s4EligibilityStreamStart(): void {
     if (function_exists('apache_setenv')) { @apache_setenv('no-gzip', '1'); @apache_setenv('dont-vary', '1'); }
     @ini_set('zlib.output_compression', '0');
     @ini_set('output_buffering', '0');
-    while (ob_get_level() > 0) { @ob_end_flush(); }
+    /* v10.755: an unremovable buffer (zlib/handler) must never spin this loop forever. */
+    for ($guard = 0; $guard < 16; $guard++) {
+        $lvl = ob_get_level();
+        if ($lvl <= 0) break;
+        if (@ob_end_flush() === false) { @ob_flush(); break; }
+        if (ob_get_level() >= $lvl) break;
+    }
     @ob_implicit_flush(true);
     echo str_repeat(' ', 2048), "\n";
     @flush();
@@ -116649,6 +116660,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.755', t:'🛡 سخت‌سازی باز کردن استریم نتایج واجد شرایط', items:[
+    'حلقهٔ تخلیهٔ بافرهای خروجی هنگام باز کردن استریم NDJSON با شمارندهٔ محافظ و بررسی کاهش سطح بافر جایگزین شد تا روی میزبانی که بافر zlib/handler قابل بستن نیست، درخواست در حلقهٔ بی‌پایان گیر نکند.'
+  ]},
   {v:'10.754', t:'🚫 حذف آگهی‌های غرفهٔ خودی از نتایج واجد شرایط + نمایش لحظه‌ای هر نتیجه + اصلاح ترب و ایمالز', items:[
     'فیلتر غرفهٔ خودی: هر نتیجه‌ای که عنوانش پسوند کد «(کد:ایکس)» دارد یا متعلق به یکی از غرفه‌ها/پروفایل‌های خودمان است (s4ProcurementIsOwnShopTitle / s4ProcurementIsOwnShopRow) دیگر در فهرست «استعلام واجد شرایط بودن» نمایش داده نمی‌شود؛ تعداد حذف‌شده‌ها در کلید own_shop_filtered پاسخ گزارش می‌شود.',
     'نمایش لحظه‌ای نتایج: اندپوینت procurement_eligibility_api با پارامتر stream=1 پاسخ را به‌صورت NDJSON خط‌به‌خط می‌فرستد (فریم‌های plan، meta، row، source و done) و هر ردیف دقیقاً در لحظهٔ پیدا شدن رسم می‌شود؛ هم در پنل اصلی (pcPostStream در perResearch و perDeepBasalam) و هم در فضای کاری عضو (run(action)).',
