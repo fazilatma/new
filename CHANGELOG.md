@@ -1,5 +1,12 @@
 # Release notes
 
+## scraper4 10.752
+
+- **New messenger headline for product conversations.** The explanatory sentence `🛍 پیام مشتری دارای محصول (customer | shop)` is gone. A message now opens with a **role-coloured bullet**, then the **shop name**, then the **customer name** — `🔵 امیران تولید | میترافرجودی` for a customer message, `🟣 …` for a shopkeeper reply (same colour code already used inside the conversation block). Note that shop and customer are in the **reverse order** of the old header.
+- The longer «نقل‌قول‌شده + استعلام واجد شرایط» variant uses the **same** headline; the eligibility verdict keeps its own `🟢/🔴 نتیجهٔ تأمین` line inside the body, so no extra badge is needed. Unread count and the reminder marker moved onto the short headline, and the duplicate role/shop/customer line that the conversation block printed is now dropped, so a product message no longer carries two headers.
+- **New event — «مشاهدهٔ محصول توسط مشتری» (customer viewed a product).** `s4NotifProductViewMessage()` composes a dedicated message: headline, `👀 مشاهدهٔ محصول توسط مشتری`, product title, the refreshed Basalam price, stock, the source profile and the supplier link. It is sent by `?product_view_refresh=1` after the existing resolve → live supplier fetch → Basalam update chain, and conversations classified as `view` get the `👀` line added to their headline.
+- **New checkbox «👀 مشاهدهٔ محصول توسط مشتری» in the رویدادها (events) tab, ON by default.** Key `product_view` follows the standard rule (absent key = on, explicit `0` = off) in `notifEventOn()`, the POST normaliser, the JS load/save paths and the capability fallback map. Unticking it only silences the message — the product refresh chain keeps running.
+
 ## scraper4 10.751
 
 - **Bug fix — «ادامه» (Continue) on a stopped send-queue row failed on exec-less hosts (Noviex).** Clicking Continue returned various errors and the row never resumed. Root cause: `?bsl_queue_resume` dispatched the backend only through `fireAndForgetCliQueueBackend()`, which returns `false` immediately when `exec` is unavailable (`_queueDispatchMode = cli_spawn_unavailable`). The endpoint then answered `worker_pid: 0` with no server-side runner at all, and the only remaining starter was the **browser's** `POST ?action=bsl_backend`, which LiteSpeed drops together with the user's connection. Unlike the cron lane pumps, resume had no `fireAndForget()` fallback and the exec-free web worker had no send-queue job type.

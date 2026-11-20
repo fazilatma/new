@@ -417,7 +417,7 @@ const TASKS_STOP_ALL_LAST_FILE = __DIR__ . '/tasks_stop_all_last.json'; // v10.5
 /* نسخهٔ کد — با هر تغییر در این فایل به‌روز می‌شود */
 
 
-const APP_VERSION = '10.751';
+const APP_VERSION = '10.752';
 const APP_FONT_KEY      = 'scraper_font';
 const APP_FONT_FALLBACK = 'Tahoma,system-ui,sans-serif';
 
@@ -31350,7 +31350,7 @@ if (isset($_POST['baleh'])) { $bl = json_decode($_POST['baleh'], true) ?: []; $c
 if (isset($_POST['rubika'])) { $rb = json_decode($_POST['rubika'], true) ?: []; $conn['rubika'] = $notifMessengerInput($rb); }
 /* v10.78 (92): تلگرام — سومین پیام‌رسان، با همان ساختار بله/روبیکا */
 if (isset($_POST['telegram'])) { $tgm = json_decode($_POST['telegram'], true) ?: []; $conn['telegram'] = $notifMessengerInput($tgm); }
-if (isset($_POST['notif_events'])) { $ne = json_decode($_POST['notif_events'], true) ?: []; $conn['notif_events'] = ['order_new'=>!empty($ne['order_new']),'order_status'=>!empty($ne['order_status']),'order_eligibility'=>!isset($ne['order_eligibility'])||!empty($ne['order_eligibility']),'order_cancel_customer_msg'=>!empty($ne['order_cancel_customer_msg']),'chat_msg'=>!empty($ne['chat_msg']),'chat_digest_single'=>!empty($ne['chat_digest_single']),'product_status'=>!empty($ne['product_status']),'product_new'=>!empty($ne['product_new']),'order_refund'=>!empty($ne['order_refund']),'src_price'=>!empty($ne['src_price']),'src_stock'=>!empty($ne['src_stock']),'run_fail'=>!empty($ne['run_fail']),'retire'=>!empty($ne['retire']),'cron_ping'=>!empty($ne['cron_ping']),/* v10.35 (۴۷د): گزارشِ همگام‌سازی — پیش‌فرض روشن، پس نبودِ کلید یعنی روشن */'sync_report'=>!isset($ne['sync_report'])||!empty($ne['sync_report']),'quoted_product_reply'=>!empty($ne['quoted_product_reply'])]; }
+if (isset($_POST['notif_events'])) { $ne = json_decode($_POST['notif_events'], true) ?: []; $conn['notif_events'] = ['order_new'=>!empty($ne['order_new']),'order_status'=>!empty($ne['order_status']),'order_eligibility'=>!isset($ne['order_eligibility'])||!empty($ne['order_eligibility']),'order_cancel_customer_msg'=>!empty($ne['order_cancel_customer_msg']),'chat_msg'=>!empty($ne['chat_msg']),'chat_digest_single'=>!empty($ne['chat_digest_single']),/* v10.752: رویداد «مشاهدهٔ محصول توسط مشتری» — نبودِ کلید یعنی روشن */'product_view'=>!isset($ne['product_view'])||!empty($ne['product_view']),'product_status'=>!empty($ne['product_status']),'product_new'=>!empty($ne['product_new']),'order_refund'=>!empty($ne['order_refund']),'src_price'=>!empty($ne['src_price']),'src_stock'=>!empty($ne['src_stock']),'run_fail'=>!empty($ne['run_fail']),'retire'=>!empty($ne['retire']),'cron_ping'=>!empty($ne['cron_ping']),/* v10.35 (۴۷د): گزارشِ همگام‌سازی — پیش‌فرض روشن، پس نبودِ کلید یعنی روشن */'sync_report'=>!isset($ne['sync_report'])||!empty($ne['sync_report']),'quoted_product_reply'=>!empty($ne['quoted_product_reply'])]; }
 /* v10.392: a short, user-defined installation/host label is appended to every notification. */
 if (isset($_POST['notif_source_text'])) $conn['notif_source_text'] = mb_substr(trim((string)$_POST['notif_source_text']), 0, 160);
 if (isset($_POST['notif_quoted_product_template'])) $conn['notif_quoted_product_template'] = mb_substr(trim((string)$_POST['notif_quoted_product_template']),0,1000);
@@ -55584,6 +55584,43 @@ if (isset($_GET['selftest'])) {
     $__pfGone751 = bslResolveQueueProductsFile(['id'=>'selftest751missing',
         'products_file'=>'/nonexistent/bsl_queue_products_selftest751missing.json']);
     if ($__pf751 !== '') @unlink($__pf751);
+    /* v10.752: ۱) سرخطِ پیامِ محصولی = گلولهٔ رنگی + غرفه + مشتری،
+       ۲) رویدادِ «مشاهدهٔ محصول توسط مشتری» با تیکِ مستقل و پیش‌فرضِ روشن. */
+    $__pvEntry752 = ['nc'=>['who'=>'میترافرجودی','unseen'=>2],'shop_name'=>'امیران تولید','is_admin'=>false,
+        'why'=>'new','remind_n'=>0,'has_quoted_product'=>true,'product_view_event'=>true,
+        'msgs'=>[['text'=>'این محصول موجوده؟','is_admin'=>false,'at'=>'2026-11-12T08:00:00Z']]];
+    $__pvMsg752 = s4NotifFormatConversationMessage($__pvEntry752, ['mode'=>'product_customer']);
+    $__pvAdmin752 = s4NotifFormatConversationMessage(['is_admin'=>true] + $__pvEntry752, ['mode'=>'product_customer']);
+    $__pvHead752 = s4NotifProductHeadline('امیران تولید', 'میترافرجودی', false);
+    $__pvHeadA752 = s4NotifProductHeadline('', '', true);
+    $__pvText752 = s4NotifProductViewMessage(
+        ['ok'=>true,'title'=>'ساعت مچی','product_id'=>4411,'price'=>780000,'in_stock'=>true,'stock'=>3,
+         'refreshed_from_source'=>true,'profile_name'=>'پروفایل تست','source_url'=>'https://example.com/p/4411'],
+        ['basalam'=>['shop_name'=>'امیران تولید']], ['customer'=>'میترافرجودی']);
+    $add('10.752','سرخط پیام محصولیِ پیام‌رسان: گلولهٔ رنگی نقش، سپس نام غرفه و سپس نام مشتری',
+        version_compare(APP_VERSION,'10.752','>=')
+        &&function_exists('s4NotifConversationBullet')&&function_exists('s4NotifProductHeadline')
+        &&$__pvHead752==='🔵 امیران تولید | میترافرجودی'
+        &&$__pvHeadA752==='🟣 غرفهٔ باسلام | مشتری'
+        &&s4NotifConversationBullet(false)==='🔵'&&s4NotifConversationBullet(true)==='🟣'
+        &&count($__pvMsg752)===1&&count($__pvAdmin752)===1
+        &&strpos($__pvMsg752[0],'🔵 امیران تولید | میترافرجودی')===0
+        &&strpos($__pvAdmin752[0],'🟣 امیران تولید | میترافرجودی')===0
+        &&strpos($__pvMsg752[0],'پیام مشتری '.'دارای محصول (')===false
+        &&substr_count($selfSrc,'🛍 پیام مشتری '.'دارای محصول (')===0);
+    $add('10.752','رویداد «مشاهدهٔ محصول توسط مشتری» پیام مستقل دارد و تیکش پیش‌فرض روشن است',
+        function_exists('s4NotifProductViewMessage')
+        &&notifEventOn([],'product_view')===true
+        &&notifEventOn(['product_view'=>0],'product_view')===false
+        &&strpos($__pvText752,'🔵 امیران تولید | میترافرجودی')===0
+        &&strpos($__pvText752,'👀 مشاهدهٔ محصول توسط مشتری')!==false
+        &&strpos($__pvText752,'ساعت مچی')!==false&&strpos($__pvText752,'780,000')!==false
+        &&strpos($__pvText752,'موجود (3)')!==false
+        &&strpos($__pvMsg752[0],'👀 مشاهدهٔ محصول توسط مشتری')!==false
+        &&strpos($selfSrc,'id="notifProduct'.'View"')!==false
+        &&strpos($selfSrc,"product_view:\$('notifProduct".'View\')?.checked?1:0,')!==false
+        &&strpos($selfSrc,"\$conv['product_view_event']=(\$refreshKind==='view')")!==false
+        &&strpos($selfSrc,"'product_view'=>!isset(\$ne['product_vi"."ew'])")!==false);
     $add('10.751','ادامهٔ ردیف متوقف‌شدهٔ صف ارسال روی میزبان بدون exec هم اعزام سمت سرور دارد',
         version_compare(APP_VERSION,'10.751','>=')
         &&function_exists('s4DispatchQueueBackend')
@@ -72269,6 +72306,22 @@ function s4NotifFormatChatBlock(array $entry, bool $forSingleDigest = false, int
  * @return list<string>
  */
 /**
+ * v10.752: گلولهٔ رنگیِ ابتدای پیامِ محصولیِ پیام‌رسان.
+ * آبی = پیامِ مشتری، صورتی/بنفش = پاسخِ غرفه‌دار. سپس نام غرفه و بعد نام مشتری
+ * می‌آید؛ عنوانِ توضیحیِ قبلی («پیام مشتری دارای محصول …») حذف شده است.
+ */
+function s4NotifConversationBullet(bool $isAdmin): string {
+    return $isAdmin ? '🟣' : '🔵';
+}
+
+/** v10.752: سرخطِ کوتاهِ «گلوله + غرفه + مشتری» برای پیام‌های محصولی. */
+function s4NotifProductHeadline(string $shopName, string $who, bool $isAdmin): string {
+    $shopName = trim($shopName) !== '' ? trim($shopName) : 'غرفهٔ باسلام';
+    $who = trim($who) !== '' ? trim($who) : 'مشتری';
+    return s4NotifConversationBullet($isAdmin) . ' ' . $shopName . ' | ' . $who;
+}
+
+/**
  * v10.730: قالب‌بندی مکالمهٔ یکپارچهٔ ارسالی و دریافتی برای یک غرفه‌دار و یک مشتری منحصربه‌فرد.
  * پیام‌های مشتری‌های مختلف هرگز در یک پیام ترکیب نمی‌شوند.
  * @return list<string>
@@ -72285,6 +72338,9 @@ function s4NotifFormatConversationMessage(array $entry, array $opts = []): array
     $remindN = (int)($entry['remind_n'] ?? 0);
     $hasQuoted = !empty($entry['has_quoted_product']);
     $hasElig = !empty($entry['eligibility']);
+    /* v10.752: رویدادِ «مشتری محصول را دید» — تیکِ مستقل در تبِ رویدادها. */
+    $isProductView = !empty($entry['product_view_event']);
+    $shortHeadline = false;
     $mode = (string)($opts['mode'] ?? 'single_digest');
     $forSingle = ($mode === 'single_digest' || $mode === 'conversation_merge');
 
@@ -72298,20 +72354,25 @@ function s4NotifFormatConversationMessage(array $entry, array $opts = []): array
              . ($unseen > 0 ? (' (' . $unseen . ' خوانده‌نشده)') : '')
              . "
 🔔 رویداد: " . $statusTxt;
-    } elseif ($hasQuoted && $hasElig) {
-        $hdr = '🛍 پیام مشتری دارای محصول نقل‌قول‌شده + استعلام واجد شرایط (' . $who . ' | ' . $shopName . ')';
-    } elseif ($hasQuoted || $hasElig || !empty($entry['inquiry'])) {
-        $hdr = '🛍 پیام مشتری دارای محصول (' . $who . ' | ' . $shopName . ')';
+    } elseif ($hasQuoted || $hasElig || !empty($entry['inquiry']) || $isProductView) {
+        /* v10.752: متنِ توضیحیِ قبلی برداشته شد؛ اول گلولهٔ رنگی، بعد نام غرفه و
+           سپس نام مشتری. نتیجهٔ استعلام خطِ مستقلِ خودش را در بدنه دارد. */
+        $shortHeadline = true;
+        $hdr = s4NotifProductHeadline($shopName, $who, $isAdmin)
+             . ($unseen > 0 ? (' · ' . $unseen . ' خوانده‌نشده') : '')
+             . ($why === 'remind' ? (' · 🔁 یادآوری' . ($remindN > 1 ? ' (' . $remindN . ')' : '')) : '');
+        if ($isProductView) $hdr .= "\n👀 مشاهدهٔ محصول توسط مشتری";
     } else {
         $hdr = '💬 گفتگوی ' . $who . ' | ' . $shopName;
     }
 
     $block = s4NotifFormatChatBlock($entry, $forSingle, $hasElig ? 1600 : 2300);
     if ($block === '') return [];
-    // در حالت تک‌مکالمه خط اول تکراری هدر بلوک را حذف می‌کنیم چون هدر کامل بالا آمده است
+    /* خط اول بلوک تکرارِ هدر است. v10.752: سرخطِ کوتاهِ محصولی هم نقش و نام غرفه
+       و مشتری را دارد، پس همان خط آنجا هم حذف می‌شود تا پیام دو سرخط نداشته باشد. */
     $bLines = explode("
 ", $block);
-    if ($forSingle && count($bLines) > 1) {
+    if (($forSingle || $shortHeadline) && count($bLines) > 1) {
         array_shift($bLines);
         $block = implode("
 ", $bLines);
@@ -73818,6 +73879,9 @@ function notifCheckChats(array $cn, bool $test = false, bool $send = true): arra
                 /* گزارش واجد شرایط بودن فقط برای نقل‌قول است؛ بازدید فقط تازه‌سازی قیمت/موجودی می‌خواهد. */
                 $deferElig=($heavyRefresh&&$refreshKind==='quoted'&&function_exists('s4UrgentEvaluateChatProductEligibility'))?s4UrgentEvaluateChatProductEligibility($deferTk,$deferVid,(string)($conv['shop_name']??''),$nc,(array)($conv['msgs']??[]),(array)($conv['raw_chat']??[]),$cn,$deferInq):null;
                 $conv['inquiry']=$deferInq;$conv['eligibility']=$deferElig;
+                /* v10.752: گفتگویی که مشتری در آن محصولی را دیده (بدون نقل‌قول)
+                   سرخطِ «مشاهدهٔ محصول توسط مشتری» می‌گیرد؛ تیکِ تبِ رویدادها. */
+                $conv['product_view_event']=($refreshKind==='view')&&notifEventOn((array)($cn['notif_events']??[]),'product_view');
                 $updatedMsgs=s4NotifFormatConversationMessage($conv,['mode'=>'product_customer']);
                 if(count($updatedMsgs)>1){
                     $eligSummary=is_array($deferElig)&&array_key_exists('eligible',$deferElig)?(!empty($deferElig['eligible'])?'🟢 نتیجهٔ تأمین: واجد شرایط':'🔴 نتیجهٔ تأمین: غیرواجد شرایط'):'🔎 نتیجهٔ استعلام: در دسترس نیست';
@@ -81315,7 +81379,9 @@ function bslCheckNotifications(array $cn): array {
     $pending = 0;
     $wantOrd = notifEventOn($ne, 'order_new') || notifEventOn($ne, 'order_status')
             || notifEventOn($ne, 'order_eligibility') || notifEventOn($ne, 'order_cancel_customer_msg');
-    $wantChat = notifEventOn($ne, 'chat_msg') || notifEventOn($ne, 'chat_digest_single') || bslAnyChatRouteOn($cn);
+    /* v10.752: رویداد «مشاهدهٔ محصول توسط مشتری» هم از همین اسکنِ گفتگوها می‌آید. */
+    $wantChat = notifEventOn($ne, 'chat_msg') || notifEventOn($ne, 'chat_digest_single')
+        || notifEventOn($ne, 'product_view') || bslAnyChatRouteOn($cn);
     $wantProd = notifEventOn($ne, 'product_status') || notifEventOn($ne, 'product_new');
     if (!$wantOrd && !$wantChat && !$wantProd) $out['events_off'] = true;
     if ($wantOrd) {
@@ -85778,6 +85844,43 @@ function s4UrgentRefreshViewedProduct(array $hint, ?array $cn = null, string $tr
     ];
 }
 
+/**
+ * v10.752: متنِ پیام‌رسانِ رویدادِ «مشتری محصول را دید».
+ * ساختار دقیقاً مثل پیام‌های محصولی: گلولهٔ رنگی، نام غرفه، نام مشتری.
+ */
+function s4NotifProductViewMessage(array $res, array $cn, array $hint = []): string {
+    $shop = trim((string)($hint['shop_name'] ?? ''));
+    $vid = (int)($hint['vendor_id'] ?? 0);
+    if ($shop === '' && $vid > 0 && function_exists('bslAllShops')) {
+        foreach ((array)bslAllShops($cn) as $sh) {
+            if (!is_array($sh) || (int)($sh['vendor_id'] ?? 0) !== $vid) continue;
+            $shop = trim((string)($sh['shop_name'] ?? '')); break;
+        }
+    }
+    if ($shop === '') $shop = trim((string)($cn['basalam']['shop_name'] ?? ''));
+    $who = trim((string)($hint['customer'] ?? $hint['who'] ?? ''));
+    $lines = [s4NotifProductHeadline($shop, $who, false), '👀 مشاهدهٔ محصول توسط مشتری'];
+    $title = trim((string)($res['title'] ?? $hint['title'] ?? ''));
+    $pid = (int)($res['product_id'] ?? $hint['product_id'] ?? 0);
+    if ($title !== '' || $pid > 0) {
+        $lines[] = '🛍 ' . ($title !== '' ? $title : ('محصول #' . $pid));
+    }
+    $price = (int)($res['price'] ?? 0);
+    if ($price > 0) $lines[] = '💰 قیمت به‌روز باسلام: ' . number_format($price) . ' ت';
+    $stock = (int)($res['stock'] ?? 0);
+    $lines[] = '📦 موجودی: ' . (!empty($res['in_stock']) ? ('موجود' . ($stock > 0 ? ' (' . $stock . ')' : '')) : 'ناموجود');
+    if (!empty($res['refreshed_from_source'])) {
+        $lines[] = '♻️ پیش از این پیام، قیمت و موجودی از مبدأ تأمین تازه و در باسلام به‌روز شد';
+    } elseif (!empty($res['ok'])) {
+        $lines[] = '♻️ محصول از پروفایل ذخیره‌شده حل و در باسلام به‌روز شد (مبدأ پاسخ تازه نداد)';
+    }
+    $pName = trim((string)($res['profile_name'] ?? ''));
+    if ($pName !== '') $lines[] = '🗂 پروفایل: ' . $pName;
+    $url = trim((string)($res['source_url'] ?? $hint['url'] ?? ''));
+    if ($url !== '') $lines[] = '🔗 ' . $url;
+    return implode("\n", $lines);
+}
+
 /* v10.750: رویدادِ «مشتری محصول را دید» از هر منبعی می‌تواند این اندپوینت را صدا بزند. */
 if (isset($_GET['product_view_refresh']) || isset($_POST['product_view_refresh'])) {
     header('Content-Type: application/json; charset=UTF-8');
@@ -85791,7 +85894,16 @@ if (isset($_GET['product_view_refresh']) || isset($_POST['product_view_refresh']
         'sku' => trim((string)($_POST['sku'] ?? $_GET['sku'] ?? '')),
         'vendor_id' => (int)($_POST['vendor_id'] ?? $_GET['vendor_id'] ?? 0),
     ];
+    $hintPV['customer'] = trim((string)($_POST['customer'] ?? $_GET['customer'] ?? ''));
+    $hintPV['shop_name'] = trim((string)($_POST['shop_name'] ?? $_GET['shop_name'] ?? ''));
     $resPV = s4UrgentRefreshViewedProduct($hintPV, $cnPV, 'view');
+    /* v10.752: رویدادِ بازدید، پیامِ مستقلِ خودش را دارد — تیکِ «مشاهدهٔ محصول
+       توسط مشتری» در تبِ رویدادها آن را روشن/خاموش می‌کند (پیش‌فرض روشن). */
+    $resPV['notified'] = false;
+    if (notifEventOn((array)($cnPV['notif_events'] ?? []), 'product_view')) {
+        $sendPV = notifSend($cnPV, s4NotifProductViewMessage($resPV, $cnPV, $hintPV), 'chat_customer', [], 'chat_customer');
+        $resPV['notified'] = !isset($sendPV['suppressed_duplicate']);
+    }
     if (empty($resPV['ok']) && trim((string)($resPV['error'] ?? '')) !== '') http_response_code(404);
     echo json_encode($resPV + ['version' => APP_VERSION], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
@@ -93707,6 +93819,7 @@ $notifyFlagsFb=[
     'order_cancel_customer_msg'=>notifEventOn((array)$notificationsFb,'order_cancel_customer_msg'),
     'chat_msg'=>notifEventOn((array)$notificationsFb,'chat_msg'),
     'chat_digest_single'=>notifEventOn((array)$notificationsFb,'chat_digest_single'),
+    'product_view'=>notifEventOn((array)$notificationsFb,'product_view'),
     'product_new'=>notifEventOn((array)$notificationsFb,'product_new'),
     'product_status'=>notifEventOn((array)$notificationsFb,'product_status'),
     'order_refund'=>notifEventOn((array)$notificationsFb,'order_refund'),
@@ -106327,6 +106440,8 @@ title="چند درخواست هم‌زمان فرستاده شود (۱ تا ۱۶
 اعلانِ «پیام مشتری» از کدام غرفه‌ها بیاید. «همه» یعنی همهٔ غرفه‌های تنظیم‌شده؛
 برای محدود کردن، یک غرفه را انتخاب کنید.
 </div>
+<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#bae6fd;cursor:pointer"><input type="checkbox" id="notifProductView" checked style="width:15px;height:15px"><span>👀 مشاهدهٔ محصول توسط مشتری</span></label>
+<div style="font-size:10px;color:#64748b;padding-right:21px;line-height:1.6;margin-bottom:2px">هر بار مشتری محصولی را ببیند، همان محصول اول از پروفایل ذخیره‌شده پیدا می‌شود، قیمت و موجودی‌اش از مبدأ تأمین تازه و در باسلام به‌روز می‌شود و سپس یک پیام مستقل با همین داده‌های تازه به پیام‌رسان می‌رود. برداشتن تیک فقط جلوی پیام را می‌گیرد؛ به‌روزرسانی محصول به کار خود ادامه می‌دهد.</div>
 <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;cursor:pointer"><input type="checkbox" id="notifProductStatus" checked style="width:15px;height:15px"><span>📋 تغییر وضعیت محصول</span></label>
 <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;cursor:pointer"><input type="checkbox" id="notifProductNew" checked style="width:15px;height:15px"><span>➕ محصول جدید افزوده شد</span></label>
 <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#e2e8f0;cursor:pointer"><input type="checkbox" id="notifOrderRefund" checked style="width:15px;height:15px"><span>🔄 بازگشت سفارش</span></label>
@@ -116251,6 +116366,13 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
  *  v8.28: تاریخچهٔ تغییرات — تازه‌ترین نسخه بالای فهرست
  * ================================================================== */
 const CHANGELOG = [
+  {v:'10.752', t:'🔵 سرخط تازهٔ پیام محصولی + رویداد «مشاهدهٔ محصول توسط مشتری»', items:[
+    'سرخط پیام‌های محصولیِ پیام‌رسان عوض شد: دیگر جملهٔ توضیحی ندارد. حالا اول یک گلولهٔ رنگی می‌آید (آبی برای پیام مشتری، بنفش برای پاسخ غرفه‌دار)، بعد نام غرفه و سپس نام مشتری — یعنی ترتیب نسبت به قبل برعکس شده است.',
+    'همین سرخط برای پیام‌های «نقل‌قول محصول + استعلام واجد شرایط» هم به کار می‌رود؛ نتیجهٔ استعلام خط مستقل خودش را داخل بدنهٔ پیام دارد و نشان جداگانه‌ای لازم ندارد.',
+    'خط تکراریِ نقش/غرفه/مشتری که از بلوک گفتگو می‌آمد حذف شد تا پیام دو سرخط نداشته باشد؛ شمار پیام‌های خوانده‌نشده و نشان یادآوری به همان سرخط کوتاه منتقل شدند.',
+    'رویداد تازهٔ «مشاهدهٔ محصول توسط مشتری»: هر بار مشتری محصولی را ببیند، پیام مستقلی با عنوان محصول، قیمت به‌روز باسلام، موجودی، پروفایل مبدأ و لینک منبع فرستاده می‌شود و در گفتگوهای محصولی هم سطر 👀 به سرخط اضافه می‌شود.',
+    'تیک تازهٔ «👀 مشاهدهٔ محصول توسط مشتری» در تب رویدادهای بخش اعلان‌ها اضافه شد؛ پیش‌فرض روشن است. برداشتن تیک فقط جلوی پیام را می‌گیرد و زنجیرهٔ «حل محصول از پروفایل ← تازه‌سازی قیمت و موجودی از مبدأ ← به‌روزرسانی باسلام» سر جای خودش باقی می‌ماند.',
+  ]},
   {v:'10.751', t:'▶ رفع خطاهای دکمهٔ «ادامه» ردیف‌های متوقف‌شدهٔ صف ارسال (میزبان بدون exec)', items:[
     'باگ: روی نوویکس (میزبانی که exec غیرفعال دارد) کلیک روی «ادامه» ردیف متوقف‌شده خطا می‌داد و ردیف ادامه پیدا نمی‌کرد. علت ریشه‌ای: fireAndForgetCliQueueBackend() بدون exec بی‌درنگ false برمی‌گرداند و اندپوینت ?bsl_queue_resume هیچ fallbackی نداشت؛ پس worker_pid=0 برمی‌گشت و تنها راه‌اندازِ باقیمانده POSTِ خود مرورگر بود که با بسته‌شدن تب/اتصال کاربر می‌مرد.',
     'تابع تازهٔ s4DispatchQueueBackend() تنها مسیر اعزام backend صف شد: اول spawn CLI، بعد (فقط روی میزبان بدون exec) ثبت job ماندگار در صف worker وب، و در پایان handoff HTTP حلقهٔ برگشتی با توکن worker. همهٔ اندپوینت‌های صف باسلام و ووکامرس (resume / retry / start_server / restart_server / start_next / add / fan-out / زنجیرهٔ ردیف بعدی) و هر دو pumpِ کران از همین مسیر می‌روند.',
@@ -127945,7 +128067,7 @@ const applyMessenger=(prefix,cfg)=>{cfg=cfg||{};const ids=cfg.chat_ids||{};if($(
 const bl=cn.baleh||{};applyMessenger('baleh',bl);if($('balehS')&&bl.token){$('balehS').textContent='فعال';$('balehS').className='cst on';}
 const rb=cn.rubika||{};applyMessenger('rubika',rb);
 const tgm=cn.telegram||{};applyMessenger('telegram',tgm);
-const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifOrderEligibility'))$('notifOrderEligibility').checked=neOn('order_eligibility');if($('notifOrderCancelCustomerMsg'))$('notifOrderCancelCustomerMsg').checked=!!ne.order_cancel_customer_msg;if($('notifOrderCancelMsgTemplate'))$('notifOrderCancelMsgTemplate').value=String(cn.notif_order_cancel_template||'');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');if($('notifQuotedReply'))$('notifQuotedReply').checked=!!ne.quoted_product_reply;if($('notifQuotedTemplate'))$('notifQuotedTemplate').value=String(cn.notif_quoted_product_template||'سلام 🌿 قیمت محصول به‌روز است و موجودی فعلی آن ثبت شده؛ همکارانمان پس از بررسی انبار، موجودی نهایی را تأیید می‌کنند. سپاس از شکیبایی شما 🙏');if($('notifChatDigestSingle'))$('notifChatDigestSingle').checked=!!ne.chat_digest_single;/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
+const ne=cn.notif_events||{};/* v10.45: نبودِ کلید = روشن، صریحِ 0 = خاموش — دقیقاً همان قاعدهٔ سروری (notifEventOn). تا حالا 0 هم «روشن» نشان داده می‌شد. */const neOn=k=>ne[k]===undefined?true:!!ne[k];if($('notifOrderNew'))$('notifOrderNew').checked=neOn('order_new');if($('notifOrderStatus'))$('notifOrderStatus').checked=neOn('order_status');if($('notifOrderEligibility'))$('notifOrderEligibility').checked=neOn('order_eligibility');if($('notifOrderCancelCustomerMsg'))$('notifOrderCancelCustomerMsg').checked=!!ne.order_cancel_customer_msg;if($('notifOrderCancelMsgTemplate'))$('notifOrderCancelMsgTemplate').value=String(cn.notif_order_cancel_template||'');if($('notifChatMsg'))$('notifChatMsg').checked=neOn('chat_msg');if($('notifQuotedReply'))$('notifQuotedReply').checked=!!ne.quoted_product_reply;if($('notifQuotedTemplate'))$('notifQuotedTemplate').value=String(cn.notif_quoted_product_template||'سلام 🌿 قیمت محصول به‌روز است و موجودی فعلی آن ثبت شده؛ همکارانمان پس از بررسی انبار، موجودی نهایی را تأیید می‌کنند. سپاس از شکیبایی شما 🙏');if($('notifChatDigestSingle'))$('notifChatDigestSingle').checked=!!ne.chat_digest_single;/* v10.46 (۶۰): غرفهٔ «پیام مشتری» — گزینه‌ها از غرفهٔ پیش‌فرض + غرفه‌های اضافی می‌سازند */if($('notifChatShop')){const ncs=$('notifChatShop');const ncsCur=String(cn.notif_chat_shop||0);let ncsOpts='<option value="0">همهٔ غرفه‌ها</option>';const ncsDefVid=parseInt(b.vendor_id)||0;if(ncsDefVid>0&&b.token)ncsOpts+='<option value="'+ncsDefVid+'">غرفهٔ پیش‌فرض (#'+ncsDefVid+')</option>';(Array.isArray(bslExtraVendors)?bslExtraVendors:[]).forEach(v=>{const ncsVid=parseInt(v&&v.vendor_id)||0,ncsTok=String(v&&(v.token||''));if(ncsVid>0&&ncsTok)ncsOpts+='<option value="'+ncsVid+'">'+esc((v.shop_name||v.name)||('غرفه '+ncsVid))+' (#'+ncsVid+')</option>';});ncs.innerHTML=ncsOpts;ncs.value=(ncsCur!=='0'&&ncsOpts.indexOf('value="'+ncsCur+'"')>-1)?ncsCur:'0';}if($('notifProductView'))$('notifProductView').checked=neOn('product_view');if($('notifProductStatus'))$('notifProductStatus').checked=neOn('product_status');if($('notifProductNew'))$('notifProductNew').checked=neOn('product_new');if($('notifOrderRefund'))$('notifOrderRefund').checked=neOn('order_refund');if($('notifSrcPrice'))$('notifSrcPrice').checked=neOn('src_price');if($('notifSrcStock'))$('notifSrcStock').checked=neOn('src_stock');if($('notifRunFail'))$('notifRunFail').checked=neOn('run_fail');if($('notifRetire'))$('notifRetire').checked=neOn('retire');if($('notifSyncReport'))$('notifSyncReport').checked=neOn('sync_report');if($('notifCronPing'))$('notifCronPing').checked=!!ne.cron_ping;if($('pingEvery'))$('pingEvery').value=(cn.ping_every!==undefined?cn.ping_every:360);if($('notifScanLimit'))$('notifScanLimit').value=(cn.notif_scan_limit!==undefined?cn.notif_scan_limit:20); /* v10.86 (100) */
 if($('notifSourceText'))$('notifSourceText').value=String(cn.notif_source_text||'');if($('remindAfter'))$('remindAfter').value=(cn.notif_remind_after!==undefined?cn.notif_remind_after:30);if($('remindMax'))$('remindMax').value=(cn.notif_remind_max!==undefined?cn.notif_remind_max:0);if($('qDedup'))$('qDedup').checked=cn.queue_dedup!==false;if($('qDedupStale'))$('qDedupStale').value=Math.round((cn.queue_dedup_stale!==undefined?cn.queue_dedup_stale:7200)/60);if($('cronLockMin'))$('cronLockMin').value=(cn.cron_lock_min||30);if($('internalCronEnabled'))$('internalCronEnabled').checked=(cn.internal_cron_enabled!==false);if($('internalCronSec'))$('internalCronSec').value=(cn.internal_cron_sec||60);if($('keepReports'))$('keepReports').value=(cn.keep_reports||20);if($('contentSync'))$('contentSync').checked=(cn.content_sync!==false);if($('catLearnWords'))$('catLearnWords').value=String(cn.catlearn_words||1);catLearnWordsCfg=parseInt(cn.catlearn_words||1)||1;updateCatWordsBadge();if($('digestEnabled'))$('digestEnabled').checked=!!cn.digest_enabled;if($('digestHour')){if(!$('digestHour').options.length){let hh='';for(let i=0;i<24;i++)hh+='<option value="'+i+'">'+toFa(String(i).padStart(2,'0'))+':۰۰</option>';$('digestHour').innerHTML=hh;}$('digestHour').value=String(cn.digest_hour!==undefined?cn.digest_hour:23);}if($('digestHours'))$('digestHours').value=String(cn.digest_hours||24);updateDigestBadge();updateGenBadge();if($('retireMode'))$('retireMode').value=cn.retire_mode||'off';if($('retireWooAction'))$('retireWooAction').value=cn.retire_woo_action||'delete';if($('retireBslAction'))$('retireBslAction').value=cn.retire_bsl_action||'delete';if($('retireMaxPct'))$('retireMaxPct').value=cn.retire_max_pct||30;if($('retireMaxCount'))$('retireMaxCount').value=cn.retire_max_count||50;if($('stallWatchdog'))$('stallWatchdog').checked=cn.stall_watchdog!==false;if($('stallAfter'))$('stallAfter').value=cn.stall_after||300;if($('autoResume'))$('autoResume').checked=cn.auto_resume!==false;if($('autoResumeMax'))$('autoResumeMax').value=(cn.auto_resume_max||2);if($('detailBudget'))$('detailBudget').value=(cn.detail_budget_sec!==undefined?cn.detail_budget_sec:0);if($('listBudget'))$('listBudget').value=(cn.list_budget_sec!==undefined?cn.list_budget_sec:0);if($('extractPagePause'))$('extractPagePause').value=(cn.extract_page_pause_ms!==undefined?cn.extract_page_pause_ms:80);if($('proxyTimeout'))$('proxyTimeout').value=(cn.proxy_timeout_sec||45);srcNetApply(cn.src_net||{});renderApply(cn.render||{});updateRetireBadge();updateStallBadge();
 updN();syncMatrixRenderDestinations(b);
 const lazyCatInput=$('bsCatSearch');if(lazyCatInput&&!lazyCatInput.dataset.lazyBound){lazyCatInput.dataset.lazyBound='1';let catsRequested=false;const needCats=()=>{if(!catsRequested&&bslAllCats.length===0){catsRequested=true;loadBslCats();}};lazyCatInput.addEventListener('focus',needCats,{once:true});lazyCatInput.addEventListener('pointerdown',needCats,{once:true});}
@@ -128753,7 +128875,7 @@ const messengerPayload=prefix=>({enabled:$(prefix+'Enabled')?.checked?1:0,token:
 fd.append('baleh',JSON.stringify(messengerPayload('baleh')));
 fd.append('rubika',JSON.stringify(messengerPayload('rubika')));
 fd.append('telegram',JSON.stringify(messengerPayload('telegram')));
-fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,order_eligibility:$('notifOrderEligibility')?.checked?1:0,order_cancel_customer_msg:$('notifOrderCancelCustomerMsg')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,quoted_product_reply:$('notifQuotedReply')?.checked?1:0,chat_digest_single:$('notifChatDigestSingle')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_source_text',$('notifSourceText')?.value||'');fd.append('notif_order_cancel_template',$('notifOrderCancelMsgTemplate')?.value||'');fd.append('notif_quoted_product_template',$('notifQuotedTemplate')?.value||'');fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('internal_cron_enabled',$('internalCronEnabled')?.checked?1:0);fd.append('internal_cron_sec',$('internalCronSec')?.value||60);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
+fd.append('notif_events',JSON.stringify({order_new:$('notifOrderNew')?.checked?1:0,order_status:$('notifOrderStatus')?.checked?1:0,order_eligibility:$('notifOrderEligibility')?.checked?1:0,order_cancel_customer_msg:$('notifOrderCancelCustomerMsg')?.checked?1:0,chat_msg:$('notifChatMsg')?.checked?1:0,quoted_product_reply:$('notifQuotedReply')?.checked?1:0,chat_digest_single:$('notifChatDigestSingle')?.checked?1:0,product_view:$('notifProductView')?.checked?1:0,product_status:$('notifProductStatus')?.checked?1:0,product_new:$('notifProductNew')?.checked?1:0,order_refund:$('notifOrderRefund')?.checked?1:0,src_price:$('notifSrcPrice')?.checked?1:0,src_stock:$('notifSrcStock')?.checked?1:0,run_fail:$('notifRunFail')?.checked?1:0,retire:$('notifRetire')?.checked?1:0,cron_ping:$('notifCronPing')?.checked?1:0,sync_report:$('notifSyncReport')?.checked?1:0}));/* v10.46 (۶۰): غرفهٔ انتخاب‌شده برای پیام مشتری */fd.append('notif_chat_shop',String($('notifChatShop')?.value||0));fd.append('notif_scan_limit',$('notifScanLimit')?.value||20); /* v10.86 (100) */fd.append('ping_every',$('pingEvery')?.value||360);fd.append('notif_source_text',$('notifSourceText')?.value||'');fd.append('notif_order_cancel_template',$('notifOrderCancelMsgTemplate')?.value||'');fd.append('notif_quoted_product_template',$('notifQuotedTemplate')?.value||'');fd.append('notif_remind_after',$('remindAfter')?.value??30);fd.append('notif_remind_max',$('remindMax')?.value??0);fd.append('queue_dedup',$('qDedup')?.checked?1:0);fd.append('queue_dedup_stale',Math.round((parseInt($('qDedupStale')?.value)||0)*60));fd.append('cron_lock_min',$('cronLockMin')?.value??30);fd.append('internal_cron_enabled',$('internalCronEnabled')?.checked?1:0);fd.append('internal_cron_sec',$('internalCronSec')?.value||60);fd.append('keep_reports',$('keepReports')?.value??20);fd.append('content_sync',$('contentSync')?.checked?1:0);fd.append('catlearn_words',$('catLearnWords')?.value??1);fd.append('digest_enabled',$('digestEnabled')?.checked?1:0);fd.append('digest_hour',$('digestHour')?.value??23);fd.append('digest_hours',$('digestHours')?.value??24);fd.append('retire_mode',$('retireMode')?.value||'off');fd.append('retire_woo_action',$('retireWooAction')?.value||'delete');fd.append('retire_bsl_action',$('retireBslAction')?.value||'delete');fd.append('retire_max_pct',$('retireMaxPct')?.value||30);fd.append('retire_max_count',$('retireMaxCount')?.value||50);fd.append('stall_watchdog',$('stallWatchdog')?.checked?1:0);fd.append('stall_after',$('stallAfter')?.value||300);fd.append('auto_resume',$('autoResume')?.checked?1:0);fd.append('auto_resume_max',$('autoResumeMax')?.value||2);fd.append('detail_budget_sec',$('detailBudget')?.value??0);fd.append('list_budget_sec',$('listBudget')?.value??0);fd.append('extract_page_pause_ms',$('extractPagePause')?.value??80);fd.append('proxy_timeout_sec',$('proxyTimeout')?.value??45);fd.append('src_net',JSON.stringify(srcNetCollect()));fd.append('render',JSON.stringify(renderCollect()));fd.append('autoreply',JSON.stringify(arCollectCfg()));
 fd.append('ai_content_auto',JSON.stringify({
   enabled:!!($('aiContentAutoEnabled')&&$('aiContentAutoEnabled').checked),
   web_search:!!($('aiContentAutoWeb')&&$('aiContentAutoWeb').checked),
